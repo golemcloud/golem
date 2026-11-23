@@ -852,10 +852,11 @@ use crate::model::oplog::types::{
     SerializableP3HttpClientSendResult, SerializableP3HttpConsumeBodyResult,
     SerializableP3HttpRequestBodyFrame, SerializableP3HttpRequestOptions, SerializableP3HttpScheme,
     SerializableP3IpSocketAddress, SerializableP3SocketErrorCode, SerializableP3TcpChunk,
-    SerializableP3UdpDatagram, SerializableResponseHeaders, SerializableRpcError,
-    SerializableScheduleId, SerializableStreamError, SerializableToolAdmissionRefusal,
-    SerializableToolError, SerializableToolInvocationResult, SerializableToolOperationTerminal,
-    SerializableToolResultValue, SerializableToolRpcError, SerializableToolStructuredResult,
+    SerializableP3UdpDatagram, SerializableP3UdpEndpoint, SerializableResponseHeaders,
+    SerializableRpcError, SerializableScheduleId, SerializableStreamError,
+    SerializableToolAdmissionRefusal, SerializableToolError, SerializableToolInvocationResult,
+    SerializableToolOperationTerminal, SerializableToolResultValue, SerializableToolRpcError,
+    SerializableToolStructuredResult,
 };
 use crate::model::oplog::{
     HostPayloadPair, HostRequest, HostRequestCliEnvironmentGetEnvironment,
@@ -881,11 +882,11 @@ use crate::model::oplog::{
     HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
     HostResponseP3HttpClientRequestBodyTransmission, HostResponseP3HttpClientSendResult,
     HostResponseP3KeyvalueIncomingValueStream, HostResponseP3MonotonicClockUnit,
-    HostResponseP3SocketsConnect, HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
+    HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
     HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend,
-    HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponsePermissionCheck,
-    HostResponseRandomBytes, HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock,
-    host_functions,
+    HostResponseP3SocketsTcpSendChunk, HostResponseP3SocketsUdpReceive,
+    HostResponseP3SocketsUdpSend, HostResponsePermissionCheck, HostResponseRandomBytes,
+    HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock, host_functions,
 };
 use crate::model::{AgentFingerprint, AgentId, IdempotencyKey, InvocationId, OplogIndex};
 use crate::model::{ScanCursor, Timestamp};
@@ -1513,6 +1514,16 @@ fn p3_tcp_socket_host_payload_pairs_roundtrip() {
             chunk: SerializableP3TcpChunk::End,
         },
     );
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketSendChunk>(
+        HostRequestNoInput {},
+        HostResponseP3SocketsTcpSendChunk { result: Ok(4096) },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketSendChunk>(
+        HostRequestNoInput {},
+        HostResponseP3SocketsTcpSendChunk {
+            result: Err(SerializableP3SocketErrorCode::ConnectionBroken),
+        },
+    );
     assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketSendAcquire>(
         HostRequestNoInput {},
         HostResponseP3SocketsTcpAcquire { result: Ok(()) },
@@ -1536,28 +1547,53 @@ fn p3_udp_socket_host_payload_pairs_roundtrip() {
         scope_id: None,
     };
 
+    let local_address = SerializableP3IpSocketAddress {
+        port: 4321,
+        ..remote_address.clone()
+    };
+
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesUdpSocketBind>(
+        super::HostRequestP3SocketsBind {
+            local_address: local_address.clone(),
+        },
+        super::HostResponseP3SocketsBind {
+            result: Ok(local_address.clone()),
+        },
+    );
     assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesUdpSocketConnect>(
         HostRequestP3SocketsConnect {
             remote_address: remote_address.clone(),
         },
-        HostResponseP3SocketsConnect {
-            result: Err(SerializableP3SocketErrorCode::AccessDenied),
+        super::HostResponseP3SocketsUdpConnect {
+            result: Err(SerializableP3SocketErrorCode::InvalidArgument),
+            endpoint: Some(SerializableP3UdpEndpoint::Bound(local_address)),
+            disconnected: true,
         },
     );
     assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesUdpSocketSend>(
         HostRequestP3SocketsUdpSend {
-            data: b"outgoing udp bytes".to_vec(),
             remote_address: Some(remote_address.clone()),
         },
-        HostResponseP3SocketsUdpSend { result: Ok(()) },
+        HostResponseP3SocketsUdpSend {
+            result: Err(SerializableP3SocketErrorCode::ConnectionBroken),
+            endpoint: Some(SerializableP3UdpEndpoint::Lost),
+        },
     );
     assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesUdpSocketReceive>(
         HostRequestNoInput {},
         HostResponseP3SocketsUdpReceive {
             result: Ok(SerializableP3UdpDatagram {
                 data: b"incoming udp bytes".to_vec(),
-                remote_address,
+                remote_address: remote_address.clone(),
             }),
+            endpoint: None,
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesUdpSocketDisconnect>(
+        HostRequestNoInput {},
+        super::HostResponseP3SocketsUdpDisconnect {
+            result: Ok(()),
+            local_address: Some(remote_address),
         },
     );
 }
@@ -1928,6 +1964,123 @@ fn p3_filesystem_host_payload_pairs_roundtrip() {
             address: "127.0.0.1:9".to_string(),
         },
         HostResponsePermissionCheck { result: Ok(()) },
+    );
+}
+
+#[test]
+fn p2_tcp_socket_host_payload_pairs_roundtrip() {
+    use crate::model::oplog::types::SerializableSocketError;
+    use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode;
+    let local = SerializableP3IpSocketAddress {
+        address: SerializableIpAddress::IPv4 {
+            address: [127, 0, 0, 1],
+        },
+        port: 40123,
+        flow_info: None,
+        scope_id: None,
+    };
+    let remote = SerializableP3IpSocketAddress {
+        port: 5432,
+        ..local.clone()
+    };
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsTcpStartBind>(
+        super::HostRequestSocketsTcpBind {
+            local_address: local.clone(),
+        },
+        super::HostResponseSocketsTcpBind {
+            result: Ok(local.clone()),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsTcpStartConnect>(
+        super::HostRequestSocketsTcpConnect {
+            remote_address: remote.clone(),
+        },
+        super::HostResponseSocketsTcpStartConnect {
+            result: Err(SerializableSocketError::from_result(Ok(
+                ErrorCode::ConcurrencyConflict,
+            ))),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsTcpFinishConnect>(
+        HostRequestNoInput {},
+        super::HostResponseSocketsTcpFinishConnect {
+            result: Ok((local, remote)),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsTcpFinishConnect>(
+        HostRequestNoInput {},
+        super::HostResponseSocketsTcpFinishConnect {
+            result: Err(SerializableSocketError::from_result(Ok(
+                ErrorCode::WouldBlock,
+            ))),
+        },
+    );
+}
+
+#[test]
+fn p2_udp_socket_host_payload_pairs_roundtrip() {
+    use crate::model::oplog::types::SerializableSocketError;
+    use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode;
+    let local = SerializableP3IpSocketAddress {
+        address: SerializableIpAddress::IPv4 {
+            address: [127, 0, 0, 1],
+        },
+        port: 40123,
+        flow_info: None,
+        scope_id: None,
+    };
+    let remote = SerializableP3IpSocketAddress {
+        port: 5353,
+        ..local.clone()
+    };
+    let reset = || SerializableSocketError::from_result(Ok(ErrorCode::ConnectionReset));
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsUdpStartBind>(
+        super::HostRequestSocketsUdpBind {
+            local_address: local.clone(),
+        },
+        super::HostResponseSocketsUdpBind {
+            result: Ok(local.clone()),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsUdpStream>(
+        super::HostRequestSocketsUdpStream {
+            remote_address: Some(remote.clone()),
+        },
+        super::HostResponseSocketsUdpStream {
+            result: Err(reset()),
+            lost: false,
+            local_address: Some(local.clone()),
+            disconnected: true,
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsUdpReceive>(
+        super::HostRequestSocketsUdpReceive { max_results: 16 },
+        super::HostResponseSocketsUdpReceive {
+            result: Ok(vec![SerializableP3UdpDatagram {
+                data: b"incoming".to_vec(),
+                remote_address: remote.clone(),
+            }]),
+            lost: false,
+            local_address: Some(local.clone()),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsUdpCheckSend>(
+        HostRequestNoInput {},
+        super::HostResponseSocketsUdpCheckSend {
+            result: Ok(16),
+            lost: false,
+            local_address: None,
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsUdpSend>(
+        super::HostRequestSocketsUdpSend {
+            remote_addresses: vec![Some(remote), None],
+        },
+        super::HostResponseSocketsUdpSend {
+            result: Ok(2),
+            lost: false,
+            local_address: Some(local),
+        },
     );
 }
 
@@ -2325,11 +2478,13 @@ fn discovered_tool(name: &str) -> DiscoveredTool {
         definition: Tool {
             version: "1.0.0".to_string(),
             requires_filesystem: false,
+            http_mount: None,
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: name.to_string(),
                     aliases: Vec::new(),
                     doc: Doc::default(),
+                    http: None,
                     globals: Globals::default(),
                     subcommands: Vec::new(),
                     body: None,
@@ -3050,4 +3205,82 @@ proptest! {
         assert_eq!(decoded, attributes);
     }
 
+}
+
+#[test]
+fn p2_tcp_stream_error_keeps_its_errno_and_kind_through_the_oplog() {
+    use crate::model::oplog::types::SerializableTcpStreamError;
+
+    fn replayed(error: StreamError) -> std::io::Error {
+        let recorded = SerializableTcpStreamError::from_stream_error(error).unwrap();
+        let bytes = desert_rust::serialize_to_byte_vec(&recorded).unwrap();
+        let decoded: SerializableTcpStreamError = desert_rust::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, recorded);
+        match StreamError::from(decoded) {
+            StreamError::LastOperationFailed(error) => error.downcast::<std::io::Error>().unwrap(),
+            other => panic!("expected last-operation-failed, got {other:?}"),
+        }
+    }
+
+    let os = replayed(StreamError::LastOperationFailed(wasmtime::Error::from(
+        std::io::Error::from_raw_os_error(32),
+    )));
+    assert_eq!(os.raw_os_error(), Some(32));
+    assert_eq!(os.kind(), std::io::ErrorKind::BrokenPipe);
+
+    let kind = replayed(StreamError::LastOperationFailed(wasmtime::Error::from(
+        std::io::Error::from(std::io::ErrorKind::ConnectionReset),
+    )));
+    assert_eq!(kind.raw_os_error(), None);
+    assert_eq!(kind.kind(), std::io::ErrorKind::ConnectionReset);
+
+    // The native P2 TCP streams fail with a socket error code, not with an I/O error.
+    let native = wasmtime_wasi::p2::bindings::sockets::network::ErrorCode::ConnectionAborted;
+    let code = replayed(StreamError::LastOperationFailed(wasmtime::Error::from(
+        native,
+    )));
+    assert_eq!(code.raw_os_error(), None);
+    assert_eq!(code.kind(), std::io::ErrorKind::ConnectionAborted);
+    assert_eq!(code.to_string(), native.to_string(), "the message is kept");
+
+    // The reader fails with the Wasmtime sockets error code instead of the P2 one.
+    let read = replayed(StreamError::LastOperationFailed(wasmtime::Error::from(
+        wasmtime_wasi::sockets::ErrorCode::ConnectionReset,
+    )));
+    assert_eq!(
+        wasmtime_wasi::p2::bindings::sockets::network::ErrorCode::from(&read),
+        wasmtime_wasi::p2::bindings::sockets::network::ErrorCode::ConnectionReset
+    );
+
+    // Every code that a native stream can fail with comes back as the guest's
+    // `network-error-code`, which Wasmtime derives from the I/O error.
+    {
+        use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode;
+        for code in [
+            ErrorCode::AccessDenied,
+            ErrorCode::NotSupported,
+            ErrorCode::InvalidArgument,
+            ErrorCode::OutOfMemory,
+            ErrorCode::Timeout,
+            ErrorCode::ConcurrencyConflict,
+            ErrorCode::InvalidState,
+            ErrorCode::NewSocketLimit,
+            ErrorCode::AddressNotBindable,
+            ErrorCode::AddressInUse,
+            ErrorCode::RemoteUnreachable,
+            ErrorCode::ConnectionRefused,
+            ErrorCode::ConnectionReset,
+            ErrorCode::ConnectionAborted,
+            ErrorCode::DatagramTooLarge,
+        ] {
+            let error = replayed(StreamError::LastOperationFailed(wasmtime::Error::from(
+                code,
+            )));
+            assert_eq!(ErrorCode::from(&error), code, "{code:?} through the oplog");
+        }
+    }
+
+    let closed = SerializableTcpStreamError::from_stream_error(StreamError::Closed).unwrap();
+    assert!(matches!(StreamError::from(closed), StreamError::Closed));
+    assert!(SerializableTcpStreamError::from_stream_error(StreamError::trap("trap")).is_err());
 }

@@ -24,6 +24,7 @@ use golem_common::model::{OplogIndex, OwnedAgentId};
 use golem_common::{agent_key, data_value};
 use golem_service_base::model::FileReadResponse;
 use golem_test_framework::dsl::{TestDsl, count_agent_invocation_pair_since};
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start, start_with_concurrent_agent_limit,
@@ -105,12 +106,13 @@ pub(crate) async fn first_read_frame(
         .client
         .clone()
         .get_file_contents(GetFileContentsRequest {
-            agent_id: Some(agent.agent_id.into()),
+            target: Some(crate::agent::id_target(agent)),
+            component_id: None,
             component_owner_account_id: Some(executor.context.account_id.into()),
             environment_id: Some(agent.environment_id.into()),
             file_path: path.into(),
             auth_ctx: Some(executor.auth_ctx().into()),
-            principal: None,
+            caller: Some(callers::anonymous().into()),
             selection: Some(FileByteSelection::Full.into()),
         })
         .await?
@@ -136,6 +138,87 @@ pub(crate) async fn read_head(
         }
         (other, _) => anyhow::bail!("expected a file head, got {other:?}"),
     }
+}
+
+#[test]
+#[timeout("2m")]
+async fn a_key_bound_file_read_rejects_another_keys_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::GetFileContentsRequest;
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let owner = agent_key!(
+        "Inspection",
+        "file-owner",
+        "/a.txt",
+        b"private".to_vec(),
+        false
+    );
+    let owner_id = executor.start_agent(&component.id, owner).await?;
+    assert_eq!(
+        executor
+            .get_file_contents(&owner_id, "/a.txt")
+            .await?
+            .as_ref(),
+        b"private"
+    );
+    let requested = agent_key!(
+        "Inspection",
+        "file-requested",
+        "/a.txt",
+        Vec::<u8>::new(),
+        false
+    );
+    let collided = executor.keyed_agent_id(context.default_environment_id, &requested)?;
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    golem_worker_executor_test_utils::copy_create_entry_to(deps, &context, &owner_id, &collided)
+        .await?;
+
+    let executor = start(deps, &context).await?;
+    let mut stream = executor
+        .client
+        .clone()
+        .get_file_contents(GetFileContentsRequest {
+            target: Some(crate::agent::key_target(&requested)?),
+            component_id: Some(component.id.into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(context.default_environment_id.into()),
+            file_path: "/a.txt".into(),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            caller: Some(callers::anonymous().into()),
+            selection: Some(FileByteSelection::Full.into()),
+        })
+        .await?
+        .into_inner();
+    let first = stream
+        .message()
+        .await?
+        .expect("a collision returns one error frame");
+    let Some(get_file_contents_response::Result::Failure(error)) = first.result else {
+        panic!("a colliding file read must not return a header or body: {first:?}");
+    };
+    assert!(matches!(
+        WorkerExecutorError::try_from(error).map_err(anyhow::Error::msg)?,
+        WorkerExecutorError::AgentKeyCollision { .. }
+    ));
+    assert!(stream.message().await?.is_none());
+    assert_eq!(
+        golem_worker_executor_test_utils::agent_oplog_length(deps, &context, &collided,).await?,
+        1
+    );
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    Ok(())
 }
 
 #[test]
@@ -934,12 +1017,13 @@ async fn grpc_read_waits_for_blocking_invocation_and_completes(
     .await?;
     let mut client = executor.client.clone();
     let mut read = Box::pin(client.get_file_contents(GetFileContentsRequest {
-        agent_id: Some(agent.agent_id.into()),
+        target: Some(crate::agent::id_target(&agent)),
+        component_id: None,
         component_owner_account_id: Some(component.account_id.into()),
         environment_id: Some(context.default_environment_id.into()),
         file_path: "/a.txt".into(),
         auth_ctx: Some(executor.auth_ctx().into()),
-        principal: None,
+        caller: Some(callers::anonymous().into()),
         selection: Some(FileByteSelection::Full.into()),
     }));
     let pending_before_release = tokio::time::timeout(Duration::from_secs(2), &mut read)
@@ -1022,12 +1106,13 @@ async fn exact_file_read_grpc_rejects_unsafe_paths_before_activation(
             .client
             .clone()
             .get_file_contents(GetFileContentsRequest {
-                agent_id: Some(agent.agent_id.into()),
+                target: Some(crate::agent::id_target(&agent)),
+                component_id: None,
                 component_owner_account_id: Some(component.account_id.into()),
                 environment_id: Some(context.default_environment_id.into()),
                 file_path: path.into(),
                 auth_ctx: Some(executor.auth_ctx().into()),
-                principal: None,
+                caller: Some(callers::anonymous().into()),
                 selection: Some(FileByteSelection::Full.into()),
             })
             .await?
@@ -1071,7 +1156,7 @@ pub(crate) async fn file_system_node_is_not_found(
             environment_id: Some(agent.environment_id.into()),
             component_owner_account_id: Some(executor.context.account_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
-            principal: None,
+            caller: Some(callers::anonymous().into()),
         })
         .await?
         .into_inner();

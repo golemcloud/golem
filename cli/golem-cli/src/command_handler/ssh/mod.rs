@@ -40,7 +40,8 @@ use self::contract::{
     Outcome, PromptPart, RUN, banner, check_run_contract, classify_cancel, classify_live_error,
     decode_live_result, decode_result, decorated, dimmed, ended, exit_code, failed_agent_notice,
     global_args, help_text, input_mode, interrupted_message, local_command, lookup_command, prompt,
-    run_argv, run_can_be_stopped, runs_nothing, strip_cursor_reports, time_limit, tools_listing,
+    run_argv, run_can_be_stopped, runs_nothing, sandboxed_agent_notice, strip_cursor_reports,
+    time_limit, tools_listing,
 };
 use self::editor::{PLAIN_CONTINUATION, SshPrompt};
 use self::history::{SessionHistory, history_file};
@@ -60,7 +61,7 @@ use crate::log::{
 };
 use crate::model::agent::RawAgentId;
 use anyhow::anyhow;
-use golem_client::api::WorkerClient;
+use golem_client::api::{InvocationClient, WorkerClient};
 use golem_client::model::NativeToolInvocationMode;
 use golem_common::base_model::tool::ToolName;
 use golem_common::model::{AgentStatus, IdempotencyKey};
@@ -248,15 +249,13 @@ async fn cancel_call(ctx: &Arc<Context>, owner: &ToolOwner, key: &CallKey) -> an
     Ok(ctx
         .golem_clients()
         .await?
-        .worker
+        .invocation
         .cancel_invocation(
             &owner.environment.environment_id.0,
-            &agent.0,
-            &accepted.to_string(),
-            None,
+            &format!("{agent}.{accepted}"),
         )
         .await
-        .map(|result| result.canceled)
+        .map(|invocation| invocation.state == golem_client::model::InvocationState::Cancelled)
         .map_service_error()?)
 }
 
@@ -303,6 +302,12 @@ impl SshCommandHandler {
             },
             Err(error) => return Err(self.connect_failure(error)),
         };
+        // A sandbox runs no commands, so the session ends before anything is submitted.
+        if self.agent_state(&session).await.0 == Readiness::Sandboxed {
+            set_log_output(Output::Stderr);
+            log_error(sandboxed_agent_notice(&session.agent));
+            return Err(anyhow!(PipedExitCode(NOT_RUN_EXIT)));
+        }
 
         let status = match command {
             Some(script) => self.run_once(&session, &script).await,
@@ -976,13 +981,13 @@ impl SshCommandHandler {
         session.fingerprint = Some(fingerprint);
     }
 
-    /// After an outcome nobody saw: when the agent has failed, that is why and there is nothing
-    /// to look up; otherwise how to look the result up later.
+    /// After an outcome nobody saw: when the agent has failed or is a sandbox, that is why and
+    /// there is nothing to look up; otherwise how to look the result up later.
     async fn report_unknown(&self, session: &Session, key: &CallKey) {
-        if self.agent_state(session).await.0 == Readiness::Failed {
-            log_error(failed_agent_notice(&session.agent));
-        } else {
-            self.report_lookup(session, key);
+        match self.agent_state(session).await.0 {
+            Readiness::Failed => log_error(failed_agent_notice(&session.agent)),
+            Readiness::Sandboxed => log_error(sandboxed_agent_notice(&session.agent)),
+            _ => self.report_lookup(session, key),
         }
     }
 
@@ -991,12 +996,18 @@ impl SshCommandHandler {
         let request = cancel_call(&self.ctx, &session.owner, key);
         classify_cancel(match tokio::time::timeout(CANCEL_WAIT, request).await {
             Ok(Ok(cancelled)) => Ok(cancelled),
-            Ok(Err(error)) => Err(match error_response(&error) {
-                Some((_, _, messages)) if !messages.is_empty() => messages.join("; "),
-                Some((_, rendered, _)) => rendered,
-                None => format!("{error:#}"),
-            }),
-            Err(_) => Err("no answer to the cancel request".to_string()),
+            Ok(Err(error)) => Err((
+                error
+                    .downcast_ref::<ServiceError>()
+                    .and_then(|error| error.error_code())
+                    .map(str::to_string),
+                match error_response(&error) {
+                    Some((_, _, messages)) if !messages.is_empty() => messages.join("; "),
+                    Some((_, rendered, _)) => rendered,
+                    None => format!("{error:#}"),
+                },
+            )),
+            Err(_) => Err((None, "no answer to the cancel request".to_string())),
         })
     }
 
@@ -1362,6 +1373,7 @@ fn readiness(status: &AgentStatus) -> Readiness {
         | AgentStatus::Interrupted
         | AgentStatus::Retrying => Readiness::Busy,
         AgentStatus::Failed | AgentStatus::Exited => Readiness::Failed,
+        AgentStatus::Sandboxed => Readiness::Sandboxed,
     }
 }
 
@@ -1557,6 +1569,7 @@ mod tests {
             (AgentStatus::Retrying, Readiness::Busy),
             (AgentStatus::Failed, Readiness::Failed),
             (AgentStatus::Exited, Readiness::Failed),
+            (AgentStatus::Sandboxed, Readiness::Sandboxed),
         ] {
             assert_eq!(readiness(&status), expected, "{status:?}");
         }

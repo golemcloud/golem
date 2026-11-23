@@ -167,6 +167,7 @@ impl ComponentDto {
 
         Ok(diff::Component {
             wasm_hash: self.wasm_hash,
+            package_metadata: self.package_metadata.clone(),
             agent_types: metadata
                 .agent_types()
                 .iter()
@@ -316,6 +317,7 @@ mod tests {
         let tool_name = ToolName::try_from("grep").unwrap();
         let definition = Tool {
             requires_filesystem: false,
+            http_mount: None,
             version: "1.0.0".to_string(),
             commands: CommandTree { nodes: Vec::new() },
             schema: SchemaGraph::empty(),
@@ -362,9 +364,11 @@ mod tests {
             metadata: metadata.into(),
             created_at: chrono::Utc::now(),
             wasm_hash,
+            package_metadata: None,
         };
         let expected = diff::Component {
             wasm_hash,
+            package_metadata: None,
             agent_types: BTreeMap::new(),
             component_config: diff::ComponentConfig::default().into(),
             agent_type_provision_configs: BTreeMap::new(),

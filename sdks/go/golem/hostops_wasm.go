@@ -41,8 +41,8 @@ var selfEnv = func(name string) string {
 	return ""
 }
 
-// immediateCaller reads the principal that made the running invocation.
-var immediateCaller = func() common.Principal { return invocationContext.Caller().Immediate }
+// currentCaller reads the caller of the running invocation from the host.
+var currentCaller = func() common.Caller { return invocationContext.Caller() }
 
 type witHost struct{}
 

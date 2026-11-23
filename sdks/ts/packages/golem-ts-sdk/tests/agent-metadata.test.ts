@@ -94,10 +94,7 @@ describe('agent metadata (Phase 3)', () => {
     expect(methods['read'].description).toBe('Reads the value');
     expect(methods['read'].promptHint).toBe('No arguments needed');
     // `readOnly: true` uses the `until-write` cache policy (matching the base SDK).
-    expect(methods['read'].readOnly).toEqual({
-      cachePolicy: { tag: 'until-write' },
-      usesPrincipal: false,
-    });
+    expect(methods['read'].readOnly).toEqual({ cachePolicy: { tag: 'until-write' } });
 
     // Omitted metadata keeps today's defaults.
     expect(methods['write'].description).toBe('');
@@ -105,61 +102,33 @@ describe('agent metadata (Phase 3)', () => {
     expect(methods['write'].readOnly).toBeUndefined();
   });
 
-  it('infers per-principal caching only from direct method inputs', () => {
+  it('emits no auto-injected field and no uses-principal flag', () => {
     defineAgent({
-      name: 'PrincipalReadOnlyMetadata',
-      id: { creator: s.principal() },
+      name: 'ContextReadOnlyMetadata',
+      id: { creator: s.principalRef() },
       methods: {
-        direct: method({ input: { caller: s.principal() }, returns: z.string(), readOnly: true }),
+        direct: method({ input: { who: s.principalRef() }, returns: z.string(), readOnly: true }),
         ttl: method({
-          input: { caller: s.principal() },
+          input: {},
           returns: z.string(),
           readOnly: { cache: { ttlNanos: 123n } },
         }),
-        uncached: method({
-          input: { caller: s.principal() },
-          returns: z.string(),
-          readOnly: { cache: 'no-cache' },
-        }),
-        nested: method({
-          input: { data: z.object({ caller: s.principal() }) },
-          returns: z.string(),
-          readOnly: {},
-        }),
-        returned: method({ input: {}, returns: s.principal(), readOnly: true }),
-        ordinary: method({ input: {}, returns: z.string(), readOnly: true }),
-        mutable: method({ input: { caller: s.principal() }, returns: z.string() }),
-        disabled: method({
-          input: { caller: s.principal() },
-          returns: z.string(),
-          readOnly: false,
-        }),
+        uncached: method({ input: {}, returns: s.principalRef(), readOnly: { cache: 'no-cache' } }),
+        mutable: method({ input: {}, returns: z.string() }),
+        disabled: method({ input: {}, returns: z.string(), readOnly: false }),
       },
     });
 
-    const methods = Object.fromEntries(
-      get('PrincipalReadOnlyMetadata')!.methods.map((m) => [m.name, m]),
-    );
-    expect(methods.direct.readOnly).toEqual({
-      cachePolicy: { tag: 'until-write' },
-      usesPrincipal: true,
-    });
-    expect(methods.ttl.readOnly).toEqual({
-      cachePolicy: { tag: 'ttl', val: 123n },
-      usesPrincipal: true,
-    });
-    expect(methods.uncached.readOnly).toEqual({
-      cachePolicy: { tag: 'no-cache' },
-      usesPrincipal: true,
-    });
-    for (const name of ['nested', 'returned', 'ordinary']) {
-      expect(methods[name].readOnly).toEqual({
-        cachePolicy: { tag: 'until-write' },
-        usesPrincipal: false,
-      });
-    }
+    const type = get('ContextReadOnlyMetadata')!;
+    const methods = Object.fromEntries(type.methods.map((m) => [m.name, m]));
+    expect(methods.direct.readOnly).toEqual({ cachePolicy: { tag: 'until-write' } });
+    expect(methods.ttl.readOnly).toEqual({ cachePolicy: { tag: 'ttl', val: 123n } });
+    expect(methods.uncached.readOnly).toEqual({ cachePolicy: { tag: 'no-cache' } });
     expect(methods.mutable.readOnly).toBeUndefined();
     expect(methods.disabled.readOnly).toBeUndefined();
+    const sources = (fields: { source: { tag: string } }[]) => fields.map((f) => f.source.tag);
+    expect(sources(type.constructor.inputSchema.val)).toEqual(['user-supplied']);
+    expect(sources(methods.direct.inputSchema.val)).toEqual(['user-supplied']);
   });
 
   it('maps snapshotting variants correctly', () => {
@@ -457,7 +426,7 @@ describe('agent metadata (Phase 3)', () => {
     expect(rejection).toContain('implement() was called more than once');
   });
 
-  it('installs principal and restored state only after the restoration factory succeeds', async () => {
+  it('installs restored state only after the restoration factory succeeds and installs no principal', async () => {
     vi.resetModules();
     const [{ defineAgent: isolatedDefineAgent }, { method: isolatedMethod }, isolatedGuest] =
       await Promise.all([import('../src/defineAgent'), import('../src/method'), import('../src')]);
@@ -511,14 +480,9 @@ describe('agent metadata (Phase 3)', () => {
 
     await isolatedGuest.loadSnapshot.load(envelope({ count: 9 }), constructorInput);
     const saved = await isolatedGuest.saveSnapshot.save();
-    const principalLength = new DataView(
-      saved.payload.buffer,
-      saved.payload.byteOffset,
-      saved.payload.byteLength,
-    ).getUint32(1, false);
-    expect(JSON.parse(new TextDecoder().decode(saved.payload.slice(5 + principalLength)))).toEqual({
-      count: 9,
-    });
+    expect(saved.mimeType).toBe('application/octet-stream');
+    expect(saved.payload[0]).toBe(3);
+    expect(JSON.parse(new TextDecoder().decode(saved.payload.slice(1)))).toEqual({ count: 9 });
     expect(initializeCalls).toBe(0);
     expect(restoreCalls).toBe(2);
   });
@@ -574,10 +538,11 @@ describe('agent metadata (Phase 3)', () => {
     );
     expect(restoredIds).toEqual([{ region: 'eu-west', tenant: 'acme' }]);
     const saved = await isolatedGuest.saveSnapshot.save();
-    expect(saved.payload[0]).toBe(2);
-    expect(
-      JSON.parse(new TextDecoder().decode(saved.payload.slice(5 + principalBytes.length))),
-    ).toEqual({ region: 'eu-west', tenant: 'acme:stored' });
+    expect(saved.payload[0]).toBe(3);
+    expect(JSON.parse(new TextDecoder().decode(saved.payload.slice(1)))).toEqual({
+      region: 'eu-west',
+      tenant: 'acme:stored',
+    });
   });
 
   it('strictly validates JSON, multipart, and binary snapshot envelopes', async () => {
@@ -611,7 +576,9 @@ describe('agent metadata (Phase 3)', () => {
     });
     const invalidJsonEnvelopes: Array<[object, string]> = [
       [{ principal: { tag: 'anonymous' }, state: {} }, "missing 'version' field"],
-      [{ version: 2, principal: { tag: 'anonymous' }, state: {} }, 'version must be 1'],
+      [{ version: 3, state: {} }, 'version must be 1 or 2'],
+      [{ version: 2 }, "missing 'state' field"],
+      [{ version: 2, state: {} }, "missing 'fileDatabases' field"],
       [{ version: 1, state: {} }, "missing 'principal' field"],
       [{ version: 1, principal: { tag: 'anonymous' } }, "missing 'state' field"],
       [{ version: 1, principal: { tag: 'anonymous' }, state: {} }, "missing 'fileDatabases' field"],

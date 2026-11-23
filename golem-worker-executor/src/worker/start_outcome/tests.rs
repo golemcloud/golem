@@ -18,10 +18,23 @@ use crate::services::agent_filesystem::{
     AccessError, FilesystemStorageError, InitialFileConflict, RestoreError,
 };
 use golem_common::model::component::ComponentId;
-use golem_common::model::oplog::FilesystemSnapshotName;
+use golem_common::model::oplog::{FilesystemSnapshotName, ReplayStep, StartIdentityField};
 use golem_common::model::{AssistedSelection, UsableAutomaticSnapshot};
 use std::path::Path;
 use test_r::test;
+
+/// A failed instance creation of the core initializer with `error`: an interrupt is a
+/// `Lifecycle` failure, every other error a `Host` failure.
+fn creation(error: &WorkerExecutorError) -> InstanceCreationFailure {
+    InstanceCreationFailure {
+        stage: InstanceCreationStage::Initializer,
+        provenance: match error {
+            WorkerExecutorError::Interrupted { .. } => FailureProvenance::Lifecycle,
+            _ => FailureProvenance::Host,
+        },
+        error: error.clone(),
+    }
+}
 
 fn revision(value: u64) -> ComponentRevision {
     ComponentRevision::new(value).unwrap()
@@ -316,7 +329,7 @@ fn ordinary_instantiation_errors_are_not_target_refusals() {
     let action = decide_now(
         &BaselineRole::InitialFiles,
         Some(&automatic_head()),
-        RawStartError::Instantiation(&error),
+        RawStartError::Instantiation(&creation(&error)),
     );
     assert!(
         matches!(
@@ -434,7 +447,7 @@ fn the_outcome_table() {
         Column::AssistedPromoted,
     ];
     let refused = FetchProblem::Refused(ComponentServiceRefusal::Unauthorized);
-    let table: [(Problem, [&str; 7]); 37] = [
+    let table: [(Problem, [&str; 7]); 38] = [
         (Problem::StaleSource, ["P", "P", "P", "P", "P", "F", "P"]),
         (Problem::TargetExecutor, ["P", "P", "P", "P", "P", "P", "P"]),
         (
@@ -482,12 +495,25 @@ fn the_outcome_table() {
         (Problem::Quota, ["P", "P", "P", "P", "P", "P", "P"]),
         (Problem::Reconstruction, ["P", "P", "P", "P", "P", "P", "P"]),
         (
-            Problem::Instantiation { interrupted: true },
+            Problem::Instantiation {
+                interrupted: true,
+                target_trap: false,
+            },
             ["P", "P", "P", "P", "P", "P", "P"],
         ),
         (
-            Problem::Instantiation { interrupted: false },
+            Problem::Instantiation {
+                interrupted: false,
+                target_trap: false,
+            },
             ["P", "P", "P", "P", "P", "F", "P"],
+        ),
+        (
+            Problem::Instantiation {
+                interrupted: false,
+                target_trap: true,
+            },
+            ["P", "P", "P", "P", "Fr", "F", "P"],
         ),
         (Problem::LoadRetry, ["D", "P", "D", "P", "D", "D", "D"]),
         (
@@ -655,10 +681,7 @@ fn each_raw_error_has_its_problem() {
     let interrupted = WorkerExecutorError::Interrupted {
         kind: InterruptKind::Restart,
     };
-    let unexpected = WorkerExecutorError::UnexpectedOplogEntry {
-        expected: "a".to_string(),
-        got: "b".to_string(),
-    };
+    let unexpected = WorkerExecutorError::unexpected_oplog_entry(OplogIndex::from_u64(1), "a", "b");
     let previous_failed = WorkerExecutorError::PreviousInvocationFailed {
         error: AgentError::Unknown("trap".to_string()),
         stderr: String::new(),
@@ -722,19 +745,28 @@ fn each_raw_error_has_its_problem() {
             Problem::LoadRetry,
         ),
         (
-            SnapshotRecoveryResult::Failed(runtime.clone()),
+            SnapshotRecoveryResult::Failed(runtime.clone(), crate::model::FailureProvenance::Host),
             Problem::LoadFailed,
         ),
         (
-            SnapshotRecoveryResult::Unavailable(runtime.clone()),
+            SnapshotRecoveryResult::Unavailable(
+                runtime.clone(),
+                crate::model::FailureProvenance::Host,
+            ),
             Problem::LoadUnavailable,
         ),
         (
-            SnapshotRecoveryResult::Unavailable(recovery.clone()),
+            SnapshotRecoveryResult::Unavailable(
+                recovery.clone(),
+                crate::model::FailureProvenance::Host,
+            ),
             Problem::RecoveryRequired,
         ),
         (
-            SnapshotRecoveryResult::Unavailable(interrupted.clone()),
+            SnapshotRecoveryResult::Unavailable(
+                interrupted.clone(),
+                crate::model::FailureProvenance::Host,
+            ),
             Problem::Interrupted,
         ),
         (SnapshotRecoveryResult::NotAttempted, Problem::ReplayError),
@@ -759,7 +791,8 @@ fn each_raw_error_has_its_problem() {
         assert_eq!(
             StartProblem::of(&RawStartError::Replay {
                 error,
-                diverged: *diverged
+                diverged: *diverged,
+                provenance: None,
             }),
             *problem,
             "{error} diverged: {diverged}"
@@ -804,8 +837,8 @@ fn each_raw_error_has_its_problem() {
             StartProblem::of(&RawStartError::StaleSource(&found)),
             StartProblem::of(&RawStartError::ModeChange("mode")),
             StartProblem::of(&RawStartError::Disabled),
-            StartProblem::of(&RawStartError::Instantiation(&runtime)),
-            StartProblem::of(&RawStartError::Instantiation(&interrupted)),
+            StartProblem::of(&RawStartError::Instantiation(&creation(&runtime))),
+            StartProblem::of(&RawStartError::Instantiation(&creation(&interrupted))),
             StartProblem::of(&RawStartError::ManualLoad(&ManualLoadResult::Failed(
                 "load".to_string()
             ))),
@@ -821,8 +854,14 @@ fn each_raw_error_has_its_problem() {
             Problem::StaleSource,
             Problem::ModeChange,
             Problem::Disabled,
-            Problem::Instantiation { interrupted: false },
-            Problem::Instantiation { interrupted: true },
+            Problem::Instantiation {
+                interrupted: false,
+                target_trap: false,
+            },
+            Problem::Instantiation {
+                interrupted: true,
+                target_trap: false,
+            },
             Problem::ManualLoadFailed,
             Problem::ManualLoadInterrupted,
             Problem::ManualLoadExited,
@@ -840,22 +879,29 @@ fn an_unreadable_oplog_fails_the_start_in_every_column() {
         agent_id(),
         "corrupt oplog data from archive layer 1: failed to decode compressed oplog chunk",
     );
-    let failed = SnapshotRecoveryResult::Failed(unreadable.clone());
-    let unavailable = SnapshotRecoveryResult::Unavailable(unreadable.clone());
+    let failed =
+        SnapshotRecoveryResult::Failed(unreadable.clone(), crate::model::FailureProvenance::Host);
+    let unavailable = SnapshotRecoveryResult::Unavailable(
+        unreadable.clone(),
+        crate::model::FailureProvenance::Host,
+    );
     let lost = SnapshotRecoveryResult::Lost(unreadable.clone());
+    let unreadable_creation = creation(&unreadable);
     let errors = [
         RawStartError::Replay {
             error: &unreadable,
             diverged: false,
+            provenance: None,
         },
         RawStartError::Replay {
             error: &unreadable,
             diverged: true,
+            provenance: None,
         },
         RawStartError::Load(&failed),
         RawStartError::Load(&unavailable),
         RawStartError::Load(&lost),
-        RawStartError::Instantiation(&unreadable),
+        RawStartError::Instantiation(&unreadable_creation),
         RawStartError::TargetLoad(&unreadable),
         RawStartError::TargetFetch(&unreadable),
     ];
@@ -954,8 +1000,10 @@ fn every_assisted_failure_carries_the_details_of_its_head() {
     let lost = restore(RestoreClass::Lost);
     let fixed = restore(RestoreClass::Fixed);
     let conflicting = FilesystemError::InitialFileConflict(Box::new(conflict()));
-    let failed_load = SnapshotRecoveryResult::Failed(runtime.clone());
-    let unavailable_load = SnapshotRecoveryResult::Unavailable(runtime.clone());
+    let failed_load =
+        SnapshotRecoveryResult::Failed(runtime.clone(), crate::model::FailureProvenance::Host);
+    let unavailable_load =
+        SnapshotRecoveryResult::Unavailable(runtime.clone(), crate::model::FailureProvenance::Host);
     let metadata = UpdateStateError::Metadata(not_found());
     let refused_target = refused_service();
     let other_update =
@@ -967,6 +1015,7 @@ fn every_assisted_failure_carries_the_details_of_its_head() {
         Option<SnapshotFault>,
         Option<u64>,
     );
+    let runtime_creation = creation(&runtime);
     let cases: Vec<Case<'_>> = vec![
         (RawStartError::StaleSource(&found), None, None, None),
         (
@@ -1000,7 +1049,12 @@ fn every_assisted_failure_carries_the_details_of_its_head() {
             None,
         ),
         (RawStartError::Filesystem(&conflicting), None, None, None),
-        (RawStartError::Instantiation(&runtime), None, None, None),
+        (
+            RawStartError::Instantiation(&runtime_creation),
+            None,
+            None,
+            None,
+        ),
         (RawStartError::Load(&unavailable_load), None, None, None),
         (
             RawStartError::Load(&failed_load),
@@ -1012,6 +1066,7 @@ fn every_assisted_failure_carries_the_details_of_its_head() {
             RawStartError::Replay {
                 error: &runtime,
                 diverged: true,
+                provenance: None,
             },
             Some(UPDATE_SNAPSHOT_INCOMPATIBLE),
             Some(SnapshotFault::Incompatible),
@@ -1021,6 +1076,7 @@ fn every_assisted_failure_carries_the_details_of_its_head() {
             RawStartError::Replay {
                 error: &runtime,
                 diverged: false,
+                provenance: None,
             },
             None,
             None,
@@ -1086,7 +1142,8 @@ fn a_retried_failure_and_a_lost_shard_write_no_failed_update() {
             Some(&head),
             RawStartError::Replay {
                 error: &recovery,
-                diverged: false
+                diverged: false,
+                provenance: None,
             }
         ),
         StartAction::Error(WorkerExecutorError::RecoveryRequired { .. })
@@ -1095,7 +1152,7 @@ fn a_retried_failure_and_a_lost_shard_write_no_failed_update() {
         decide_now(
             &role,
             Some(&head),
-            RawStartError::Instantiation(&interrupted)
+            RawStartError::Instantiation(&creation(&interrupted))
         ),
         StartAction::Error(WorkerExecutorError::Interrupted { .. })
     ));
@@ -1705,20 +1762,28 @@ fn an_instantiation_failure_fails_only_a_pending_assisted_update() {
         .iter()
         .map(|(role, head)| {
             matches!(
-                decide_now(role, Some(head), RawStartError::Instantiation(&runtime)),
+                decide_now(
+                    role,
+                    Some(head),
+                    RawStartError::Instantiation(&creation(&runtime))
+                ),
                 StartAction::FailUpdate { .. }
             )
         })
         .collect::<Vec<_>>();
     assert_eq!(fails, vec![false, false, true, true]);
     assert!(heads.iter().all(|(role, head)| matches!(
-        decide_now(role, Some(head), RawStartError::Instantiation(&interrupted)),
+        decide_now(
+            role,
+            Some(head),
+            RawStartError::Instantiation(&creation(&interrupted))
+        ),
         StartAction::Error(WorkerExecutorError::Interrupted { .. })
     )));
     let (entry, _) = failed_entry(decide_now(
         &heads[2].0,
         Some(&heads[2].1),
-        RawStartError::Instantiation(&runtime),
+        RawStartError::Instantiation(&creation(&runtime)),
     ));
     let (target, details, assisted, attempt, _) = entry_fields(&entry);
     assert_eq!(
@@ -1773,6 +1838,7 @@ fn a_failed_manual_admission_names_its_invocation() {
         revision(3),
         OplogIndex::from_u64(9),
         "cannot take a snapshot".to_string(),
+        UpdateFailureClass::Other,
     );
     assert_eq!(
         entry_fields(&entry),
@@ -1847,7 +1913,8 @@ fn a_stale_assisted_head_fails_with_what_the_status_has() {
 #[test]
 fn a_pending_baseline_fails_its_own_update_and_a_failed_load_names_its_record() {
     let runtime = WorkerExecutorError::runtime("boom");
-    let failed_load = SnapshotRecoveryResult::Failed(runtime);
+    let failed_load =
+        SnapshotRecoveryResult::Failed(runtime, crate::model::FailureProvenance::Host);
     let lost = restore(RestoreClass::Lost);
     let assisted = assisted_head();
     let manual = manual_head();
@@ -1930,7 +1997,10 @@ fn reconstruction_startup_error_for_every_filesystem_error() {
 fn a_load_retry_keeps_its_decision_and_a_periodic_record_is_skipped_or_rejected() {
     let periodic = BaselineRole::Periodic(OplogIndex::from_u64(10));
     let retry = SnapshotRecoveryResult::Retry(RetryDecision::Immediate);
-    let failed = SnapshotRecoveryResult::Failed(WorkerExecutorError::runtime("bad"));
+    let failed = SnapshotRecoveryResult::Failed(
+        WorkerExecutorError::runtime("bad"),
+        crate::model::FailureProvenance::Host,
+    );
     let runtime = WorkerExecutorError::runtime("trap");
     assert!(matches!(
         decide_now(&periodic, None, RawStartError::Load(&retry)),
@@ -1946,7 +2016,8 @@ fn a_load_retry_keeps_its_decision_and_a_periodic_record_is_skipped_or_rejected(
             None,
             RawStartError::Replay {
                 error: &runtime,
-                diverged: true
+                diverged: true,
+                provenance: None,
             }
         ),
         StartAction::RejectPeriodic(index) if index == OplogIndex::from_u64(10)
@@ -1959,7 +2030,8 @@ fn a_load_retry_keeps_its_decision_and_a_periodic_record_is_skipped_or_rejected(
         ),
         StartAction::Error(WorkerExecutorError::InvocationFailed { .. })
     ));
-    let unavailable = SnapshotRecoveryResult::Unavailable(runtime.clone());
+    let unavailable =
+        SnapshotRecoveryResult::Unavailable(runtime.clone(), crate::model::FailureProvenance::Host);
     assert!(matches!(
         decide_now(
             &BaselineRole::AssistedPromoted,
@@ -2021,6 +2093,16 @@ fn an_interrupted_manual_load_keeps_the_update_pending_and_an_exit_fails_it() {
         details,
         "Manual update failed to load snapshot: the agent exited during the snapshot load"
     );
+    assert_eq!(
+        class_and_divergence(decide_now(
+            &role,
+            Some(&manual),
+            RawStartError::ManualLoad(&ManualLoadResult::Exited),
+        ))
+        .0,
+        UpdateFailureClass::Interrupted,
+        "an exit is a lifecycle event, not a failure of the load"
+    );
     assert!(matches!(
         decide(
             &role,
@@ -2042,6 +2124,7 @@ fn a_full_replay_failure_of_an_automatic_update_names_the_replay_code() {
         RawStartError::Replay {
             error: &runtime,
             diverged: false,
+            provenance: None,
         },
     ));
     let (_, details, assisted, attempt, fault) = entry_fields(&entry);
@@ -2063,6 +2146,7 @@ fn a_divergence_of_a_pending_manual_update_fails_it_as_a_manual_update() {
         RawStartError::Replay {
             error: &runtime,
             diverged: true,
+            provenance: None,
         },
     ));
     let (target, details, assisted, attempt, fault) = entry_fields(&entry);
@@ -2104,4 +2188,326 @@ fn the_replay_purpose_of_each_baseline_and_head() {
             SnapshotReplayPurpose::None,
         ]
     );
+}
+
+fn class_and_divergence(action: StartAction) -> (UpdateFailureClass, Option<ReplayDivergence>) {
+    match failed_entry(action).0 {
+        OplogEntry::FailedUpdate {
+            failure_class,
+            divergence,
+            ..
+        } => (failure_class, divergence.map(|divergence| *divergence)),
+        other => panic!("expected a failed update, got {other:?}"),
+    }
+}
+
+fn host_call(function_name: &str, request: Option<&str>) -> ReplayStep {
+    use golem_common::schema::IntoTypedSchemaValue;
+    ReplayStep::HostCall(golem_common::model::oplog::ReplayHostCall {
+        function_name: function_name.to_string(),
+        durable_function_type: golem_common::model::oplog::PublicDurableFunctionType::ReadLocal(
+            golem_schema::Empty {},
+        ),
+        parent_start_index: None,
+        invocation_id: None,
+        observational_owner: None,
+        carries_request: true,
+        request: request
+            .map(|request| Box::new(request.to_string().into_typed_schema_value().unwrap())),
+    })
+}
+
+/// The class of a failed replay follows the provenance of the failure before the inferred
+/// divergence, and an explicit divergence wins over every provenance. The cell of the outcome
+/// table stays the one of the raw problem.
+#[test]
+fn the_class_of_a_failed_replay_follows_its_provenance() {
+    use FailureProvenance as Provenance;
+    use UpdateFailureClass as Class;
+    let divergence = ReplayDivergence {
+        oplog_index: OplogIndex::from_u64(7),
+        expected: host_call("random::get_random_bytes", Some("recorded")),
+        actual: host_call("random::get_random_u64", Some("replayed")),
+        mismatched: vec![StartIdentityField::FunctionName],
+    };
+    let unexpected = WorkerExecutorError::UnexpectedOplogEntry {
+        divergence: Box::new(divergence.clone()),
+    };
+    let permanent = WorkerExecutorError::PreviousInvocationFailed {
+        error: AgentError::PermanentError("refused".to_string()),
+        stderr: String::new(),
+    };
+    let trapped = WorkerExecutorError::PreviousInvocationFailed {
+        error: AgentError::DeterministicTrap("unreachable".to_string()),
+        stderr: String::new(),
+    };
+    let returned = WorkerExecutorError::PreviousInvocationFailed {
+        error: AgentError::InternalError("agent error".to_string()),
+        stderr: String::new(),
+    };
+    let speculative = WorkerExecutorError::InvocationFailed {
+        error: AgentError::InternalError("agent error".to_string()),
+        stderr: String::new(),
+    };
+    let interrupted = WorkerExecutorError::Interrupted {
+        kind: InterruptKind::Restart,
+    };
+    let runtime = WorkerExecutorError::runtime("boom");
+    let cases = [
+        (&unexpected, true, Some(Provenance::Host), Class::Divergence),
+        (&permanent, true, Some(Provenance::Host), Class::Operational),
+        (
+            &trapped,
+            true,
+            Some(Provenance::TargetInstruction),
+            Class::TargetTrap,
+        ),
+        (
+            &returned,
+            false,
+            Some(Provenance::TargetReturned),
+            Class::TargetTrap,
+        ),
+        (&speculative, true, None, Class::Divergence),
+        (&speculative, false, None, Class::Operational),
+        (
+            &interrupted,
+            true,
+            Some(Provenance::Lifecycle),
+            Class::Interrupted,
+        ),
+        (&runtime, false, None, Class::Operational),
+    ];
+    for (error, diverged, provenance, expected) in cases {
+        let replay = RawStartError::Replay {
+            error,
+            diverged,
+            provenance,
+        };
+        let action = decide_now(&BaselineRole::InitialFiles, Some(&automatic_head()), replay);
+        let (_, details, ..) = entry_fields(
+            &failed_entry(decide_now(
+                &BaselineRole::InitialFiles,
+                Some(&automatic_head()),
+                replay,
+            ))
+            .0,
+        );
+        assert!(details.starts_with(UPDATE_REPLAY_FAILED), "{details}");
+        assert_eq!(
+            class_and_divergence(action).0,
+            expected,
+            "{error} {diverged} {provenance:?}"
+        );
+    }
+
+    // The raw entry keeps the actual request and leaves the expected one to its `Start`.
+    let (class, recorded) = class_and_divergence(decide_now(
+        &BaselineRole::AssistedPending(Arc::new(assisted_head())),
+        Some(&assisted_head()),
+        RawStartError::Replay {
+            error: &unexpected,
+            diverged: true,
+            provenance: None,
+        },
+    ));
+    assert_eq!(class, Class::Divergence);
+    assert_eq!(
+        recorded,
+        Some(ReplayDivergence {
+            expected: host_call("random::get_random_bytes", None),
+            ..divergence
+        })
+    );
+    let (_, recorded) = class_and_divergence(decide_now(
+        &BaselineRole::InitialFiles,
+        Some(&automatic_head()),
+        RawStartError::Replay {
+            error: &trapped,
+            diverged: true,
+            provenance: Some(Provenance::TargetInstruction),
+        },
+    ));
+    assert_eq!(recorded, None);
+}
+
+/// A trap of the core initializer of the target fails a pending automatic and a pending assisted
+/// update as a target trap; a host failure of the initializer still passes for a plain automatic
+/// update, and the stage of an earlier failure decides its class.
+#[test]
+fn the_class_of_a_failed_instance_creation_follows_its_stage_and_provenance() {
+    use FailureProvenance as Provenance;
+    use UpdateFailureClass as Class;
+    let runtime = WorkerExecutorError::runtime("initializer failed");
+    let failure = |stage, provenance| InstanceCreationFailure {
+        stage,
+        provenance,
+        error: runtime.clone(),
+    };
+    let trap = failure(
+        InstanceCreationStage::Initializer,
+        Provenance::TargetInstruction,
+    );
+    let host = failure(InstanceCreationStage::Initializer, Provenance::Host);
+    let link = failure(InstanceCreationStage::Link, Provenance::Host);
+    let storage = failure(InstanceCreationStage::Storage, Provenance::Host);
+    let assisted = || BaselineRole::AssistedPending(Arc::new(assisted_head()));
+
+    let automatic = decide_now(
+        &BaselineRole::InitialFiles,
+        Some(&automatic_head()),
+        RawStartError::Instantiation(&trap),
+    );
+    assert_eq!(class_and_divergence(automatic).0, Class::TargetTrap);
+    assert!(matches!(
+        decide_now(
+            &BaselineRole::InitialFiles,
+            Some(&automatic_head()),
+            RawStartError::Instantiation(&host),
+        ),
+        StartAction::Error(_)
+    ));
+    for (failure, expected) in [
+        (&trap, Class::TargetTrap),
+        (&host, Class::Operational),
+        (&link, Class::TargetRejected),
+        (&storage, Class::Operational),
+    ] {
+        let action = decide_now(
+            &assisted(),
+            Some(&assisted_head()),
+            RawStartError::Instantiation(failure),
+        );
+        assert_eq!(class_and_divergence(action).0, expected, "{failure:?}");
+    }
+}
+
+/// A load hook that traps is a target trap, one that returns an error keeps the snapshot class
+/// `Other`, and a host failure or an interruption of the load keeps its own class.
+#[test]
+fn the_class_of_a_failed_snapshot_load_follows_its_provenance() {
+    use FailureProvenance as Provenance;
+    use UpdateFailureClass as Class;
+    let runtime = WorkerExecutorError::runtime("load failed");
+    for (provenance, expected) in [
+        (Provenance::TargetInstruction, Class::TargetTrap),
+        (Provenance::TargetReturned, Class::Other),
+        (Provenance::Host, Class::Operational),
+        (Provenance::Lifecycle, Class::Interrupted),
+    ] {
+        let failed = SnapshotRecoveryResult::Failed(runtime.clone(), provenance);
+        let action = decide_now(
+            &BaselineRole::AssistedPending(Arc::new(assisted_head())),
+            Some(&assisted_head()),
+            RawStartError::Load(&failed),
+        );
+        assert_eq!(class_and_divergence(action).0, expected, "{provenance:?}");
+    }
+}
+
+/// Problems that no provenance decides keep the class of their row.
+#[test]
+fn the_class_of_a_target_or_restore_problem_follows_its_row() {
+    use UpdateFailureClass as Class;
+    let not_found = WorkerExecutorError::ComponentNotFound {
+        component_id: ComponentId::new(),
+    };
+    let cases = [
+        (
+            RawStartError::TargetFetch(&not_found),
+            Class::TargetRejected,
+        ),
+        (
+            RawStartError::ModeChange("durable to ephemeral"),
+            Class::TargetRejected,
+        ),
+        (
+            RawStartError::TargetUnsupported("unsupported"),
+            Class::TargetRejected,
+        ),
+    ];
+    for (error, expected) in cases {
+        let action = decide_now(&BaselineRole::InitialFiles, Some(&automatic_head()), error);
+        assert_eq!(class_and_divergence(action).0, expected);
+    }
+    let manual = manual_head();
+    let (class, _) = class_and_divergence(decide_now(
+        &BaselineRole::ManualPending(Arc::new(manual.clone())),
+        Some(&manual),
+        RawStartError::Disabled,
+    ));
+    assert_eq!(class, Class::Other);
+}
+
+/// In a tainted generation a divergence and a failure of the target code, also of the
+/// initializer and of the load hook, are operational failures; host failures and interruptions
+/// keep their class.
+#[test]
+fn a_tainted_generation_turns_target_failures_and_divergences_into_operational_failures() {
+    use FailureProvenance as Provenance;
+    use UpdateFailureClass as Class;
+    let unexpected = WorkerExecutorError::unexpected_oplog_entry(
+        OplogIndex::from_u64(4),
+        "a recorded Start",
+        "the end of the invocation",
+    );
+    let runtime = WorkerExecutorError::runtime("failed");
+    let trap = InstanceCreationFailure {
+        stage: InstanceCreationStage::Initializer,
+        provenance: Provenance::TargetInstruction,
+        error: runtime.clone(),
+    };
+    let load_trap = SnapshotRecoveryResult::Failed(runtime.clone(), Provenance::TargetInstruction);
+    let replay = |error, diverged, provenance| RawStartError::Replay {
+        error,
+        diverged,
+        provenance,
+    };
+    let cases = [
+        (
+            replay(&unexpected, true, None),
+            Class::Divergence,
+            Class::Operational,
+        ),
+        (
+            replay(&runtime, true, None),
+            Class::Divergence,
+            Class::Operational,
+        ),
+        (
+            replay(&runtime, false, Some(Provenance::TargetReturned)),
+            Class::TargetTrap,
+            Class::Operational,
+        ),
+        (
+            replay(&runtime, false, Some(Provenance::TargetInstruction)),
+            Class::TargetTrap,
+            Class::Operational,
+        ),
+        (
+            RawStartError::Instantiation(&trap),
+            Class::TargetTrap,
+            Class::Operational,
+        ),
+        (
+            RawStartError::Load(&load_trap),
+            Class::TargetTrap,
+            Class::Operational,
+        ),
+        (
+            replay(&runtime, true, Some(Provenance::Host)),
+            Class::Operational,
+            Class::Operational,
+        ),
+        (
+            replay(&runtime, false, Some(Provenance::Lifecycle)),
+            Class::Interrupted,
+            Class::Interrupted,
+        ),
+    ];
+    for (error, untainted, tainted) in cases {
+        let problem = StartProblem::of(&error);
+        assert_eq!(failure_class(problem, &error, false), untainted);
+        assert_eq!(failure_class(problem, &error, true), tainted);
+    }
 }

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 pub(crate) mod invocation_session;
-mod oplog_export;
+pub(crate) mod oplog_export;
 pub mod oplog_serve;
 mod stream;
 mod stream_output;
@@ -41,8 +41,8 @@ use crate::log::{
     log_failed_to, log_warn, log_warn_action, logln, message_for_output, try_print_bytes,
 };
 use crate::model::agent::action_result::{
-    AgentCancelInvocationResult, AgentDeleteView, AgentFileContentsResult, AgentInterruptResult,
-    AgentPluginToggleResult, AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
+    AgentDeleteView, AgentFileContentsResult, AgentInterruptResult, AgentPluginToggleResult,
+    AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
 };
 use crate::model::agent::files::{AgentFilesView, FileNodeView};
 use crate::model::agent::oplog::{AgentOplogEntryView, AgentOplogPageView};
@@ -53,7 +53,7 @@ use crate::model::agent::{
     AgentAddress, AgentCreateView, AgentGetView, AgentListCursor, AgentUpsertView,
     agent_id_display, format_agent_id_match, format_timestamp,
 };
-use crate::model::component::{ComponentNameMatchKind, ComponentRevisionSelection};
+use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::{AgentUpdateMeta, TryUpdateAllWorkersView};
 use crate::model::help::{
     AgentNameHelp, ArgumentError, AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp,
@@ -76,7 +76,7 @@ use crate::model::agent::{
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
-use golem_client::api::{AgentClient, ComponentClient, WorkerClient};
+use golem_client::api::{AgentClient, ComponentClient, EnvironmentClient, WorkerClient};
 use golem_client::model::ScanCursor;
 use golem_client::model::{
     AgentInvocationMode, AgentInvocationRequest, AgentKeyRequest, ComponentDto, RevertWorkerTarget,
@@ -90,15 +90,15 @@ use golem_common::model::agent::{
     AgentConfigSource, AgentMode, AgentTypeName, DeployedRegisteredAgentType, ParsedAgentKey,
 };
 use golem_common::model::application::ApplicationName;
-use golem_common::model::component::ComponentName;
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::component::{ComponentId, ComponentName};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, FilterComparator, IdempotencyKey, OplogIndex,
 };
-use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, FieldSource, InputSchema};
+use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, InputSchema};
 use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
 
 use crate::command_handler::interactive::Ask;
@@ -294,10 +294,6 @@ impl AgentCommandHandler {
                     self.cmd_revert(agent_id, last_oplog_index, number_of_invocations)
                         .await
                 }
-                AgentSubcommand::CancelInvocation {
-                    agent_id,
-                    idempotency_key,
-                } => self.cmd_cancel_invocation(agent_id, idempotency_key).await,
                 AgentSubcommand::Files { agent_id, path } => self.cmd_files(agent_id, path).await,
                 AgentSubcommand::FileContents {
                     agent_id,
@@ -505,19 +501,27 @@ impl AgentCommandHandler {
 
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
 
-        let component = self
-            .ctx
-            .component_handler()
-            .component_by_name_with_auto_deploy(
-                &agent_id_match.environment,
-                agent_id_match.component_name_match_kind,
-                &agent_id_match.component_name,
-                None,
-                post_deploy_args.as_ref(),
-                None,
-                false,
-            )
-            .await?;
+        let component = match &agent_id_match.address {
+            AgentAddress::Id(id) => {
+                self.recorded_agent_component(agent_id_match.environment.environment_id, *id)
+                    .await?
+                    .0
+            }
+            AgentAddress::Key(_) => {
+                self.ctx
+                    .component_handler()
+                    .component_by_name_with_auto_deploy(
+                        &agent_id_match.environment,
+                        agent_id_match.component_name_match_kind,
+                        &agent_id_match.component_name,
+                        None,
+                        post_deploy_args.as_ref(),
+                        None,
+                        false,
+                    )
+                    .await?
+            }
+        };
 
         let component_metadata: ComponentMetadata = component.metadata.clone().into();
         let Some(agent_type) = component_metadata
@@ -624,7 +628,7 @@ impl AgentCommandHandler {
         let selected_agent_name = agent_id_match.display_name();
         let environment = &agent_id_match.environment;
         let wait_for_invocation = !trigger && stdout_format == InvocationStdoutFormat::Value;
-        let live_output = (!no_stream).then(|| {
+        let live_output = (!no_stream && stdout_format != InvocationStdoutFormat::Raw).then(|| {
             Arc::new(LiveOutput::new(
                 self.ctx.clone(),
                 environment.environment_id,
@@ -941,8 +945,27 @@ impl AgentCommandHandler {
         export: OplogExportArgs,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
-        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
-        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+        let lookup_error = |error| {
+            if export.obfuscate {
+                oplog_export::read_failed(error)
+            } else {
+                error
+            }
+        };
+        let (agent_id_match, component, agent_id) = {
+            let _log_output = export
+                .obfuscate
+                .then(|| LogOutput::new(LogOutputTarget::TracingDebug));
+            let agent_id_match = self
+                .match_agent_id(agent_id.agent_id)
+                .await
+                .map_err(lookup_error)?;
+            let (component, agent_id) = self
+                .component_by_agent_id_match(&agent_id_match)
+                .await
+                .map_err(lookup_error)?;
+            (agent_id_match, component, agent_id)
+        };
 
         let batch_size = self.ctx.http_batch_size();
         if export.obfuscate {
@@ -1018,6 +1041,9 @@ impl AgentCommandHandler {
                         batch_size,
                         cursor.as_ref(),
                         query.as_deref(),
+                        None,
+                        None,
+                        None,
                         None,
                     )
                     .await
@@ -1122,6 +1148,9 @@ impl AgentCommandHandler {
                 cursor.as_ref(),
                 query.as_deref(),
                 None,
+                None,
+                None,
+                None,
             )
             .await
             .map_service_error()?;
@@ -1212,55 +1241,6 @@ impl AgentCommandHandler {
             last_oplog_index,
             number_of_invocations,
         })?;
-
-        Ok(())
-    }
-
-    async fn cmd_cancel_invocation(
-        &self,
-        agent_id: AgentIdArgs,
-        idempotency_key: IdempotencyKey,
-    ) -> anyhow::Result<()> {
-        self.ctx.silence_app_context_init().await;
-        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
-        let agent_id = self.agent_id_of(&agent_id_match).await?;
-
-        log_warn_action(
-            "Canceling invocation",
-            format!(
-                "for agent {} using idempotency key: {}",
-                format_agent_id_match(&agent_id_match),
-                idempotency_key.value.log_color_highlight()
-            ),
-        );
-
-        let clients = self.ctx.golem_clients().await?;
-
-        let canceled = clients
-            .worker
-            .cancel_invocation(
-                &agent_id_match.environment.environment_id.0,
-                &agent_id.0,
-                &idempotency_key.value,
-                None,
-            )
-            .await
-            .map(|result| result.canceled)
-            .map_service_error()?;
-
-        if canceled {
-            log_action("Canceled", "");
-        } else {
-            log_warn_action("Failed", "to cancel, invocation already started");
-        }
-
-        self.ctx
-            .log_handler()
-            .log_output(AgentCancelInvocationResult {
-                canceled,
-                agent_id,
-                idempotency_key: idempotency_key.value,
-            })?;
 
         Ok(())
     }
@@ -1414,6 +1394,140 @@ impl AgentCommandHandler {
         result
     }
 
+    /// The latest declaration on each component that has implemented a type. Reflection
+    /// still uses the current deployment; management also needs these retained declarations.
+    async fn historical_agent_types(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> anyhow::Result<Vec<DeployedRegisteredAgentType>> {
+        let clients = self.ctx.golem_clients().await?;
+        let mut deployments = clients
+            .environment
+            .list_deployments(&environment_id.0, None)
+            .await
+            .map_service_error()?
+            .values;
+        deployments.sort_by_key(|deployment| std::cmp::Reverse(deployment.revision));
+        let mut seen = BTreeSet::new();
+        let mut types = Vec::new();
+        for deployment in deployments {
+            for agent_type in clients
+                .environment
+                .list_deployment_agent_types(&environment_id.0, deployment.revision.into())
+                .await
+                .map_service_error()?
+                .values
+            {
+                if seen.insert((
+                    agent_type.implemented_by.component_id.0,
+                    agent_type.agent_type.type_name.0.clone(),
+                )) {
+                    types.push(agent_type);
+                }
+            }
+        }
+        Ok(types)
+    }
+
+    /// Finds ownership through the public recorded-component filter, never by interpreting
+    /// the UUID tag or assuming that the current implementer owns an existing agent.
+    async fn recorded_agent_component(
+        &self,
+        environment_id: EnvironmentId,
+        agent_id: AgentId,
+    ) -> anyhow::Result<(ComponentDto, DeployedRegisteredAgentType)> {
+        let clients = self.ctx.golem_clients().await?;
+        let metadata = clients
+            .worker
+            .get_worker_metadata(&environment_id.0, &agent_id.0, None)
+            .await
+            .map_service_error()?;
+        let historical = self.historical_agent_types(environment_id).await?;
+        self.recorded_component_for_metadata(
+            &AgentMetadata::from(ComponentName(String::new()), metadata),
+            &historical,
+        )
+        .await
+    }
+
+    async fn recorded_component_for_metadata(
+        &self,
+        metadata: &AgentMetadata,
+        historical: &[DeployedRegisteredAgentType],
+    ) -> anyhow::Result<(ComponentDto, DeployedRegisteredAgentType)> {
+        let clients = self.ctx.golem_clients().await?;
+        let environment_id = metadata.environment_id;
+        let agent_id = metadata.agent_id;
+        let name = metadata
+            .agent_type_name
+            .as_ref()
+            .ok_or_else(|| anyhow!("Agent {agent_id} has no agent type"))?;
+        for mut agent_type in historical.iter().cloned() {
+            if &agent_type.agent_type.type_name != name {
+                continue;
+            }
+            if historical.iter().any(|other| {
+                other.implemented_by.component_name == agent_type.implemented_by.component_name
+                    && other.implemented_by.component_id != agent_type.implemented_by.component_id
+            }) {
+                continue;
+            }
+            let mut cursor = None;
+            let matches_owner = loop {
+                let Some(matches) = clients
+                    .agent
+                    .find_agents_metadata(
+                        &environment_id.0,
+                        &name.0,
+                        Some(&agent_type.implemented_by.component_name),
+                        &WorkersMetadataRequest {
+                            filter: Some(AgentFilter::new_id(FilterComparator::Equal, agent_id)),
+                            cursor,
+                            count: Some(self.ctx.http_batch_size()),
+                            precise: Some(false),
+                        },
+                    )
+                    .await
+                    .map_service_error_not_found_as_opt()?
+                else {
+                    break false;
+                };
+                if matches.workers.iter().any(|agent| {
+                    agent.agent_id == agent_id
+                        && agent.fingerprint == metadata.fingerprint
+                        && agent.component_revision == metadata.component_revision
+                }) {
+                    break true;
+                }
+                cursor = matches.cursor;
+                if cursor.is_none() {
+                    break false;
+                }
+            };
+            if !matches_owner {
+                continue;
+            }
+            let component = self
+                .ctx
+                .component_handler()
+                .get_component_revision_by_id(
+                    &agent_type.implemented_by.component_id,
+                    metadata.component_revision,
+                )
+                .await?;
+            let declaration = component
+                .metadata
+                .agent_types
+                .iter()
+                .find(|declaration| &declaration.declaration.type_name == name)
+                .ok_or_else(|| anyhow!("The recorded component has no declaration for {name}"))?;
+            agent_type.agent_type = declaration.declaration.clone();
+            agent_type.implemented_by.component_revision = metadata.component_revision;
+            return Ok((component, agent_type));
+        }
+        bail!("Cannot establish the recorded component of agent {agent_id}")
+    }
+
     async fn resolve_list_components(
         &self,
         agent_type_name: Option<AgentTypeName>,
@@ -1430,11 +1544,13 @@ impl AgentCommandHandler {
                     .resolve_environment(EnvironmentResolveMode::Any)
                     .await?;
                 debug!("Finding agent type {}", agent_type_name.0);
-                let Some(agent_type) = self
-                    .ctx
-                    .app_handler()
-                    .get_agent_type_by_name(&environment, agent_type_name.0.as_str())
-                    .await?
+                let historical = Arc::new(
+                    self.historical_agent_types(environment.environment_id)
+                        .await?,
+                );
+                let Some(agent_type) = historical
+                    .iter()
+                    .find(|agent_type| agent_type.agent_type.type_name == agent_type_name)
                 else {
                     log_error(format!(
                         "Agent type {} not found",
@@ -1450,7 +1566,9 @@ impl AgentCommandHandler {
                             agent_type.implemented_by.component_revision,
                         )
                         .await?,
-                    agent_types: vec![agent_type.agent_type.type_name],
+                    agent_types: vec![agent_type.agent_type.type_name.clone()],
+                    component_name_filter: component_name,
+                    historical,
                 }])
             }
             None => {
@@ -1461,6 +1579,10 @@ impl AgentCommandHandler {
                     .await?;
 
                 let environment = &selected_components.environment;
+                let historical = Arc::new(
+                    self.historical_agent_types(environment.environment_id)
+                        .await?,
+                );
 
                 environment
                     .with_current_deployment_revision_or_default_warn(
@@ -1480,16 +1602,42 @@ impl AgentCommandHandler {
                                 {
                                     Some(component) => {
                                         targets.push(AgentListTarget {
-                                            agent_types: component_agent_types(&component),
+                                            agent_types: component_agent_types(
+                                                &component,
+                                                &historical,
+                                            ),
+                                            component_name_filter: Some(
+                                                component.component_name.clone(),
+                                            ),
+                                            historical: historical.clone(),
                                             component,
                                         });
                                     }
                                     None => {
-                                        log_error(format!(
-                                            "Component not found: {}",
-                                            component_name.0.log_color_error_highlight()
-                                        ));
-                                        bail!(NonSuccessfulExit)
+                                        let Some(previous) = historical.iter().find(|ty| {
+                                            ty.implemented_by.component_name == component_name.0
+                                        }) else {
+                                            log_error(format!(
+                                                "Component not found: {}",
+                                                component_name.0.log_color_error_highlight()
+                                            ));
+                                            bail!(NonSuccessfulExit)
+                                        };
+                                        let component = component_handler
+                                            .get_component_revision_by_id(
+                                                &previous.implemented_by.component_id,
+                                                previous.implemented_by.component_revision,
+                                            )
+                                            .await?;
+                                        targets.push(AgentListTarget {
+                                            agent_types: component_agent_types(
+                                                &component,
+                                                &historical,
+                                            ),
+                                            component_name_filter: Some(component_name),
+                                            historical: historical.clone(),
+                                            component,
+                                        });
                                     }
                                 }
                             }
@@ -1515,19 +1663,23 @@ impl AgentCommandHandler {
         if let Some(scan_cursor) = scan_cursor {
             let listed = targets
                 .iter()
-                .flat_map(|target| target.agent_types.iter())
-                .map(|agent_type| agent_type.0.as_str())
+                .flat_map(|target| {
+                    target
+                        .agent_types
+                        .iter()
+                        .map(move |agent_type| (target.component.id, agent_type.0.as_str()))
+                })
                 .collect::<BTreeSet<_>>();
             let unlisted = scan_cursor
-                .agent_types()
-                .filter(|agent_type| !listed.contains(agent_type))
+                .scans()
+                .filter(|scan| !listed.contains(scan))
                 .collect::<Vec<_>>();
             if !unlisted.is_empty() {
                 log_error(format!(
                     "The cursor continues agent types that are not listed: {}",
                     unlisted
                         .iter()
-                        .map(|agent_type| agent_type.log_color_highlight())
+                        .map(|(component, agent_type)| format!("{component}/{agent_type}"))
                         .join(", ")
                 ));
                 logln("");
@@ -1547,6 +1699,10 @@ impl AgentCommandHandler {
                 .list_component_agents(
                     &target.component,
                     &target.agent_types,
+                    target
+                        .component_name_filter
+                        .as_ref()
+                        .map(|name| name.0.as_str()),
                     Some(filters),
                     mode_overlay,
                     scan_cursor,
@@ -1556,9 +1712,9 @@ impl AgentCommandHandler {
                 .await?;
 
             view.agents
-                .extend(self.agent_views(&target.component, agents).await?);
+                .extend(self.agent_views(agents, &target.historical).await?);
             for (agent_type, type_scan_cursor) in type_scan_cursors {
-                next_cursor.insert(&agent_type, type_scan_cursor);
+                next_cursor.insert(target.component.id, &agent_type, type_scan_cursor);
             }
         }
         view.cursor = (!next_cursor.is_empty()).then(|| next_cursor.encode());
@@ -1578,23 +1734,21 @@ impl AgentCommandHandler {
     /// The views of listed agents, with their keys rendered in their source language.
     async fn agent_views(
         &self,
-        component: &ComponentDto,
         agents: Vec<AgentMetadata>,
+        historical: &[DeployedRegisteredAgentType],
     ) -> anyhow::Result<Vec<AgentMetadataView>> {
         let mut views = Vec::with_capacity(agents.len());
-        for agent in agents {
-            // A type can move to another component, whose history does not contain the
-            // agent's revision. List the agent without that revision's metadata in that case.
-            let Ok(agent_component) = self
-                .ctx
-                .component_handler()
-                .get_component_revision_by_id(&component.id, agent.component_revision)
+        for mut agent in agents {
+            let Ok((agent_component, _)) = self
+                .recorded_component_for_metadata(&agent, historical)
                 .await
             else {
+                agent.component_name = ComponentName(String::new());
                 views.push(AgentMetadataView::from(agent));
                 continue;
             };
 
+            agent.component_name = agent_component.component_name.clone();
             let parsed_agent_type_name = agent.agent_type_name.clone();
             let component_metadata: ComponentMetadata = agent_component.metadata.into();
 
@@ -1663,21 +1817,23 @@ impl AgentCommandHandler {
                 target
                     .agent_types
                     .iter()
-                    .map(|agent_type| (&target.component, agent_type))
+                    .map(move |agent_type| (target, agent_type))
             })
             .collect::<Vec<_>>();
         let names = types
             .iter()
-            .map(|(_, agent_type)| agent_type.0.as_str())
+            .map(|(target, agent_type)| (target.component.id, agent_type.0.as_str()))
             .collect::<Vec<_>>();
         let (agents, cursor) = read_page(
             &names,
             cursor,
             count,
             async |position, scan_cursor, limit| {
-                let (component, agent_type) = types[position];
+                let (target, agent_type) = types[position];
+                let component = &target.component;
                 let mut start = AgentListCursor::default();
                 start.insert(
+                    component.id,
                     agent_type,
                     scan_cursor.unwrap_or_else(|| ScanCursor::new(String::new())),
                 );
@@ -1685,6 +1841,10 @@ impl AgentCommandHandler {
                     .list_component_agents(
                         component,
                         std::slice::from_ref(agent_type),
+                        target
+                            .component_name_filter
+                            .as_ref()
+                            .map(|name| name.0.as_str()),
                         Some(filters),
                         mode_overlay,
                         Some(&start),
@@ -1693,7 +1853,7 @@ impl AgentCommandHandler {
                     )
                     .await?;
                 Ok((
-                    self.agent_views(component, agents).await?,
+                    self.agent_views(agents, &target.historical).await?,
                     cursors.into_iter().next().map(|(_, cursor)| cursor),
                 ))
             },
@@ -1875,42 +2035,42 @@ impl AgentCommandHandler {
 
     async fn cmd_get(&self, agent_id: AgentIdArgs) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
-        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
-        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
-
-        let clients = self.ctx.golem_clients().await?;
-
-        let metadata = {
-            let result = clients
-                .worker
-                .get_worker_metadata(
-                    &agent_id_match.environment.environment_id.0,
-                    &agent_id.0,
-                    None,
-                )
-                .await
-                .map_service_error()?;
-
-            AgentMetadata::from(agent_id_match.component_name, result)
+        let (environment, address) = self.resolve_agent_address(agent_id.agent_id).await?;
+        let (type_name, agent_id) = if let Some((name, id)) = parse_agent_id_address(&address) {
+            (name, id)
+        } else {
+            let matched = self
+                .match_agent_id_in_environment(environment.clone(), address)
+                .await?;
+            (
+                Some(matched.agent_type_name.0.clone()),
+                self.agent_id_of(&matched).await?,
+            )
         };
 
-        let component_metadata: ComponentMetadata = component.metadata.into();
-        let defaults = component_metadata
-            .agent_type_provision_configs()
-            .get(&agent_id_match.agent_type_name)
-            .cloned();
-
-        let secret_config_paths = secret_config_paths_for_agent_type(
-            component_metadata.agent_types(),
-            &agent_id_match.agent_type_name,
-        );
-
-        let parsed_key = metadata.parsed_key(&component_metadata);
-        let metadata_view = AgentMetadataView::from(metadata)
-            .with_defaults(defaults)
-            .with_secret_config_paths(secret_config_paths)
-            .with_source_language(agent_id_match.source_language.clone())
-            .with_rendered_key(parsed_key.as_ref());
+        let clients = self.ctx.golem_clients().await?;
+        let result = clients
+            .worker
+            .get_worker_metadata(&environment.environment_id.0, &agent_id.0, None)
+            .await
+            .map_service_error()?;
+        if type_name.is_some_and(|name| {
+            result
+                .agent_type_name
+                .as_ref()
+                .is_none_or(|actual| actual.0 != name)
+        }) {
+            bail!("Agent ID {agent_id} does not belong to the specified agent type");
+        }
+        let historical = self
+            .historical_agent_types(environment.environment_id)
+            .await
+            .unwrap_or_default();
+        let metadata = AgentMetadata::from(ComponentName(String::new()), result);
+        let metadata_view = self
+            .agent_views(vec![metadata], &historical)
+            .await?
+            .remove(0);
 
         self.ctx
             .log_handler()
@@ -2361,6 +2521,9 @@ impl AgentCommandHandler {
         disable_wakeup: bool,
     ) -> anyhow::Result<TryUpdateAllWorkersView> {
         let component_name = &component.component_name;
+        let historical = self
+            .historical_agent_types(component.environment_id)
+            .await?;
         let agent_filters = [
             // only consider durable agents
             AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable).to_string(),
@@ -2370,7 +2533,8 @@ impl AgentCommandHandler {
         let (agents_to_update, _) = self
             .list_component_agents(
                 component,
-                &component_agent_types(component),
+                &component_agent_types(component, &historical),
+                Some(component.component_name.0.as_str()),
                 Some(&agent_filters),
                 None,
                 None,
@@ -2642,10 +2806,14 @@ impl AgentCommandHandler {
         component: &ComponentDto,
     ) -> anyhow::Result<BulkAgentActionResult<(AgentId, AgentId, ComponentRevision)>> {
         let component_name = &component.component_name;
+        let historical = self
+            .historical_agent_types(component.environment_id)
+            .await?;
         let (agents, _) = self
             .list_component_agents(
                 component,
-                &component_agent_types(component),
+                &component_agent_types(component, &historical),
+                Some(component.component_name.0.as_str()),
                 None,
                 None,
                 None,
@@ -2720,10 +2888,14 @@ impl AgentCommandHandler {
         show_skip: bool,
     ) -> anyhow::Result<BulkAgentActionResult<AgentId>> {
         let component_name = &component.component_name;
+        let historical = self
+            .historical_agent_types(component.environment_id)
+            .await?;
         let (agents, _) = self
             .list_component_agents(
                 component,
-                &component_agent_types(component),
+                &component_agent_types(component, &historical),
+                Some(component.component_name.0.as_str()),
                 None,
                 None,
                 None,
@@ -2816,15 +2988,13 @@ impl AgentCommandHandler {
             )));
         }
         let keyed = agent_metadata.canonical_key.is_some();
-        let parameters =
-            ParsedAgentKey::parse_parameters(&agent_type, constructor_parameters, component_metadata)
-                .map_err(|error| {
-                    anyhow!(
-                        "the constructor parameters do not match the constructor of agent type {agent_type}: {error}"
-                    )
-                })
-                .and_then(|key| key_parameters(&key))
-                .map_err(RedeployAgentError::InvalidParameters)?;
+        let parameters = redeploy_parameters(
+            &agent_type,
+            constructor_parameters,
+            keyed,
+            component_metadata,
+        )
+        .map_err(RedeployAgentError::InvalidParameters)?;
 
         log_warn_action(
             "Redeploying",
@@ -2944,6 +3114,7 @@ impl AgentCommandHandler {
         &self,
         component: &ComponentDto,
         agent_types: &[AgentTypeName],
+        component_name_filter: Option<&str>,
         filters: Option<&[String]>,
         mode_overlay: Option<&AgentFilter>,
         start_cursor: Option<&AgentListCursor>,
@@ -2976,7 +3147,7 @@ impl AgentCommandHandler {
         for agent_type in agent_types {
             let mut current_scan_cursor = match start_cursor {
                 None => None,
-                Some(start_cursor) => match start_cursor.resume_at(agent_type) {
+                Some(start_cursor) => match start_cursor.resume_at(component.id, agent_type) {
                     Some(resume_at) => Some(resume_at),
                     None => continue,
                 },
@@ -2987,6 +3158,7 @@ impl AgentCommandHandler {
                     .find_agents_metadata(
                         &component.environment_id.0,
                         &agent_type.0,
+                        component_name_filter,
                         &WorkersMetadataRequest {
                             filter: filter.clone(),
                             cursor: current_scan_cursor.clone(),
@@ -3030,28 +3202,9 @@ impl AgentCommandHandler {
         agent_id_match: &AgentIdMatch,
     ) -> anyhow::Result<(ComponentDto, AgentId)> {
         let agent_id = self.agent_id_of(agent_id_match).await?;
-        let component = self
-            .ctx
-            .component_handler()
-            .resolve_component(
-                &agent_id_match.environment,
-                &agent_id_match.component_name,
-                Some(ComponentRevisionSelection::ByAgentId(
-                    agent_id_match.environment.environment_id,
-                    agent_id,
-                )),
-            )
+        let (component, _) = self
+            .recorded_agent_component(agent_id_match.environment.environment_id, agent_id)
             .await?;
-
-        let Some(component) = component else {
-            log_error(format!(
-                "Component {} not found",
-                agent_id_match.component_name.0.log_color_error_highlight()
-            ));
-            logln("");
-            bail!(NonSuccessfulExit);
-        };
-
         Ok((component, agent_id))
     }
 }
@@ -3060,15 +3213,28 @@ impl AgentCommandHandler {
 struct AgentListTarget {
     component: ComponentDto,
     agent_types: Vec<AgentTypeName>,
+    component_name_filter: Option<ComponentName>,
+    historical: Arc<Vec<DeployedRegisteredAgentType>>,
 }
 
-/// The agent types that `component` implements.
-fn component_agent_types(component: &ComponentDto) -> Vec<AgentTypeName> {
+/// Current and historical types of this component, not its types' current implementers.
+fn component_agent_types(
+    component: &ComponentDto,
+    historical: &[DeployedRegisteredAgentType],
+) -> Vec<AgentTypeName> {
     component
         .metadata
         .agent_types
         .iter()
         .map(|agent_type| agent_type.declaration.type_name.clone())
+        .chain(
+            historical
+                .iter()
+                .filter(|agent_type| agent_type.implemented_by.component_id == component.id)
+                .map(|agent_type| agent_type.agent_type.type_name.clone()),
+        )
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .collect()
 }
 
@@ -3120,6 +3286,28 @@ pub(crate) fn parse_agent_key(text: &str, component: &ComponentDto) -> Option<Pa
 /// The constructor parameters of a key in the REST wire form.
 fn key_parameters(key: &ParsedAgentKey) -> anyhow::Result<ExternalSchemaValue> {
     ExternalSchemaValue::try_from(key.parameters.value().clone()).map_err(anyhow::Error::msg)
+}
+
+fn redeploy_parameters(
+    agent_type: &AgentTypeName,
+    constructor_parameters: &str,
+    keyed: bool,
+    component_metadata: &ComponentMetadata,
+) -> anyhow::Result<ExternalSchemaValue> {
+    let parsed =
+        ParsedAgentKey::parse_parameters(agent_type, constructor_parameters, component_metadata)
+            .map_err(|error| {
+                anyhow!(
+                    "the constructor parameters do not match the constructor of agent type {agent_type}: {error}"
+                )
+            })?;
+    if keyed && parsed.canonical_parameters().map_err(anyhow::Error::msg)? != constructor_parameters
+    {
+        anyhow::bail!(
+            "the current constructor changes the canonical parameters of agent type {agent_type}; redeploy would change its key"
+        );
+    }
+    key_parameters(&parsed)
 }
 
 impl AgentCommandHandler {
@@ -3183,65 +3371,53 @@ impl AgentCommandHandler {
         environment: ResolvedEnvironmentIdentity,
         agent_id: String,
     ) -> anyhow::Result<AgentIdMatch> {
-        let (agent_type, address_id) = match parse_agent_id_address(&agent_id) {
-            Some((None, id)) => {
-                let agent_types = self
-                    .ctx
-                    .app_handler()
-                    .list_agent_types(&environment)
-                    .await?;
-                let Some(agent_type) = agent_types
-                    .into_iter()
-                    .find(|agent_type| agent_type.type_id.get() == id.type_tag())
-                else {
-                    logln("");
-                    log_error(format!(
-                        "No agent type of the selected deployment has the type of agent ID {}.",
-                        id.to_string().log_color_error_highlight()
-                    ));
-                    logln("");
-                    bail!(NonSuccessfulExit);
-                };
-                (agent_type, Some(id))
+        if let Some((type_name, id)) = parse_agent_id_address(&agent_id) {
+            let (component, agent_type) = self
+                .recorded_agent_component(environment.environment_id, id)
+                .await?;
+            if type_name.is_some_and(|name| name != agent_type.agent_type.type_name.0) {
+                bail!("Agent ID {id} does not belong to the specified agent type");
             }
-            Some((Some(agent_type_name), id)) => {
-                let agent_type = self
-                    .deployed_agent_type(&environment, &agent_type_name)
-                    .await?;
-                if agent_type.type_id.get() != id.type_tag() {
-                    logln("");
-                    log_error(format!(
-                        "Agent ID {} does not belong to agent type {}.",
-                        id.to_string().log_color_error_highlight(),
-                        agent_type_name.log_color_highlight()
-                    ));
-                    logln("");
-                    bail!(NonSuccessfulExit);
-                }
-                (agent_type, Some(id))
+            return Ok(AgentIdMatch {
+                environment,
+                component_name_match_kind: ComponentNameMatchKind::Unknown,
+                component_name: component.component_name,
+                agent_type_name: agent_type.agent_type.type_name.clone(),
+                source_language: SourceLanguage::from(
+                    agent_type.agent_type.source_language.as_str(),
+                ),
+                agent_type,
+                address: AgentAddress::Id(id),
+            });
+        }
+        let agent_type_name = match ParsedAgentKey::parse_agent_type_name(&agent_id) {
+            Ok(agent_type_name) => agent_type_name,
+            Err(err) => {
+                logln("");
+                log_error(format!(
+                    "Failed to parse agent name ({}) as agent id: {err}",
+                    agent_id.log_color_error_highlight()
+                ));
+                logln("");
+                log_text_view(&AgentNameHelp);
+                self.log_available_deployed_agent_constructors(&environment)
+                    .await;
+                bail!(NonSuccessfulExit);
             }
-            None => {
-                let agent_type_name = match ParsedAgentKey::parse_agent_type_name(&agent_id) {
-                    Ok(agent_type_name) => agent_type_name,
-                    Err(err) => {
-                        logln("");
-                        log_error(format!(
-                            "Failed to parse agent name ({}) as agent id: {err}",
-                            agent_id.log_color_error_highlight()
-                        ));
-                        logln("");
-                        log_text_view(&AgentNameHelp);
-                        self.log_available_deployed_agent_constructors(&environment)
-                            .await;
-                        bail!(NonSuccessfulExit);
-                    }
-                };
-                (
-                    self.deployed_agent_type(&environment, &agent_type_name.0)
-                        .await?,
-                    None,
-                )
-            }
+        };
+        let agent_type = match self
+            .ctx
+            .app_handler()
+            .get_agent_type_by_name(&environment, &agent_type_name.0)
+            .await?
+        {
+            Some(agent_type) => agent_type,
+            None => self
+                .historical_agent_types(environment.environment_id)
+                .await?
+                .into_iter()
+                .find(|agent_type| agent_type.agent_type.type_name == agent_type_name)
+                .ok_or_else(|| anyhow!("Agent type {agent_type_name} not found"))?,
         };
 
         let component = self
@@ -3253,24 +3429,21 @@ impl AgentCommandHandler {
             )
             .await?;
 
-        let address = match address_id {
-            Some(id) => AgentAddress::Id(id),
-            None => match parse_agent_key(&agent_id, &component) {
-                Some(key) => AgentAddress::Key(Box::new(key)),
-                None => {
-                    logln("");
-                    log_error(format!(
-                        "Failed to parse the constructor parameters of agent {}",
-                        agent_id.log_color_error_highlight()
-                    ));
-                    logln("");
-                    log_text_view(&AvailableAgentConstructorsHelp::for_component(
-                        &component,
-                        Some(&agent_type.agent_type.type_name),
-                    ));
-                    bail!(NonSuccessfulExit);
-                }
-            },
+        let address = match parse_agent_key(&agent_id, &component) {
+            Some(key) => AgentAddress::Key(Box::new(key)),
+            None => {
+                logln("");
+                log_error(format!(
+                    "Failed to parse the constructor parameters of agent {}",
+                    agent_id.log_color_error_highlight()
+                ));
+                logln("");
+                log_text_view(&AvailableAgentConstructorsHelp::for_component(
+                    &component,
+                    Some(&agent_type.agent_type.type_name),
+                ));
+                bail!(NonSuccessfulExit);
+            }
         };
 
         Ok(AgentIdMatch {
@@ -3282,37 +3455,6 @@ impl AgentCommandHandler {
             agent_type,
             address,
         })
-    }
-
-    async fn deployed_agent_type(
-        &self,
-        environment: &ResolvedEnvironmentIdentity,
-        agent_type_name: &str,
-    ) -> anyhow::Result<DeployedRegisteredAgentType> {
-        match self
-            .ctx
-            .app_handler()
-            .get_agent_type_by_name(environment, agent_type_name)
-            .await?
-        {
-            Some(agent_type) => Ok(agent_type),
-            None => {
-                logln("");
-                log_error(format!(
-                    "Agent type {} is not found in the selected deployment.",
-                    agent_type_name.log_color_error_highlight()
-                ));
-                logln("");
-                logln(
-                    "Deploy the component that defines this agent type or specify environment/application/account prefixes.",
-                );
-                logln("");
-                log_text_view(&AgentNameHelp);
-                self.log_available_deployed_agent_constructors(environment)
-                    .await;
-                bail!(NonSuccessfulExit);
-            }
-        }
     }
 
     /// The ID of the addressed agent. A key is looked up, so a key that no current agent has
@@ -3339,6 +3481,15 @@ impl AgentCommandHandler {
     }
 
     pub async fn match_agent_id(&self, agent_id: RawAgentId) -> anyhow::Result<AgentIdMatch> {
+        let (environment, address) = self.resolve_agent_address(agent_id).await?;
+        self.match_agent_id_in_environment(environment, address)
+            .await
+    }
+
+    async fn resolve_agent_address(
+        &self,
+        agent_id: RawAgentId,
+    ) -> anyhow::Result<(ResolvedEnvironmentIdentity, String)> {
         let segments = split_agent_id(&agent_id.0);
         match segments.len() {
             // <AGENT>
@@ -3351,8 +3502,7 @@ impl AgentCommandHandler {
                     .resolve_environment(EnvironmentResolveMode::Any)
                     .await?;
 
-                self.match_agent_id_in_environment(environment, agent_id)
-                    .await
+                Ok((environment, agent_id))
             }
             // <ENVIRONMENT>/<AGENT>
             // <APPLICATION>/<ENVIRONMENT>/<AGENT>
@@ -3443,8 +3593,7 @@ impl AgentCommandHandler {
                     )
                     .await?;
 
-                self.match_agent_id_in_environment(environment, agent_id)
-                    .await
+                Ok((environment, agent_id))
             }
             _ => {
                 logln("");
@@ -3563,12 +3712,7 @@ fn parse_method_parameters_with_error_table(
         .ok_or_else(|| anyhow!("Method '{}' not found in agent type", method_name))?;
 
     let InputSchema::Parameters(fields) = &method.input_schema;
-    // Auto-injected fields (the principal) are filled by the host and carry no
-    // value, so the caller supplies only the rest.
-    let element_schemas = fields
-        .iter()
-        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
-        .collect::<Vec<_>>();
+    let element_schemas = fields.iter().collect::<Vec<_>>();
 
     if element_schemas.len() != arguments.len() {
         logln("");
@@ -3704,7 +3848,7 @@ pub(super) fn parse_method_argument_schema_value(
 /// The page ends at the first scan that gives a scan cursor, or when `count` items are listed.
 /// The next cursor includes the unfinished type and every type not yet scanned.
 async fn read_page<T>(
-    component_names: &[&str],
+    scans: &[(ComponentId, &str)],
     cursor: Option<&AgentListCursor>,
     count: u64,
     mut scan: impl AsyncFnMut(
@@ -3717,9 +3861,11 @@ async fn read_page<T>(
         bail!("A page needs a --max-count of at least 1");
     }
     if let Some(cursor) = cursor {
-        for agent_type in cursor.agent_types() {
-            if !component_names.contains(&agent_type) {
-                bail!("The page cursor is for agent type {agent_type}, which is not selected");
+        for (component, agent_type) in cursor.scans() {
+            if !scans.contains(&(component, agent_type)) {
+                bail!(
+                    "The page cursor is for component {component} and agent type {agent_type}, which is not selected"
+                );
             }
         }
     }
@@ -3727,17 +3873,18 @@ async fn read_page<T>(
     let mut remaining = count;
     let mut next = AgentListCursor::default();
     let mut stopped = false;
-    for (position, name) in component_names.iter().enumerate() {
+    for (position, (component, name)) in scans.iter().enumerate() {
         let agent_type = AgentTypeName((*name).to_string());
         let scan_cursor = match cursor {
             None => None,
-            Some(cursor) => match cursor.resume_at(&agent_type) {
+            Some(cursor) => match cursor.resume_at(*component, &agent_type) {
                 Some(cursor) => cursor.into_option(),
                 None => continue,
             },
         };
         if stopped || remaining == 0 {
             next.insert(
+                *component,
                 &agent_type,
                 scan_cursor.unwrap_or_else(|| ScanCursor::new(String::new())),
             );
@@ -3747,7 +3894,7 @@ async fn read_page<T>(
         remaining = remaining.saturating_sub(listed.len() as u64);
         items.extend(listed);
         if let Some(next_scan_cursor) = next_scan_cursor {
-            next.insert(&agent_type, next_scan_cursor);
+            next.insert(*component, &agent_type, next_scan_cursor);
             stopped = true;
         }
     }
@@ -3960,14 +4107,14 @@ mod tests {
         AgentListCursor, AgentListMode, AgentUpdateMode, ScanCursor, apply_list_mode_filter,
         is_selected_update_attempt, parse_agent_id_address, parse_agent_key,
         parse_method_argument_schema_value, parse_method_parameters_with_error_table,
-        pending_update_progress, read_page, render_revert_command, split_agent_id,
-        validate_ordinary_agent_type,
+        pending_update_progress, read_page, redeploy_parameters, render_revert_command,
+        split_agent_id, validate_ordinary_agent_type,
     };
     use crate::agent_id_display::SourceLanguage;
     use crate::context::GlobalEnvironmentSelector;
     use crate::model::environment::EnvironmentReference;
     use golem_common::model::account::AccountId;
-    use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
+    use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentKey, Snapshotting};
     use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::component::{
         ComponentDto, ComponentId, ComponentName, ComponentRevision,
@@ -3976,8 +4123,8 @@ mod tests {
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
     use golem_common::model::{AgentFilter, FilterComparator, OplogIndex, StringFilterComparator};
     use golem_common::schema::agent::{
-        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, AutoInjectedKind, InputSchema,
-        NamedField, OutputSchema,
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, NamedField,
+        OutputSchema,
     };
     use golem_common::schema::schema_type::{NamedFieldType, VariantCaseType};
     use golem_common::schema::{SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId};
@@ -3997,7 +4144,10 @@ mod tests {
         Vec<(Vec<String>, Option<String>)>,
         Vec<(usize, Option<String>)>,
     ) {
-        let names = components.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+        let names = components
+            .iter()
+            .map(|(name, _)| (ComponentId::new(), *name))
+            .collect::<Vec<_>>();
         let mut pages = Vec::new();
         let mut scans = Vec::new();
         let mut cursor = None::<AgentListCursor>;
@@ -4031,17 +4181,14 @@ mod tests {
     async fn a_page_that_ends_a_component_at_its_limit_names_the_next_component() {
         let (pages, scans) = read_all_pages(&[("a:x", 2), ("b:y", 3)], 2).await;
         assert_eq!(
-            pages,
+            pages
+                .iter()
+                .map(|(items, cursor)| (items.clone(), cursor.is_some()))
+                .collect::<Vec<_>>(),
             vec![
-                (
-                    vec!["a:x#0".to_string(), "a:x#1".to_string()],
-                    Some("eyJiOnkiOiIifQ".to_string())
-                ),
-                (
-                    vec!["b:y#0".to_string(), "b:y#1".to_string()],
-                    Some("eyJiOnkiOiIyIn0".to_string())
-                ),
-                (vec!["b:y#2".to_string()], None),
+                (vec!["a:x#0".to_string(), "a:x#1".to_string()], true),
+                (vec!["b:y#0".to_string(), "b:y#1".to_string()], true),
+                (vec!["b:y#2".to_string()], false),
             ]
         );
         // The cursor for an unscanned type starts it at its beginning; no scan asks for 0 items.
@@ -4056,6 +4203,16 @@ mod tests {
             pages,
             vec![(vec!["a:x#0".to_string(), "b:y#0".to_string()], None)]
         );
+    }
+
+    #[test]
+    async fn page_reaches_the_second_component_of_a_moved_type() {
+        let names = [(ComponentId::new(), "T"), (ComponentId::new(), "T")];
+        let scan = async |position, _: Option<ScanCursor>, _| Ok((vec![position], None));
+        let (first, token) = read_page(&names, None, 1, scan).await.unwrap();
+        let cursor = AgentListCursor::decode(token.as_deref().unwrap()).unwrap();
+        let (second, end) = read_page(&names, Some(&cursor), 1, scan).await.unwrap();
+        assert_eq!((first, second, end), (vec![0], vec![1], None));
     }
 
     #[test]
@@ -4258,16 +4415,10 @@ mod tests {
     }
 
     #[test]
-    fn method_arguments_omit_host_injected_fields() {
+    fn method_arguments_are_every_declared_field() {
         let mut agent_type = test_agent_type_schema(AgentMode::Durable);
-        let principal = NamedField::auto_injected(
-            "principal",
-            AutoInjectedKind::Principal,
-            SchemaType::string(),
-        );
         agent_type.methods[0].input_schema = InputSchema::Parameters(vec![
             NamedField::user_supplied("name", SchemaType::string()),
-            principal.clone(),
             NamedField::user_supplied("count", SchemaType::u32()),
         ]);
         for language in [
@@ -4289,7 +4440,17 @@ mod tests {
                 },
             );
         }
-        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![principal]);
+        // A declared field is never left out: too few arguments are refused.
+        assert!(
+            parse_method_parameters_with_error_table(
+                &agent_type,
+                "run",
+                vec!["\"alice\"".to_string()],
+                &SourceLanguage::TypeScript,
+            )
+            .is_err()
+        );
+        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![]);
         assert_eq!(
             parse_method_parameters_with_error_table(
                 &agent_type,
@@ -4398,6 +4559,7 @@ mod tests {
             component_name: ComponentName("counter:main".to_string()),
             hash: Default::default(),
             wasm_hash: Default::default(),
+            package_metadata: None,
             application_id: ApplicationId(uuid::Uuid::nil()),
             account_id: AccountId(uuid::Uuid::nil()),
             component_size: 0,
@@ -4410,6 +4572,35 @@ mod tests {
             )
             .into(),
         }
+    }
+
+    #[test]
+    fn component_selection_includes_past_types_but_not_another_components_types() {
+        let component = counter_component();
+        let mut moved = component.metadata.agent_types[0].declaration.clone();
+        moved.type_name = AgentTypeName("Moved".into());
+        let previous = golem_common::model::agent::DeployedRegisteredAgentType {
+            type_id: golem_common::model::type_id::TypeId::try_from(1u32).unwrap(),
+            agent_type: moved,
+            implemented_by: golem_common::model::agent::RegisteredAgentTypeImplementer {
+                component_id: component.id,
+                component_revision: component.revision,
+                component_name: component.component_name.0.clone(),
+                account_id: component.account_id,
+                account_email: golem_common::model::account::AccountEmail::new("owner@example.com"),
+            },
+            webhook_prefix_authority_and_path: None,
+        };
+        let mut other = previous.clone();
+        other.implemented_by.component_id = ComponentId::new();
+        other.agent_type.type_name = AgentTypeName("OnlyOnOtherComponent".into());
+        assert_eq!(
+            super::component_agent_types(&component, &[previous, other]),
+            vec![
+                AgentTypeName("CounterAgent".into()),
+                AgentTypeName("Moved".into())
+            ]
+        );
     }
 
     #[test]
@@ -4440,6 +4631,29 @@ mod tests {
                 "{not_a_key} must not parse as a key"
             );
         }
+    }
+
+    #[test]
+    fn keyed_redeploy_rejects_constructor_rounding_before_mutation() {
+        let name = AgentTypeName("Meter".to_string());
+        let component = |field_type| {
+            let mut ty = test_agent_type_schema(AgentMode::Durable);
+            ty.type_name = name.clone();
+            ty.constructor.input_schema =
+                InputSchema::Parameters(vec![NamedField::user_supplied("reading", field_type)]);
+            ComponentMetadata::from_parts(Default::default(), vec![], vec![ty], BTreeMap::new())
+        };
+        let old = component(SchemaType::f64());
+        let stored = ParsedAgentKey::parse_parameters(&name, "16777217.0", &old)
+            .unwrap()
+            .canonical_parameters()
+            .unwrap();
+        let new = component(SchemaType::f32());
+        let error = redeploy_parameters(&name, &stored, true, &new).unwrap_err();
+        assert!(error.to_string().contains("redeploy would change its key"));
+        assert!(redeploy_parameters(&name, &stored, true, &old).is_ok());
+        assert!(redeploy_parameters(&name, "16777216.0", true, &new).is_ok());
+        assert!(redeploy_parameters(&name, &stored, false, &new).is_ok());
     }
 
     #[test]

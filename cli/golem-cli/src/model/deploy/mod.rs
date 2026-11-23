@@ -1643,6 +1643,9 @@ impl TextOutput for DeploymentDiff {
                             if diff.wasm_changed {
                                 logln("    - binary");
                             }
+                            if diff.package_metadata_changed {
+                                logln("    - package metadata");
+                            }
                             if !diff.agent_type_changes.is_empty() {
                                 logln("    - agent type declarations");
                                 for (agent_type, change) in &diff.agent_type_changes {

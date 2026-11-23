@@ -195,7 +195,7 @@ Keep normal policy annotations and registration. Incomplete or conflicting hook 
 combined with explicit byte hooks or `Snapshotted[S]`, fail compilation. Existing simpler modes remain unchanged.
 Binary-only applications use JSON null state; zero-part bundles still emit multipart. Part names are case-sensitive
 `[A-Za-z0-9_][A-Za-z0-9_.-]*`, and content types are bare ASCII MIME types without parameters, normalized lowercase.
-Parts are application-owned bytes, not automatically managed resources. The SDK owns principal-envelope encoding.
+Parts are application-owned bytes, not automatically managed resources. The SDK owns envelope encoding; the envelope holds no caller.
 
 Hooks run unpersisted and may be retried. Whole-buffer copies amplify peak memory usage; the host's 64 KiB
 inline/blob-spill threshold is not a snapshot size cap. See the

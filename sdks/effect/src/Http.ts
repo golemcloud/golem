@@ -6,6 +6,7 @@ import {
   type FileResponseHeaders,
 } from "@golemcloud/http-contract"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
+import type * as ToolCommon from "golem:tool/common@0.1.0"
 import { withPipe } from "./internal/pipeable.js"
 import type {
   EndpointBound,
@@ -523,6 +524,10 @@ export interface EndpointDef<
   readonly cors: ReadonlyArray<string>
   readonly durableStreams?: DurableStreamOptions
   readonly mode?: HttpRouteMode
+  /** Stable tool route identity. */
+  readonly routeId?: string
+  /** Response headers for a tool endpoint. */
+  readonly responseHeaders?: FileResponseHeaders
 }
 
 // ---------------------------------------------------------------------------
@@ -923,6 +928,8 @@ export interface EndpointOptions<H extends Readonly<Record<string, string>> = No
   /** Durable-stream route customization for this endpoint. */
   readonly durableStreams?: DurableStreamOptions
   readonly mode?: HttpRouteMode
+  readonly routeId?: string
+  readonly responseHeaders?: FileResponseHeaders
 }
 
 const buildEndpoint = <H extends Readonly<Record<string, string>>>(
@@ -946,6 +953,8 @@ const buildEndpoint = <H extends Readonly<Record<string, string>>>(
     cors: opts?.cors ?? [],
     durableStreams: opts?.durableStreams,
     mode: opts?.mode,
+    routeId: opts?.routeId,
+    responseHeaders: opts?.responseHeaders,
   }) as unknown as EndpointDef<string>
 }
 
@@ -1120,6 +1129,8 @@ export const put: EndpointFactory<"bodyful"> = verbHelper<"bodyful">("PUT")
  * @category constructors
  */
 export const del: EndpointFactory<"bodyless"> = verbHelper<"bodyless">("DELETE")
+/** DELETE endpoint constructor. @since 1.6.0 @category constructors */
+export { del as delete }
 /**
  * Shorthand for `Http.endpoint("PATCH", path, opts?)`. Bodyful — see
  * {@link post}.
@@ -1455,6 +1466,9 @@ export const compileMount = (mountDef: MountDef<string, string>): AgentCommon.Ht
  * @category metadata
  */
 export const compileEndpoint = (ep: EndpointDef<string>): AgentCommon.HttpEndpointDetails => {
+  if (ep.routeId !== undefined || ep.responseHeaders !== undefined) {
+    throw new TypeError("routeId and responseHeaders are tool endpoint options")
+  }
   if (
     ep.mode !== undefined &&
     ep.mode !== "durableStreams" &&
@@ -1508,6 +1522,63 @@ export const compileEndpoint = (ep: EndpointDef<string>): AgentCommon.HttpEndpoi
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
+
+/** Command-group HTTP suffix; publishes no endpoint. @since 1.6.0 @category models */
+export interface PrefixDef {
+  readonly prefix: ReadonlyArray<PathSegment>
+}
+
+/** Declare the suffix inherited by a command group's descendants. @since 1.6.0 @category constructors */
+export const prefix = (path: string): PrefixDef => ({ prefix: runParse(parseMountPath(path)) })
+
+const toolPath = (
+  path: ReadonlyArray<AgentCommon.PathSegment>,
+): ToolCommon.ToolHttpMount["pathPrefix"] =>
+  path.map((segment) => {
+    if (segment.tag !== "segment")
+      throw new TypeError("Tool paths cannot use agent system variables")
+    return segment.val
+  })
+
+/** Compile a tool mount without agent admission metadata. @since 1.6.0 @category metadata */
+export const compileToolMount = (mount: MountDef<string, string>): ToolCommon.ToolHttpMount => {
+  if (
+    mount.authRequired ||
+    mount.cors.length ||
+    mount.phantomAgent ||
+    mount.phantomId ||
+    mount.webhookSuffix.length ||
+    mount.exposeFiles?.length ||
+    mount.fileResponseHeaders
+  ) {
+    throw new TypeError("Tool mounts declare only a path; admission belongs to the export")
+  }
+  return { pathPrefix: toolPath(mount.pathPrefix.map(segmentToWit)) }
+}
+
+/** Compile a tool command endpoint or prefix with neutral route types. @since 1.6.0 @category metadata */
+export const compileToolHttp = (spec: EndpointDef<string> | PrefixDef): ToolCommon.CommandHttp => {
+  if ("prefix" in spec)
+    return { tag: "prefix", val: { pathSuffix: toolPath(spec.prefix.map(segmentToWit)) } }
+  if (spec.authRequired !== undefined || spec.cors.length)
+    throw new TypeError("Tool endpoint admission and CORS belong to the export")
+  const endpoint = compileEndpoint({ ...spec, routeId: undefined, responseHeaders: undefined })
+  if (endpoint.httpMethod.tag !== "method")
+    throw new TypeError("Tools require a concrete HTTP method")
+  return {
+    tag: "endpoint",
+    val: {
+      routeId: spec.routeId,
+      httpMethod: endpoint.httpMethod.val,
+      pathSuffix: toolPath(endpoint.pathSuffix),
+      queryVars: endpoint.queryVars,
+      headerVars: endpoint.headerVars,
+      responseHeaders: compileFileResponseHeaders(spec.responseHeaders),
+      mode: endpoint.mode,
+      durableStreams: endpoint.durableStreams,
+    },
+  }
+}
 
 /**
  * Result of `validateAgentHttp`: the compiled WIT mount (when present)

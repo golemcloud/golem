@@ -369,6 +369,7 @@ fn filesystem_turns_allow_pending_invocations_and_updates_to_progress() {
             oplog_index: OplogIndex::from_u64(4),
             idempotency_key: Some(InvocationId(Uuid::from_u128(1))),
             manual_update_target_revision: None,
+            operation: None,
         };
         let mut status = AgentStatusRecord {
             pending_invocations: vec![pending],
@@ -433,6 +434,7 @@ fn filesystem_turns_preserve_initialization_and_control_priority() {
             oplog_index: OplogIndex::from_u64(2),
             idempotency_key: Some(constructor),
             manual_update_target_revision: None,
+            operation: None,
         }],
         ..Default::default()
     });
@@ -500,6 +502,7 @@ fn future_invocations_do_not_block_ready_work_or_idle() {
         oplog_index: OplogIndex::from_u64(3),
         idempotency_key: Some(InvocationId(Uuid::from_u128(3))),
         manual_update_target_revision: None,
+        operation: None,
     };
     let ready = PendingInvocationRef {
         not_before: None,
@@ -2442,6 +2445,7 @@ fn periodic_snapshot_failed_invocation_triggers_immediate_recovery() {
         error: AgentError::InternalError("boom".to_string()),
         retry_from: OplogIndex::INITIAL,
         semantic_trap_retry_override: None,
+        provenance: crate::model::FailureProvenance::Host,
     });
 
     assert_eq!(

@@ -231,6 +231,7 @@ fn streaming_caller_result(
 async fn seed_direct_session(
     deps: &BenchmarkTestDependencies,
     user: &TestUserContext<BenchmarkTestDependencies>,
+    environment_id: EnvironmentId,
     application: &str,
     environment: &str,
     target: &ParsedAgentKey,
@@ -239,6 +240,7 @@ async fn seed_direct_session(
     let report = PublicInvocationSession::start(
         deps,
         &user.token,
+        environment_id,
         application,
         environment,
         target,
@@ -713,6 +715,7 @@ impl StreamingRpcCold {
         seed_direct_session(
             &context.deps,
             &user,
+            environment_id,
             &application,
             &environment,
             &warm,
@@ -748,6 +751,7 @@ impl StreamingRpcCold {
             seed_direct_session(
                 &context.deps,
                 &user,
+                environment_id,
                 &application,
                 &environment,
                 &target,
@@ -792,6 +796,7 @@ impl StreamingRpcCold {
         let mut session = PublicInvocationSession::start(
             &context.deps,
             &iteration.user.token,
+            iteration.environment_id,
             &iteration.application,
             &iteration.environment,
             &iteration.target,

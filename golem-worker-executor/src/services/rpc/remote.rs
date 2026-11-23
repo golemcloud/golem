@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::caller::Principal;
 
 impl RemoteInvocationRpc {
     pub fn new(worker_proxy: Arc<dyn WorkerProxy>, shard_service: Arc<dyn ShardService>) -> Self {
@@ -54,7 +55,7 @@ impl Rpc for RemoteInvocationRpc {
             method_name,
             input,
             invocation_context,
-            principal,
+            caller,
             scope_card,
         } = invocation
         else {
@@ -62,8 +63,8 @@ impl Rpc for RemoteInvocationRpc {
                 details: "guest scheduling requires an agent method invocation".to_string(),
             });
         };
-        let parent = match &principal {
-            Principal::Agent(agent) => Some(agent.agent_id.into()),
+        let parent = match &caller.immediate {
+            Principal::Agent(agent) => Some(agent.address.into()),
             _ => None,
         };
         let start = InvocationStart {
@@ -90,7 +91,7 @@ impl Rpc for RemoteInvocationRpc {
                 tracing: Some(invocation_context.into()),
             }),
             auth_ctx: Some(auth_ctx.clone().into()),
-            principal: Some(principal.into()),
+            caller: Some(caller.into()),
             environment_id: Some(owned_agent_id.environment_id.into()),
             config: Vec::new(),
             component_owner_account_id: None,
@@ -177,6 +178,7 @@ impl Rpc for RemoteInvocationRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         idempotency_key: IdempotencyKey,
@@ -191,7 +193,7 @@ impl Rpc for RemoteInvocationRpc {
                 HashMap::from_iter(self_env.to_vec()),
                 self_stack,
                 config,
-                caller_agent_principal(self_agent_id),
+                caller.clone(),
                 auth_ctx,
                 Some(idempotency_key),
             )
@@ -216,6 +218,7 @@ impl Rpc for RemoteInvocationRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         idempotency_key: Option<IdempotencyKey>,
@@ -224,7 +227,7 @@ impl Rpc for RemoteInvocationRpc {
         let owned_agent_id = &target.owned_agent_id;
         debug!("Ensuring remote target worker exists");
 
-        let principal = caller_agent_principal(self_agent_id);
+        let caller = caller.clone();
 
         let fingerprint = self
             .worker_proxy
@@ -235,7 +238,7 @@ impl Rpc for RemoteInvocationRpc {
                 HashMap::from_iter(self_env.to_vec()),
                 self_stack,
                 config,
-                principal,
+                caller,
                 auth_ctx,
                 // The receiving executor checks a fresh ephemeral instance against the same owner
                 // key the caller derived it from.
@@ -263,12 +266,13 @@ impl Rpc for RemoteInvocationRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
     ) -> Result<SchemaValue, RpcError> {
         let owned_agent_id = &target.owned_agent_id;
-        let principal = caller_agent_principal(self_agent_id);
+        let caller = caller.clone();
         let output = self
             .worker_proxy
             .invoke_agent(
@@ -284,7 +288,7 @@ impl Rpc for RemoteInvocationRpc {
                 HashMap::from_iter(self_env.to_vec()),
                 self_stack,
                 config,
-                principal,
+                caller,
                 owned_agent_id.environment_id,
                 auth_ctx,
                 scope_card,
@@ -316,6 +320,7 @@ impl Rpc for RemoteInvocationRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
@@ -337,7 +342,7 @@ impl Rpc for RemoteInvocationRpc {
                     tracing: Some(self_stack.into()),
                 }),
                 auth_ctx: Some(auth_ctx.clone().into()),
-                principal: Some(caller_agent_principal(self_agent_id).into()),
+                caller: Some(caller.clone().into()),
                 environment_id: Some(owned_agent_id.environment_id.into()),
                 config: config.into_iter().map(Into::into).collect(),
                 component_owner_account_id: None,
@@ -429,9 +434,7 @@ impl Rpc for RemoteInvocationRpc {
                                         operation: ResumeOperation::Resume as i32,
                                         cursors: Vec::new(),
                                         auth_ctx: Some(auth_ctx.clone().into()),
-                                        principal: Some(
-                                            caller_agent_principal(self_agent_id).into(),
-                                        ),
+                                        caller: Some(caller.clone().into()),
                                     },
                                 )),
                             };
@@ -576,11 +579,12 @@ impl Rpc for RemoteInvocationRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), RpcError> {
         let owned_agent_id = &target.owned_agent_id;
-        let principal = caller_agent_principal(self_agent_id);
+        let caller = caller.clone();
         self.worker_proxy
             .invoke_agent(
                 &target,
@@ -595,7 +599,7 @@ impl Rpc for RemoteInvocationRpc {
                 HashMap::from_iter(self_env.to_vec()),
                 self_stack,
                 config,
-                principal,
+                caller,
                 owned_agent_id.environment_id,
                 auth_ctx,
                 None,
@@ -620,7 +624,15 @@ async fn confirm_terminal_response_is_last(
     }
 }
 
-fn rpc_error_from_rejection(rejected: InvocationRejected) -> RpcError {
+pub(super) fn rpc_error_from_rejection(rejected: InvocationRejected) -> RpcError {
+    // A reused key of a cancelled invocation is rejected before acceptance; it keeps the
+    // permanent `cancelled` error of a finished one.
+    if let Some(worker_error) = &rejected.worker_error
+        && let Ok(error @ WorkerExecutorError::InvocationCancelled) =
+            WorkerExecutorError::try_from(worker_error.clone())
+    {
+        return error.into();
+    }
     match InvocationRejectionReason::try_from(rejected.reason)
         .unwrap_or(InvocationRejectionReason::Internal)
     {

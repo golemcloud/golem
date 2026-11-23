@@ -98,9 +98,7 @@ pub(super) async fn run_session(
             debug!(attempt = recovery.attempts, "HTTP session reattach attempt");
             let resume = recovery
                 .pending
-                .get_or_insert_with(|| {
-                    make_resume(identity, &output.cursors, start.principal.clone())
-                })
+                .get_or_insert_with(|| make_resume(identity, &output.cursors, start.caller.clone()))
                 .clone();
             first_request = InvocationRequest {
                 request: Some(invocation_request::Request::ResumeAttach(resume.clone())),
@@ -216,7 +214,7 @@ pub(super) async fn run_session(
                 recovery.pending = Some(make_resume(
                     accepted.as_ref().unwrap(),
                     &output.cursors,
-                    start.principal.clone(),
+                    start.caller.clone(),
                 ));
                 recovery.pending.as_mut().unwrap().operation = operation as i32;
                 continue;
@@ -342,12 +340,15 @@ pub(super) async fn run_session(
                 return;
             }
             if request_tx.send(request).await.is_err() {
-                continue 'attempts;
+                break;
             }
         }
         // Output disposal is durable only once its terminal response is observed. Reissue any
         // still-pending controls after every accepted attachment.
         for stream_id in output.pending_disposals.iter().copied().collect::<Vec<_>>() {
+            if request_tx.is_closed() {
+                break;
+            }
             let Some(&durable_id) = output.controls.get(&stream_id) else {
                 continue;
             };
@@ -360,12 +361,18 @@ pub(super) async fn run_session(
                 return;
             }
             if request_tx.send(request).await.is_err() {
-                continue 'attempts;
+                break;
             }
         }
 
         loop {
-            if input.disposal_pending && !input.terminal && input.retained.is_empty() {
+            // The executor may close its request side before delivering its final responses.
+            // Keep draining them; only response loss requires another attachment.
+            if !request_tx.is_closed()
+                && input.disposal_pending
+                && !input.terminal
+                && input.retained.is_empty()
+            {
                 let request = cancel_request(
                     INPUT_STREAM_ID,
                     input.next_sequence,
@@ -383,7 +390,10 @@ pub(super) async fn run_session(
                     return;
                 }
                 if request_tx.send(request).await.is_err() {
-                    continue 'attempts;
+                    debug!(
+                        reason = "input_disposal_send_closed",
+                        "HTTP session drains remaining responses"
+                    );
                 }
             }
             let can_read_input = input.can_read(&limits);
@@ -411,8 +421,17 @@ pub(super) async fn run_session(
                     (permit, responses.next().await)
                 } => {
                     let (permit, response) = response;
-                    let Some(response) = response else { continue 'attempts };
-                    let response = match response { Ok(response) => response, Err(_) => continue 'attempts };
+                    let Some(response) = response else {
+                        debug!(reason = "response_eof", "HTTP session requires reattachment");
+                        continue 'attempts;
+                    };
+                    let response = match response {
+                        Ok(response) => response,
+                        Err(error) => {
+                            debug!(reason = "response_error", error = %error, "HTTP session requires reattachment");
+                            continue 'attempts;
+                        }
+                    };
                     if response.encoded_len() > limits.max_event_bytes {
                         send_error(&events, HttpSessionError::RetainedInputLimit).await;
                         return;
@@ -495,7 +514,10 @@ pub(super) async fn run_session(
                             permit.send(HttpSessionEvent::Finished(finished));
                             return;
                         }
-                        invocation_response::Response::AttachmentRevoked(_) => continue 'attempts,
+                        invocation_response::Response::AttachmentRevoked(_) => {
+                            debug!(reason = "attachment_revoked", "HTTP session requires reattachment");
+                            continue 'attempts;
+                        }
                         invocation_response::Response::Accepted(_) | invocation_response::Response::Rejected(_) => unreachable!(),
                     }
                 }
@@ -512,7 +534,7 @@ pub(super) async fn run_session(
                         },
                         else => std::future::pending().await,
                     }
-                } => {
+                }, if !request_tx.is_closed() => {
                     let Some(command) = command else {
                         continue;
                     };
@@ -533,7 +555,9 @@ pub(super) async fn run_session(
                         send_error(&events, error).await;
                         return;
                     }
-                    if request_tx.send(request).await.is_err() { continue 'attempts; }
+                    if request_tx.send(request).await.is_err() {
+                        debug!(reason = "command_send_closed", "HTTP session drains remaining responses");
+                    }
                 }
             }
         }
@@ -679,7 +703,7 @@ fn accepted_identity(accepted: InvocationAccepted) -> Result<AcceptedIdentity, H
 fn make_resume(
     identity: &AcceptedIdentity,
     cursors: &HashMap<(u64, u64), Vec<u8>>,
-    principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+    caller: Option<golem_api_grpc::proto::golem::component::Caller>,
 ) -> ResumeAttach {
     let mut cursors = cursors
         .iter()
@@ -703,7 +727,7 @@ fn make_resume(
         operation: ResumeOperation::Resume as i32,
         cursors,
         auth_ctx: None,
-        principal,
+        caller,
     }
 }
 

@@ -16,7 +16,7 @@
 //! PUT/DELETE handling and the session summary, plus the input/output schema
 //! inspection that decides which slots a route declares.
 
-use super::super::call_agent::principal_from_request;
+use super::super::call_agent::caller_from_request;
 use super::super::error::RequestHandlerError;
 use super::super::route_resolver::ResolvedRouteEntry;
 use super::super::{ResponseBody, RichRequest, RouteExecutionResult};
@@ -97,7 +97,7 @@ impl DurableStreamsHandler {
             stream.take_host_endpoint::<u64>()
         })
         .map_err(|e| anyhow::anyhow!("invalid durable stream input: {e}"))?;
-        let principal = principal_from_request(request)?;
+        let caller = caller_from_request(request)?;
         let mut start = InvocationStart {
             target: None,
             constructor: None,
@@ -119,7 +119,7 @@ impl DurableStreamsHandler {
                 tracing: Some(request.invocation_context().into()),
             }),
             auth_ctx: Some(AuthCtx::System.into()),
-            principal: Some(principal.into()),
+            caller: Some(caller.into()),
             environment_id: Some(route.route.environment_id.into()),
             config: vec![],
             component_owner_account_id: Some(route.route.account_id.into()),

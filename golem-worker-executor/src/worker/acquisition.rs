@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::caller::Caller;
 use uuid::Uuid;
 
 use golem_common::model::IdempotencyKey;
@@ -64,7 +65,7 @@ pub(super) fn decide_create(
             .collect::<HashMap<_, _>>()
     };
     if stored.request.kind == incoming.request.kind
-        && stored.request.principal == incoming.request.principal
+        && stored.request.caller == incoming.request.caller
         && stored.canonical_key == incoming.canonical_key
         && stored.constructor_parameters == incoming.constructor_parameters
         && env(stored.env) == env(incoming.env)
@@ -129,17 +130,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
         loop {
-            let worker = match Self::get_exact_existing_suspended(
-                deps,
-                owned_agent_id,
-                Principal::anonymous(),
-            )
-            .await
-            {
-                Ok(worker) => worker,
-                Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(None),
-                Err(error) => return Err(error.into()),
-            };
+            let worker =
+                match Self::get_exact_existing_suspended(deps, owned_agent_id, Caller::anonymous())
+                    .await
+                {
+                    Ok(worker) => worker,
+                    Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(None),
+                    Err(error) => return Err(error.into()),
+                };
             if worker.agent_mode() != AgentMode::Ephemeral {
                 return Ok(Some((worker, None)));
             }
@@ -164,7 +162,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -177,7 +175,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             component_revision,
             parent,
             invocation_context_stack,
-            principal,
+            caller,
             InvocationFreshnessDisposition::MayExist,
             CreateIntent::Existing,
         )
@@ -191,7 +189,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         freshness_disposition: InvocationFreshnessDisposition,
         create_intent: CreateIntent,
     ) -> Result<Arc<Self>, WorkerExecutorError>
@@ -207,7 +205,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 component_revision,
                 parent,
                 invocation_context_stack,
-                principal,
+                caller,
                 freshness_disposition,
                 create_intent,
             )
@@ -219,13 +217,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn get_exact_existing_suspended<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-        principal: Principal,
+        caller: Caller,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
         deps.active_agents()
-            .get_existing(deps, owned_agent_id, principal)
+            .get_existing(deps, owned_agent_id, caller)
             .await
     }
     /// Pins an existing owner's response metadata without allowing owner creation. With an
@@ -234,7 +232,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn get_exact_existing_suspended_for_response<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-        principal: Principal,
+        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(Arc<Self>, Option<Arc<EphemeralResponseLease>>), WorkerExecutorError>
     where
@@ -246,7 +244,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .get_existing_with_fingerprint(
                     deps,
                     owned_agent_id,
-                    principal.clone(),
+                    caller.clone(),
                     expected_fingerprint,
                 )
                 .await?;
@@ -279,7 +277,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         mut freshness_disposition: InvocationFreshnessDisposition,
         create_intent: CreateIntent,
     ) -> Result<(Arc<Self>, Option<Arc<EphemeralResponseLease>>), WorkerExecutorError>
@@ -295,7 +293,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 component_revision,
                 parent,
                 invocation_context_stack,
-                principal.clone(),
+                caller.clone(),
                 freshness_disposition,
                 create_intent.clone(),
             )
@@ -323,7 +321,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
@@ -336,7 +334,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             component_revision,
             parent,
             invocation_context_stack,
-            principal,
+            caller,
             InvocationFreshnessDisposition::MayExist,
         )
         .await
@@ -355,7 +353,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .get_existing_with_fingerprint(
                 deps,
                 owned_agent_id,
-                Principal::anonymous(),
+                Caller::anonymous(),
                 Some(expected_fingerprint),
             )
             .await?;
@@ -388,7 +386,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
@@ -402,7 +400,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             component_revision,
             parent,
             invocation_context_stack,
-            principal,
+            caller,
             freshness_disposition,
             CreateIntent::Existing,
         )
@@ -594,7 +592,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         freshness_disposition: InvocationFreshnessDisposition,
         creation_mode: WorkerCreationMode,
         create_intent: CreateIntent,
@@ -606,7 +604,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let worker_env = worker_env.clone();
                 let worker_agent_config = worker_agent_config.clone();
                 let invocation_context_stack = invocation_context_stack.clone();
-                let principal = principal.clone();
+                let caller = caller.clone();
                 async move {
                     let start = std::time::Instant::now();
                     let mut lifecycle = worker
@@ -630,7 +628,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         worker_env,
                         worker_agent_config,
                         parent,
-                        &principal,
+                        &caller,
                         &invocation_context_stack,
                         freshness_disposition,
                         creation_mode,
@@ -676,8 +674,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // rather than returning a missing-agent result from an exclusive create.
                 return Err(WorkerExecutorError::ShardingNotReady);
             }
-            let incoming_request =
-                create_intent.request(principal.clone(), &invocation_context_stack);
+            let incoming_request = create_intent.request(caller.clone(), &invocation_context_stack);
             let canonical_key = create_intent
                 .owner()
                 .and_then(|owner| owner.canonical_key(self.agent_mode()));
@@ -777,23 +774,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         owner: Option<&NewOwner>,
     ) -> Result<(), WorkerExecutorError> {
-        let Some(owner) = owner.filter(|owner| owner.keyed) else {
+        let Some(owner) = owner else {
             return Ok(());
         };
-        let requested_key = owner.canonical_key(self.agent_mode());
-        if self.initial_worker_metadata.canonical_key == requested_key {
-            Ok(())
-        } else {
-            Err(WorkerExecutorError::AgentKeyCollision {
-                agent_id: self.agent_id(),
-                requested_key: requested_key.unwrap_or_default(),
-            })
-        }
+        owner.ensure_owns_key(
+            self.agent_id(),
+            self.agent_mode(),
+            self.initial_worker_metadata.canonical_key.as_deref(),
+        )
     }
 
     pub(crate) async fn ensure_existing_with_fingerprint(
         self: &Arc<Self>,
-        _principal: Principal,
+        _principal: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError> {
         // Existing-only acquisition resolves identity, not execution readiness. Deletion
@@ -1062,7 +1055,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
 
         let current_status_snapshot = current_status.load_full();
-        let metrics_status = Arc::new(WorkerStatusMetric::new(current_status_snapshot.status));
+        let metrics_status = Arc::new(WorkerStatusMetric::new(
+            current_status_snapshot.reported_status(),
+        ));
         let last_oplog_idx = current_status_snapshot.oplog_idx;
         drop(current_status_snapshot);
 
@@ -1264,7 +1259,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             let create_request = &worker.initial_worker_metadata.create_request;
             let invocation_context = create_request.invocation_context();
-            let principal = create_request.principal.clone();
+            let caller = create_request.caller.clone();
             let idempotency_key = self.initialization_idempotency_key();
             let (_, entry) = self
                 .pending_invocation_entry(
@@ -1273,7 +1268,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         idempotency_key,
                         input: agent_id.parameters.value().clone(),
                         invocation_context,
-                        principal,
+                        caller,
                     },
                     None,
                 )
@@ -1454,7 +1449,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_env: Option<Vec<(String, String)>>,
         worker_agent_config: Vec<AgentConfigEntryDto>,
         parent: Option<AgentId>,
-        principal: &Principal,
+        caller: &Caller,
         invocation_context: &InvocationContextStack,
         freshness_disposition: InvocationFreshnessDisposition,
         creation_mode: WorkerCreationMode,
@@ -1599,7 +1594,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     fingerprint: AgentFingerprint(instance_id),
                     agent_mode,
                     create_request: create_intent.request(
-                        principal.clone(),
+                        caller.clone(),
                         &invocation_context
                             .clone()
                             .limit_depth(this.config().limits.max_invocation_context_stack_depth),
@@ -1649,6 +1644,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         local_agent_config,
                         instance_id,
                         create_request: initial_worker_metadata.create_request.clone(),
+                        never_live: false,
                     }));
 
                 let initial_status = Arc::new(arc_swap::ArcSwap::from_pointee(initial_status));

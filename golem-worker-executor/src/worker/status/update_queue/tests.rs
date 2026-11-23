@@ -17,7 +17,10 @@ use uuid::Uuid;
 use golem_common::model::InvocationId;
 
 use super::*;
+use golem_common::model::InvocationRequestOperation;
+use golem_common::model::StoredAgentInvocationPayload;
 use golem_common::model::oplog::FilesystemSnapshotName;
+use golem_common::model::oplog::OplogPayload;
 use golem_common::model::{AgentStatusRecord, AssistedSelection, UsableAutomaticSnapshot};
 use test_r::test;
 
@@ -58,9 +61,10 @@ fn manual_invocation(target: u64) -> OplogEntry {
         timestamp: Timestamp::from(1_000),
         not_before: None,
         invocation_id: InvocationId(Uuid::new_v4()),
-        payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
+        operation: Box::new(InvocationRequestOperation::ManualUpdate {
             target_revision: revision(target),
-        })),
+        }),
+        payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate)),
         trace_id: golem_common::model::invocation_context::TraceId::generate(),
         trace_states: Vec::new(),
         invocation_context: Vec::new(),
@@ -80,7 +84,15 @@ fn manual_pending_update(target: u64, admission: Option<u64>) -> OplogEntry {
 }
 
 fn failed(target: u64, attempt: Option<u64>) -> OplogEntry {
-    OplogEntry::failed_update(revision(target), None, None, attempt.map(idx), None)
+    OplogEntry::failed_update(
+        revision(target),
+        None,
+        None,
+        attempt.map(idx),
+        None,
+        golem_common::model::oplog::UpdateFailureClass::Other,
+        None,
+    )
 }
 
 fn succeeded(target: u64) -> OplogEntry {
@@ -333,6 +345,7 @@ fn of_seeds_the_queue_and_the_manual_admissions_from_a_checkpoint_status() {
                 oplog_index: idx(6),
                 idempotency_key: Some(InvocationId(Uuid::new_v4())),
                 manual_update_target_revision: None,
+                operation: None,
             },
             PendingInvocationRef {
                 timestamp: Timestamp::from(1_000),
@@ -340,6 +353,7 @@ fn of_seeds_the_queue_and_the_manual_admissions_from_a_checkpoint_status() {
                 oplog_index: idx(7),
                 idempotency_key: None,
                 manual_update_target_revision: Some(revision(4)),
+                operation: None,
             },
         ],
         ..AgentStatusRecord::default()

@@ -26,11 +26,11 @@ export default {
   "golem-invoke-agent-effect": "Invoking an Effect Golem Agent with `golem agent invoke`",
   "golem-logging-effect": "Logging and Tracing from an Effect Agent",
   "golem-make-http-request-effect": "Making Outgoing HTTP Requests from Effect Golem Agents",
+  "golem-read-only-method-effect": "Marking Agent Methods as Read-Only (Effect)",
   "golem-multi-instance-agent-effect":
     "Multiple Agents with Identical Agent Id Fields in Effect Golem",
   "golem-parallel-workers-effect": "Parallel Workers with Effect",
   "golem-permission-card-effect": "Permission cards in Effect",
-  "golem-read-only-method-effect": "Read-only Effect methods",
   "golem-recurring-task-effect": "Recurring Tasks via Self-Scheduling in Effect",
   "golem-agent-reflection-effect": "Runtime reflection with Effect",
   "golem-add-transactions-effect": "Saga-Pattern Transactions in Effect Golem Agents",

@@ -14,6 +14,7 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::future::BoxFuture;
 use golem_common::config::{DbPostgresConfig, RedisConfig};
 use golem_common::model::ShardEpoch;
 use golem_common::model::agent::AgentMode;
@@ -39,9 +40,19 @@ use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
 use url::Url;
 use uuid::Uuid;
 
+type OpenIndexedStorage =
+    Box<dyn Fn() -> BoxFuture<'static, Arc<dyn IndexedStorage + Send + Sync>> + Send + Sync>;
+
 #[async_trait]
 trait GetIndexedStorage: Debug {
-    async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync>;
+    async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
+        let open = self.opener().await;
+        open().await
+    }
+
+    /// Opens clients onto one store. Persistent backends create independent clients;
+    /// the in-memory backend retains and returns the same store.
+    async fn opener(&self) -> OpenIndexedStorage;
 
     /// Two handles onto the SAME store, as two executors racing over one key have.
     async fn get_two_writers(
@@ -49,7 +60,10 @@ trait GetIndexedStorage: Debug {
     ) -> (
         Arc<dyn IndexedStorage + Send + Sync>,
         Arc<dyn IndexedStorage + Send + Sync>,
-    );
+    ) {
+        let open = self.opener().await;
+        (open().await, open().await)
+    }
 }
 
 struct InMemoryIndexedStorageWrapper;
@@ -62,19 +76,12 @@ impl Debug for InMemoryIndexedStorageWrapper {
 
 #[async_trait]
 impl GetIndexedStorage for InMemoryIndexedStorageWrapper {
-    async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
-        let kvs = InMemoryIndexedStorage::new();
-        Arc::new(kvs)
-    }
-
-    async fn get_two_writers(
-        &self,
-    ) -> (
-        Arc<dyn IndexedStorage + Send + Sync>,
-        Arc<dyn IndexedStorage + Send + Sync>,
-    ) {
+    async fn opener(&self) -> OpenIndexedStorage {
         let store: Arc<dyn IndexedStorage + Send + Sync> = Arc::new(InMemoryIndexedStorage::new());
-        (store.clone(), store)
+        Box::new(move || {
+            let store = store.clone();
+            Box::pin(async move { store })
+        })
     }
 }
 
@@ -97,22 +104,19 @@ impl Debug for RedisIndexedStorageWrapper {
 
 #[async_trait]
 impl GetIndexedStorage for RedisIndexedStorageWrapper {
-    async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
-        Arc::new(RedisIndexedStorage::new(
-            self.pool(&Uuid::new_v4().to_string()).await,
-        ))
-    }
-
-    async fn get_two_writers(
-        &self,
-    ) -> (
-        Arc<dyn IndexedStorage + Send + Sync>,
-        Arc<dyn IndexedStorage + Send + Sync>,
-    ) {
+    async fn opener(&self) -> OpenIndexedStorage {
         let prefix = Uuid::new_v4().to_string();
-        let first = RedisIndexedStorage::new(self.pool(&prefix).await);
-        let second = RedisIndexedStorage::new(self.pool(&prefix).await);
-        (Arc::new(first), Arc::new(second))
+        let redis = self.redis.clone();
+        Box::new(move || {
+            let wrapper = RedisIndexedStorageWrapper {
+                redis: redis.clone(),
+            };
+            let prefix = prefix.clone();
+            Box::pin(async move {
+                Arc::new(RedisIndexedStorage::new(wrapper.pool(&prefix).await))
+                    as Arc<dyn IndexedStorage + Send + Sync>
+            })
+        })
     }
 }
 
@@ -166,7 +170,7 @@ impl Debug for SqliteIndexedStorageWrapper {
 
 #[async_trait]
 impl GetIndexedStorage for SqliteIndexedStorageWrapper {
-    async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
+    async fn opener(&self) -> OpenIndexedStorage {
         let tempdir = tempfile::tempdir().unwrap();
         let database = tempdir
             .path()
@@ -179,31 +183,13 @@ impl GetIndexedStorage for SqliteIndexedStorageWrapper {
             max_connections: 10,
             foreign_keys: false,
         };
-        let sis = SqliteIndexedStorage::configured(&config).await.unwrap();
-        Arc::new(sis)
-    }
-
-    async fn get_two_writers(
-        &self,
-    ) -> (
-        Arc<dyn IndexedStorage + Send + Sync>,
-        Arc<dyn IndexedStorage + Send + Sync>,
-    ) {
-        let tempdir = tempfile::tempdir().unwrap();
-        let database = tempdir
-            .path()
-            .join("indexed.db")
-            .to_string_lossy()
-            .into_owned();
-        self.tempdirs.lock().unwrap().push(tempdir);
-        let config = golem_common::config::DbSqliteConfig {
-            database,
-            max_connections: 10,
-            foreign_keys: false,
-        };
-        let first = SqliteIndexedStorage::configured(&config).await.unwrap();
-        let second = SqliteIndexedStorage::configured(&config).await.unwrap();
-        (Arc::new(first), Arc::new(second))
+        Box::new(move || {
+            let config = config.clone();
+            Box::pin(async move {
+                Arc::new(SqliteIndexedStorage::configured(&config).await.unwrap())
+                    as Arc<dyn IndexedStorage + Send + Sync>
+            })
+        })
     }
 }
 
@@ -234,27 +220,17 @@ impl Debug for MultiSqliteIndexedStorageWrapper {
 
 #[async_trait]
 impl GetIndexedStorage for MultiSqliteIndexedStorageWrapper {
-    async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
+    async fn opener(&self) -> OpenIndexedStorage {
         let tempdir = tempfile::tempdir().unwrap();
         let path = tempdir.path().to_path_buf();
         self.tempdirs.lock().unwrap().push(tempdir);
-
-        let storage = MultiSqliteIndexedStorage::new(&path, 10, true);
-        Arc::new(storage)
-    }
-
-    async fn get_two_writers(
-        &self,
-    ) -> (
-        Arc<dyn IndexedStorage + Send + Sync>,
-        Arc<dyn IndexedStorage + Send + Sync>,
-    ) {
-        let tempdir = tempfile::tempdir().unwrap();
-        let path = tempdir.path().to_path_buf();
-        self.tempdirs.lock().unwrap().push(tempdir);
-        let first = MultiSqliteIndexedStorage::new(&path, 10, true);
-        let second = MultiSqliteIndexedStorage::new(&path, 10, true);
-        (Arc::new(first), Arc::new(second))
+        Box::new(move || {
+            let path = path.clone();
+            Box::pin(async move {
+                Arc::new(MultiSqliteIndexedStorage::new(&path, 10, true))
+                    as Arc<dyn IndexedStorage + Send + Sync>
+            })
+        })
     }
 }
 
@@ -316,29 +292,18 @@ impl PostgresIndexedStorageWrapper {
 
 #[async_trait]
 impl GetIndexedStorage for PostgresIndexedStorageWrapper {
-    async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
+    async fn opener(&self) -> OpenIndexedStorage {
         let config = self.fresh_database().await;
-        let storage = PostgresIndexedStorage::configured(&config)
-            .await
-            .expect("Cannot create postgres indexed storage");
-
-        Arc::new(storage)
-    }
-
-    async fn get_two_writers(
-        &self,
-    ) -> (
-        Arc<dyn IndexedStorage + Send + Sync>,
-        Arc<dyn IndexedStorage + Send + Sync>,
-    ) {
-        let config = self.fresh_database().await;
-        let first = PostgresIndexedStorage::configured(&config)
-            .await
-            .expect("Cannot create postgres indexed storage");
-        let second = PostgresIndexedStorage::configured(&config)
-            .await
-            .expect("Cannot create postgres indexed storage");
-        (Arc::new(first), Arc::new(second))
+        Box::new(move || {
+            let config = config.clone();
+            Box::pin(async move {
+                Arc::new(
+                    PostgresIndexedStorage::configured(&config)
+                        .await
+                        .expect("Cannot create postgres indexed storage"),
+                ) as Arc<dyn IndexedStorage + Send + Sync>
+            })
+        })
     }
 }
 
@@ -402,6 +367,289 @@ inherit_test_dep!(WorkerExecutorTestDependencies);
 
 define_matrix_dimension!(is: Arc<dyn GetIndexedStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite", "postgres");
 define_matrix_dimension!(sql_is: Arc<dyn GetIndexedStorage + Send + Sync> -> "sqlite", "postgres");
+define_matrix_dimension!(persistent_is: Arc<dyn GetIndexedStorage + Send + Sync> -> "redis", "sqlite", "multi_sqlite", "postgres");
+
+fn test_agent_metadata() -> golem_common::model::AgentMetadata {
+    use golem_common::model::account::{AccountEmail, AccountId};
+    use golem_common::model::agent::OwnerKind;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::model::oplog::{CreateRequest, CreateRequestKind};
+    use golem_common::model::{AgentFingerprint, AgentMetadata, AgentStatusRecord, Timestamp};
+
+    let component_id = golem_common::model::component::ComponentId::new();
+    AgentMetadata {
+        component_id,
+        agent_type_name: None,
+        canonical_key: None,
+        agent_id: crate::fresh_owned_agent_id().agent_id,
+        owner_kind: OwnerKind::ComponentAgent,
+        env: vec![],
+        environment_id: EnvironmentId::new(),
+        created_by: AccountId::new(),
+        created_by_email: AccountEmail::new("test@golem"),
+        config: vec![],
+        created_at: Timestamp::now_utc(),
+        parent: None,
+        last_known_status: AgentStatusRecord::default(),
+        constructor_parameters: None,
+        fingerprint: AgentFingerprint::new(),
+        agent_mode: AgentMode::Durable,
+        create_request: CreateRequest::new(
+            CreateRequestKind::GetOrCreate,
+            None,
+            golem_worker_executor_test_utils::callers::anonymous(),
+            &InvocationContextStack::fresh_rounded(),
+        ),
+    }
+}
+
+async fn primary_oplog_service(
+    storage: Arc<dyn IndexedStorage + Send + Sync>,
+) -> golem_worker_executor::services::oplog::PrimaryOplogService {
+    use golem_common::model::RetryConfig;
+    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+    use golem_worker_executor::services::oplog::PrimaryOplogService;
+
+    PrimaryOplogService::new(
+        storage,
+        Arc::new(InMemoryBlobStorage::new()),
+        100,
+        100,
+        1024,
+        32,
+        RetryConfig::default(),
+    )
+    .await
+}
+
+async fn read_records(
+    storage: &dyn IndexedStorage,
+    namespace: &IndexedStorageNamespace,
+    key: &str,
+) -> Vec<(u64, Vec<u8>)> {
+    storage
+        .read("test", "reopen", "entry", namespace.clone(), key, 1, 10)
+        .await
+        .unwrap()
+}
+
+async fn append_record(
+    storage: &dyn IndexedStorage,
+    namespace: &IndexedStorageNamespace,
+    key: &str,
+    id: u64,
+    value: &[u8],
+    epoch: Option<ShardEpoch>,
+) -> Result<(), IndexedStorageError> {
+    storage
+        .append(
+            "test",
+            "append",
+            "entry",
+            namespace.clone(),
+            key,
+            id,
+            value.to_vec(),
+            epoch,
+        )
+        .await
+}
+
+async fn publish_staged_records(
+    storage: &dyn IndexedStorage,
+    staged: &IndexedStorageNamespace,
+    source_key: &str,
+    visible: &IndexedStorageNamespace,
+    target_key: &str,
+    last_id: u64,
+) -> bool {
+    storage
+        .with("test", "publish")
+        .move_if_absent(
+            staged.clone(),
+            source_key,
+            visible.clone(),
+            target_key,
+            last_id,
+        )
+        .await
+        .unwrap()
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn committed_oplog_records_survive_cold_reopen(
+    #[dimension(persistent_is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    use golem_common::model::oplog::{OplogEntry, OplogIndex};
+    use golem_worker_executor::services::oplog::{CommitLevel, OplogService};
+
+    let open = is.opener().await;
+    let metadata = test_agent_metadata();
+    let owned = metadata.owned_agent_id();
+    let stage_id = Uuid::new_v4();
+    let target_key = owned.storage_key();
+    let key = format!("{target_key}#{stage_id}");
+    let staged = IndexedStorageNamespace::StagedOpLog {
+        owned_agent_id: owned.clone(),
+        agent_mode: AgentMode::Durable,
+    };
+    let visible = IndexedStorageNamespace::OpLog {
+        owned_agent_id: owned.clone(),
+        agent_mode: AgentMode::Durable,
+    };
+    let first = OplogEntry::suspend().rounded();
+    let second = OplogEntry::restart().rounded();
+    {
+        let service = primary_oplog_service(open().await).await;
+        let writer = service
+            .create_staged(&owned, AgentMode::Durable, stage_id, metadata)
+            .await
+            .unwrap();
+        writer.add(first.clone()).await.unwrap();
+        writer.add(second.clone()).await.unwrap();
+        assert_eq!(writer.commit(CommitLevel::Always).await.unwrap().len(), 2);
+        let uncommitted = writer.add(OplogEntry::suspend().rounded()).await.unwrap();
+        assert_eq!(uncommitted, OplogIndex::from_u64(3));
+        let closed = writer.closed();
+        drop(writer);
+        closed.await.unwrap();
+    }
+
+    let storage = open().await;
+    let expected = vec![
+        (1, golem_common::serialization::serialize(&first).unwrap()),
+        (2, golem_common::serialization::serialize(&second).unwrap()),
+    ];
+    assert_eq!(
+        read_records(storage.as_ref(), &staged, &key).await,
+        expected
+    );
+    assert!(
+        !storage
+            .exists("test", "hidden", visible.clone(), &target_key)
+            .await
+            .unwrap()
+    );
+
+    // Independent clients race to publish different complete stages into the same target.
+    let competitor = open().await;
+    append_record(
+        competitor.as_ref(),
+        &staged,
+        "competitor",
+        1,
+        b"other",
+        None,
+    )
+    .await
+    .unwrap();
+    let (published, other) = tokio::join!(
+        publish_staged_records(storage.as_ref(), &staged, &key, &visible, &target_key, 2),
+        publish_staged_records(
+            competitor.as_ref(),
+            &staged,
+            "competitor",
+            &visible,
+            &target_key,
+            1
+        ),
+    );
+    assert_ne!(published, other, "exactly one publication must win");
+    let expected = if published {
+        expected
+    } else {
+        vec![(1, b"other".to_vec())]
+    };
+    let (loser, tip) = if published {
+        ("competitor", 1)
+    } else {
+        (key.as_str(), 2)
+    };
+    assert!(
+        !publish_staged_records(
+            competitor.as_ref(),
+            &staged,
+            loser,
+            &visible,
+            &target_key,
+            tip
+        )
+        .await
+    );
+    assert!(
+        competitor
+            .exists("test", "loser", staged, loser)
+            .await
+            .unwrap()
+    );
+    storage
+        .set_key_epoch("test", "owner", visible.clone(), &target_key, ShardEpoch(7))
+        .await
+        .unwrap();
+    competitor
+        .set_key_epoch(
+            "test",
+            "takeover",
+            visible.clone(),
+            &target_key,
+            ShardEpoch(8),
+        )
+        .await
+        .unwrap();
+    assert_fenced(
+        append_record(
+            storage.as_ref(),
+            &visible,
+            &target_key,
+            3,
+            b"stale",
+            Some(ShardEpoch(7)),
+        )
+        .await,
+        7,
+        Some(8),
+    );
+    drop(storage);
+    drop(competitor);
+
+    let reopened = open().await;
+    assert_eq!(
+        read_records(reopened.as_ref(), &visible, &target_key).await,
+        expected
+    );
+    assert_fenced(
+        append_record(
+            reopened.as_ref(),
+            &visible,
+            &target_key,
+            3,
+            b"stale",
+            Some(ShardEpoch(7)),
+        )
+        .await,
+        7,
+        Some(8),
+    );
+    append_record(
+        reopened.as_ref(),
+        &visible,
+        &target_key,
+        3,
+        b"current",
+        Some(ShardEpoch(8)),
+    )
+    .await
+    .unwrap();
+    drop(reopened);
+    let mut expected = expected;
+    expected.push((3, b"current".to_vec()));
+    assert_eq!(
+        read_records(open().await.as_ref(), &visible, &target_key).await,
+        expected
+    );
+}
 
 #[test]
 async fn staged_publication_preserves_atomic_visibility(

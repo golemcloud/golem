@@ -16,11 +16,12 @@ use super::{
     AcceptedInvocation, AccountId, AgentId, AgentInvocation, AgentInvocationOutput,
     AgentInvocationResult, AgentMode, ComponentRevision, DateTime, Future, HasAll,
     HasComponentService, InvocationFreshnessDisposition, InvocationStart, InvocationStatus, Pin,
-    Principal, SchemaValue, ScopeCard, UsesAllDeps, Utc, Worker, WorkerCtx, WorkerExecutorError,
+    SchemaValue, ScopeCard, UsesAllDeps, Utc, Worker, WorkerCtx, WorkerExecutorError,
     WorkerExecutorImpl, build_durable_streaming_request, from_proto_invocation_context, golem,
     validate_agent_method_invocation,
 };
 use golem_common::model::InvocationRequestKey;
+use golem_common::model::caller::Caller;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -112,7 +113,22 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .deleted_incarnation_as_not_found(expected_fingerprint, bound)
                         .await?;
                     match worker.lookup_invocation_result(&ik).await {
-                        crate::model::LookupResult::Complete(Ok(_)) => InvocationStatus::Complete,
+                        crate::model::LookupResult::Complete(Ok(mut output)) => {
+                            publish_acceptance(
+                                acceptance_committed,
+                                accepted,
+                                &final_agent_id,
+                                &ik,
+                                None,
+                            )?;
+                            output.agent_id = Some(final_agent_id);
+                            output.idempotency_key = Some(ik);
+                            output.invocation_status = Some(InvocationStatus::Complete);
+                            return Ok(output);
+                        }
+                        crate::model::LookupResult::Complete(Err(
+                            WorkerExecutorError::InvocationCancelled,
+                        )) => InvocationStatus::Cancelled,
                         crate::model::LookupResult::Complete(Err(err)) => return Err(err),
                         crate::model::LookupResult::Pending => InvocationStatus::Pending,
                         crate::model::LookupResult::New
@@ -178,15 +194,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         )
         .await?;
 
-        let principal: Principal = request
-            .principal
-            .clone()
-            .map(|p| p.try_into())
-            .transpose()
-            .map_err(|e: String| {
-                WorkerExecutorError::invalid_request(format!("failed converting principal: {e}"))
-            })?
-            .unwrap_or_else(Principal::anonymous);
+        let caller: Caller = crate::grpc::extract_caller(&request.caller)?;
 
         let invocation_context = self
             .limit_invocation_context_stack_depth(from_proto_invocation_context(&request.context));
@@ -304,7 +312,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     method_name: method_name.clone(),
                     input: method_parameters,
                     invocation_context,
-                    principal,
+                    caller,
                     scope_card,
                 };
                 let mut invocation_output = if streaming {
@@ -388,7 +396,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         let pinned = Worker::get_exact_existing_suspended_for_response(
                             self,
                             &owned_agent_id,
-                            principal.clone(),
+                            caller.clone(),
                             Some(expected),
                         )
                         .await?;
@@ -499,7 +507,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     method_name,
                     input: method_parameters,
                     invocation_context,
-                    principal,
+                    caller,
                     scope_card,
                 };
 

@@ -40,7 +40,7 @@ use crate::model::oplog::raw_types::{
 };
 use crate::model::oplog::{
     AgentResourceId, DurableFunctionType, FailedSnapshotAssistedUpdateDetails, LogLevel,
-    OplogEntry, PublicOplogEntry, SnapshotAssistedUpdateDetails,
+    OplogEntry, PublicOplogEntry, SnapshotAssistedUpdateDetails, UpdateFailureClass,
 };
 use crate::resource_runtime::ResourceTypeId;
 
@@ -172,6 +172,62 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry>
     fn try_from(value: golem_api_grpc::proto::golem::worker::OplogEntry) -> Result<Self, String> {
         let public: PublicOplogEntry = value.try_into()?;
         public.try_into()
+    }
+}
+
+impl From<crate::model::InvocationRequestOperation>
+    for golem_api_grpc::proto::golem::worker::RawInvocationRequestOperation
+{
+    fn from(value: crate::model::InvocationRequestOperation) -> Self {
+        use crate::model::InvocationRequestOperation as Op;
+        use golem_api_grpc::proto::golem::worker::RawExternalToolOperation;
+        use golem_api_grpc::proto::golem::worker::raw_invocation_request_operation::Operation;
+        let operation = match value {
+            Op::ManualUpdate { target_revision } => {
+                Operation::ManualUpdateTargetRevision(target_revision.get())
+            }
+            Op::AgentInitialization => Operation::AgentInitialization(()),
+            Op::AgentMethod { method_name } => Operation::AgentMethod(method_name),
+            Op::ExternalTool {
+                tool_name,
+                command_path,
+            } => Operation::ExternalTool(RawExternalToolOperation {
+                tool_name: tool_name.into_inner(),
+                command_path,
+            }),
+            Op::LoadSnapshot => Operation::LoadSnapshot(()),
+            Op::SaveSnapshot => Operation::SaveSnapshot(()),
+            Op::ProcessOplogEntries => Operation::ProcessOplogEntries(()),
+        };
+        Self {
+            operation: Some(operation),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::RawInvocationRequestOperation>
+    for crate::model::InvocationRequestOperation
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::RawInvocationRequestOperation,
+    ) -> Result<Self, String> {
+        use golem_api_grpc::proto::golem::worker::raw_invocation_request_operation::Operation;
+        Ok(match value.operation.ok_or("Missing operation")? {
+            Operation::ManualUpdateTargetRevision(target_revision) => Self::ManualUpdate {
+                target_revision: target_revision.try_into()?,
+            },
+            Operation::AgentInitialization(()) => Self::AgentInitialization,
+            Operation::AgentMethod(method_name) => Self::AgentMethod { method_name },
+            Operation::ExternalTool(tool) => Self::ExternalTool {
+                tool_name: tool.tool_name.try_into()?,
+                command_path: tool.command_path,
+            },
+            Operation::LoadSnapshot(()) => Self::LoadSnapshot,
+            Operation::SaveSnapshot(()) => Self::SaveSnapshot,
+            Operation::ProcessOplogEntries(()) => Self::ProcessOplogEntries,
+        })
     }
 }
 
@@ -463,6 +519,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     local_agent_config,
                     instance_id,
                     create_request,
+                    never_live,
                 } = *parameters;
                 Entry::Create(RawCreateParameters {
                     component_id: Some(component_id.into()),
@@ -493,6 +550,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                         .collect::<Result<Vec<_>, _>>()?,
                     instance_id: Some(instance_id.into()),
                     create_request: Some(create_request_to_proto(create_request)),
+                    never_live,
                 })
             }
             OplogEntry::Start {
@@ -551,6 +609,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             }
             OplogEntry::AgentInvocationStarted {
                 invocation_id,
+                operation,
                 payload,
                 trace_id,
                 trace_states,
@@ -559,6 +618,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 ..
             } => Entry::AgentInvocationStarted(RawAgentInvocationStartedParameters {
                 invocation_id: Some(invocation_id.into()),
+                operation: Some((*operation).into()),
                 payload: Some(oplog_payload_to_proto(payload)?),
                 trace_id: trace_id.to_string(),
                 trace_states,
@@ -599,6 +659,8 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 error,
                 retry_from,
                 retry_policy_state,
+                retry_at,
+                retrying_start_index,
                 ..
             } => Entry::Error(RawErrorParameters {
                 error: Some(error.into()),
@@ -608,6 +670,8 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 retry_policy_state: retry_policy_state
                     .map(|s| crate::serialization::serialize(&s))
                     .transpose()?,
+                retry_at: retry_at.map(Into::into),
+                retrying_start_index: retrying_start_index.map(Into::into),
             }),
             OplogEntry::RecoverySucceeded { .. } => Entry::RecoverySucceeded(RawTimestampOnly {}),
             OplogEntry::Jump { jump, .. } => Entry::Jump(RawJumpParameters {
@@ -621,6 +685,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             OplogEntry::PendingAgentInvocation {
                 not_before,
                 invocation_id,
+                operation,
                 payload,
                 trace_id,
                 trace_states,
@@ -629,6 +694,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             } => Entry::PendingAgentInvocation(RawPendingAgentInvocationParameters {
                 not_before: not_before.map(Into::into),
                 invocation_id: Some(invocation_id.into()),
+                operation: Some((*operation).into()),
                 payload: Some(oplog_payload_to_proto(payload)?),
                 trace_id: trace_id.to_string(),
                 trace_states,
@@ -674,6 +740,8 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 snapshot_assisted_details,
                 update_attempt_index,
                 snapshot_fault,
+                failure_class,
+                divergence,
                 ..
             } => Entry::FailedUpdate(RawFailedUpdateParameters {
                 target_revision: target_revision.into(),
@@ -689,6 +757,10 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 update_attempt_index: update_attempt_index.map(Into::into),
                 snapshot_fault: snapshot_fault
                     .map(|fault| raw_snapshot_fault_to_proto(fault) as i32),
+                failure_class: failure_class.proto_number(),
+                divergence: divergence
+                    .map(|divergence| (*divergence).try_into())
+                    .transpose()?,
             }),
             OplogEntry::GrowMemory { delta, .. } => {
                 Entry::GrowMemory(RawGrowMemoryParameters { delta })
@@ -1135,6 +1207,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                         create_request: create_request_from_proto(
                             p.create_request.ok_or("Missing create_request")?,
                         )?,
+                        never_live: p.never_live,
                     }),
                 })
             }
@@ -1207,6 +1280,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             }),
             Entry::AgentInvocationStarted(p) => {
                 let invocation_id = p.invocation_id.ok_or("Missing invocation_id")?.into();
+                let operation = Box::new(p.operation.ok_or("Missing operation")?.try_into()?);
                 let payload = oplog_payload_from_proto(p.payload.ok_or("Missing payload")?)?;
                 let trace_id = TraceId::from_string(p.trace_id)?;
                 let invocation_context = p
@@ -1217,6 +1291,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 Ok(OplogEntry::AgentInvocationStarted {
                     timestamp,
                     invocation_id,
+                    operation,
                     payload,
                     trace_id,
                     trace_states: p.trace_states,
@@ -1263,6 +1338,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     error,
                     retry_from,
                     retry_policy_state,
+                    retry_at: p.retry_at.map(Into::into),
+                    retrying_start_index: p.retrying_start_index.map(OplogIndex::from_u64),
                 };
                 entry.check_well_formed()?;
                 Ok(entry)
@@ -1283,6 +1360,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             Entry::Exited(_) => Ok(OplogEntry::Exited { timestamp }),
             Entry::PendingAgentInvocation(p) => {
                 let invocation_id = p.invocation_id.ok_or("Missing invocation_id")?.into();
+                let operation = Box::new(p.operation.ok_or("Missing operation")?.try_into()?);
                 let payload = oplog_payload_from_proto(p.payload.ok_or("Missing payload")?)?;
                 let trace_id = TraceId::from_string(p.trace_id)?;
                 let invocation_context = p
@@ -1294,6 +1372,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     timestamp,
                     not_before: p.not_before.map(Into::into),
                     invocation_id,
+                    operation,
                     payload,
                     trace_id,
                     trace_states: p.trace_states,
@@ -1372,6 +1451,14 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     snapshot_fault: p
                         .snapshot_fault
                         .map(raw_snapshot_fault_from_proto)
+                        .transpose()?,
+                    failure_class: UpdateFailureClass::from_proto_number(p.failure_class)?,
+                    divergence: p
+                        .divergence
+                        .map(|divergence| {
+                            crate::model::oplog::ReplayDivergence::try_from(divergence)
+                                .map(Box::new)
+                        })
                         .transpose()?,
                 })
             }
@@ -1735,7 +1822,7 @@ fn create_request_to_proto(
     let CreateRequest {
         kind,
         idempotency_key,
-        principal,
+        caller,
         trace_id,
         trace_states,
         invocation_context,
@@ -1748,7 +1835,7 @@ fn create_request_to_proto(
             CreateRequestKind::Fork => RawCreateRequestKind::Fork,
         } as i32,
         idempotency_key: idempotency_key.map(Into::into),
-        principal: Some(principal.into()),
+        caller: Some(caller.into()),
         trace_id: trace_id.to_string(),
         trace_states,
         invocation_context: invocation_context
@@ -1774,9 +1861,9 @@ fn create_request_from_proto(
     Ok(CreateRequest {
         kind,
         idempotency_key: value.idempotency_key.map(Into::into),
-        principal: value
-            .principal
-            .ok_or("Missing create request principal")?
+        caller: value
+            .caller
+            .ok_or("Missing create request caller")?
             .try_into()?,
         trace_id: TraceId::from_string(value.trace_id)?,
         trace_states: value.trace_states,

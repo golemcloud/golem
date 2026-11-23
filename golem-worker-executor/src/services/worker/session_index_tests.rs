@@ -31,7 +31,9 @@ use crate::storage::keyvalue::fault_injecting::{
 };
 use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use async_trait::async_trait;
+use golem_common::model::InvocationRequestOperation;
 use golem_common::model::RetryConfig;
+use golem_common::model::StoredAgentInvocationPayload;
 use golem_common::model::Timestamp;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentMode;
@@ -50,8 +52,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::TraceId;
 use golem_common::model::oplog::OplogPayload;
 use golem_common::model::{
-    AgentFingerprint, AgentInvocationPayload, AgentMetadata, DurableStreamPublicBinding,
-    DurableStreamSessionIndex,
+    AgentFingerprint, AgentMetadata, DurableStreamPublicBinding, DurableStreamSessionIndex,
 };
 use golem_common::read_only_lock;
 use golem_service_base::model::component::Component;
@@ -136,9 +137,10 @@ fn create_entry(
         create_request: golem_common::model::oplog::CreateRequest::new(
             golem_common::model::oplog::CreateRequestKind::GetOrCreate,
             None,
-            golem_common::model::agent::Principal::anonymous(),
+            golem_common::model::caller::Caller::anonymous(),
             &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
+        never_live: false,
     }))
 }
 
@@ -849,7 +851,7 @@ fn agent_metadata_with_identity(
         create_request: golem_common::model::oplog::CreateRequest::new(
             golem_common::model::oplog::CreateRequestKind::GetOrCreate,
             None,
-            golem_common::model::agent::Principal::anonymous(),
+            golem_common::model::caller::Caller::anonymous(),
             &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
     }
@@ -1626,7 +1628,10 @@ async fn append_pending_invocation(oplog: &dyn Oplog, key: &InvocationId) -> Opl
         .add(OplogEntry::pending_agent_invocation(
             None,
             *key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            Box::new(InvocationRequestOperation::SaveSnapshot),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
+                caller: golem_common::model::caller::Caller::anonymous(),
+            })),
             TraceId::generate(),
             Vec::new(),
             Vec::new(),

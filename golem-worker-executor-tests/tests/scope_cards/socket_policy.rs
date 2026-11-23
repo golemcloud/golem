@@ -488,6 +488,68 @@ async fn exact_hostname_grants_reach_the_addresses_of_recorded_lookups(
 #[test]
 #[timeout("3m")]
 #[tracing::instrument]
+async fn a_hostname_grant_with_a_port_allows_the_lookup_and_only_that_port(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let granted = CountingPeer::start("127.0.0.1:0").await?;
+    let other = CountingPeer::start("127.0.0.1:0").await?;
+    let component = networking_component(
+        &executor,
+        &context,
+        host_api_tests,
+        &[format!("localhost:{}", granted.address.port())],
+    )
+    .await?;
+    let agent = agent_key!("Networking", "socket-policy-port-grant-lookup");
+    configure_scope_card_root(&authority, &component, &agent)?;
+    executor.start_agent(&component.id, agent.clone()).await?;
+
+    for lookup_api in API {
+        let resolved = resolve(&executor, &component, &agent, lookup_api, "localhost").await?;
+        assert_eq!(resolved, Ok(true), "the {lookup_api} lookup of localhost");
+    }
+    let mut connected = 0;
+    for api in API {
+        let result = socket_operation(
+            &executor,
+            &component,
+            &agent,
+            api,
+            "tcp-connect",
+            &granted.address.to_string(),
+        )
+        .await?;
+        assert_eq!(
+            result,
+            Ok("connected".to_string()),
+            "{api} connect to the granted port"
+        );
+        connected += 1;
+        let denied = socket_operation(
+            &executor,
+            &component,
+            &agent,
+            api,
+            "tcp-connect",
+            &other.address.to_string(),
+        )
+        .await?;
+        assert_denied(&denied, &format!("{api} connect to another port"));
+    }
+    assert_eq!(granted.accepted(), connected);
+    assert_eq!(other.accepted(), 0);
+    Ok(())
+}
+
+#[test]
+#[timeout("3m")]
+#[tracing::instrument]
 async fn wildcard_grants_do_not_reach_internal_addresses_through_links(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -595,8 +657,8 @@ async fn hostname_links_are_rebuilt_after_snapshot_recovery(
         .await?;
     crate::hot_update::wait_for_snapshot_after(&executor, &worker, before_close).await?;
 
-    // The recovery loads the snapshot, so it does not replay the lookup: only the rebuild from
-    // the history before the snapshot gives the connect its link.
+    // The recovery loads the snapshot, so it does not replay the lookup: only the links that
+    // the status record folded from the oplog give the connect its link.
     drop(executor);
     let executor = start_with_overrides(deps, &context, overrides).await?;
     let mut events = executor.capture_output(&worker).await?;

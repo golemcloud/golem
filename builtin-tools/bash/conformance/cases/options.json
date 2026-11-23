@@ -1,0 +1,126 @@
+{
+  "tier": "pr",
+  "description": "Shell options: set -e/-u/-x/-f/-n/-a, pipefail and POSIX mode.",
+  "cases": [
+    {
+      "name": "option: errexit stops the script",
+      "script": "set -e; echo before; false; echo not-reached",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "option: errexit ignores conditions",
+      "script": "set -e; if false; then :; fi; false || true; ! true; false && true; echo survived",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "option: errexit in functions and subshells",
+      "script": "set -e; f() { false; echo in-f; }; f || echo f-failed; (false; echo in-sub); echo not-reached",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "option: errexit and command substitution",
+      "script": "set -e; x=$(false; echo sub); echo \"[$x]\"; y=$(false); echo not-reached",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "option: errexit in pipelines",
+      "script": "set -e; false | true; echo last-wins; set -o pipefail; false | true; echo not-reached",
+      "tags": [
+        "option.pipefail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "option: errexit with local",
+      "script": "set -e; f() { local v=$(false); echo local-hides; }; f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "option: nounset errors",
+      "script": "set -u; echo ${unset_var}; echo not-reached",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "option: nounset and positionals",
+      "script": "set -u; f() { echo \"${1-none}\" \"$#\"; echo \"$@\"; }; f; echo ok",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "option: nounset with arrays",
+      "script": "set -u; a=(); echo \"${#a[@]}\"; echo \"${a[@]}\" done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "option: xtrace",
+      "script": "set -x; x=1; echo \"$x\" done; f() { :; }; f arg; set +x; echo quiet",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "option: xtrace with PS4",
+      "script": "PS4=\"> \"; set -x; echo traced; set +x",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "option: noglob",
+      "script": "cd /tmp; touch g1; set -f; echo g*; set +f; echo g*",
+      "tags": [
+        "option.noglob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "option: noexec",
+      "script": "set -n; echo not-run; exit 3",
+      "tags": [
+        "option.noexec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "option: pipefail status",
+      "script": "set -o pipefail; (exit 2) | (exit 3) | true; echo $?; true | (exit 4); echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "option: set -o and +o",
+      "script": "set -o errexit; case $- in *e*) echo on;; esac; set +o errexit; case $- in *e*) echo still;; *) echo off;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "option: posix mode",
+      "script": "set -o posix; echo ${POSIXLY_CORRECT-unset}; case $SHELLOPTS in *posix*) echo posix;; esac",
+      "tags": [
+        "option.posix"
+      ],
+      "options": {}
+    },
+    {
+      "name": "option: inherited by children",
+      "script": "set -e; bash -c 'case $- in *e*) echo child-e;; *) echo child-plain;; esac'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "option: shopt inherit_errexit",
+      "script": "set -e; shopt -s inherit_errexit; x=$(false; echo leaked); echo \"[$x]\"",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}

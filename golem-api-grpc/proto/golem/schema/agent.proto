@@ -27,13 +27,9 @@ message NamedField {
 message FieldSource {
   oneof source {
     golem.common.Empty user_supplied = 1;
-    AutoInjectedKind auto_injected = 2;
   }
-}
-
-enum AutoInjectedKind {
-  AUTO_INJECTED_KIND_UNSPECIFIED = 0;
-  AUTO_INJECTED_KIND_PRINCIPAL = 1;
+  reserved 2;
+  reserved "auto_injected";
 }
 
 message OutputSchema {

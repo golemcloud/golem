@@ -80,6 +80,62 @@ impl From<DecodeError> for ToolWitError {
     }
 }
 
+impl From<ToolHttpMount> for wire::ToolHttpMount {
+    fn from(value: ToolHttpMount) -> Self {
+        Self {
+            path_prefix: value.path_prefix.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<wire::ToolHttpMount> for ToolHttpMount {
+    fn from(value: wire::ToolHttpMount) -> Self {
+        Self {
+            path_prefix: value.path_prefix.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<CommandHttp> for wire::CommandHttp {
+    fn from(value: CommandHttp) -> Self {
+        match value {
+            CommandHttp::Prefix(value) => Self::Prefix(wire::ToolHttpPrefix {
+                path_suffix: value.path_suffix.into_iter().map(Into::into).collect(),
+            }),
+            CommandHttp::Endpoint(value) => Self::Endpoint(wire::ToolHttpEndpoint {
+                route_id: value.route_id,
+                http_method: value.http_method.into(),
+                path_suffix: value.path_suffix.into_iter().map(Into::into).collect(),
+                query_vars: value.query_vars.into_iter().map(Into::into).collect(),
+                header_vars: value.header_vars.into_iter().map(Into::into).collect(),
+                response_headers: value.response_headers.into_iter().map(Into::into).collect(),
+                mode: value.mode.map(Into::into),
+                durable_streams: value.durable_streams.map(Into::into),
+            }),
+        }
+    }
+}
+
+impl From<wire::CommandHttp> for CommandHttp {
+    fn from(value: wire::CommandHttp) -> Self {
+        match value {
+            wire::CommandHttp::Prefix(value) => Self::Prefix(ToolHttpPrefix {
+                path_suffix: value.path_suffix.into_iter().map(Into::into).collect(),
+            }),
+            wire::CommandHttp::Endpoint(value) => Self::Endpoint(ToolHttpEndpoint {
+                route_id: value.route_id,
+                http_method: value.http_method.into(),
+                path_suffix: value.path_suffix.into_iter().map(Into::into).collect(),
+                query_vars: value.query_vars.into_iter().map(Into::into).collect(),
+                header_vars: value.header_vars.into_iter().map(Into::into).collect(),
+                response_headers: value.response_headers.into_iter().map(Into::into).collect(),
+                mode: value.mode.map(Into::into),
+                durable_streams: value.durable_streams.map(Into::into),
+            }),
+        }
+    }
+}
+
 /// Encode a [`Tool`] into its flat WIT representation.
 pub fn encode_tool(tool: &Tool) -> Result<wire::Tool, ToolWitError> {
     wire::Tool::try_from(tool)
@@ -458,6 +514,7 @@ impl TryFrom<&Tool> for wire::Tool {
         Ok(Self {
             version: tool.version.clone(),
             requires_filesystem: tool.requires_filesystem,
+            http_mount: tool.http_mount.clone().map(Into::into),
             commands,
             schema,
         })
@@ -485,6 +542,7 @@ fn encode_command_node(
         name: n.name.clone(),
         aliases: n.aliases.clone(),
         doc: wire::Doc::from(&n.doc),
+        http: n.http.clone().map(Into::into),
         globals: encode_globals(enc, &n.globals)?,
         subcommands: n.subcommands.iter().map(|c| c.0).collect(),
         body: n
@@ -672,6 +730,7 @@ impl TryFrom<&wire::Tool> for Tool {
         Ok(Self {
             version: w.version.clone(),
             requires_filesystem: w.requires_filesystem,
+            http_mount: w.http_mount.clone().map(Into::into),
             commands,
             schema,
         })
@@ -699,6 +758,7 @@ fn decode_command_node(
         name: n.name.clone(),
         aliases: n.aliases.clone(),
         doc: Doc::from(&n.doc),
+        http: n.http.clone().map(Into::into),
         globals: decode_globals(dec, &n.globals)?,
         subcommands: n.subcommands.iter().map(|c| CommandIndex(*c)).collect(),
         body: n

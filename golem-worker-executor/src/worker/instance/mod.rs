@@ -22,7 +22,7 @@ use super::{ObservedPrimaryStore, Worker};
 use crate::durable_host::durability::GuestTaskContext;
 use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::tool::operation::{DeferredAdmissionTable, OwnerToolOperations};
-use crate::model::ExecutionStatus;
+use crate::model::{ExecutionStatus, FailureProvenance};
 use crate::services::active_agents::WorkerComponentCharge;
 use crate::services::agent_filesystem::FilesystemGenerationHandle;
 use crate::services::oplog::{CommitLevel, Oplog, OplogRefusal};
@@ -61,6 +61,43 @@ fn resource_capacity_trap(
     match resource_capacity_error(agent_mode, error) {
         WorkerExecutorError::Interrupted { kind } => kind.into(),
         error => error.into(),
+    }
+}
+
+/// The stage of an instance creation that failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InstanceCreationStage {
+    /// The component did not link against the imports of the executor.
+    Link,
+    /// The executor did not set up the Store or the memory accounting of the instance.
+    Storage,
+    /// The instantiation failed while the core initializer of the component ran, or the
+    /// initializer did not finish its recorded durable calls.
+    Initializer,
+}
+
+/// A failed instance creation: its stage, where the failure came from, and its error.
+#[derive(Debug)]
+pub(crate) struct InstanceCreationFailure {
+    pub stage: InstanceCreationStage,
+    pub provenance: FailureProvenance,
+    pub error: WorkerExecutorError,
+}
+
+impl InstanceCreationFailure {
+    /// A failure of the executor at `stage`.
+    pub(crate) fn host(stage: InstanceCreationStage, error: WorkerExecutorError) -> Self {
+        Self {
+            stage,
+            provenance: FailureProvenance::Host,
+            error,
+        }
+    }
+}
+
+impl From<InstanceCreationFailure> for WorkerExecutorError {
+    fn from(failure: InstanceCreationFailure) -> Self {
+        failure.error
     }
 }
 
@@ -971,14 +1008,21 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         &self,
         context: Ctx,
         component: &Component,
-    ) -> Result<HostedInstance<Ctx>, WorkerExecutorError> {
-        let owner = self.owner()?;
-        let mut store = StoreFuelGuard::new(self.create_store(context)?);
+    ) -> Result<HostedInstance<Ctx>, InstanceCreationFailure> {
+        use InstanceCreationStage as Stage;
+
+        let owner = self
+            .owner()
+            .map_err(|error| InstanceCreationFailure::host(Stage::Storage, error))?;
+        let mut store = StoreFuelGuard::new(
+            self.create_store(context)
+                .map_err(|error| InstanceCreationFailure::host(Stage::Storage, error))?,
+        );
 
         let linker = (*owner.linker()).clone();
-        let instance_pre = linker
-            .instantiate_pre(component)
-            .map_err(|error| self.creation_error(error.into()))?;
+        let instance_pre = linker.instantiate_pre(component).map_err(|error| {
+            InstanceCreationFailure::host(Stage::Link, self.creation_error(error.into()))
+        })?;
         // Instantiation runs the core initializer under the invocation the Store is created for:
         // the entity invocation of an entity Store, and no invocation for a fresh primary Store.
         let attribution = store.data().durable_ctx().attribution.clone();
@@ -986,37 +1030,48 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         let instance = attribution
             .instantiating(invocation_key, instance_pre.instantiate_async(&mut *store))
             .await
-            .map_err(|error| match instantiation_failure(&self.runtime, &error) {
-                Some(failure) => failure,
-                None if error.root_cause().is::<wasmtime::GcHeapOutOfMemory<()>>()
-                    || matches!(
-                        error.root_cause().downcast_ref::<GolemSpecificWasmTrap>(),
-                        Some(
-                            GolemSpecificWasmTrap::WorkerExceededMemoryLimit
-                                | GolemSpecificWasmTrap::WorkerOutOfMemory
+            .map_err(|error| {
+                let provenance = crate::worker::invocation::failure_provenance(&error);
+                let error = match instantiation_failure(&self.runtime, &error) {
+                    Some(failure) => failure,
+                    None if error.root_cause().is::<wasmtime::GcHeapOutOfMemory<()>>()
+                        || matches!(
+                            error.root_cause().downcast_ref::<GolemSpecificWasmTrap>(),
+                            Some(
+                                GolemSpecificWasmTrap::WorkerExceededMemoryLimit
+                                    | GolemSpecificWasmTrap::WorkerOutOfMemory
+                            )
+                        ) =>
+                    {
+                        let error = store
+                            .data()
+                            .durable_ctx()
+                            .linear_memory_tracker()
+                            .annotate_gc_heap_error(error);
+                        crate::model::TrapType::from_error::<Ctx>(
+                            &error.into(),
+                            OplogIndex::INITIAL,
+                            store.data().agent_mode(),
                         )
-                    ) =>
-                {
-                    let error = store
-                        .data()
-                        .durable_ctx()
-                        .linear_memory_tracker()
-                        .annotate_gc_heap_error(error);
-                    crate::model::TrapType::from_error::<Ctx>(
-                        &error.into(),
-                        OplogIndex::INITIAL,
-                        store.data().agent_mode(),
-                    )
-                    .as_golem_error("")
-                    .expect("memory exhaustion must classify as a memory failure")
+                        .as_golem_error("")
+                        .expect("memory exhaustion must classify as a memory failure")
+                    }
+                    None => self.creation_error(error.into()),
+                };
+                InstanceCreationFailure {
+                    stage: Stage::Initializer,
+                    provenance,
+                    error,
                 }
-                None => self.creation_error(error.into()),
             })?;
 
         let current_level = store.get_fuel().unwrap_or(0);
         let agent_mode = store.data().agent_mode();
         if let Err(error) = store.data_mut().ensure_fuel(current_level) {
-            return Err(resource_capacity_error(agent_mode, error));
+            return Err(InstanceCreationFailure::host(
+                Stage::Initializer,
+                resource_capacity_error(agent_mode, error),
+            ));
         }
 
         Ok(HostedInstance {
@@ -1559,8 +1614,8 @@ mod monthly_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        ObservedPrimaryStore, PrimaryStore, StoreFuelGuard, instantiation_failure,
-        interrupt_kind_in, resource_capacity_trap,
+        FailureProvenance, ObservedPrimaryStore, PrimaryStore, StoreFuelGuard,
+        instantiation_failure, interrupt_kind_in, resource_capacity_trap,
     };
     use crate::metrics::resource_release::{Cause, tests::TestMetrics};
     use crate::workerctx::FuelManagement;
@@ -1723,7 +1778,53 @@ mod tests {
                 for_entity,
                 "{failure}"
             );
+            let provenance = match failure {
+                WorkerExecutorError::Interrupted { .. } => FailureProvenance::Lifecycle,
+                _ => FailureProvenance::Host,
+            };
+            assert_eq!(
+                crate::worker::invocation::failure_provenance(&error),
+                provenance,
+                "{failure}"
+            );
         }
+        Ok(())
+    }
+
+    /// A Wasm instruction trap in the start function of the core initializer is a failure of the
+    /// target code, with a Wasm backtrace or without.
+    #[test]
+    #[timeout("10s")]
+    async fn an_unreachable_start_function_is_a_target_instruction_failure() -> anyhow::Result<()> {
+        let engine =
+            Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())?;
+        let component = Component::new(
+            &engine,
+            r#"(component
+                (core module $m
+                    (func $init unreachable)
+                    (start $init))
+                (core instance (instantiate $m)))"#,
+        )?;
+        let linker = Linker::<()>::new(&engine);
+        let mut store = wasmtime::Store::new(&engine, ());
+        store.set_fuel(u64::MAX)?;
+        store.set_epoch_deadline(1);
+        let error = linker
+            .instantiate_pre(&component)?
+            .instantiate_async(&mut store)
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            crate::worker::invocation::failure_provenance(&error),
+            FailureProvenance::TargetInstruction,
+            "{error:#}"
+        );
+        assert_eq!(
+            instantiation_failure(&golem_common::model::entity::OwnerRuntime::Agent, &error),
+            None
+        );
         Ok(())
     }
 

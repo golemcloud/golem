@@ -19,8 +19,8 @@ use super::{
     EntityInvocationPlanReference, EnvironmentName, GolemSpecificWasmTrap,
     GuestCallSettlementError, HasSelf, HostFailureKind, HostRequestGolemToolInvocationRejected,
     ModelTypedSchemaValue, NamedToolErrorSchema, NativeToolTask, Ordering, PreparedToolCall,
-    Principal, ResolvedOwnerContext, Resource, SchemaType, SerializableToolError,
-    SerializableToolRpcError, StoreContextMut, Tool, ToolActivationOutcome, ToolActivationSnapshot,
+    ResolvedOwnerContext, Resource, SchemaType, SerializableToolError, SerializableToolRpcError,
+    StoreContextMut, Tool, ToolActivationOutcome, ToolActivationSnapshot,
     ToolAttachmentCounterparty, ToolBindingOwner, ToolCallDispatch, ToolCallPreparation,
     ToolCallStdin, ToolCallTarget, ToolDiscoveryError, ToolInputDecodeFailure,
     ToolInvocationAttempt, ToolInvocationDescriptor, ToolInvocationReplayOutcome,
@@ -33,6 +33,7 @@ use super::{
     operation, record_tool_rejection_access, reject_output, resolve_tool_command,
     run_guest_call_settled, spawn_tool_execution, tool_target, validate_stream_attachments,
 };
+use golem_common::model::caller::Caller;
 
 impl UnderlyingToolEntry {
     pub(crate) fn new(
@@ -369,7 +370,7 @@ pub(super) async fn prepare_tool_call<U, Ctx>(
     stderr_requested: bool,
     call_mode: EntityCallMode,
     pinned_activation: Option<Arc<ToolActivationSnapshot>>,
-    principal: Option<Principal>,
+    caller: Option<Caller>,
 ) -> anyhow::Result<ToolCallPreparation>
 where
     U: Send + 'static,
@@ -681,14 +682,14 @@ where
     let descriptor = EntityInvocationDescriptor::Tool(descriptor);
     let operation = accessor.with(|mut access| {
         let ctx = access.get();
-        let principal = principal.unwrap_or_else(|| ctx.invocation_principal());
+        let caller = caller.unwrap_or_else(|| ctx.invocation_caller());
         ctx.owner_execution
             .tool_operations()
             .create(operation::OwnerToolOperationContext {
                 parent,
                 call_mode,
                 activation,
-                principal,
+                caller,
                 descriptor,
                 input,
             })
@@ -716,7 +717,7 @@ pub(super) async fn dispatch_tool_attempt<U, Ctx>(
     has_stderr: bool,
     call_mode: EntityCallMode,
     pinned_activation: Option<Arc<ToolActivationSnapshot>>,
-    principal: Option<Principal>,
+    caller: Option<Caller>,
     attachment_counterparty: ToolAttachmentCounterparty,
 ) -> anyhow::Result<ToolCallDispatch>
 where
@@ -752,7 +753,7 @@ where
                             parent: durability.parent().clone(),
                             call_mode: durability.call_mode(),
                             activation: durability.scope().activation().clone(),
-                            principal: durability.principal().clone(),
+                            caller: durability.caller().clone(),
                             descriptor,
                             input,
                         },
@@ -788,7 +789,7 @@ where
         has_stderr,
         call_mode,
         pinned_activation,
-        principal,
+        caller,
     )
     .await?
     {
@@ -814,7 +815,7 @@ where
                 context.parent.clone(),
                 &key_context,
                 context.activation.entity(),
-                context.principal.clone(),
+                context.caller.clone(),
                 context.call_mode,
                 context.descriptor.clone(),
                 prepared.plan.clone(),
@@ -900,7 +901,7 @@ pub(crate) async fn invoke_external_tool<Ctx: WorkerCtx>(
     stdin: bool,
     stdout: bool,
     stderr: bool,
-    principal: Principal,
+    caller: Caller,
 ) -> Result<anyhow::Result<ToolInvokeResponse>, GuestCallSettlementError> {
     run_guest_call_settled(
         store,
@@ -916,7 +917,7 @@ pub(crate) async fn invoke_external_tool<Ctx: WorkerCtx>(
                 stdin,
                 stdout,
                 stderr,
-                principal,
+                caller,
                 result,
             };
             let captured = accessor.with(|mut access| access.get().attribution.capture());

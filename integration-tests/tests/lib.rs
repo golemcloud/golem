@@ -19,6 +19,7 @@ mod custom_api;
 mod fork;
 mod gol40_chunk_g_environment_resolution_acceptance;
 mod invocation_context;
+mod invocations;
 mod otlp_plugin;
 mod owner_environment_resolution;
 mod permissions;

@@ -17,7 +17,8 @@ use crate::services::golem_config::ScanBudget;
 use crate::services::oplog::{CommitLevel, OplogOps, PrimaryOplogService};
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentPrincipal, AgentTypeName, Principal};
+use golem_common::model::agent::AgentTypeName;
+
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::entity::{
@@ -28,7 +29,6 @@ use golem_common::model::entity::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::json::NormalizedJsonValue;
-use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::payload::host_functions::HostFunctionName;
 use golem_common::model::oplog::payload::types::{
     SecretRevealAudit, SerializableDateTime, SerializableEntityBodyExecution,
@@ -46,10 +46,11 @@ use golem_common::model::oplog::{
     HostResponseP3BlobstoreIncomingValueStream, HostResponseP3HttpClientConsumeBodyChunk,
     HostResponseP3HttpClientConsumeBodyResult, HostResponseP3HttpClientSendResult,
     HostResponseP3KeyvalueIncomingValueStream, HostResponseP3SocketsTcpAcquire,
-    HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsUdpReceive,
-    HostResponseP3SocketsUdpSend, HostResponseSecretRevealed, HostStreamKind, LogLevel,
-    OplogPayload,
+    HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSendChunk,
+    HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponseSecretRevealed,
+    HostStreamKind, LogLevel, OplogPayload,
 };
+use golem_common::model::oplog::{OplogCursor, OplogScanAllowance};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::tool::{
     CompiledToolBinding, SecretKeyScope, ToolFilesystemAccess, ToolName, ToolProvisionConfig,
@@ -496,6 +497,7 @@ fn test_tool_definition() -> Tool {
     Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree { nodes: Vec::new() },
         schema: SchemaGraph::empty(),
     }
@@ -566,7 +568,7 @@ fn make_agent_metadata(
         create_request: golem_common::model::oplog::CreateRequest::new(
             golem_common::model::oplog::CreateRequestKind::GetOrCreate,
             None,
-            golem_common::model::agent::Principal::anonymous(),
+            golem_common::model::caller::Caller::anonymous(),
             &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
     }
@@ -669,6 +671,7 @@ async fn checkpoint_after_plugin_removal_uses_recorded_source_revision() {
         ),
         created_at: chrono::Utc::now(),
         wasm_hash: golem_common::model::diff::Hash::empty(),
+        package_metadata: None,
         object_store_key: String::new(),
     }));
     let owner = OwnedAgentId::new(environment_id, &AgentId::from_parts(7, 1));
@@ -863,6 +866,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
         ),
         created_at: chrono::Utc::now(),
         wasm_hash: golem_common::model::diff::Hash::empty(),
+        package_metadata: None,
         object_store_key: String::new(),
     }));
     let oplog_service = Arc::new(
@@ -956,6 +960,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
         initial_active_plugins: [grant_id].into_iter().collect(),
         local_agent_config: Vec::new(),
         instance_id: Uuid::new_v4(),
+        never_live: true,
     };
     let public = PublicOplogEntry::from_enrichment_entry(
         OplogIndex::INITIAL,
@@ -992,6 +997,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
         projection.initial_total_linear_memory_size
     );
     assert_eq!(public.instance_id, projection.instance_id);
+    assert!(public.never_live);
     assert_eq!(public.initial_active_plugins.len(), 1);
     assert_eq!(
         public.initial_active_plugins.first().unwrap().plugin_name,
@@ -1011,6 +1017,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
         wire.owner_kind,
         crate::preview2::golem_api_1_x::oplog::OwnerKind::OplogProcessor
     ));
+    assert!(wire.never_live);
 }
 
 fn default_last_known_status() -> read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord> {
@@ -1138,9 +1145,7 @@ fn test_entity_request(
                 },
             })
         }),
-        principal: Principal::Agent(AgentPrincipal {
-            agent_id: owner.agent_id,
-        }),
+        caller: crate::test_callers::agent_caller(owner.agent_id),
         plan: EntityInvocationPlanReference::Root { plan },
         authority_wallet: Vec::new(),
     };
@@ -1398,6 +1403,8 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             Some(uuid::Uuid::from_u128(602).into()),
             golem_common::model::oplog::AgentError::TransientError("entity retry".to_string()),
             agent_entry,
+            None,
+            None,
             None,
         ))
         .await
@@ -2132,7 +2139,6 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
         (
             HostFunctionName::P3SocketsTypesUdpSocketSend,
             HostRequestP3SocketsUdpSend {
-                data: vec![1, 2, 3],
                 remote_address: Some(SerializableP3IpSocketAddress {
                     address: SerializableIpAddress::IPv4 {
                         address: [127, 0, 0, 1],
@@ -2143,7 +2149,11 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
                 }),
             }
             .into(),
-            HostResponseP3SocketsUdpSend { result: Ok(()) }.into(),
+            HostResponseP3SocketsUdpSend {
+                result: Ok(()),
+                endpoint: None,
+            }
+            .into(),
         ),
         (
             HostFunctionName::P3SocketsTypesUdpSocketReceive,
@@ -2160,6 +2170,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
                         scope_id: Some(2),
                     },
                 }),
+                endpoint: None,
             }
             .into(),
         ),
@@ -2170,6 +2181,11 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
                 chunk: SerializableP3TcpChunk::Data(vec![7, 8, 9]),
             }
             .into(),
+        ),
+        (
+            HostFunctionName::P3SocketsTypesTcpSocketSendChunk,
+            HostRequestNoInput {}.into(),
+            HostResponseP3SocketsTcpSendChunk { result: Ok(4096) }.into(),
         ),
         (
             HostFunctionName::P3SocketsTypesTcpSocketSendAcquire,
@@ -3191,4 +3207,184 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
             }
         }
     }
+}
+
+#[test]
+async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("range-read").await;
+    let updated_revision = ComponentRevision::new(4).unwrap();
+    let mut indices = Vec::new();
+    for i in 0..12 {
+        let entry = if i == 2 {
+            OplogEntry::SuccessfulUpdate {
+                timestamp: Timestamp::now_utc(),
+                target_revision: updated_revision,
+                new_component_size: 100,
+                new_total_linear_memory_size: None,
+                new_active_plugins: HashSet::new(),
+                snapshot_assisted_details: None,
+                bootstrap: None,
+            }
+        } else {
+            log_entry(0)
+        };
+        indices.push(oplog.add(entry).await.unwrap());
+    }
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    let allowance = |entries| OplogScanAllowance {
+        entries,
+        millis: 600_000,
+    };
+    let read = |cursor: Option<OplogCursor>, from: OplogIndex, to: OplogIndex, count, a| {
+        get_public_oplog_range_page(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            cursor,
+            from,
+            to,
+            PublicOplogPageLimits {
+                count,
+                max_bytes: 1_000_000,
+                max_entry_bytes: 1_000_000,
+            },
+            a,
+        )
+    };
+    let (from, to) = (indices[5], indices[8]);
+    // The entries before `from` count against the allowance: they hold the revision at `from`.
+    let charged_before = from.as_u64() - 1;
+
+    // A page of two, then a page that ends at `to`, though the oplog goes on.
+    let first = read(None, from, to, 2, allowance(100)).await.unwrap();
+    assert_eq!(
+        page_indices(&first.entries),
+        vec![(indices[5], true), (indices[6], true)]
+    );
+    assert_eq!(first.scan.charged_entries, charged_before + 2);
+    assert!(!first.scan.exhausted);
+    let cursor = first.next.clone().expect("the range goes on");
+    assert_eq!(cursor.next_oplog_index, indices[7].as_u64());
+    assert_eq!(
+        cursor.current_component_revision,
+        u64::from(updated_revision)
+    );
+    let second = read(Some(cursor), from, to, 10, allowance(100))
+        .await
+        .unwrap();
+    assert_eq!(
+        page_indices(&second.entries),
+        vec![(indices[7], true), (indices[8], true)]
+    );
+    assert_eq!(second.next, None);
+    assert_eq!(second.scan.charged_entries, 2);
+    assert!(!second.scan.exhausted);
+    assert!(second.last_index > to);
+
+    // Exactly the allowance completes the range; one entry less stops before `to`.
+    let exact = read(None, from, to, 10, allowance(charged_before + 4))
+        .await
+        .unwrap();
+    assert_eq!(exact.entries.len(), 4);
+    assert_eq!((exact.next, exact.scan.exhausted), (None, false));
+    let short = read(None, from, to, 10, allowance(charged_before + 3))
+        .await
+        .unwrap();
+    assert_eq!(short.entries.len(), 3);
+    assert!(short.scan.exhausted);
+    assert_eq!(
+        short.next.map(|cursor| cursor.next_oplog_index),
+        Some(to.as_u64())
+    );
+
+    // A page that its byte limit cuts short is charged with every entry that it read.
+    let cut = get_public_oplog_range_page(
+        Arc::new(PanicComponentService),
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        test_component_id(),
+        OwnerKind::ComponentAgent,
+        None,
+        None,
+        from,
+        to,
+        PublicOplogPageLimits {
+            count: 10,
+            max_bytes: 1,
+            max_entry_bytes: 1_000_000,
+        },
+        allowance(100),
+    )
+    .await
+    .unwrap();
+    assert_eq!(page_indices(&cut.entries), vec![(indices[5], true)]);
+    assert_eq!(cut.scan.charged_entries, charged_before + 4);
+    assert_eq!(
+        cut.next.map(|cursor| cursor.next_oplog_index),
+        Some(indices[6].as_u64())
+    );
+
+    // The allowance runs out while the read looks for the revision at `from`: no page, no cursor.
+    let before = read(None, from, to, 10, allowance(2)).await.unwrap();
+    assert!(before.entries.is_empty());
+    assert_eq!((before.next, before.scan.exhausted), (None, true));
+
+    // A cursor outside the range, or a range that ends before it starts, is refused.
+    let outside = OplogCursor {
+        next_oplog_index: indices[9].as_u64(),
+        current_component_revision: updated_revision.into(),
+        query_hash: OplogCursor::query_hash(None),
+    };
+    assert!(
+        read(Some(outside), from, to, 10, allowance(100))
+            .await
+            .is_err()
+    );
+    assert!(read(None, to, from, 10, allowance(100)).await.is_err());
+}
+
+#[test]
+fn a_range_read_never_gets_more_than_the_configured_allowance() {
+    let configured = ScanBudget {
+        entries: std::num::NonZeroU64::new(50).unwrap(),
+        time: std::time::Duration::from_secs(5),
+    };
+    assert_eq!(
+        oplog_range_allowance(None, configured),
+        OplogScanAllowance {
+            entries: 50,
+            millis: 5000
+        }
+    );
+    assert_eq!(
+        oplog_range_allowance(
+            Some(OplogScanAllowance {
+                entries: 7,
+                millis: 9000
+            }),
+            configured
+        ),
+        OplogScanAllowance {
+            entries: 7,
+            millis: 5000
+        }
+    );
+    assert_eq!(
+        oplog_range_allowance(
+            Some(OplogScanAllowance {
+                entries: 0,
+                millis: 0
+            }),
+            configured
+        ),
+        OplogScanAllowance {
+            entries: 0,
+            millis: 0
+        }
+    );
 }

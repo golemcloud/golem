@@ -1,8 +1,12 @@
+include:
+  - ../..
+build: npm ci --prefix ../.. && bun build ./server.ts --target bun --outfile ./server.js && cp "$(command -v bun)" ./bun
 source: false
 artifacts:
   - index.html
   - brand.png
-  - server.py
+  - server.js
+  - bun
 services:
   web:
-    command: python3 server.py
+    command: ./bun server.js

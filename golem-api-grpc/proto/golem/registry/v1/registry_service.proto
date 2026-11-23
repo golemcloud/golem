@@ -25,6 +25,10 @@ import "golem/worker/worker_id.proto";
 service RegistryService {
   // auth api
   rpc AuthenticateToken (AuthenticateTokenRequest) returns (AuthenticateTokenResponse);
+  rpc AuthorizeEnvironment (AuthorizeEnvironmentRequest) returns (AuthorizeEnvironmentResponse);
+
+  // installation api
+  rpc GetGolemIssuer (GetGolemIssuerRequest) returns (GetGolemIssuerResponse);
 
   // limits api
   rpc GetResourceLimits (GetResourceLimitsRequest) returns (GetResourceLimitsResponse);
@@ -50,6 +54,8 @@ service RegistryService {
       returns (ResolveAgentTypeByNamesResponse);
   // Resolves the type ID in an agent ID's tag. It also resolves types that are no longer deployed.
   rpc ResolveTypeId (ResolveTypeIdRequest) returns (ResolveTypeIdResponse);
+  // Resolves retained names, including declarations on previous implementing components.
+  rpc ResolveAgentTypeName (ResolveAgentTypeNameRequest) returns (ResolveAgentTypeNameResponse);
   // Resolves an agent type of the environment's current deployment by name.
   rpc GetDeployedAgentType (GetDeployedAgentTypeRequest) returns (GetDeployedAgentTypeResponse);
 
@@ -74,6 +80,18 @@ service RegistryService {
       returns (stream RegistryInvalidationEvent);
 }
 
+message AuthorizeEnvironmentRequest {
+  golem.common.EnvironmentId environment_id = 1;
+  golem.auth.AuthCtx auth_ctx = 2;
+}
+
+message AuthorizeEnvironmentResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
 message AuthenticateTokenRequest {
   string secret = 1;
 }
@@ -87,6 +105,21 @@ message AuthenticateTokenResponse {
 
 message AuthenticateTokenSuccessResponse {
     golem.auth.AuthCtx auth_ctx = 1;
+}
+
+message GetGolemIssuerRequest {
+}
+
+message GetGolemIssuerResponse {
+  oneof result {
+    GetGolemIssuerSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetGolemIssuerSuccessResponse {
+  // The Golem issuer of the installation: an https URL, or urn:golem:issuer:<uuid>.
+  string golem_issuer = 1;
 }
 
 message GetResourceLimitsRequest {
@@ -421,6 +454,23 @@ message ResolveAgentTypeByNamesSuccessResponse {
   uint64 deployment_revision = 3;
   // Present only when request.deployment_revision is not set.
   optional uint64 current_deployment_revision = 4;
+}
+
+message ResolveAgentTypeNameRequest {
+  golem.common.EnvironmentId environment_id = 1;
+  string agent_type_name = 2;
+}
+
+message ResolveAgentTypeNameResponse {
+  oneof result {
+    ResolveAgentTypeNameSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message ResolveAgentTypeNameSuccessResponse {
+  // Latest declaration for each historical implementing component, newest deployment first.
+  repeated RegisteredAgentType agent_types = 1;
 }
 
 message ResolveTypeIdRequest {

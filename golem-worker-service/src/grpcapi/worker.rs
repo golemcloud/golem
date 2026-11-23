@@ -808,7 +808,7 @@ impl WorkerGrpcApi {
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing component id"))?;
 
-        let constructor: golem_common::model::agent::AgentKey = request
+        let constructor: golem_common::model::agent::ParsedAgentKey = request
             .constructor
             .ok_or_else(|| bad_request_error("Missing constructor"))?
             .try_into()
@@ -842,7 +842,9 @@ impl WorkerGrpcApi {
                 request.ignore_already_existing,
                 auth,
                 request.context,
-                request.principal,
+                request
+                    .caller
+                    .ok_or_else(|| bad_request_error("caller is missing"))?,
                 request.idempotency_key.map(Into::into),
                 freshness_disposition,
             )
@@ -945,18 +947,19 @@ impl WorkerGrpcApi {
             .map(|id| validate_protobuf_agent_id(Some(id)))
             .transpose()?;
         let oplog_idx = OplogIndex::from_u64(request.oplog_index_cutoff);
-        let principal = request
-            .principal
-            .map(golem_common::model::agent::Principal::try_from)
-            .transpose()
-            .map_err(|e| bad_request_error(format!("failed converting principal: {e}")))?;
+        let caller = golem_common::model::caller::Caller::try_from(
+            request
+                .caller
+                .ok_or_else(|| bad_request_error("caller is missing"))?,
+        )
+        .map_err(|e| bad_request_error(format!("failed converting caller: {e}")))?;
 
         self.worker_service
             .fork_worker(
                 &source_agent_id,
                 target_agent_id,
                 oplog_idx,
-                principal,
+                Some(caller),
                 None,
                 auth,
             )
@@ -1057,9 +1060,9 @@ impl WorkerGrpcApi {
             }
         }
 
-        let principal = request
-            .principal
-            .unwrap_or_else(|| golem_common::model::agent::Principal::anonymous().into());
+        let caller = request
+            .caller
+            .ok_or_else(|| bad_request_error("caller is missing"))?;
 
         let output = if is_lookup {
             self.worker_service
@@ -1069,7 +1072,7 @@ impl WorkerGrpcApi {
                         idempotency_key: request.idempotency_key,
                         request_key: Some(request_key.into()),
                         context: request.context,
-                        principal: Some(principal),
+                        caller: Some(caller),
                         environment_id: Some(environment_id.into()),
                         attempt_id: Some(uuid::Uuid::new_v4().into()),
                         expected_callee_fingerprint: request.expected_callee_fingerprint,
@@ -1083,10 +1086,9 @@ impl WorkerGrpcApi {
                 .map_err(|e| bad_request_error(format!("Invalid target: {e}")))?;
             let constructor = request
                 .constructor
-                .map(golem_common::model::agent::AgentKey::try_from)
+                .map(golem_common::model::agent::ParsedAgentKey::try_from)
                 .transpose()
-                .map_err(|e| bad_request_error(format!("Invalid constructor: {e}")))?
-                .map(golem_common::model::agent::ParsedAgentKey::from);
+                .map_err(|e| bad_request_error(format!("Invalid constructor: {e}")))?;
             let component_id = request
                 .component_id
                 .map(ComponentId::try_from)
@@ -1108,7 +1110,7 @@ impl WorkerGrpcApi {
                     freshness_disposition,
                     config,
                     auth,
-                    principal,
+                    caller,
                     request.scope_card,
                     request
                         .expected_callee_fingerprint

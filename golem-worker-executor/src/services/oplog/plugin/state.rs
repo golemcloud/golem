@@ -346,6 +346,7 @@ impl ForwardingOplogState {
         // be copied into every delivery checkpoint.
         let delivery_status = AgentStatusRecord {
             status: status.status,
+            never_live: status.never_live,
             component_revision: status.component_revision,
             current_retry_state: status
                 .current_retry_state
@@ -521,6 +522,12 @@ impl ForwardingOplogState {
                                 Ok(InvocationStatus::Unknown) => {
                                     tracing::warn!(
                                         "Plugin {grant_id}: invocation status unknown for batch [{batch_start}..{batch_end}]"
+                                    );
+                                    break;
+                                }
+                                Ok(InvocationStatus::Cancelled) => {
+                                    tracing::warn!(
+                                        "Plugin {grant_id}: invocation cancelled for batch [{batch_start}..{batch_end}]"
                                     );
                                     break;
                                 }

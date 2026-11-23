@@ -16,7 +16,8 @@
 //! accounts, and of their identity proofs.
 //!
 //! The identifier is an `https` URL, or `urn:golem:issuer:<uuid>` when the operator sets none and
-//! Golem generates one. An outside receiver can fetch keys only from an `https` issuer.
+//! the registry service generates one and keeps it in its database. An outside receiver can fetch
+//! keys only from an `https` issuer.
 //!
 //! Identities compare their issuer byte for byte, so the parser accepts each identifier in one
 //! spelling only.
@@ -52,7 +53,6 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Display, Formatter};
 use std::net::Ipv4Addr;
 use std::str::FromStr;
-use tracing::warn;
 use url::Url;
 use uuid::Uuid;
 
@@ -68,23 +68,6 @@ impl GolemIssuer {
             "{GENERATED_GOLEM_ISSUER_PREFIX}{}",
             Uuid::new_v4().hyphenated()
         ))
-    }
-
-    /// The configured issuer, or a generated one with a warning when none is configured.
-    ///
-    /// Call this once per start and keep the result: every call without a configured issuer
-    /// generates a different one.
-    pub fn configured_or_generated(configured: Option<GolemIssuer>) -> Self {
-        configured.unwrap_or_else(|| {
-            let generated = Self::generate();
-            warn!(
-                "No Golem issuer is configured (golem_issuer), so this process generated {generated}. \
-                 Identity proofs to outside receivers need an https issuer, and every worker \
-                 service and executor of one installation needs the same issuer: set golem_issuer \
-                 to an https URL on its own host"
-            );
-            generated
-        })
     }
 
     pub fn as_str(&self) -> &str {
@@ -363,7 +346,6 @@ mod tests {
     use super::*;
     use serde::Deserialize;
     use test_r::test;
-    use tracing_test::traced_test;
     use uuid::Uuid;
 
     const ACCEPTED_URLS: &[&str] = &[
@@ -417,34 +399,6 @@ mod tests {
         let configured: GolemIssuer = generated.as_str().parse().unwrap();
         assert_eq!(configured, generated);
         assert!(configured.is_generated());
-    }
-
-    #[test]
-    #[traced_test]
-    fn no_value_gives_a_generated_issuer_and_the_warning() {
-        let issuer = GolemIssuer::configured_or_generated(None);
-        assert!(issuer.is_generated());
-        assert!(logs_contain(issuer.as_str()));
-        logs_assert(|lines: &[&str]| {
-            let at_warn = lines.iter().any(|line| {
-                line.contains("WARN")
-                    && line.contains("Identity proofs to outside receivers need an https issuer")
-            });
-            if at_warn {
-                Ok(())
-            } else {
-                Err(format!("no WARN line with the message in {lines:?}"))
-            }
-        });
-    }
-
-    #[test]
-    #[traced_test]
-    fn a_configured_value_is_kept_without_a_warning() {
-        let configured: GolemIssuer = "https://id.acme.example".parse().unwrap();
-        let issuer = GolemIssuer::configured_or_generated(Some(configured.clone()));
-        assert_eq!(issuer, configured);
-        assert!(!logs_contain("Identity proofs"));
     }
 
     #[test]

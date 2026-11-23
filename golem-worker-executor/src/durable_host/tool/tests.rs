@@ -947,10 +947,12 @@ fn registered_tool() -> (RegisteredTool, ComponentId) {
     let definition = Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![CommandNode {
                 name: "search".to_string(),
                 aliases: vec!["find".to_string()],
+                http: None,
                 doc: Doc {
                     summary: "Search documents".to_string(),
                     description: "Searches indexed documents".to_string(),

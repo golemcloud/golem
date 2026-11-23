@@ -18,6 +18,7 @@
 #![recursion_limit = "256"]
 
 pub mod agent_deployments_service;
+pub mod callers;
 pub mod component_service;
 pub mod component_writer;
 pub mod dsl_impl;
@@ -37,11 +38,10 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::config::{DbSqliteConfig, RedisConfig};
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{
-    AgentMode, AgentTypeName, ParsedAgentKey, Principal, ResolvedOwnerContext,
-};
+use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentKey, ResolvedOwnerContext};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
+use golem_common::model::caller::Caller;
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
     Card, CardId, CardManagedByRuntimeDerived, StoredCard, parse_permission_fields,
@@ -654,7 +654,7 @@ impl TestWorkerExecutor {
         environment_id: EnvironmentId,
         idempotency_key: &IdempotencyKey,
         invocation_context: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
     ) -> Result<Arc<Worker<TestWorkerCtx>>, WorkerExecutorError> {
         let services = self
             .services
@@ -668,7 +668,7 @@ impl TestWorkerExecutor {
                 environment_id,
                 idempotency_key,
                 invocation_context,
-                principal,
+                caller,
             )
             .await
     }
@@ -685,7 +685,7 @@ impl TestWorkerExecutor {
         command_path: Vec<String>,
         input: TypedSchemaValue,
         invocation_context: InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         scope_card: Option<golem_common::model::card::ScopeCard>,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         self.invoke_external_tool_in_environment(
@@ -697,7 +697,7 @@ impl TestWorkerExecutor {
             command_path,
             input,
             invocation_context,
-            principal,
+            caller,
             scope_card,
         )
         .await
@@ -713,7 +713,7 @@ impl TestWorkerExecutor {
         command_path: Vec<String>,
         input: TypedSchemaValue,
         invocation_context: InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         scope_card: Option<golem_common::model::card::ScopeCard>,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         let services = self
@@ -722,13 +722,15 @@ impl TestWorkerExecutor {
             .expect("test service graph is captured");
         let owned_agent_id = OwnedAgentId::new(environment_id, agent_id);
         let worker =
-            Worker::get_exact_existing_suspended(services, &owned_agent_id, principal.clone())
-                .await?;
+            Worker::get_exact_existing_suspended(services, &owned_agent_id, caller.clone()).await?;
         let invocation_id = golem_common::model::InvocationRequestKey::Internal(idempotency_key)
             .finalize(
                 *agent_id,
                 expected_fingerprint,
-                &format!("tool:{tool_name}/{}", command_path.join("/")),
+                &golem_common::model::InvocationOperation::tool_operation(
+                    &tool_name,
+                    &command_path,
+                ),
             )
             .id();
         worker
@@ -739,7 +741,7 @@ impl TestWorkerExecutor {
                 command_path,
                 input,
                 invocation_context,
-                principal,
+                caller,
                 scope_card,
             )
             .await
@@ -1208,6 +1210,28 @@ impl TestWorkerExecutor {
                 metadata.initial_worker_metadata.fingerprint,
                 &status,
                 &indexes.into_iter().collect(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Evicts the cached status of the agent, and with it its persisted result index, as an
+    /// archive does. The oplog stays.
+    pub async fn evict_cached_status(&self, agent_id: &AgentId) -> anyhow::Result<()> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker_service = self
+            .services
+            .as_ref()
+            .ok_or_else(|| anyhow!("the test service graph is not captured"))?
+            .worker_service();
+        let metadata = worker_service
+            .get(&owned_agent_id)
+            .await?
+            .ok_or_else(|| anyhow!("no metadata for {owned_agent_id}"))?;
+        worker_service
+            .remove_cached_status(
+                &owned_agent_id,
+                metadata.initial_worker_metadata.fingerprint,
             )
             .await?;
         Ok(())
@@ -2164,6 +2188,22 @@ impl TestWorkerExecutor {
             .await
     }
 
+    /// Holds the explicit commit after a matching entry has been buffered, before storage.
+    /// Unlike an append gate, this lets the writer receive its append index and reach the
+    /// actual acceptance or completion commit barrier. Threshold auto-commits must be disabled.
+    pub async fn gate_before_next_oplog_commit(
+        &self,
+        agent_id: &AgentId,
+        matches: fn(&OplogEntry) -> bool,
+    ) -> AgentInitializationEnqueueGateHandle {
+        let handle = self
+            .additional_test_deps
+            .gate_next_append(*agent_id, matches)
+            .await;
+        handle.gate.before_commit.store(true, Ordering::SeqCst);
+        handle
+    }
+
     /// Holds a selected invocation writer at its real terminal append, before storage changes.
     pub async fn gate_next_invocation_outcome_append(
         &self,
@@ -2894,6 +2934,7 @@ impl TestExecutorOverrides {
 
 fn make_base_test_config(deps: &WorkerExecutorTestDependencies) -> GolemConfig {
     GolemConfig {
+        golem_issuer: Some("https://issuer.golem-test.example".parse().unwrap()),
         blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
             root: deps.data_dir.path().join("blobs"),
         }),
@@ -3154,6 +3195,58 @@ pub async fn copy_create_entry_to(
             None,
         )
         .await?;
+    Ok(())
+}
+
+/// Copies a durable agent's complete oplog to another ID while retaining the source's key.
+/// Both executors must be stopped, as for [`copy_create_entry_to`].
+pub async fn copy_agent_oplog_to(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    source: &OwnedAgentId,
+    target: &OwnedAgentId,
+) -> anyhow::Result<()> {
+    copy_create_entry_to(deps, context, source, target).await?;
+    let storage = sqlite_indexed_storage(deps, context).await?;
+    let namespace = |agent: &OwnedAgentId| IndexedStorageNamespace::OpLog {
+        owned_agent_id: agent.clone(),
+        agent_mode: AgentMode::Durable,
+    };
+    let last = storage
+        .last_id(
+            "oplog",
+            "test_read",
+            "entry",
+            namespace(source),
+            &source.storage_key(),
+        )
+        .await?
+        .ok_or_else(|| anyhow!("the oplog of {source} is empty"))?;
+    let entries = storage
+        .read(
+            "oplog",
+            "test_read",
+            "entry",
+            namespace(source),
+            &source.storage_key(),
+            OplogIndex::INITIAL.as_u64() + 1,
+            last,
+        )
+        .await?;
+    for (id, value) in entries {
+        storage
+            .append(
+                "oplog",
+                "test_copy",
+                "entry",
+                namespace(target),
+                &target.storage_key(),
+                id,
+                value,
+                None,
+            )
+            .await?;
+    }
     Ok(())
 }
 
@@ -3444,7 +3537,7 @@ trait NativeTestTool {
         stdin: Option<golem_native_tool::NativeToolStdin<NativeTestContext>>,
         stdout: Option<golem_native_tool::NativeToolOutput<NativeTestContext>>,
         stderr: Option<golem_native_tool::NativeToolOutput<NativeTestContext>>,
-        principal: golem_native_tool::Principal,
+        caller: golem_native_tool::Caller,
     ) -> golem_native_tool::HostResult<()>;
 }
 
@@ -3469,7 +3562,7 @@ impl NativeTestTool for NativeTestToolImpl {
         mut stdin: Option<golem_native_tool::NativeToolStdin<NativeTestContext>>,
         mut stdout: Option<golem_native_tool::NativeToolOutput<NativeTestContext>>,
         mut stderr: Option<golem_native_tool::NativeToolOutput<NativeTestContext>>,
-        _principal: golem_native_tool::Principal,
+        _caller: golem_native_tool::Caller,
     ) -> golem_native_tool::HostResult<()> {
         let wait_for_count = mode
             .strip_prefix("wait-counter:")
@@ -6062,6 +6155,12 @@ impl TestOplog {
         else {
             return Ok(());
         };
+        if gate.before_commit.load(Ordering::SeqCst) {
+            if after_append && gate.armed.load(Ordering::SeqCst) && (gate.matches)(entry) {
+                *gate.entry.lock().unwrap() = Some(entry.clone());
+            }
+            return Ok(());
+        }
         if after_append && matches!(entry, OplogEntry::AgentInvocationStarted { .. }) {
             gate.wait_for_invocation_start
                 .store(false, Ordering::SeqCst);
@@ -6605,6 +6704,20 @@ impl Oplog for TestOplog {
     {
         self.additional_test_deps
             .record_oplog_call(&self.owned_agent_id, "commit");
+        if level != CommitLevel::ReportOnly
+            && let Some(gate) = self
+                .additional_test_deps
+                .agent_initialization_enqueue_gate(&self.owned_agent_id.agent_id)
+                .await
+            && gate.before_commit.load(Ordering::SeqCst)
+        {
+            let entry = gate.entry.lock().unwrap().clone();
+            if let Some(entry) = entry
+                && gate.armed.swap(false, Ordering::SeqCst)
+            {
+                self.pause_at_claimed_test_append(&entry, gate).await?;
+            }
+        }
         let committed = self.oplog.commit(level).await;
         if committed.as_ref().is_ok_and(|entries| {
             entries
@@ -6985,6 +7098,34 @@ impl Oplog for TestOplog {
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
     ) -> golem_worker_executor::services::oplog::OplogAddPairReceipt {
+        let gate = self
+            .additional_test_deps
+            .agent_initialization_enqueue_gates
+            .read_sync(&self.owned_agent_id.agent_id, |_, gate| {
+                gate.before_commit
+                    .load(Ordering::SeqCst)
+                    .then(|| gate.clone())
+            })
+            .flatten();
+        if let Some(gate) = gate {
+            let first = start.clone();
+            return self.oplog.enqueue_add_pair(
+                start,
+                Box::new(move |index| {
+                    let second = make_second(index);
+                    // Observe both entries inside the atomic writer job, without splitting the
+                    // pair or depending on its receipt being polled before the next commit.
+                    if gate.armed.load(Ordering::SeqCst) {
+                        if (gate.matches)(&first) {
+                            *gate.entry.lock().unwrap() = Some(first);
+                        } else if (gate.matches)(&second) {
+                            *gate.entry.lock().unwrap() = Some(second.clone());
+                        }
+                    }
+                    second
+                }),
+            );
+        }
         self.oplog.enqueue_add_pair(start, make_second)
     }
 
@@ -7000,7 +7141,7 @@ impl Oplog for TestOplog {
                 details,
             ));
         }
-        self.oplog.add_pair(start, make_second).await
+        self.enqueue_add_pair(start, make_second).await
     }
 
     fn inner(&self) -> Option<Arc<dyn Oplog>> {
@@ -7691,17 +7832,10 @@ impl AdditionalTestDeps {
         agent_id: AgentId,
     ) -> AgentInitializationEnqueueGateHandle {
         fn is_initialization_enqueue(entry: &OplogEntry) -> bool {
-            let OplogEntry::PendingAgentInvocation { payload, .. } = entry else {
-                return false;
-            };
-            let payload = match payload {
-                OplogPayload::Inline(payload) => Some(payload.as_ref()),
-                OplogPayload::SerializedInline { cached, .. }
-                | OplogPayload::External { cached, .. } => cached.as_deref(),
-            };
             matches!(
-                payload,
-                Some(golem_common::model::AgentInvocationPayload::AgentInitialization { .. })
+                entry,
+                OplogEntry::PendingAgentInvocation { operation, .. }
+                    if **operation == golem_common::model::InvocationRequestOperation::AgentInitialization
             )
         }
         self.gate_next_append(agent_id, is_initialization_enqueue)
@@ -7731,6 +7865,7 @@ impl AdditionalTestDeps {
             armed: AtomicBool::new(true),
             matches,
             after_append: AtomicBool::new(false),
+            before_commit: AtomicBool::new(false),
             commit_prefix: AtomicBool::new(false),
             abort_append: AtomicBool::new(false),
             wait_for_invocation_start: AtomicBool::new(false),
@@ -8162,6 +8297,7 @@ struct AgentInitializationEnqueueGate {
     /// The entry the gate fires on; the initialization enqueue unless a test arms it otherwise.
     matches: fn(&OplogEntry) -> bool,
     after_append: AtomicBool,
+    before_commit: AtomicBool,
     commit_prefix: AtomicBool,
     abort_append: AtomicBool,
     wait_for_invocation_start: AtomicBool,
@@ -8191,6 +8327,11 @@ impl AgentInitializationEnqueueGateHandle {
             .unwrap()
             .clone()
             .expect("the append gate has not intercepted an entry")
+    }
+
+    /// Releases the paused append or commit. Drop also releases it as failure cleanup.
+    pub fn release(self) {
+        drop(self);
     }
 
     /// Refuses the intercepted receipt only after executor shutdown fences its oplog generation.
@@ -9689,6 +9830,7 @@ impl Rpc for RecordingRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         idempotency_key: IdempotencyKey,
@@ -9702,6 +9844,7 @@ impl Rpc for RecordingRpc {
                 self_agent_id,
                 self_env,
                 self_stack,
+                caller,
                 config,
                 auth_ctx,
                 idempotency_key,
@@ -9753,6 +9896,7 @@ impl Rpc for RecordingRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         idempotency_key: Option<IdempotencyKey>,
@@ -9767,6 +9911,7 @@ impl Rpc for RecordingRpc {
                 self_agent_id,
                 self_env,
                 self_stack,
+                caller,
                 config,
                 auth_ctx,
                 idempotency_key,
@@ -9787,6 +9932,7 @@ impl Rpc for RecordingRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         scope_card: Option<golem_common::model::card::ScopeCard>,
@@ -9807,6 +9953,7 @@ impl Rpc for RecordingRpc {
                 self_agent_id,
                 self_env,
                 self_stack,
+                caller,
                 config,
                 auth_ctx,
                 scope_card,
@@ -9826,6 +9973,7 @@ impl Rpc for RecordingRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), ServiceRpcError> {
@@ -9842,6 +9990,7 @@ impl Rpc for RecordingRpc {
                 self_agent_id,
                 self_env,
                 self_stack,
+                caller,
                 config,
                 auth_ctx,
             )
@@ -9859,6 +10008,7 @@ impl Rpc for FailingRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         idempotency_key: IdempotencyKey,
@@ -9871,6 +10021,7 @@ impl Rpc for FailingRpc {
                 self_agent_id,
                 self_env,
                 self_stack,
+                caller,
                 config,
                 auth_ctx,
                 idempotency_key,
@@ -9920,6 +10071,7 @@ impl Rpc for FailingRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         idempotency_key: Option<IdempotencyKey>,
@@ -9933,6 +10085,7 @@ impl Rpc for FailingRpc {
                 self_agent_id,
                 self_env,
                 self_stack,
+                caller,
                 config,
                 auth_ctx,
                 idempotency_key,
@@ -9953,6 +10106,7 @@ impl Rpc for FailingRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<golem_common::model::agent::AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         scope_card: Option<golem_common::model::card::ScopeCard>,
@@ -9978,6 +10132,7 @@ impl Rpc for FailingRpc {
                     self_agent_id,
                     self_env,
                     self_stack,
+                    caller,
                     config,
                     auth_ctx,
                     scope_card,
@@ -9998,6 +10153,7 @@ impl Rpc for FailingRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<golem_common::model::agent::AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), ServiceRpcError> {
@@ -10013,6 +10169,7 @@ impl Rpc for FailingRpc {
                 self_agent_id,
                 self_env,
                 self_stack,
+                caller,
                 config,
                 auth_ctx,
             )

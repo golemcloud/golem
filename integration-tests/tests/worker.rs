@@ -43,7 +43,8 @@ use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended, WorkerLogEventStream, update_counts};
 use golem_test_framework::model::IFSEntry;
 use integration_tests::agents::{
-    agent_type_id, create_agent_with, invoke_agent_by_id, keyed_agent_id, try_create_agent,
+    agent_type_id, create_agent_with, invoke_agent_by_id, invoke_and_await_agent_by_id,
+    keyed_agent_id, try_create_agent,
 };
 use pretty_assertions::assert_eq;
 use rand::seq::IteratorRandom;
@@ -444,21 +445,12 @@ async fn remote_rpc_create_waits_for_constructor_and_reports_rejection(
     Ok(())
 }
 
-/// REST/JSON invocation of a method whose only declared input is the
-/// auto-injected `principal` field. The caller supplies no parameters (the
-/// host injects the principal out of band), so the invocation must succeed —
-/// the same way the gRPC executor path and the HTTP gateway path already do.
-///
-/// `ReadonlyAgent::get_count_for(&self, _principal: Principal) -> u64` declares
-/// a single auto-injected principal field and no user-supplied parameters, so
-/// the caller sends an empty parameter record. This guards against the
-/// worker-service REST path validating method parameters against the *full*
-/// input schema (including auto-injected fields) instead of only the
-/// user-supplied ones.
+/// A REST invocation authenticated with an account token reaches the agent as that account, in
+/// both roles and without tokens: the caller's pair is the Golem issuer and `account:<id>`.
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
-async fn rest_invoke_of_principal_only_method_succeeds(
+async fn rest_invoke_gives_the_account_pair(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
@@ -469,16 +461,24 @@ async fn rest_invoke_of_principal_only_method_succeeds(
         .name("golem-it:agent-sdk-rust")
         .store()
         .await?;
-    let agent_id = agent_key!("ReadonlyAgent", "rest-principal-1");
+    let agent_id = agent_key!("InvocationContextProbe", "rest-principal-1");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let result = user
-        .invoke_and_await_agent(&component, &agent_id, "get_count_for", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "caller_summary", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    assert_eq!(result, SchemaValue::U64(0));
+    let account = format!(
+        "account (\"{}\",\"account:{}\")",
+        golem_test_framework::components::TEST_GOLEM_ISSUER,
+        user.account_id.0.hyphenated()
+    );
+    assert_eq!(
+        result,
+        SchemaValue::String(format!("original={account} immediate={account} tokens=0"))
+    );
     Ok(())
 }
 
@@ -932,6 +932,7 @@ async fn invalid_worker_enumeration_requests_return_http_400(
             .get_agents_metadata(
                 &component.environment_id.0,
                 agent_type,
+                None,
                 Some(&get_filter),
                 Some("not-a-valid-cursor"),
                 Some(1),
@@ -945,6 +946,7 @@ async fn invalid_worker_enumeration_requests_return_http_400(
             .find_agents_metadata(
                 &component.environment_id.0,
                 agent_type,
+                None,
                 &WorkersMetadataRequest {
                     filter: Some(running_filter.clone()),
                     cursor: Some(ScanCursor::new("not-a-valid-cursor".to_string())),
@@ -962,6 +964,7 @@ async fn invalid_worker_enumeration_requests_return_http_400(
                 .get_agents_metadata(
                     &component.environment_id.0,
                     agent_type,
+                    None,
                     Some(&get_filter),
                     None,
                     Some(count),
@@ -975,6 +978,7 @@ async fn invalid_worker_enumeration_requests_return_http_400(
                 .find_agents_metadata(
                     &component.environment_id.0,
                     agent_type,
+                    None,
                     &WorkersMetadataRequest {
                         filter: Some(running_filter.clone()),
                         cursor: None,
@@ -2312,6 +2316,7 @@ async fn resolve_components_from_name(
 
 #[test]
 #[tracing::instrument]
+#[timeout("4m")]
 async fn agent_promise_await(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -2592,7 +2597,12 @@ async fn agent_update_constructor_signature(
     user.log_output(&old_singleton).await?;
 
     let result1b = user
-        .invoke_and_await_agent(&component, &old_singleton_id, "call", data_value!("agent1"))
+        .invoke_and_await_agent(
+            &component,
+            &old_singleton_id,
+            "call",
+            data_value!(golem_schema::model::AgentId::from(agent1.agent_id.0)),
+        )
         .await?;
     assert_eq!(result1b.into_return_value(), Some(SchemaValue::U32(2)));
 
@@ -2615,10 +2625,25 @@ async fn agent_update_constructor_signature(
         .await?;
     assert_eq!(result2b.into_return_value(), Some(SchemaValue::U32(2)));
 
-    // Still able to call both agents
-    let result3a = user
+    let old_key_error = user
         .invoke_and_await_agent(&component, &agent1_id, "increment", data_value!())
-        .await?;
+        .await
+        .expect_err("a key must satisfy the deployed constructor schema");
+    assert!(matches!(
+        old_key_error.downcast_ref::<golem_client::Error<AgentError>>(),
+        Some(golem_client::Error::Item(AgentError::Error400(body)))
+            if body.code == golem_common::base_model::api::error_code::TYPE_CHECKER_ERROR
+    ));
+
+    // The existing agent keeps its constructor schema and is reachable by ID.
+    let result3a = invoke_and_await_agent_by_id(
+        &user,
+        &agent1_id.agent_type,
+        &agent1,
+        "increment",
+        data_value!(),
+    )
+    .await?;
 
     let result4a = user
         .invoke_and_await_agent(&component, &agent2_id, "increment", data_value!())
@@ -2628,9 +2653,14 @@ async fn agent_update_constructor_signature(
     assert_eq!(result4a.into_return_value(), Some(SchemaValue::U32(3)));
 
     // Still able to do RPC
-    let result3b = user
-        .invoke_and_await_agent(&component, &old_singleton_id, "call", data_value!("agent1"))
-        .await?;
+    let result3b = invoke_and_await_agent_by_id(
+        &user,
+        &old_singleton_id.agent_type,
+        &old_singleton,
+        "call",
+        data_value!(golem_schema::model::AgentId::from(agent1.agent_id.0)),
+    )
+    .await?;
     assert_eq!(result3b.into_return_value(), Some(SchemaValue::U32(4)));
 
     let result4b = user

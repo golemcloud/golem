@@ -165,6 +165,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWasmRpcWithStore<U> for HasSelf<Dura
                 .await?
                 .ok_or_else(|| {
                     WorkerExecutorError::unexpected_oplog_entry(
+                        handle.start_index(),
                         "RPC create Start carrying span_started",
                         format!(
                             "RPC create Start at {} without span metadata",
@@ -177,6 +178,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWasmRpcWithStore<U> for HasSelf<Dura
         let creation_index = accessor.with(|mut access| {
             (!access.get().state.snapshotting_mode).then(|| handle.start_index())
         });
+        let start_index = handle.start_index();
 
         if !handle.is_live() {
             match handle.replay_access(accessor, accessor.getter()).await? {
@@ -186,8 +188,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWasmRpcWithStore<U> for HasSelf<Dura
                         discard_owned_rpc_input(constructor, ctx);
                         discard_owned_rpc_config(agent_config, ctx);
                     });
-                    return replayed_creation(accessor, response, span.span_id(), creation_index)
-                        .await;
+                    return replayed_creation(
+                        accessor,
+                        response,
+                        span.span_id(),
+                        creation_index,
+                        start_index,
+                    )
+                    .await;
                 }
                 CallReplayOutcome::Incomplete(live) => handle = live,
             }
@@ -329,6 +337,7 @@ async fn replayed_creation<U: Send + 'static, Ctx: WorkerCtx>(
     response: HostResponseGolemRpcCreated,
     span_id: &SpanId,
     creation_index: Option<golem_common::model::OplogIndex>,
+    start_index: golem_common::model::OplogIndex,
 ) -> anyhow::Result<Result<Created, RpcError>> {
     let (agent_id, fingerprint) = match response.result {
         Ok(created) => created,
@@ -339,6 +348,7 @@ async fn replayed_creation<U: Send + 'static, Ctx: WorkerCtx>(
     };
     let (Some(schema), Some(type_id)) = (response.agent_type, response.type_id) else {
         return Err(WorkerExecutorError::unexpected_oplog_entry(
+            start_index,
             "RPC create End with its agent type",
             "RPC create End without its agent type",
         )
@@ -545,6 +555,9 @@ async fn live_create<U: Send + 'static, Ctx: WorkerCtx>(
         )));
     }
     let interrupt = accessor.with(|mut access| access.get().create_interrupt_signal());
+    let rpc_caller = accessor.with(|mut access| {
+        golem_common::model::caller::Caller::entry(access.get().self_principal())
+    });
     let creation = rpc.create_and_initialize(
         target,
         true,
@@ -552,6 +565,7 @@ async fn live_create<U: Send + 'static, Ctx: WorkerCtx>(
         &caller,
         &env,
         stack,
+        &rpc_caller,
         config.clone(),
         &auth_ctx,
         call_key,

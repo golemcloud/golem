@@ -2793,7 +2793,7 @@ fn fingerprints_in_clear_on_trusted_paths() {
             fqfn::<host_functions::GolemRpcWasmRpcPrepareInvocation>(),
         ),
         (&create, fqfn::<host_functions::GolemRpcWasmRpcUpsert>()),
-        (&create, fqfn::<host_functions::GolemRpcWasmRpcGetById>()),
+        (&created, fqfn::<host_functions::GolemRpcWasmRpcGetById>()),
         (&created, fqfn::<host_functions::GolemRpcWasmRpcCreate>()),
         (
             &bind_self,
@@ -3063,6 +3063,8 @@ fn error_entry(error: &str) -> PublicOplogEntryWithIndex {
             error: error.to_string(),
             retry_from: OplogIndex::from_u64(3),
             retry_policy_state: None,
+            retry_at: None,
+            retrying_start_index: None,
             invocation_id: None,
         }),
     )
@@ -3207,6 +3209,8 @@ fn failed_update(details: &str, keep: KeepFlags) -> String {
             details: Some(details.to_string()),
             snapshot_assisted_details: None,
             update_attempt_index: None,
+            failure_class: golem_common::model::oplog::UpdateFailureClass::Other,
+            divergence: None,
         }),
     );
     json(field(&rendered(keep, &entry, None).entry, "details"))
@@ -3795,6 +3799,7 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
                 value: marker_value(),
             }],
             instance_id: Uuid::from_u128(0xF1F2),
+            never_live: false,
         }),
         PublicOplogEntry::Start(StartParams {
             timestamp: ts(),
@@ -3839,6 +3844,8 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
             retry_policy_state: Some(PublicRetryPolicyState::Counter(
                 PublicRetryPolicyStateCounter { count: 2 },
             )),
+            retry_at: None,
+            retrying_start_index: None,
             invocation_id: Some(invocation_id()),
         }),
         PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams { timestamp: ts() }),
@@ -3878,6 +3885,28 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
                 source_revision_start_index: OplogIndex::INITIAL,
                 snapshot_index: OplogIndex::from_u64(19),
             }),
+            failure_class: golem_common::model::oplog::UpdateFailureClass::Divergence,
+            divergence: Some(Box::new(golem_common::model::oplog::ReplayDivergence {
+                oplog_index: OplogIndex::from_u64(22),
+                expected: golem_common::model::oplog::ReplayStep::HostCall(
+                    golem_common::model::oplog::ReplayHostCall {
+                        function_name: "golem::rpc::invoke".to_string(),
+                        durable_function_type:
+                            golem_common::model::oplog::PublicDurableFunctionType::WriteRemote(
+                                golem_schema::Empty {},
+                            ),
+                        parent_start_index: None,
+                        invocation_id: None,
+                        observational_owner: None,
+                        carries_request: true,
+                        request: Some(Box::new(
+                            "MARKER".to_string().into_typed_schema_value().unwrap(),
+                        )),
+                    },
+                ),
+                actual: golem_common::model::oplog::ReplayStep::described("MARKER"),
+                mismatched: vec![],
+            })),
         }),
         PublicOplogEntry::GrowMemory(GrowMemoryParams {
             timestamp: ts(),

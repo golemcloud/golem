@@ -403,24 +403,11 @@ fn get_agent_type_with_remote_client(
                 );
             }
 
-            let mut uses_principal = false;
-            for input in &trait_fn.sig.inputs {
-                if let syn::FnArg::Typed(pat_type) = input
-                    && let syn::Type::Path(type_path) = &*pat_type.ty
-                    && let Some(last) = type_path.path.segments.last()
-                    && last.ident == "Principal"
-                {
-                    uses_principal = true;
-                    break;
-                }
-            }
-
             let read_only_tokens = if let Some(parsed) = parsed_read_only {
                 let cache_policy = parsed.cache_policy;
                 quote! {
                     Some(golem_rust::golem_agentic::golem::agent::common::ReadOnlyConfig {
                         cache_policy: #cache_policy,
-                        uses_principal: #uses_principal,
                     })
                 }
             } else {
@@ -550,8 +537,11 @@ fn get_agent_type_with_remote_client(
                     if !has_agent_config_attr(pat_type) {
                         let ty = &pat_type.ty;
                         input_schema_logic.push(quote! {
-                            default_inputs.push((&golem_rust::agentic::AgentParameterProbe::<#ty>(::std::marker::PhantomData))
-                                .parameter_schema(#param_name, &mut __golem_schema));
+                            if let Some(field) = (&golem_rust::agentic::AgentParameterProbe::<#ty>(::std::marker::PhantomData))
+                                .parameter_schema(#param_name, &mut __golem_schema)
+                            {
+                                default_inputs.push(field);
+                            }
                         });
                     }
                 }
@@ -682,7 +672,7 @@ fn get_agent_type_with_remote_client(
                                 <<#ty as ::golem_rust::agentic::InnerTypeHelper>::Type as ::golem_rust::agentic::ConfigSchema>::RpcType
                             });
                             client_agent_config_param_idents.push(param_ident.clone());
-                        } else if type_name != "Principal" {
+                        } else if type_name != "InvocationContext" {
                             client_data_value_param_defs.push(quote! {
                                 #param_ident: #ty
                             });
@@ -701,8 +691,11 @@ fn get_agent_type_with_remote_client(
                             !(&golem_rust::agentic::AgentParameterProbe::<#ty>(::std::marker::PhantomData)).parameter_contains_stream(),
                             "AgentStream cannot be used in an agent constructor parameter"
                         );
-                        constructor_default_inputs.push((&golem_rust::agentic::AgentParameterProbe::<#ty>(::std::marker::PhantomData))
-                            .parameter_schema(#param_name, &mut __golem_schema));
+                        if let Some(field) = (&golem_rust::agentic::AgentParameterProbe::<#ty>(::std::marker::PhantomData))
+                            .parameter_schema(#param_name, &mut __golem_schema)
+                        {
+                            constructor_default_inputs.push(field);
+                        }
                     });
                 }
             }

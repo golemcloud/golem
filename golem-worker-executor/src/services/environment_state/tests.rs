@@ -133,11 +133,13 @@ fn registered_tool(
             definition: Tool {
                 version: "1.0.0".to_string(),
                 requires_filesystem: false,
+                http_mount: None,
                 commands: CommandTree {
                     nodes: vec![CommandNode {
                         name: name.to_string(),
                         aliases: Vec::new(),
                         doc: Doc::default(),
+                        http: None,
                         globals: Globals::default(),
                         subcommands: Vec::new(),
                         body: None,
@@ -386,6 +388,7 @@ fn dynamic_admission_compiles_projected_metadata_and_rejects_changed_upstream_co
         metadata: ComponentMetadata::default(),
         created_at: chrono::Utc::now(),
         wasm_hash: Default::default(),
+        package_metadata: None,
         object_store_key: String::new(),
     };
     let source = McpImportSource {

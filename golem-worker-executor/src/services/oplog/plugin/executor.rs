@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::caller::Caller;
 
 /// An implementation of the `OplogProcessorPlugin` trait that runs a single instance of each
 /// used plugin on each worker executor node.
@@ -185,6 +186,8 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                         metadata: worker_metadata.into(),
                         first_entry_index: initial_oplog_index,
                         entries,
+                        // Replaced with the processor agent when the batch is enqueued.
+                        caller: Caller::anonymous(),
                     },
                 )
                 .await?;
@@ -220,9 +223,13 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                     created_by: Some(worker_metadata.created_by.into()),
                     component_revision: latest_status.component_revision.into(),
                     status: Into::<golem_api_grpc::proto::golem::worker::AgentStatus>::into(
-                        latest_status.status,
+                        latest_status.reported_status(),
                     )
                     .into(),
+                    underlying_status: latest_status.underlying_status().map(|status| {
+                        Into::<golem_api_grpc::proto::golem::worker::AgentStatus>::into(status)
+                            .into()
+                    }),
                     retry_count: latest_status
                         .current_retry_state
                         .iter()

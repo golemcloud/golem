@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::InvocationId;
+use golem_common::model::caller::Caller;
 
 use super::*;
 use crate::services::oplog::compressed::CompressedOplogArchiveService;
@@ -35,7 +36,7 @@ use futures::FutureExt;
 use golem_common::config::RedisConfig;
 use golem_common::model::ShardEpoch;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, OwnerKind, Principal};
+use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
 use golem_common::model::component::ComponentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -93,9 +94,10 @@ macro_rules! create_oplog_entry {
             create_request: golem_common::model::oplog::CreateRequest::new(
                 golem_common::model::oplog::CreateRequestKind::GetOrCreate,
                 None,
-                golem_common::model::agent::Principal::anonymous(),
+                golem_common::model::caller::Caller::anonymous(),
                 &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
             ),
+            never_live: false,
         }))
     };
 }
@@ -302,7 +304,7 @@ pub(super) fn make_agent_metadata(
         create_request: golem_common::model::oplog::CreateRequest::new(
             golem_common::model::oplog::CreateRequestKind::GetOrCreate,
             None,
-            golem_common::model::agent::Principal::anonymous(),
+            golem_common::model::caller::Caller::anonymous(),
             &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
     }
@@ -340,6 +342,8 @@ pub(super) fn default_execution_status(
 enum PausePoint {
     /// Before the archive append reaches the storage.
     Append,
+    /// Before only the first archive append reaches the storage; later appends pass through.
+    FirstAppend,
     /// After the append landed, before the transfer verifies it and trims its source.
     Verify,
 }
@@ -458,10 +462,15 @@ impl BlockingArchive {
     /// Waits for the release when `point` is where this archive pauses, announcing the first
     /// arrival.
     async fn hold(&self, point: PausePoint) {
-        if point != self.pause_at {
+        let first_append = self.pause_at == PausePoint::FirstAppend;
+        if point != self.pause_at && !(first_append && point == PausePoint::Append) {
             return;
         }
-        if let Some(sender) = self.paused.lock().await.take() {
+        let sender = self.paused.lock().await.take();
+        if first_append && sender.is_none() {
+            return;
+        }
+        if let Some(sender) = sender {
             let _ = sender.send(());
         }
         self.release.notified().await;
@@ -4955,6 +4964,8 @@ async fn ephemeral_read_exact_partial_range(_tracing: &Tracing) {
             error: AgentError::Unknown(i.to_string()),
             retry_from: OplogIndex::NONE,
             retry_policy_state: None,
+            retry_at: None,
+            retrying_start_index: None,
         }
         .rounded();
         oplog.add(entry.clone()).await.unwrap();
@@ -5068,6 +5079,8 @@ async fn ephemeral_read_exact_across_archive_layers(_tracing: &Tracing) {
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 retry_policy_state: None,
+                retry_at: None,
+                retrying_start_index: None,
             }
             .rounded()
         })
@@ -5255,7 +5268,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
                     fields: vec![SchemaValue::String("request".to_string())],
                 },
                 invocation_context: InvocationContextStack::fresh_rounded(),
-                principal: Principal::anonymous(),
+                caller: Caller::anonymous(),
                 scope_card: None,
             },
             InvocationContextStack::fresh_rounded(),
@@ -5367,13 +5380,19 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         _ => panic!("unexpected entry"),
     };
     let p2 = match entry2 {
-        OplogEntry::AgentInvocationStarted { payload, .. } => {
-            let payload: AgentInvocationPayload = oplog_service
+        OplogEntry::AgentInvocationStarted {
+            operation, payload, ..
+        } => {
+            let payload = oplog_service
                 .download_payload(&owned_agent_id, AgentMode::Durable, payload)
                 .await
+                .unwrap()
+                .with_operation(*operation)
                 .unwrap();
             match payload {
-                AgentInvocationPayload::AgentMethod { input, .. } => match input {
+                AgentInvocationPayload::AgentMethod {
+                    method_name, input, ..
+                } if method_name == "f2" => match input {
                     SchemaValue::Record { fields } => match fields.into_iter().next() {
                         Some(SchemaValue::String(value)) => value,
                         _ => panic!("unexpected element"),
@@ -5546,6 +5565,7 @@ async fn invocation_start_records_executing_context_for_processor_and_method(_tr
             metadata: metadata.into(),
             first_entry_index: OplogIndex::INITIAL,
             entries: Vec::new(),
+            caller: golem_common::model::caller::Caller::anonymous(),
         },
         AgentInvocation::AgentMethod {
             idempotency_key: InvocationId(Uuid::new_v4()),
@@ -5554,7 +5574,7 @@ async fn invocation_start_records_executing_context_for_processor_and_method(_tr
                 elements: Vec::new(),
             },
             invocation_context: InvocationContextStack::fresh_rounded(),
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         },
     ];
@@ -5658,7 +5678,7 @@ async fn owned_invocation_payload_upload_failure_writes_no_entry(_tracing: &Trac
                     mime_type: None,
                 }),
                 invocation_context: InvocationContextStack::fresh_rounded(),
-                principal: Principal::anonymous(),
+                caller: Caller::anonymous(),
                 scope_card: None,
             },
             InvocationContextStack::fresh_rounded(),
@@ -5668,6 +5688,391 @@ async fn owned_invocation_payload_upload_failure_writes_no_entry(_tracing: &Trac
 
     assert!(result.is_err());
     assert_eq!(oplog.current_oplog_index().await, before);
+}
+
+/// Builds a new service, including new archive handles, over the same backing stores.
+async fn cold_ambiguity_service(
+    indexed: Arc<ReadCountingIndexedStorage>,
+    blobs: Arc<dyn BlobStorage + Send + Sync>,
+    archive: Option<Arc<dyn OplogArchiveService>>,
+) -> MultiLayerOplogService {
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            indexed.clone(),
+            blobs,
+            100,
+            1,
+            16,
+            32,
+            append_reconciliation_retry_config(),
+        )
+        .await,
+    );
+    let archive = archive.unwrap_or_else(|| {
+        Arc::new(CompressedOplogArchiveService::new(
+            indexed,
+            1,
+            immediate_archive_retry_config(1),
+        ))
+    });
+    MultiLayerOplogService::new(primary, nev![archive], 10_000, 10_000)
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn external_payload_indeterminate_append_survives_cold_takeover(_tracing: &Tracing) {
+    for failure in [
+        InjectedAppendFailure::IndeterminateBeforeWrite,
+        InjectedAppendFailure::CommitThenIndeterminate,
+    ] {
+        let indexed = Arc::new(ReadCountingIndexedStorage::new());
+        let blobs = Arc::new(ReadCountingBlobStorage::new());
+        let service = cold_ambiguity_service(indexed.clone(), blobs.clone(), None).await;
+        let (_, owned, metadata) = archive_open_agent("cold-payload-takeover");
+        let initial = OplogEntry::recovery_succeeded().rounded();
+        let old = service
+            .create_fresh(
+                &mut service.lock_lifecycle(&owned.agent_id).await,
+                &owned,
+                AgentMode::Durable,
+                initial.clone(),
+                metadata.clone(),
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+                Some(ShardEpoch(5)),
+            )
+            .await
+            .unwrap();
+        let value = AgentInvocationPayload::AgentMethod {
+            method_name: "cold-payload".to_string(),
+            input: SchemaValue::List {
+                elements: (0..513).map(|i| SchemaValue::U8((i % 251) as u8)).collect(),
+            },
+            caller: Caller::anonymous(),
+            scope_card: None,
+        };
+        let (operation, payload) = old.upload_request(value.clone()).await.unwrap();
+        assert!(matches!(payload, OplogPayload::External { .. }));
+        let context = InvocationContextStack::fresh_rounded();
+        let spans = context.to_oplog_data();
+        let pending = OplogEntry::pending_agent_invocation(
+            None,
+            test_invocation_id("cold-payload".to_string()),
+            Box::new(operation),
+            payload,
+            context.trace_id,
+            context.trace_states,
+            spans,
+        )
+        .rounded();
+        let second = old.add(pending.clone()).await.unwrap();
+        let marker = OplogEntry::grow_memory(37).rounded();
+        let third = old.add(marker.clone()).await.unwrap();
+        indexed.reset_append_observations();
+        indexed.inject_append_many_failure(failure);
+        // Even a committed append is retried when the first reconciliation read misses it.
+        indexed.hidden_reads.store(1, Ordering::Relaxed);
+        old.commit(CommitLevel::Always).await.unwrap();
+        assert_eq!(indexed.append_many_attempts(), 2);
+        assert!(old.commit(CommitLevel::Always).await.unwrap().is_empty());
+
+        let cold_service = cold_ambiguity_service(indexed.clone(), blobs.clone(), None).await;
+        let cold = cold_service
+            .open(
+                &mut cold_service.lock_lifecycle(&owned.agent_id).await,
+                &owned,
+                AgentMode::Durable,
+                None,
+                metadata,
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+                Some(ShardEpoch(6)),
+            )
+            .await
+            .unwrap();
+        assert!(!Arc::ptr_eq(&old, &cold));
+        assert_eq!(cold.current_oplog_index().await, third);
+        let expected = BTreeMap::from([
+            (OplogIndex::INITIAL, initial),
+            (second, pending),
+            (third, marker),
+        ]);
+        assert_eq!(
+            cold.read_exact(OplogIndex::INITIAL, 3).await.unwrap(),
+            expected
+        );
+        assert_eq!(cold.length().await.unwrap(), 3);
+        let OplogEntry::PendingAgentInvocation {
+            operation, payload, ..
+        } = cold.read(second).await.unwrap()
+        else {
+            panic!("cold owner lost the payload entry");
+        };
+        assert_eq!(
+            cold.download_request(*operation, payload).await.unwrap(),
+            value
+        );
+        assert_eq!(blobs.puts.load(Ordering::Relaxed), 1);
+        old.add(OplogEntry::exited().rounded()).await.unwrap();
+        assert!(matches!(
+            old.commit(CommitLevel::Always).await,
+            Err(OplogError::Fenced(_))
+        ));
+        let next = OplogEntry::grow_memory(91).rounded();
+        assert_eq!(cold.add(next.clone()).await.unwrap(), third.next());
+        cold.commit(CommitLevel::Always).await.unwrap();
+        assert_eq!(cold.read(third.next()).await.unwrap(), next);
+        assert_eq!(cold.length().await.unwrap(), 4);
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn late_archive_publication_survives_cold_reopen_and_retry(_tracing: &Tracing) {
+    let indexed = Arc::new(ReadCountingIndexedStorage::new());
+    let blobs: Arc<dyn BlobStorage + Send + Sync> = Arc::new(ReadCountingBlobStorage::new());
+    let archive_service = blob_archive(indexed.clone(), blobs.clone(), 1);
+    let (_, owned, metadata) = archive_open_agent("cold-late-publication");
+    let archive = archive_service
+        .open_fresh(&owned, AgentMode::Durable, Some(ShardEpoch(5)))
+        .await
+        .unwrap();
+    let expected = transfer_test_entries();
+    let entries = expected.clone().into_iter().collect::<Vec<_>>();
+    indexed.inject_append_failure(InjectedAppendFailure::HeldThenIndeterminate);
+    assert!(archive.append(&entries).await.is_err());
+    assert_eq!(indexed.held_appends.lock().unwrap().len(), 1);
+    assert_eq!(blob_objects(&blobs, &owned, 1).await, 1);
+
+    // The request really lands after its caller observed failure, not merely after a stale read.
+    indexed.land_held_appends().await.unwrap();
+    let cold_archive_service = Arc::new(blob_archive(indexed.clone(), blobs.clone(), 1));
+    let cold_service =
+        cold_ambiguity_service(indexed, blobs.clone(), Some(cold_archive_service.clone())).await;
+    let cold = cold_service
+        .open(
+            &mut cold_service.lock_lifecycle(&owned.agent_id).await,
+            &owned,
+            AgentMode::Durable,
+            None,
+            metadata,
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(ShardEpoch(6)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cold.current_oplog_index().await, OplogIndex::from_u64(2));
+    assert_eq!(
+        cold.read_exact(OplogIndex::INITIAL, 2).await.unwrap(),
+        expected
+    );
+
+    let retry = cold_archive_service
+        .open(&owned, AgentMode::Durable, Some(ShardEpoch(6)))
+        .await
+        .unwrap();
+    retry.append(&entries).await.unwrap();
+    assert_eq!(retry.length().await.unwrap(), 1);
+    assert_eq!(blob_objects(&blobs, &owned, 1).await, 1);
+    assert_eq!(
+        cold.read_exact(OplogIndex::INITIAL, 2).await.unwrap(),
+        expected
+    );
+    assert_eq!(cold.length().await.unwrap(), 1);
+    let next = OplogEntry::grow_memory(83).rounded();
+    assert_eq!(
+        cold.add(next.clone()).await.unwrap(),
+        OplogIndex::from_u64(3)
+    );
+    cold.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(cold.read(OplogIndex::from_u64(3)).await.unwrap(), next);
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn late_archive_publication_after_cold_takeover_is_fenced(_tracing: &Tracing) {
+    let indexed = Arc::new(ReadCountingIndexedStorage::new());
+    let blobs: Arc<dyn BlobStorage + Send + Sync> = Arc::new(ReadCountingBlobStorage::new());
+    let (_, owned, metadata) = archive_open_agent("cold-late-publication-after-takeover");
+    let old = blob_archive(indexed.clone(), blobs.clone(), 1)
+        .open_fresh(&owned, AgentMode::Durable, Some(ShardEpoch(5)))
+        .await
+        .unwrap();
+    let expected = transfer_test_entries();
+    let entries = expected.clone().into_iter().collect::<Vec<_>>();
+    indexed.inject_append_failure(InjectedAppendFailure::HeldThenIndeterminate);
+    assert!(old.append(&entries).await.is_err());
+    assert_eq!(indexed.held_appends.lock().unwrap().len(), 1);
+
+    // This independent owner records its epoch before the old manifest request arrives.
+    let cold_archive_service = Arc::new(blob_archive(indexed.clone(), blobs.clone(), 1));
+    let new_owner = cold_archive_service
+        .open(&owned, AgentMode::Durable, Some(ShardEpoch(6)))
+        .await
+        .unwrap();
+    let landed = indexed.land_held_appends().await;
+    assert!(
+        matches!(landed, Err(IndexedStorageError::Fenced { .. })),
+        "the epoch-5 manifest must not land after epoch-6 takeover: {landed:?}"
+    );
+    assert_eq!(new_owner.length().await.unwrap(), 0);
+    assert!(
+        new_owner
+            .read_source(OplogIndex::INITIAL, 2)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        old.append(&entries).await,
+        Err(OplogError::Fenced(_))
+    ));
+
+    new_owner.append(&entries).await.unwrap();
+    new_owner.append(&entries).await.unwrap();
+    assert_eq!(new_owner.length().await.unwrap(), 1);
+    let cold_service = cold_ambiguity_service(indexed, blobs, Some(cold_archive_service)).await;
+    let cold = cold_service
+        .open(
+            &mut cold_service.lock_lifecycle(&owned.agent_id).await,
+            &owned,
+            AgentMode::Durable,
+            None,
+            metadata,
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(ShardEpoch(6)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cold.current_oplog_index().await, OplogIndex::from_u64(2));
+    assert_eq!(
+        cold.read_exact(OplogIndex::INITIAL, 2).await.unwrap(),
+        expected
+    );
+    assert_eq!(cold.length().await.unwrap(), 1);
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn deferred_writer_failure_shutdown_preserves_cold_committed_prefix(_tracing: &Tracing) {
+    let indexed = Arc::new(ReadCountingIndexedStorage::new());
+    let blobs = Arc::new(InMemoryBlobStorage::new());
+    let service = cold_ambiguity_service(indexed.clone(), blobs.clone(), None).await;
+    let (_, owned, mut metadata) = archive_open_agent("cold-deferred-failure");
+    metadata.agent_mode = AgentMode::Ephemeral;
+    let initial = OplogEntry::recovery_succeeded().rounded();
+    let baseline = service
+        .create_fresh(
+            &mut service.lock_lifecycle(&owned.agent_id).await,
+            &owned,
+            AgentMode::Ephemeral,
+            initial.clone(),
+            metadata.clone(),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+            Some(ShardEpoch(4)),
+        )
+        .await
+        .unwrap();
+    let committed = OplogEntry::grow_memory(29).rounded();
+    let second = baseline.add(committed.clone()).await.unwrap();
+    baseline.commit(CommitLevel::Always).await.unwrap();
+    baseline
+        .executor_shutdown_handle()
+        .close_and_wait()
+        .await
+        .unwrap();
+
+    let (paused_tx, paused_rx) = oneshot::channel();
+    let release = Arc::new(Notify::new());
+    let gated = Arc::new(BlockingArchiveService {
+        inner: Arc::new(CompressedOplogArchiveService::new(
+            indexed.clone(),
+            1,
+            immediate_archive_retry_config(1),
+        )),
+        pause_at: PausePoint::FirstAppend,
+        paused: Arc::new(Mutex::new(Some(paused_tx))),
+        release: release.clone(),
+        append_finished: Arc::new(Notify::new()),
+    });
+    let writer_service = cold_ambiguity_service(indexed.clone(), blobs.clone(), Some(gated)).await;
+    let writer = writer_service
+        .open(
+            &mut writer_service.lock_lifecycle(&owned.agent_id).await,
+            &owned,
+            AgentMode::Ephemeral,
+            None,
+            metadata.clone(),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+            Some(ShardEpoch(5)),
+        )
+        .await
+        .unwrap();
+    let failed = writer
+        .add(OplogEntry::grow_memory(47).rounded())
+        .await
+        .unwrap();
+    assert_eq!(failed, second.next());
+    assert_eq!(writer.commit(CommitLevel::Deferred).await.unwrap().len(), 1);
+    paused_rx.await.unwrap();
+    writer
+        .add(OplogEntry::grow_memory(71).rounded())
+        .await
+        .unwrap();
+    assert_eq!(writer.commit(CommitLevel::Deferred).await.unwrap().len(), 1);
+    writer
+        .add(OplogEntry::grow_memory(97).rounded())
+        .await
+        .unwrap();
+    indexed.inject_append_failure(InjectedAppendFailure::PermanentBeforeWrite);
+    release.notify_one();
+    assert!(matches!(
+        writer.commit(CommitLevel::Always).await,
+        Err(OplogError::ArchiveWrite(_))
+    ));
+    let shutdown = writer.executor_shutdown_handle();
+    shutdown.fence();
+    assert!(shutdown.close_and_wait().await.is_err());
+
+    let cold_service = cold_ambiguity_service(indexed, blobs, None).await;
+    let cold = cold_service
+        .open(
+            &mut cold_service.lock_lifecycle(&owned.agent_id).await,
+            &owned,
+            AgentMode::Ephemeral,
+            None,
+            metadata,
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+            Some(ShardEpoch(6)),
+        )
+        .await
+        .unwrap();
+    assert!(!Arc::ptr_eq(&writer, &cold));
+    assert_eq!(cold.current_oplog_index().await, second);
+    assert_eq!(cold.length().await.unwrap(), 2);
+    assert_eq!(
+        cold.read_exact(OplogIndex::INITIAL, 2).await.unwrap(),
+        BTreeMap::from([(OplogIndex::INITIAL, initial), (second, committed),])
+    );
+    assert!(
+        cold_service
+            .read_source(&owned, AgentMode::Ephemeral, failed, 3)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // Deferred acknowledges handoff, not persistence. The before-write failure leaves the failed
+    // and queued batches absent; a later observation must not skip that gap or replace the prefix.
+    let next = OplogEntry::grow_memory(113).rounded();
+    assert_eq!(cold.add(next.clone()).await.unwrap(), failed);
+    cold.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(cold.read(failed).await.unwrap(), next);
+    assert_eq!(cold.length().await.unwrap(), 3);
 }
 
 #[test]
@@ -5714,13 +6119,10 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
         let payload_value = AgentInvocationPayload::AgentMethod {
             method_name: "large-input".to_string(),
             input,
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         };
-        let payload = oplog
-            .upload_payload_owned(payload_value.clone())
-            .await
-            .unwrap();
+        let (operation, payload) = oplog.upload_request(payload_value.clone()).await.unwrap();
         let uploads = blob_storage.puts.load(Ordering::Relaxed);
         assert_eq!(uploads, usize::from(inline_limit == 1));
         let pending_context = InvocationContextStack::fresh_rounded();
@@ -5729,6 +6131,7 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
             .add(OplogEntry::pending_agent_invocation(
                 None,
                 key,
+                Box::new(operation.clone()),
                 payload,
                 pending_context.trace_id,
                 pending_context.trace_states,
@@ -5739,7 +6142,11 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
         oplog.commit(CommitLevel::Always).await.unwrap();
 
         // Read persisted entries, not the resident oplog buffer or typed payload cache.
-        let OplogEntry::PendingAgentInvocation { payload, .. } = service
+        let OplogEntry::PendingAgentInvocation {
+            operation: pending_operation,
+            payload,
+            ..
+        } = service
             .read_exact(&owned, AgentMode::Durable, pending, 1)
             .await
             .unwrap()
@@ -5748,8 +6155,12 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
         else {
             panic!("missing committed Pending")
         };
+        assert_eq!(*pending_operation, operation);
         assert_eq!(
-            oplog.download_payload(payload.clone()).await.unwrap(),
+            oplog
+                .download_request(operation.clone(), payload.clone())
+                .await
+                .unwrap(),
             payload_value
         );
         let executing_context = InvocationContextStack::fresh_rounded();
@@ -5757,6 +6168,7 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
         let started = oplog
             .add_agent_invocation_started_from_pending(
                 key,
+                operation.clone(),
                 payload.clone(),
                 executing_context.clone(),
                 pin.clone(),
@@ -5770,6 +6182,7 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
 
         let OplogEntry::AgentInvocationStarted {
             invocation_id: idempotency_key,
+            operation: recorded_operation,
             payload: recorded,
             trace_id,
             wallet_pin,
@@ -5784,16 +6197,21 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
             panic!("missing committed Started")
         };
         assert_eq!(recorded, payload);
+        assert_eq!(*recorded_operation, operation);
         assert_eq!(idempotency_key, key);
         assert_eq!(trace_id, executing_context.trace_id);
         assert_eq!(*wallet_pin, pin);
         assert_eq!(
-            oplog.download_payload(recorded.clone()).await.unwrap(),
+            oplog
+                .download_request(operation.clone(), recorded.clone())
+                .await
+                .unwrap(),
             payload_value
         );
         oplog
             .add_agent_invocation_started_from_pending(
                 key,
+                operation.clone(),
                 recorded.clone(),
                 executing_context,
                 invocation_wallet_pin(),
@@ -5814,7 +6232,7 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
         );
         assert_eq!(blob_storage.puts.load(Ordering::Relaxed), uploads);
         assert_eq!(
-            oplog.download_payload(recorded).await.unwrap(),
+            oplog.download_request(operation, recorded).await.unwrap(),
             payload_value
         );
     }
@@ -5884,7 +6302,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
                     })],
                 },
                 invocation_context: InvocationContextStack::fresh_rounded(),
-                principal: Principal::anonymous(),
+                caller: Caller::anonymous(),
                 scope_card: None,
             },
             InvocationContextStack::fresh_rounded(),
@@ -5999,13 +6417,19 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         _ => panic!("unexpected entry"),
     };
     let p2 = match entry2 {
-        OplogEntry::AgentInvocationStarted { payload, .. } => {
-            let payload: AgentInvocationPayload = oplog_service
+        OplogEntry::AgentInvocationStarted {
+            operation, payload, ..
+        } => {
+            let payload = oplog_service
                 .download_payload(&owned_agent_id, AgentMode::Durable, payload)
                 .await
+                .unwrap()
+                .with_operation(*operation)
                 .unwrap();
             match payload {
-                AgentInvocationPayload::AgentMethod { input, .. } => match input {
+                AgentInvocationPayload::AgentMethod {
+                    method_name, input, ..
+                } if method_name == "f2" => match input {
                     SchemaValue::Record { fields } => match fields.into_iter().next() {
                         Some(SchemaValue::Binary(BinaryValuePayload { bytes, .. })) => bytes,
                         _ => panic!("unexpected element"),
@@ -6364,6 +6788,8 @@ async fn read_from_archive_impl(use_blob: bool) {
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 retry_policy_state: None,
+                retry_at: None,
+                retrying_start_index: None,
             }
             .rounded()
         })
@@ -6553,9 +6979,10 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
             create_request: golem_common::model::oplog::CreateRequest::new(
                 golem_common::model::oplog::CreateRequestKind::GetOrCreate,
                 None,
-                golem_common::model::agent::Principal::anonymous(),
+                golem_common::model::caller::Caller::anonymous(),
                 &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
             ),
+            never_live: false,
         }),
     }
     .rounded();
@@ -6719,9 +7146,10 @@ async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
             create_request: golem_common::model::oplog::CreateRequest::new(
                 golem_common::model::oplog::CreateRequestKind::GetOrCreate,
                 None,
-                golem_common::model::agent::Principal::anonymous(),
+                golem_common::model::caller::Caller::anonymous(),
                 &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
             ),
+            never_live: false,
         }),
     }
     .rounded();
@@ -9834,6 +10262,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 retry_policy_state: None,
+                retry_at: None,
+                retrying_start_index: None,
             }
             .rounded()
         })
@@ -9945,6 +10375,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 retry_policy_state: None,
+                retry_at: None,
+                retrying_start_index: None,
             }
             .rounded()
         })
@@ -10057,6 +10489,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 error: AgentError::Unknown("last".to_string()),
                 retry_from: OplogIndex::NONE,
                 retry_policy_state: None,
+                retry_at: None,
+                retrying_start_index: None,
             }
             .rounded(),
         )
@@ -10112,6 +10546,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             error: AgentError::Unknown("0".to_string()),
             retry_from: OplogIndex::NONE,
             retry_policy_state: None,
+            retry_at: None,
+            retrying_start_index: None,
         }
         .rounded()
     );
@@ -10125,6 +10561,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             error: AgentError::Unknown("99".to_string()),
             retry_from: OplogIndex::NONE,
             retry_policy_state: None,
+            retry_at: None,
+            retrying_start_index: None,
         }
         .rounded()
     );
@@ -10138,6 +10576,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             error: AgentError::Unknown("999".to_string()),
             retry_from: OplogIndex::NONE,
             retry_policy_state: None,
+            retry_at: None,
+            retrying_start_index: None,
         }
         .rounded()
     );
@@ -10151,6 +10591,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             error: AgentError::Unknown("last".to_string()),
             retry_from: OplogIndex::NONE,
             retry_policy_state: None,
+            retry_at: None,
+            retrying_start_index: None,
         }
         .rounded()
     );
@@ -10250,6 +10692,8 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
                     error: AgentError::Unknown(i.to_string()),
                     retry_from: OplogIndex::NONE,
                     retry_policy_state: None,
+                    retry_at: None,
+                    retrying_start_index: None,
                 }
                 .rounded()
             })
@@ -10397,6 +10841,8 @@ async fn scheduled_archive_impl(use_blob: bool) {
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 retry_policy_state: None,
+                retry_at: None,
+                retrying_start_index: None,
             }
             .rounded()
         })
@@ -13435,9 +13881,10 @@ async fn a_fork_target_handle_is_not_reused_by_the_owners_first_open(_tracing: &
         create_request: golem_common::model::oplog::CreateRequest::new(
             golem_common::model::oplog::CreateRequestKind::GetOrCreate,
             None,
-            golem_common::model::agent::Principal::anonymous(),
+            golem_common::model::caller::Caller::anonymous(),
             &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
+        never_live: false,
     }))
     .rounded();
 
@@ -13629,9 +14076,10 @@ async fn a_stale_create_of_an_oplog_the_owner_already_created_is_fenced_not_fata
             create_request: golem_common::model::oplog::CreateRequest::new(
                 golem_common::model::oplog::CreateRequestKind::GetOrCreate,
                 None,
-                golem_common::model::agent::Principal::anonymous(),
+                golem_common::model::caller::Caller::anonymous(),
                 &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
             ),
+            never_live: false,
         }))
         .rounded()
     };

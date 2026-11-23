@@ -14,7 +14,8 @@
 
 use desert_rust::BinaryCodec;
 
-use super::{InvocationStatus, Principal};
+use super::{InvocationOperation, InvocationStatus};
+use crate::base_model::caller::Caller;
 use crate::model::account::AccountId;
 use crate::model::card::ScopeCard;
 use crate::model::component::ComponentRevision;
@@ -50,14 +51,14 @@ pub enum AgentInvocation {
         idempotency_key: InvocationId,
         input: SchemaValue,
         invocation_context: InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
     },
     AgentMethod {
         idempotency_key: InvocationId,
         method_name: String,
         input: SchemaValue,
         invocation_context: InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         scope_card: Option<ScopeCard>,
     },
     ExternalTool {
@@ -70,16 +71,17 @@ pub enum AgentInvocation {
         stderr: bool,
         activation: Box<ToolActivationSnapshot>,
         invocation_context: InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         scope_card: Option<ScopeCard>,
     },
     LoadSnapshot {
         idempotency_key: InvocationId,
         snapshot: RawSnapshotData, // TODO
+        caller: Caller,
     },
     SaveSnapshot {
         idempotency_key: InvocationId,
-        // TODO
+        caller: Caller,
     },
     ProcessOplogEntries {
         idempotency_key: InvocationId,
@@ -88,6 +90,7 @@ pub enum AgentInvocation {
         metadata: AgentMetadataForGuests,
         first_entry_index: OplogIndex,
         entries: Vec<OplogEntry>,
+        caller: Caller,
     },
 }
 
@@ -99,12 +102,12 @@ pub enum AgentInvocationPayload {
     },
     AgentInitialization {
         input: SchemaValue,
-        principal: Principal,
+        caller: Caller,
     },
     AgentMethod {
         method_name: String,
         input: SchemaValue,
-        principal: Principal,
+        caller: Caller,
         scope_card: Option<ScopeCard>,
     },
     ExternalTool {
@@ -115,50 +118,347 @@ pub enum AgentInvocationPayload {
         stdout: bool,
         stderr: bool,
         activation: Box<ToolActivationSnapshot>,
-        principal: Principal,
+        caller: Caller,
         scope_card: Option<ScopeCard>,
     },
     LoadSnapshot {
         snapshot: RawSnapshotData,
+        caller: Caller,
     },
-    SaveSnapshot,
+    SaveSnapshot {
+        caller: Caller,
+    },
     ProcessOplogEntries {
         account_id: AccountId,
         config: Vec<(String, String)>,
         metadata: AgentMetadataForGuests,
         first_entry_index: OplogIndex,
         entries: Vec<crate::model::oplog::OplogEntry>,
+        caller: Caller,
     },
 }
 
+/// What an accepted request runs. The request entries of the oplog hold it next to the
+/// [`StoredAgentInvocationPayload`], so a reader learns it without decoding or downloading the
+/// payload. Each variant names the [`AgentInvocationPayload`] variant it rebuilds.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum InvocationRequestOperation {
+    ManualUpdate {
+        target_revision: ComponentRevision,
+    },
+    AgentInitialization,
+    AgentMethod {
+        method_name: String,
+    },
+    ExternalTool {
+        tool_name: ToolName,
+        command_path: Vec<String>,
+    },
+    LoadSnapshot,
+    SaveSnapshot,
+    ProcessOplogEntries,
+}
+
+impl InvocationRequestOperation {
+    /// What this invocation runs. `None` for a manual update, which is not an invocation of the
+    /// agent.
+    pub fn operation(&self) -> Option<InvocationOperation> {
+        match self {
+            Self::ManualUpdate { .. } => None,
+            Self::AgentInitialization => Some(InvocationOperation::Constructor),
+            Self::AgentMethod { method_name } => {
+                Some(InvocationOperation::Method(method_name.clone()))
+            }
+            Self::ExternalTool {
+                tool_name,
+                command_path,
+            } => Some(InvocationOperation::tool(tool_name, command_path)),
+            Self::LoadSnapshot | Self::SaveSnapshot | Self::ProcessOplogEntries => {
+                Some(InvocationOperation::Internal)
+            }
+        }
+    }
+
+    pub fn manual_update_target(&self) -> Option<ComponentRevision> {
+        match self {
+            Self::ManualUpdate { target_revision } => Some(*target_revision),
+            _ => None,
+        }
+    }
+}
+
+/// An [`AgentInvocationPayload`] without its [`InvocationRequestOperation`], as the request
+/// entries of the oplog store it.
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub enum StoredAgentInvocationPayload {
+    ManualUpdate,
+    AgentInitialization {
+        input: SchemaValue,
+        caller: Caller,
+    },
+    AgentMethod {
+        input: SchemaValue,
+        caller: Caller,
+        scope_card: Option<ScopeCard>,
+    },
+    ExternalTool {
+        input: Box<TypedSchemaValue>,
+        stdin: bool,
+        stdout: bool,
+        stderr: bool,
+        activation: Box<ToolActivationSnapshot>,
+        caller: Caller,
+        scope_card: Option<ScopeCard>,
+    },
+    LoadSnapshot {
+        snapshot: RawSnapshotData,
+        caller: Caller,
+    },
+    SaveSnapshot {
+        caller: Caller,
+    },
+    ProcessOplogEntries {
+        account_id: AccountId,
+        config: Vec<(String, String)>,
+        metadata: AgentMetadataForGuests,
+        first_entry_index: OplogIndex,
+        entries: Vec<crate::model::oplog::OplogEntry>,
+        caller: Caller,
+    },
+}
+
+impl StoredAgentInvocationPayload {
+    /// The full payload of the request whose entry holds `operation`.
+    pub fn with_operation(
+        self,
+        operation: InvocationRequestOperation,
+    ) -> Result<AgentInvocationPayload, String> {
+        type Op = InvocationRequestOperation;
+        Ok(match (self, operation) {
+            (Self::ManualUpdate, Op::ManualUpdate { target_revision }) => {
+                AgentInvocationPayload::ManualUpdate { target_revision }
+            }
+            (Self::AgentInitialization { input, caller }, Op::AgentInitialization) => {
+                AgentInvocationPayload::AgentInitialization { input, caller }
+            }
+            (
+                Self::AgentMethod {
+                    input,
+                    caller,
+                    scope_card,
+                },
+                Op::AgentMethod { method_name },
+            ) => AgentInvocationPayload::AgentMethod {
+                method_name,
+                input,
+                caller,
+                scope_card,
+            },
+            (
+                Self::ExternalTool {
+                    input,
+                    stdin,
+                    stdout,
+                    stderr,
+                    activation,
+                    caller,
+                    scope_card,
+                },
+                Op::ExternalTool {
+                    tool_name,
+                    command_path,
+                },
+            ) => AgentInvocationPayload::ExternalTool {
+                tool_name,
+                command_path,
+                input,
+                stdin,
+                stdout,
+                stderr,
+                activation,
+                caller,
+                scope_card,
+            },
+            (Self::LoadSnapshot { snapshot, caller }, Op::LoadSnapshot) => {
+                AgentInvocationPayload::LoadSnapshot { snapshot, caller }
+            }
+            (Self::SaveSnapshot { caller }, Op::SaveSnapshot) => {
+                AgentInvocationPayload::SaveSnapshot { caller }
+            }
+            (
+                Self::ProcessOplogEntries {
+                    account_id,
+                    config,
+                    metadata,
+                    first_entry_index,
+                    entries,
+                    caller,
+                },
+                Op::ProcessOplogEntries,
+            ) => AgentInvocationPayload::ProcessOplogEntries {
+                account_id,
+                config,
+                metadata,
+                first_entry_index,
+                entries,
+                caller,
+            },
+            (payload, operation) => {
+                return Err(format!(
+                    "the stored invocation payload {} does not match the operation {operation:?}",
+                    payload.variant_name()
+                ));
+            }
+        })
+    }
+
+    fn variant_name(&self) -> &'static str {
+        match self {
+            Self::ManualUpdate => "ManualUpdate",
+            Self::AgentInitialization { .. } => "AgentInitialization",
+            Self::AgentMethod { .. } => "AgentMethod",
+            Self::ExternalTool { .. } => "ExternalTool",
+            Self::LoadSnapshot { .. } => "LoadSnapshot",
+            Self::SaveSnapshot { .. } => "SaveSnapshot",
+            Self::ProcessOplogEntries { .. } => "ProcessOplogEntries",
+        }
+    }
+}
+
 impl AgentInvocationPayload {
+    /// What this invocation runs. `None` for a manual update, which is not an invocation of the
+    /// agent.
+    pub fn operation(&self) -> Option<InvocationOperation> {
+        self.request_operation().operation()
+    }
+
+    pub fn request_operation(&self) -> InvocationRequestOperation {
+        match self {
+            Self::ManualUpdate { target_revision } => InvocationRequestOperation::ManualUpdate {
+                target_revision: *target_revision,
+            },
+            Self::AgentInitialization { .. } => InvocationRequestOperation::AgentInitialization,
+            Self::AgentMethod { method_name, .. } => InvocationRequestOperation::AgentMethod {
+                method_name: method_name.clone(),
+            },
+            Self::ExternalTool {
+                tool_name,
+                command_path,
+                ..
+            } => InvocationRequestOperation::ExternalTool {
+                tool_name: tool_name.clone(),
+                command_path: command_path.clone(),
+            },
+            Self::LoadSnapshot { .. } => InvocationRequestOperation::LoadSnapshot,
+            Self::SaveSnapshot { .. } => InvocationRequestOperation::SaveSnapshot,
+            Self::ProcessOplogEntries { .. } => InvocationRequestOperation::ProcessOplogEntries,
+        }
+    }
+
+    /// Splits the payload into the operation its request entry holds and the payload it stores.
+    pub fn into_stored(self) -> (InvocationRequestOperation, StoredAgentInvocationPayload) {
+        type Op = InvocationRequestOperation;
+        type Stored = StoredAgentInvocationPayload;
+        match self {
+            Self::ManualUpdate { target_revision } => {
+                (Op::ManualUpdate { target_revision }, Stored::ManualUpdate)
+            }
+            Self::AgentInitialization { input, caller } => (
+                Op::AgentInitialization,
+                Stored::AgentInitialization { input, caller },
+            ),
+            Self::AgentMethod {
+                method_name,
+                input,
+                caller,
+                scope_card,
+            } => (
+                Op::AgentMethod { method_name },
+                Stored::AgentMethod {
+                    input,
+                    caller,
+                    scope_card,
+                },
+            ),
+            Self::ExternalTool {
+                tool_name,
+                command_path,
+                input,
+                stdin,
+                stdout,
+                stderr,
+                activation,
+                caller,
+                scope_card,
+            } => (
+                Op::ExternalTool {
+                    tool_name,
+                    command_path,
+                },
+                Stored::ExternalTool {
+                    input,
+                    stdin,
+                    stdout,
+                    stderr,
+                    activation,
+                    caller,
+                    scope_card,
+                },
+            ),
+            Self::LoadSnapshot { snapshot, caller } => {
+                (Op::LoadSnapshot, Stored::LoadSnapshot { snapshot, caller })
+            }
+            Self::SaveSnapshot { caller } => (Op::SaveSnapshot, Stored::SaveSnapshot { caller }),
+            Self::ProcessOplogEntries {
+                account_id,
+                config,
+                metadata,
+                first_entry_index,
+                entries,
+                caller,
+            } => (
+                Op::ProcessOplogEntries,
+                Stored::ProcessOplogEntries {
+                    account_id,
+                    config,
+                    metadata,
+                    first_entry_index,
+                    entries,
+                    caller,
+                },
+            ),
+        }
+    }
+
     /// Compares the caller's execution contract, not deployment-time tool resolution.
     /// Tracing and scheduling metadata are stored outside the payload.
     pub fn same_caller_request(&self, other: &Self) -> bool {
         match (self, other) {
             (
-                Self::AgentInitialization { input, principal },
+                Self::AgentInitialization { input, caller },
                 Self::AgentInitialization {
                     input: other_input,
-                    principal: other_principal,
+                    caller: other_caller,
                 },
-            ) => principal == other_principal && schema_value_same_request(input, other_input),
+            ) => caller == other_caller && schema_value_same_request(input, other_input),
             (
                 Self::AgentMethod {
                     method_name,
                     input,
-                    principal,
+                    caller,
                     scope_card,
                 },
                 Self::AgentMethod {
                     method_name: other_method,
                     input: other_input,
-                    principal: other_principal,
+                    caller: other_caller,
                     scope_card: other_card,
                 },
             ) => {
                 method_name == other_method
-                    && principal == other_principal
+                    && caller == other_caller
                     && scope_card == other_card
                     && schema_value_same_request(input, other_input)
             }
@@ -170,7 +470,7 @@ impl AgentInvocationPayload {
                     stdin,
                     stdout,
                     stderr,
-                    principal,
+                    caller,
                     scope_card,
                     ..
                 },
@@ -181,7 +481,7 @@ impl AgentInvocationPayload {
                     stdin: other_stdin,
                     stdout: other_stdout,
                     stderr: other_stderr,
-                    principal: other_principal,
+                    caller: other_caller,
                     scope_card: other_card,
                     ..
                 },
@@ -193,7 +493,7 @@ impl AgentInvocationPayload {
                     && stdin == other_stdin
                     && stdout == other_stdout
                     && stderr == other_stderr
-                    && principal == other_principal
+                    && caller == other_caller
                     && scope_card == other_card
             }
             _ => self == other,
@@ -473,25 +773,25 @@ impl AgentInvocation {
             AgentInvocationPayload::ManualUpdate { target_revision } => {
                 Self::ManualUpdate { target_revision }
             }
-            AgentInvocationPayload::AgentInitialization { input, principal } => {
+            AgentInvocationPayload::AgentInitialization { input, caller } => {
                 Self::AgentInitialization {
                     idempotency_key,
                     input,
                     invocation_context,
-                    principal,
+                    caller,
                 }
             }
             AgentInvocationPayload::AgentMethod {
                 method_name,
                 input,
-                principal,
+                caller,
                 scope_card,
             } => Self::AgentMethod {
                 idempotency_key,
                 method_name,
                 input,
                 invocation_context,
-                principal,
+                caller,
                 scope_card,
             },
             AgentInvocationPayload::ExternalTool {
@@ -502,7 +802,7 @@ impl AgentInvocation {
                 stdout,
                 stderr,
                 activation,
-                principal,
+                caller,
                 scope_card,
             } => Self::ExternalTool {
                 idempotency_key,
@@ -514,20 +814,25 @@ impl AgentInvocation {
                 stderr,
                 activation,
                 invocation_context,
-                principal,
+                caller,
                 scope_card,
             },
-            AgentInvocationPayload::LoadSnapshot { snapshot } => Self::LoadSnapshot {
+            AgentInvocationPayload::LoadSnapshot { snapshot, caller } => Self::LoadSnapshot {
                 idempotency_key,
                 snapshot,
+                caller,
             },
-            AgentInvocationPayload::SaveSnapshot => Self::SaveSnapshot { idempotency_key },
+            AgentInvocationPayload::SaveSnapshot { caller } => Self::SaveSnapshot {
+                idempotency_key,
+                caller,
+            },
             AgentInvocationPayload::ProcessOplogEntries {
                 account_id,
                 config,
                 metadata,
                 first_entry_index,
                 entries,
+                caller,
             } => Self::ProcessOplogEntries {
                 idempotency_key,
                 account_id,
@@ -535,6 +840,7 @@ impl AgentInvocation {
                 metadata,
                 first_entry_index,
                 entries,
+                caller,
             },
         }
     }
@@ -550,10 +856,10 @@ impl AgentInvocation {
                 idempotency_key,
                 input,
                 invocation_context,
-                principal,
+                caller,
             } => (
                 idempotency_key,
-                AgentInvocationPayload::AgentInitialization { input, principal },
+                AgentInvocationPayload::AgentInitialization { input, caller },
                 invocation_context,
             ),
             Self::AgentMethod {
@@ -561,14 +867,14 @@ impl AgentInvocation {
                 method_name,
                 input,
                 invocation_context,
-                principal,
+                caller,
                 scope_card,
             } => (
                 idempotency_key,
                 AgentInvocationPayload::AgentMethod {
                     method_name,
                     input,
-                    principal,
+                    caller,
                     scope_card,
                 },
                 invocation_context,
@@ -583,7 +889,7 @@ impl AgentInvocation {
                 stderr,
                 activation,
                 invocation_context,
-                principal,
+                caller,
                 scope_card,
                 ..
             } => (
@@ -596,7 +902,7 @@ impl AgentInvocation {
                     stdout,
                     stderr,
                     activation,
-                    principal,
+                    caller,
                     scope_card,
                 },
                 invocation_context,
@@ -604,14 +910,18 @@ impl AgentInvocation {
             Self::LoadSnapshot {
                 idempotency_key,
                 snapshot,
+                caller,
             } => (
                 idempotency_key,
-                AgentInvocationPayload::LoadSnapshot { snapshot },
+                AgentInvocationPayload::LoadSnapshot { snapshot, caller },
                 InvocationContextStack::fresh(),
             ),
-            Self::SaveSnapshot { idempotency_key } => (
+            Self::SaveSnapshot {
                 idempotency_key,
-                AgentInvocationPayload::SaveSnapshot,
+                caller,
+            } => (
+                idempotency_key,
+                AgentInvocationPayload::SaveSnapshot { caller },
                 InvocationContextStack::fresh(),
             ),
             Self::ProcessOplogEntries {
@@ -621,6 +931,7 @@ impl AgentInvocation {
                 metadata,
                 first_entry_index,
                 entries,
+                caller,
             } => (
                 idempotency_key,
                 AgentInvocationPayload::ProcessOplogEntries {
@@ -629,6 +940,7 @@ impl AgentInvocation {
                     metadata,
                     first_entry_index,
                     entries,
+                    caller,
                 },
                 InvocationContextStack::fresh(),
             ),
@@ -653,7 +965,9 @@ impl AgentInvocation {
             Self::ProcessOplogEntries {
                 idempotency_key, ..
             } => Some(idempotency_key),
-            Self::SaveSnapshot { idempotency_key } => Some(idempotency_key),
+            Self::SaveSnapshot {
+                idempotency_key, ..
+            } => Some(idempotency_key),
             Self::LoadSnapshot {
                 idempotency_key, ..
             } => Some(idempotency_key),
@@ -704,11 +1018,14 @@ impl AgentInvocation {
         }
     }
 
-    pub fn principal(&self) -> Option<&Principal> {
+    pub fn caller(&self) -> Option<&Caller> {
         match self {
-            Self::AgentInitialization { principal, .. }
-            | Self::AgentMethod { principal, .. }
-            | Self::ExternalTool { principal, .. } => Some(principal),
+            Self::AgentInitialization { caller, .. }
+            | Self::AgentMethod { caller, .. }
+            | Self::ExternalTool { caller, .. }
+            | Self::LoadSnapshot { caller, .. }
+            | Self::SaveSnapshot { caller, .. }
+            | Self::ProcessOplogEntries { caller, .. } => Some(caller),
             _ => None,
         }
     }
@@ -749,6 +1066,8 @@ pub struct PendingInvocationRef {
     pub idempotency_key: Option<InvocationId>,
     /// Target revision of the manual update. `Some` only for manual update invocations.
     pub manual_update_target_revision: Option<ComponentRevision>,
+    /// What the invocation runs. `None` for a manual update.
+    pub operation: Option<InvocationOperation>,
 }
 
 impl PendingInvocationRef {
@@ -803,6 +1122,7 @@ mod request_equality_tests {
                     definition: Tool {
                         version: "1.0.0".to_string(),
                         requires_filesystem: false,
+                        http_mount: None,
                         commands: CommandTree { nodes: Vec::new() },
                         schema: SchemaGraph::empty(),
                     },
@@ -837,7 +1157,7 @@ mod request_equality_tests {
                 middleware_chain: None,
                 mcp_import: None,
             }),
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         }
     }
@@ -846,16 +1166,53 @@ mod request_equality_tests {
         vec![
             AgentInvocationPayload::AgentInitialization {
                 input: value.clone(),
-                principal: Principal::anonymous(),
+                caller: Caller::anonymous(),
             },
             AgentInvocationPayload::AgentMethod {
                 method_name: "run".to_string(),
                 input: value.clone(),
-                principal: Principal::anonymous(),
+                caller: Caller::anonymous(),
                 scope_card: None,
             },
             tool_request(TypedSchemaValue::new(SchemaGraph::anonymous(schema), value)),
         ]
+    }
+
+    #[test]
+    fn same_caller_request_compares_the_whole_caller() {
+        use crate::base_model::caller::test_support::sample_caller;
+
+        let mut other_tokens = sample_caller();
+        other_tokens.tokens.clear();
+        let callers = [Caller::anonymous(), sample_caller(), other_tokens];
+        for (index, caller) in callers.iter().enumerate() {
+            let payloads = |caller: &Caller| {
+                vec![
+                    AgentInvocationPayload::AgentInitialization {
+                        input: SchemaValue::Tuple {
+                            elements: Vec::new(),
+                        },
+                        caller: caller.clone(),
+                    },
+                    AgentInvocationPayload::AgentMethod {
+                        method_name: "run".to_string(),
+                        input: SchemaValue::Tuple {
+                            elements: Vec::new(),
+                        },
+                        caller: caller.clone(),
+                        scope_card: None,
+                    },
+                    AgentInvocationPayload::SaveSnapshot {
+                        caller: caller.clone(),
+                    },
+                ]
+            };
+            for (other_index, other) in callers.iter().enumerate() {
+                for (a, b) in payloads(caller).iter().zip(payloads(other)) {
+                    assert_eq!(a.same_caller_request(&b), index == other_index, "{a:?}");
+                }
+            }
+        }
     }
 
     #[test]

@@ -14,6 +14,7 @@ import "golem/schema/schema.proto";
 import "golem/worker/retry_policy.proto";
 import "golem/worker/worker_error.proto";
 import "golem/worker/worker_id.proto";
+import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
 
 // An oplog entry in its raw/internal representation.
@@ -182,6 +183,7 @@ message RawCreateParameters {
   optional string canonical_key = 17;
   RawCreateRequest create_request = 18;
   optional string constructor_parameters = 19;
+  bool never_live = 20;
 }
 
 enum RawCreateRequestKind {
@@ -194,7 +196,9 @@ enum RawCreateRequestKind {
 message RawCreateRequest {
   RawCreateRequestKind kind = 1;
   optional IdempotencyKey idempotency_key = 2;
-  golem.component.Principal principal = 3;
+  reserved 3;
+  reserved "principal";
+  golem.component.Caller caller = 7;
   string trace_id = 4;
   repeated string trace_states = 5;
   repeated RawSpanData invocation_context = 6;
@@ -287,6 +291,25 @@ message RawAgentInvocationStartedParameters {
   repeated string trace_states = 4;
   repeated RawSpanData invocation_context = 5;
   RawInvocationWalletPin wallet_pin = 6;
+  RawInvocationRequestOperation operation = 7;
+}
+
+// What a request runs. The payload of its entry is stored without it.
+message RawInvocationRequestOperation {
+  oneof operation {
+    uint64 manual_update_target_revision = 1;
+    google.protobuf.Empty agent_initialization = 2;
+    string agent_method = 3;
+    RawExternalToolOperation external_tool = 4;
+    google.protobuf.Empty load_snapshot = 5;
+    google.protobuf.Empty save_snapshot = 6;
+    google.protobuf.Empty process_oplog_entries = 7;
+  }
+}
+
+message RawExternalToolOperation {
+  string tool_name = 1;
+  repeated string command_path = 2;
 }
 
 message RawInvocationWalletPin {
@@ -318,6 +341,8 @@ message RawErrorParameters {
   optional bytes retry_policy_state = 4;
   OplogErrorKind kind = 5;
   optional golem.common.UUID invocation_id = 6;
+  google.protobuf.Timestamp retry_at = 7;
+  optional uint64 retrying_start_index = 8;
 }
 
 message RawJumpParameters {
@@ -331,6 +356,7 @@ message RawPendingAgentInvocationParameters {
   repeated string trace_states = 4;
   repeated RawSpanData invocation_context = 5;
   google.protobuf.Timestamp not_before = 6;
+  RawInvocationRequestOperation operation = 7;
 }
 
 message RawPendingUpdateParameters {
@@ -360,6 +386,8 @@ message RawFailedUpdateParameters {
   optional RawFailedSnapshotAssistedUpdateDetails snapshot_assisted_details = 3;
   optional uint64 update_attempt_index = 4;
   optional RawSnapshotFault snapshot_fault = 5;
+  UpdateFailureClass failure_class = 6;
+  optional ReplayDivergence divergence = 7;
 }
 
 // Whether a failed update is about the record that the update selected.

@@ -9,6 +9,7 @@ use golem_common::model::oplog::{AgentError, OplogEntry, PublicOplogEntryWithInd
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::{HasOplog, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -151,7 +152,7 @@ async fn pending_multi_poll(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
         golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
         invocation_create_intent(
             &executor,
@@ -362,32 +363,43 @@ async fn pending_multi_poll(
             .await?;
         if durable {
             executor.resume(&owned, false).await?;
+            // The repaired poll finds both lost inputs ready, the read reports the loss, and
+            // the fixture reconnects both.
             let mut resumed_peers = accept_pair(&listeners, &mut effects).await?;
-            executor.commit_oplog(&id).await?;
+            // The multi-poll of the new connections follows their connects.
+            let reconnected = tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    executor.commit_oplog(&id).await?;
+                    let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
+                    if poll_starts(&entries).len() == 6 {
+                        return Ok::<_, anyhow::Error>(entries);
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .context("multi-poll of the reconnected inputs")??;
             ensure!(
-                input_poll(
-                    &executor.get_oplog(&owned, OplogIndex::INITIAL).await?,
-                    &stored_key,
-                    2,
-                    None
-                )? == poll_start
+                input_poll(&reconnected, &stored_key, 2, Some(&[0, 1]))? == poll_start,
+                "the repaired poll of the lost inputs is ready at once"
             );
             release_second(&mut resumed_peers, &mut effects).await?;
             let resumed = tokio::time::timeout(Duration::from_secs(10), &mut invocation)
                 .await
                 .context("retained multi-poll continuation")???
-                .into_typed::<Result<Vec<u32>, String>>()?;
+                .into_typed::<Result<(u32, Vec<u32>), String>>()?;
             ensure!(
-                resumed == Ok(vec![1]),
-                "only peer B was made ready: {resumed:?}"
+                resumed == Ok((1, vec![1])),
+                "only peer B was made ready after the reconnect: {resumed:?}"
             );
             closed_pair(&mut resumed_peers, &mut effects).await?;
             ensure!(
                 effects.accepts == [2, 2] && effects.closed == [2, 2] && effects.sent == [0, 1]
             );
             let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
-            ensure!(input_poll(&recovered, &stored_key, 2, Some(&[1]))? == poll_start);
-            ensure!(poll_starts(&recovered) == poll_starts(&stopped));
+            ensure!(input_poll(&recovered, &stored_key, 2, Some(&[0, 1]))? == poll_start);
+            let polls = poll_starts(&recovered);
+            ensure!(polls.len() == 6 && polls[..3] == poll_starts(&stopped)[..]);
             assert_invocation(&recovered, &stored_key, 1)?;
             settled_history(&recovered)?;
             ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
@@ -400,8 +412,8 @@ async fn pending_multi_poll(
                     data_value!(first_port, second_port),
                 )
                 .await?
-                .into_typed::<Result<Vec<u32>, String>>()?;
-            ensure!(cached == Ok(vec![1]));
+                .into_typed::<Result<(u32, Vec<u32>), String>>()?;
+            ensure!(cached == Ok((1, vec![1])));
             no_connections(&listeners).await?;
             ensure!(
                 poll_starts(&executor.get_oplog(&owned, OplogIndex::INITIAL).await?)
@@ -433,12 +445,12 @@ async fn pending_multi_poll(
                 tokio::try_join!(fresh, fresh_peers)
             })
             .await??;
-            ensure!(fresh.into_typed::<Result<Vec<u32>, String>>()? == Ok(vec![1]));
+            ensure!(fresh.into_typed::<Result<(u32, Vec<u32>), String>>()? == Ok((0, vec![1])));
             ensure!(
                 effects.accepts == [3, 3] && effects.closed == [3, 3] && effects.sent == [0, 2]
             );
             let history = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
-            ensure!(input_poll(&history, &stored_key, 2, Some(&[1]))? == poll_start);
+            ensure!(input_poll(&history, &stored_key, 2, Some(&[0, 1]))? == poll_start);
             input_poll(&history, &stored_fresh_key, 2, Some(&[1]))?;
             assert_invocation(&history, &stored_key, 1)?;
             assert_invocation(&history, &stored_fresh_key, 1)?;
@@ -496,7 +508,7 @@ async fn pending_multi_poll(
                 None,
                 None,
                 &InvocationContextStack::fresh(),
-                Principal::anonymous(),
+                callers::anonymous(),
                 golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
                 invocation_create_intent(
                     &executor,
@@ -529,7 +541,7 @@ async fn pending_multi_poll(
                 tokio::try_join!(fresh, fresh_peers)
             })
             .await??;
-            ensure!(fresh.into_typed::<Result<Vec<u32>, String>>()? == Ok(vec![1]));
+            ensure!(fresh.into_typed::<Result<(u32, Vec<u32>), String>>()? == Ok((0, vec![1])));
             let history = executor
                 .get_oplog(&fresh_owned, OplogIndex::INITIAL)
                 .await?;

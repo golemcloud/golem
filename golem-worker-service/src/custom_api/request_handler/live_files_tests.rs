@@ -332,6 +332,42 @@ async fn live_http_wire_deadlines_disconnects_and_late_failure() {
 }
 
 #[test]
+async fn mounted_read_preserves_a_key_collision_without_serving_a_file() {
+    let harness = live_files_harness();
+    enqueue(
+        &harness,
+        Err(
+            golem_service_base::error::worker_executor::WorkerExecutorError::AgentKeyCollision {
+                agent_id: agent1_id(&harness, 42),
+                requested_key: agent1(42).to_string(),
+            }
+            .into(),
+        ),
+    );
+    let response = endpoint(&harness, vec![route(&[("/a", "/public/a")])])
+        .execute(request("GET", "/sites/42/a", &[]))
+        .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body: serde_json::Value =
+        serde_json::from_slice(&response.into_body().into_vec().await.unwrap()).unwrap();
+    assert_eq!(body["code"], "AGENT_KEY_COLLISION");
+    let calls = harness.file_reads.calls.lock().unwrap();
+    let (target, constructor, component_id) = calls[0].target.invoke_fields();
+    let Some(golem_api_grpc::proto::golem::worker::agent_target::Target::Key(key)) = target.target
+    else {
+        panic!("a mounted read must carry its key, not only an ID");
+    };
+    assert_eq!(
+        golem_common::model::agent::ParsedAgentKey::try_from(key)
+            .unwrap()
+            .to_string(),
+        "agent1(42)"
+    );
+    assert!(constructor.is_none());
+    assert_eq!(component_id, Some(harness.component_id.into()));
+}
+
+#[test]
 async fn mounted_read_rejects_paths_before_normalization() {
     let harness = live_files_harness();
     let constructor = golem_common::model::agent::ParsedAgentKey::from(agent1(42));

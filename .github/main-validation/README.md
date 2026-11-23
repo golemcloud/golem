@@ -3,7 +3,9 @@
 Merging this cutover activates scheduled main validation and the exact-source
 release gate without repository activation variables. Main PRs run no tests.
 Ordinary main pushes no longer run full platform CI or heavy built-in Bash CI.
-Maintenance branches (`N.N.x`) retain full CI. Manual and reusable CI entry points remain.
+Existing maintenance branches (`N.N.x`) retain their own full CI workflows.
+Main no longer contains the legacy platform and built-in Bash workflows or their
+manual/reusable entry points. New branches from main do not inherit those workflows.
 Docs, CLA and Vouch checks remain. Billing tests and Bash oracle checks retain
 their main-push paths but no longer run on main PRs. Skill-harness checks run in
 Main validation and maintenance CI, not main PRs. This does not add optional PR
@@ -58,6 +60,14 @@ report deliveries before publishing success. Missing exit codes fail closed.
 Setup, upload, cancellation and runner timeout failures can still prevent saving.
 A green Linux job alone is not a green validation result.
 
+`cache-begin.json` and `cache-complete.json` retain each disk's key, visible cycle
+marker, device and capacity. The completion marker records the workload exit
+before the provider's post-job commit request; it is not a durable-save receipt.
+Compare the next run's visible marker with the previous completion evidence to
+detect missing or older snapshots. Provider generation/commit evidence is still
+needed to explain a discontinuity. Diagnostics are best effort and do not change
+the workload result or cache-saving policy.
+
 Completed WASMs are cached per application for every language, including benchmark
 builds. There is no separate application or output allowlist. Each successful build
 records the WASMs it exports. The key hashes the application's checked-in directory,
@@ -109,13 +119,26 @@ cycles, resource high-water marks and cancellation before finalizing them.
 
 `Makefile.main-validation.toml` prepares built-ins, native binaries, SDKs and
 fixtures before their consumers. A failed producer blocks dependent consumers;
-old cache contents never release them. General checks record ordinary failure
-and let the remaining prepared workloads run. Native producers share the Cargo
+old cache contents never release them. Every producer records a current-cycle
+status. Preparation continues with independent producers after failure. SDK
+preparation builds templates and publishes local packages; SDK formatting, lint,
+drift and ordinary test verdicts run later and do not prevent that production.
+Unit and JS guest test failures also leave independent preparation admitted.
+Native producers share the Cargo
 target but keep their exact package and feature selections. After the executor
 producer succeeds, copy all its test executables and rewrite only their paths in
 the local metadata. Service compilation can then overlap workers without replacing
 live worker executables. Test consumers use local nextest binaries metadata, not
 cross-job archives.
+
+Preparation runs `main-validation-js-guests` after TypeScript and Effect SDK
+production. It uses their fresh local guest templates and the general native
+producer's metadata to run the in-process `golem-js-guest-tests` crate, which
+does not depend on the CLI.
+The task first runs `prepare-js-guest-tests` to bundle current SDK fixture sources
+into the Cargo target directory. Bundles and maps are build outputs, not committed
+snapshots or byte-exact drift gates. Missing guests, failed bundling or failed smoke
+tests fail preparation; see `golem-js-guest-tests/README.md`.
 
 Executor snapshots use ordinary copies, not links. Dependency checks reject
 unresolved libraries and libraries from the mutable Cargo target, and require
@@ -127,41 +150,75 @@ runner to reclaim. The retained manifest and task logs record dependency and has
 evidence; sharing a cache is not a claim of measured speedup.
 
 Parallel execution is the default. Worker tests overlap service compilation,
-then service and CLI tests. Once both service compilation and worker tests finish,
-the same executor also runs lint and Bash checks in a background branch,
-sequentially with each other. Ordinary worker failures still admit these independent
-checks. The completion wait is bounded by the 300-minute validation timeout.
-They retain their existing progress identities and run once per cycle.
-The background branch limits Cargo, native test harnesses and Bash conformance
-to four workers; the Bash compatibility container also has a four-CPU quota.
-Bash uses a separate persistent Cargo target, including its conformance examples.
-It cannot overwrite native service or executor outputs. Lint skips the WIT sync
-already completed during preparation. Neither check overlaps a native producer.
-The four-worker cap applies only to parallel mode; serial diagnosis retains the
-normal tool concurrency. The background branch joins before privileged checks.
+then service and CLI tests. All final-check lanes wait for every stateful lane,
+including recovery. This keeps compiler and filesystem traffic out of the
+database-backed test window. Ordinary lane failures still admit independent
+checks. Root-target writers run serially in one final lane; source checks, Rust
+SDK checks, Bash and language/tool checks have separate lanes. Rust SDK tool/UI
+tests remain serial because they share a target. Dev-tools compilation precedes
+Go binding generation in the language lane. Docs generators share the root lane
+because their format step writes the docs tree. Each lane collects failures.
+XFS and Docker run serially only after all these lanes join.
+
+Final-check lanes limit Cargo and native test harnesses to four workers in both
+parallel and serial modes; Bash conformance also uses four workers and its
+compatibility container has a four-CPU quota. These are separate concurrency
+controls, not a claim that each lane consumes only four CPUs. Bash keeps a
+separate persistent Cargo target, including its conformance examples. WIT and
+SDK producers are not rerun under consumers. Formatting/lint failures fail the
+final verdict without preventing independent checks or tests inside the mixed
+SDK, Bash and schema tasks when `CI=true`. Local invocations of these validators
+fail at the first failed check. The `ci` cargo-make profile selects build and test
+settings but does not set `CI`; GitHub Actions supplies it in CI.
 
 Groups within each stateful subflow remain serial. The ceiling is three stateful
-subflows and one bounded checks branch, not another executor or a dynamic
-scheduler. Each fork collects ordinary failures before joining; the final task
+subflows, not another executor or a dynamic scheduler. Once workers finish,
+their slot runs service group 4 with its own
+listener block and temporary root. That group retains its SQLite API, streaming
+recovery and fault-matrix invocations, their single-thread settings and their
+service-producer binaries. It runs once and keeps its existing progress identity.
+Other service groups no longer wait for group 4. Each fork collects ordinary
+failures before joining; the final task
 rejects failed or missing branch completion records. Conflicting privileged
 checks follow the join. Set `MAIN_VALIDATION_PARALLEL=false` locally or the manual
 acceptance `parallel` input to false for a serial diagnostic run. Production
 sampling always uses parallel execution. Real overlap acceptance remains required;
 local contract tests alone do not establish isolation or resource headroom.
 
+Each worker, service and CLI test task has a 60-minute deadline that includes
+dependency startup and teardown. Expiry sends SIGTERM to the task's process
+group, then SIGKILL after at most 15 seconds. Remaining descendants in that group
+are also killed if the parent exits first. The task retains its log, records
+failure with exit code 124, and lets the lane run its next group. The deadline
+does not extend the workflow's 300-minute budget. Compilation and exclusive
+checks retain the workflow deadline rather than the shorter test-task limit.
+
 General workers retain test-r's hardware-derived concurrency. Keep the dedicated
-storage-quota single-thread and tool-streaming eight-thread limits. Service
+storage-quota single-thread and tool-streaming eight-thread limits. The four
+`latency` tests run one at a time after the parallel workloads and checks join,
+before XFS and Docker validation. Their wall-clock assertions must not measure
+unrelated compilation, service tests or memory stress. Their internal fan-out,
+timer races and timing budgets are unchanged. Service
 invocations share fixed dependency ports and include cluster restarts, so their
-single-thread limits are not an invitation to remove them globally. CLI's four
-concurrent tests each start servers and can run parallel compilers. Evaluate any
-increase using CPU and memory samples, not the number of test threads alone.
-The current 20-job native Cargo cap is not the main observed bottleneck: general
-and executor compilation used fewer than 20 host CPUs in over 90% of samples in
-acceptance 44267744093. Keep heavy native producers ordered and preserve their
-different feature selections. Metadata listing uses `--tests`, not `--bins`, so
+single-thread limits are not an invitation to remove them globally. PostgreSQL
+API group 2 uses two threads after repeated full-selection qualification with
+fresh dependencies; the SQLite API and recovery invocations stay single-threaded.
+CLI's four concurrent tests each start servers and can run parallel compilers.
+Evaluate any increase using CPU and memory samples, not the number of test threads alone.
+Preparation producers can use 32 Cargo jobs through `MAIN_VALIDATION_BUILD_JOBS`.
+Acceptance exposes a `build-jobs` choice of 20 or 32 for same-source comparisons.
+The service producer retains 20 while it overlaps runtime worker tests. Neither
+limit is a CPU quota, and the larger solo-producer limit is not a measured
+speedup: general and executor compilation used fewer than 20 host CPUs in over
+90% of samples in acceptance 44267744093. Keep heavy native producers ordered and
+preserve their different feature selections. Metadata listing uses `--tests`, not `--bins`, so
 nextest does not force additional test-mode builds of `test = false` binaries.
 
-Offsets are 0 for worker tests, 10000 for service tests, and 20000 for CLI tests.
+Offsets are 0 for worker tests, 10000 for the main service branch, 20000 for CLI
+tests and 23000 for the isolated group 4 branch. Group 4's default listener range
+is 29379–32195, above the CLI defaults and below Linux's default ephemeral range
+starting at 32768. Main validation rejects absolute
+`REDIS_PORT` and `REGISTRY_HTTP_PORT` overrides because they bypass these blocks.
 Preparation creates a unique root in the runner's system temporary directory.
 Each subflow receives its own absolute `TMPDIR` below that root. Keep the system
 temporary directory outside the checkout: generated Rust applications must not
@@ -173,6 +230,12 @@ temporary directory. Explicit endpoint overrides remain absolute.
 CLI integration tests start their own server on dynamic ports rather than using
 the framework defaults, so the CLI offset is not a claim of extra isolation.
 Real overlap must still establish independent Redis, files, containers and ports.
+
+Embedded-artifact validation retains its registry-only embedded feature selection.
+It records Cargo fingerprint diagnostics in its task log and publishes
+`embedded-cargo-timing.html` with the other Linux evidence, including when tests
+fail after compilation. These distinguish alternate dependency-feature builds
+from build-script and linking costs. They do not establish warm reuse by themselves.
 
 `Makefile.sdk-validation.toml` contains the existing Scala, TypeScript, Effect,
 MoonBit, Rust, Go and inexpensive skill-harness commands. The source-level mapping
@@ -200,10 +263,33 @@ remain visible in the job logs.
 
 ## Linux task progress and diagnostic logs
 
-Actions wraps the same cargo-make command with `progress.py observe`. The helper
+The validation helpers and observer use the explicitly typechecked Effect
+TypeScript package in this directory. Install with `npm ci --ignore-scripts
+--prefix .github/main-validation`; run `npm run check --prefix
+.github/main-validation` and `bun test ./.github/main-validation --timeout 180000`.
+`check` runs strict typechecking, oxlint and dprint. `npm run format --prefix
+.github/main-validation` applies the formatter. The formatter follows Effect's
+two-space, 120-column, double-quoted, semicolon-free style. The lint rules use
+Effect's native oxlint conventions plus a ban on explicit `any`; the unpublished
+Effect-specific plugin is not a dependency. The pre-existing Amp event plugin
+keeps its separate host-provided API and is outside this package's checks.
+CI installs dependencies separately for selected-source task helpers and the
+control-checkout observer wrapper. Never load helper imports from the other
+checkout. The standalone release-tooling tests run the contract fixtures; these
+execute local stubs, processes, temporary Git histories and real ELF fixtures,
+not the Golem workload or external reporting services.
+
+Python remains a prerequisite for shared tooling reached by validation, including
+Bash conformance and Docker archive inspection. Removing these flow-owned
+helpers does not authorize removal of the shared toolchain. Generic executable
+selection, snapshot verification, structured report identity and group deadlines
+are potential cargo-test-r capabilities; the local helpers retain those
+guarantees until the runner provides equivalent APIs.
+
+Actions wraps the same cargo-make command with `bun progress.ts observe`. The helper
 does not select, schedule or retry tasks. The task lists in the Makefile drive
 both execution and the initial progress plan. Each existing task invocation runs
-through `progress.py run`, which records its PID, start, completion and exit code.
+through `bun progress.ts run`, which records its PID, start, completion and exit code.
 The console shows task transitions, counts, active elapsed times and a heartbeat
 every 30 seconds. Failure excerpts are bounded; the original output is not.
 Counts describe cargo-make tasks, not individual tests or an estimated time left.
@@ -224,8 +310,9 @@ its separate job-level reporting.
 
 The Linux progress helper also retains `resources.jsonl` in the report artifact. It
 samples host CPU counters, available memory and swap, load averages, worktree
-and target filesystem capacity, and available Linux pressure metrics every five
-seconds and at completion. UTC timestamps join samples to task intervals;
+and target filesystem capacity, raw `/proc/diskstats` device counters, and
+available Linux pressure metrics every five seconds and at completion.
+UTC timestamps join samples to task intervals;
 monotonic timestamps support elapsed-time calculations. CPU counters exclude
 guest counters, which are already included in user and nice time. These are
 host-wide observations, not per-task attribution or cgroup quotas. Samples can
@@ -242,8 +329,8 @@ processes are not a credential isolation boundary. Progress is untrusted telemet
 only observer evidence establishes the source for commit comparisons. Publication
 uses a bounded HTTPS request every 30 seconds and once at completion; a failed
 publication does not change the command result. Without these settings, local
-progress, the job summary and retained artifacts still work. The observer keeps
-its independent 30-minute schedule and never executes this helper. Enabling the
+progress, the job summary and retained artifacts still work. The observer's
+completion webhook never executes this helper. Enabling the
 credential and deploying the endpoint require operator authorization.
 
 ## Exact requests and releases

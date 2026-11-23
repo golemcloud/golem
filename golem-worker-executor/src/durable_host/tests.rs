@@ -91,7 +91,7 @@ fn a_payload_that_does_not_download_retries_an_assisted_attempt_only_when_its_st
         ));
         assert!(matches!(
             payload_download_failure(SnapshotReplayPurpose::None, *lost, "down".to_string()),
-            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::Runtime { .. })
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::Runtime { .. }, _)
         ));
     });
     assert!(matches!(
@@ -100,7 +100,7 @@ fn a_payload_that_does_not_download_retries_an_assisted_attempt_only_when_its_st
             false,
             "blob store unavailable".to_string()
         ),
-        SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. })
+        SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. }, _)
     ));
     assert!(matches!(
         payload_download_failure(
@@ -108,11 +108,11 @@ fn a_payload_that_does_not_download_retries_an_assisted_attempt_only_when_its_st
             true,
             "referenced oplog payload is missing".to_string()
         ),
-        SnapshotRecoveryResult::Unavailable(WorkerExecutorError::Runtime { .. })
+        SnapshotRecoveryResult::Unavailable(WorkerExecutorError::Runtime { .. }, _)
     ));
     assert!(matches!(
         unavailable,
-        SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. })
+        SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. }, _)
     ));
     assert!(matches!(
         decide(&unavailable),
@@ -158,6 +158,7 @@ fn an_out_of_memory_trap_during_the_load_of_an_application_snapshot_retries_the_
         timed_out: false,
         retry_from: OplogIndex::INITIAL,
         semantic_trap_retry_override: None,
+        provenance: crate::model::FailureProvenance::Host,
     };
     let retry = |result: &InvokeResult| {
         DurableWorkerCtx::<crate::workerctx::default::Context>::load_retry(result)
@@ -297,7 +298,7 @@ fn a_snapshot_record_that_is_unavailable_is_a_recovery_not_a_failed_load() {
     ));
     assert!(matches!(
         unavailable,
-        SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. })
+        SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. }, _)
     ));
     let corrupt = snapshot_entry_read_failure(UnreadableOplog::new(
         &agent_id,
@@ -305,7 +306,7 @@ fn a_snapshot_record_that_is_unavailable_is_a_recovery_not_a_failed_load() {
     ));
     assert!(matches!(
         corrupt,
-        SnapshotRecoveryResult::Failed(WorkerExecutorError::OplogFailed { .. })
+        SnapshotRecoveryResult::Failed(WorkerExecutorError::OplogFailed { .. }, _)
     ));
 }
 
@@ -437,7 +438,7 @@ fn ephemeral_restart_interrupts_become_invocation_failures() {
             .expect("ephemeral restart is terminal");
         assert!(matches!(&converted,
             TrapType::Error { error: AgentError::InternalError(error), retry_from,
-                semantic_trap_retry_override: None }
+                semantic_trap_retry_override: None, .. }
             if error == message && *retry_from == start_index));
         assert!(matches!(converted.as_golem_error(""),
             Some(WorkerExecutorError::InvocationFailed { error: AgentError::InternalError(error), .. })
@@ -452,6 +453,7 @@ fn ephemeral_restart_interrupts_become_invocation_failures() {
             error: AgentError::OutOfMemory,
             retry_from: start_index,
             semantic_trap_retry_override: None,
+            provenance: crate::model::FailureProvenance::Host,
         },
     ] {
         assert!(ephemeral_terminal_trap(AgentMode::Ephemeral, &trap, start_index).is_none());
@@ -469,8 +471,7 @@ fn ephemeral_active_suspend_becomes_an_invocation_failure() {
         TrapType::Error {
             error: AgentError::EphemeralCannotSuspend(EphemeralCannotSuspendError { reason }),
             retry_from,
-            semantic_trap_retry_override: None,
-        } if reason == "suspended while an invocation was active" && *retry_from == start_index));
+            semantic_trap_retry_override: None, .. } if reason == "suspended while an invocation was active" && *retry_from == start_index));
     assert_eq!(
         DurableWorkerCtx::<crate::workerctx::default::Context>::fixed_decision_for_trap_type(
             &converted
@@ -1641,7 +1642,12 @@ fn wallet_cascade_preserves_independent_floor_releases_ceiling_and_replays_ident
         )
         .unwrap()
     );
-    adopt_recorded_wallet_generation(&mut replayed_generation, live_generation).unwrap();
+    adopt_recorded_wallet_generation(
+        OplogIndex::from_u64(1),
+        &mut replayed_generation,
+        live_generation,
+    )
+    .unwrap();
     let replayed_surface = golem_common::model::card::agent_effective_surface_from_wallet(
         &context,
         replayed_wallet.values().map(Arc::as_ref),
@@ -1722,7 +1728,12 @@ fn expiry_generation_outcome_is_stable_when_replayed() {
     let recorded_expiry_generation = generation;
 
     assert!(!remove_wallet_card(&mut wallet, &mut generation, card_id).unwrap());
-    adopt_recorded_wallet_generation(&mut generation, recorded_expiry_generation).unwrap();
+    adopt_recorded_wallet_generation(
+        OplogIndex::from_u64(1),
+        &mut generation,
+        recorded_expiry_generation,
+    )
+    .unwrap();
 
     assert!(wallet.is_empty());
     assert_eq!(generation, 8);
@@ -1791,7 +1802,12 @@ fn recorded_expiry_events_replay_identically_with_an_earlier_clock() {
         assert!(
             remove_wallet_card(&mut replayed_wallet, &mut replayed_generation, card_id).unwrap()
         );
-        adopt_recorded_wallet_generation(&mut replayed_generation, recorded_generation).unwrap();
+        adopt_recorded_wallet_generation(
+            OplogIndex::from_u64(1),
+            &mut replayed_generation,
+            recorded_generation,
+        )
+        .unwrap();
     }
 
     assert_eq!(replayed_wallet, live_wallet);
@@ -1864,10 +1880,10 @@ fn wallet_replacement_is_atomic_when_generation_would_overflow() {
 fn replay_adopts_recorded_wallet_generation() {
     let mut generation = 10;
 
-    adopt_recorded_wallet_generation(&mut generation, 10).unwrap();
+    adopt_recorded_wallet_generation(OplogIndex::from_u64(1), &mut generation, 10).unwrap();
     assert_eq!(generation, 10);
 
-    adopt_recorded_wallet_generation(&mut generation, 12).unwrap();
+    adopt_recorded_wallet_generation(OplogIndex::from_u64(1), &mut generation, 12).unwrap();
     assert_eq!(generation, 12);
 }
 
@@ -1875,7 +1891,7 @@ fn replay_adopts_recorded_wallet_generation() {
 fn replay_rejects_decreasing_recorded_wallet_generation() {
     let mut generation = 10;
 
-    assert!(adopt_recorded_wallet_generation(&mut generation, 9).is_err());
+    assert!(adopt_recorded_wallet_generation(OplogIndex::from_u64(1), &mut generation, 9).is_err());
     assert_eq!(generation, 10);
 }
 
@@ -1893,6 +1909,7 @@ fn invocation_wallet_pin_establishes_base_before_ordered_mutations() {
 
     assert!(
         apply_invocation_wallet_pin(
+            OplogIndex::from_u64(1),
             &mut wallet,
             wallet_id_hash,
             &mut generation,
@@ -1916,7 +1933,7 @@ fn invocation_wallet_pin_establishes_base_before_ordered_mutations() {
     assert!(!wallet.contains_key(&derived_card.card_id()));
 
     assert!(add_wallet_card(&mut wallet, &mut generation, derived_card.clone()).unwrap());
-    adopt_recorded_wallet_generation(&mut generation, 2).unwrap();
+    adopt_recorded_wallet_generation(OplogIndex::from_u64(1), &mut generation, 2).unwrap();
     assert_eq!(wallet.len(), 2);
     assert_eq!(
         wallet.get(&base_card.card_id()).map(Arc::as_ref),
@@ -1957,7 +1974,16 @@ fn invocation_wallet_pins_share_retained_membership_and_reject_atomically() {
     ] {
         let mut wallet = original.clone();
         let mut generation = 8;
-        assert!(apply_invocation_wallet_pin(&mut wallet, hash, &mut generation, invalid).is_err());
+        assert!(
+            apply_invocation_wallet_pin(
+                OplogIndex::from_u64(1),
+                &mut wallet,
+                hash,
+                &mut generation,
+                invalid
+            )
+            .is_err()
+        );
         assert!(wallet.ptr_eq(&original));
         assert_eq!(generation, 8);
     }
@@ -1966,6 +1992,7 @@ fn invocation_wallet_pins_share_retained_membership_and_reject_atomically() {
     let mut generation = 8;
     assert!(
         !apply_invocation_wallet_pin(
+            OplogIndex::from_u64(1),
             &mut wallet,
             hash,
             &mut generation,
@@ -1979,6 +2006,7 @@ fn invocation_wallet_pins_share_retained_membership_and_reject_atomically() {
     for end in (0..ids.len()).rev() {
         assert!(
             apply_invocation_wallet_pin(
+                OplogIndex::from_u64(1),
                 &mut wallet,
                 hash,
                 &mut generation,
@@ -2175,6 +2203,7 @@ fn shard_assignment_recovery_restarts_idle_workers_with_pending_invocations() {
         oplog_index: OplogIndex::INITIAL,
         idempotency_key: None,
         manual_update_target_revision: Some(ComponentRevision::INITIAL),
+        operation: None,
     });
 
     assert!(should_restart_after_shard_assignment_change(&status));
@@ -2211,7 +2240,16 @@ fn shard_assignment_recovery_skips_suspended_workers_without_pending_work() {
 fn shard_assignment_recovery_preserves_explicit_interrupt_with_pending_work() {
     let mut status = AgentStatusRecord {
         status: AgentStatus::Interrupted,
-        current_idempotency_key: Some(Uuid::new_v4().into()),
+        running: Some(golem_common::model::RunningInvocation {
+            key: Uuid::new_v4().into(),
+            request: golem_common::model::InvocationRequestRef {
+                index: golem_common::model::OplogIndex::INITIAL,
+                accepted_at: golem_common::model::Timestamp::from(0),
+                operation: None,
+            },
+            last_change: golem_common::model::OplogIndex::INITIAL,
+            last_change_at: golem_common::model::Timestamp::from(0),
+        }),
         ..AgentStatusRecord::default()
     };
     assert!(!should_restart_after_shard_assignment_change(&status));
@@ -2222,6 +2260,7 @@ fn shard_assignment_recovery_preserves_explicit_interrupt_with_pending_work() {
         oplog_index: OplogIndex::INITIAL,
         idempotency_key: Some(Uuid::new_v4().into()),
         manual_update_target_revision: None,
+        operation: None,
     });
     status.pending_updates.push_back(PendingUpdateRef {
         timestamp: Timestamp::now_utc(),

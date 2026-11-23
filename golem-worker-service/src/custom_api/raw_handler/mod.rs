@@ -6,7 +6,7 @@
 //
 //     http://license.golem.cloud/LICENSE
 
-use super::call_agent::principal_from_request;
+use super::call_agent::caller_from_request;
 use super::error::RequestHandlerError;
 use super::http_completion::{BodyGate, GateOutput, GateTerminal};
 use super::http_envelope::{
@@ -22,7 +22,7 @@ use golem_api_grpc::proto::golem::worker::{
     InvocationContext, InvocationStart, StreamDirection, invocation_session_completion,
     invocation_session_result, stream_terminal,
 };
-use golem_common::model::agent::{InvocationFreshnessDisposition, ParsedAgentKey, Principal};
+use golem_common::model::agent::{InvocationFreshnessDisposition, ParsedAgentKey};
 use golem_common::schema::stream::SchemaValueStream;
 use golem_common::schema::{
     FromSchema, IntoSchema, SchemaGraph, SchemaValue, TypedSchemaValue, try_into_schema_graph,
@@ -174,8 +174,11 @@ impl RawHandler {
                 &AuthCtx::System,
             )
             .await
-            .map_err(|_| RequestHandlerError::RawInternal)?;
-        let principal: Principal = principal_from_request(request)?;
+            .map_err(|error| {
+                tracing::warn!(error = %error, "Raw HTTP invocation target could not be bound");
+                RequestHandlerError::RawInternal
+            })?;
+        let caller = caller_from_request(request)?;
         let context = InvocationContext {
             parent: None,
             env: Default::default(),
@@ -188,7 +191,7 @@ impl RawHandler {
             request_key: Some(request_key.into()),
             context: Some(context),
             auth_ctx: Some(AuthCtx::System.into()),
-            principal: Some(principal.into()),
+            caller: Some(caller.into()),
             environment_id: Some(selected.route.environment_id.into()),
             config: vec![],
             component_owner_account_id: Some(selected.route.account_id.into()),

@@ -658,7 +658,7 @@ object AutoRegisterCodegen {
               agentTrait.constructorParams.map(param => s"${param.name}:${param.typeExpr}").mkString(",")
             val methods = agentTrait.methods.map { method =>
               val params = method.params.map(param => s"${param.name}:${param.typeExpr}").mkString(",")
-              s"${method.name}($params)=>${method.returnTypeExpr}[${method.principalParams.mkString(",")}]"
+              s"${method.name}($params)=>${method.returnTypeExpr}[${method.contextParams.mkString(",")}]"
             }.mkString(";")
 
             s"trait=${agentTrait.pkg}.${agentTrait.name}|typeName=${agentTrait.typeName.getOrElse(agentTrait.name)}|ctor=$constructor|methods=$methods|mode=${agentTrait.mode.getOrElse("durable")}|desc=${agentTrait.descriptionValue.getOrElse("")}"

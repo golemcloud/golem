@@ -42,9 +42,8 @@ fn self_contained_graph(registry: &SchemaGraph, root: SchemaType) -> SchemaGraph
 /// derived from the agent's declared [`InputSchema`]. `registry` is the agent
 /// type's definition registry that the input schema's references resolve in.
 ///
-/// The recorded value is caller-only: auto-injected fields (e.g. the principal)
-/// travel out of band and are not part of it, so they are excluded from the
-/// derived record schema to keep the schema and value arities aligned.
+/// The record schema has one field for each declared input field, so the schema and value
+/// arities are aligned.
 fn input_value_to_typed_schema_value(
     registry: &SchemaGraph,
     input_schema: &InputSchema,
@@ -53,7 +52,6 @@ fn input_value_to_typed_schema_value(
     let fields = input_schema
         .fields()
         .iter()
-        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
         .map(|field| NamedFieldType {
             name: field.name.clone(),
             body: field.schema.clone(),

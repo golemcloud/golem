@@ -24,12 +24,9 @@ use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::agent::{RevertToOplogIndex, RevertWorkerTarget, UpdateRecord};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentRevision};
 use golem_common::model::oplog::{
-    MultipartPartData, OplogEntry, OplogPayload, PublicAgentInvocation, PublicOplogEntry,
-    PublicSnapshotData,
+    MultipartPartData, OplogEntry, PublicAgentInvocation, PublicOplogEntry, PublicSnapshotData,
 };
-use golem_common::model::{
-    AgentFingerprint, AgentId, AgentInvocationPayload, IdempotencyKey, OplogIndex, OwnedAgentId,
-};
+use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex, OwnedAgentId};
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
 use golem_common::{agent_key, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -892,6 +889,350 @@ async fn a_restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
 
 #[test]
 #[timeout("4m")]
+async fn a_late_snapshot_publication_cannot_reach_a_recreated_incarnation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(1), None).await?;
+        let agent = Agent::start(
+            &executor,
+            &context,
+            initial_file_system,
+            "late-publication-recreated",
+            &[],
+        )
+        .await?;
+        agent
+            .apply_and_confirm(&executor, write("old-only.txt"))
+            .await?;
+        let old = agent.incarnation(&executor, &context).await?;
+        let held = store.hold_next_publication();
+        agent
+            .apply_all(
+                &executor,
+                &[Operation::Write {
+                    path: "state.txt",
+                    content: "deleted incarnation",
+                }],
+            )
+            .await?;
+        let late = eventually(Duration::from_secs(30), || async { Ok(held.name()) }).await?;
+        let records = agent.records(&executor).await?;
+        assert_eq!(records.newest_name(), Some(late.clone()));
+        assert!(!records.is_confirmed(&late));
+
+        executor.delete_worker(&agent.worker_id).await?;
+        let recreated = executor
+            .start_agent(&agent.component.id, agent.agent.clone().unwrap())
+            .await?;
+        assert_eq!(recreated, agent.worker_id);
+        let new = agent.incarnation(&executor, &context).await?;
+        assert_ne!(old.1, new.1);
+        let (_, newer) = agent
+            .apply_and_confirm(
+                &executor,
+                Operation::Write {
+                    path: "state.txt",
+                    content: "new incarnation",
+                },
+            )
+            .await?;
+        assert_eq!(store.publication_result(&late), None);
+
+        held.release();
+        eventually(Duration::from_secs(30), || async {
+            Ok(store.publication_result(&late))
+        })
+        .await?
+        .map_err(anyhow::Error::msg)?;
+        // On the submitting executor, cleanup waits for the outstanding store call to return.
+        // The successful publication makes an empty namespace evidence of cleanup, not a missed write.
+        eventually(Duration::from_secs(30), || async {
+            Ok(store
+                .snapshot_names(&old.0, old.1)
+                .await
+                .is_empty()
+                .then_some(()))
+        })
+        .await?;
+        let records = agent.records(&executor).await?;
+        assert!(
+            !records
+                .snapshots
+                .iter()
+                .flatten()
+                .any(|name| **name == late)
+        );
+        assert!(!records.is_confirmed(&late));
+        assert!(records.is_confirmed(&newer));
+        assert!(!store.snapshot_names(&new.0, new.1).await.contains(&late));
+        let live = agent.describe(&executor).await?;
+        assert_eq!(
+            live,
+            [r#"state.txt file links=1 writable=true content="new incarnation""#]
+        );
+        executor.release().await?;
+
+        let cold = start_snapshotting(deps, &context, &store, Duration::from_secs(1), None).await?;
+        let recovered = agent.describe(&cold).await?;
+        assert!(store.completed_restore_names().contains(&newer));
+        assert!(!store.restored_names().contains(&late));
+        cold.release().await?;
+        let root = tempfile::tempdir()?;
+        let replay = start_replaying(deps, &context, root.path()).await?;
+        let replayed = agent.describe(&replay).await?;
+        assert_eq!(recovered, live);
+        assert_eq!(recovered, replayed);
+        replay.release().await?;
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_late_snapshot_publication_after_cold_recovery_cannot_overwrite_newer_files(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(1), None).await?;
+        let agent = Agent::start(
+            &executor,
+            &context,
+            initial_file_system,
+            "late-publication-cold",
+            &[],
+        )
+        .await?;
+        let (_, baseline) = agent
+            .apply_and_confirm(&executor, write("removed.txt"))
+            .await?;
+        let incarnation = agent.incarnation(&executor, &context).await?;
+        let published_before = store.snapshot_names(&incarnation.0, incarnation.1).await;
+        let held = store.hold_next_publication();
+        agent
+            .apply_all(
+                &executor,
+                &[Operation::Write {
+                    path: "state.txt",
+                    content: "held state",
+                }],
+            )
+            .await?;
+        let late = eventually(Duration::from_secs(30), || async { Ok(held.name()) }).await?;
+        let records = agent.records(&executor).await?;
+        assert_eq!(records.newest_name(), Some(late.clone()));
+        assert!(!records.is_confirmed(&late));
+        // The held run is not replaceable, so no subsequent save can supply a newer complete tree.
+        // Cold recovery must replay the remove, rename and overwrite after the confirmed baseline.
+        agent
+            .apply_all(
+                &executor,
+                &[
+                    Operation::Remove {
+                        path: "removed.txt",
+                    },
+                    Operation::Mkdir { path: "dir" },
+                    Operation::Rename {
+                        from: "state.txt",
+                        to: "dir/current.txt",
+                    },
+                    Operation::Write {
+                        path: "dir/current.txt",
+                        content: "before executor loss",
+                    },
+                ],
+            )
+            .await?;
+        assert_eq!(
+            store.snapshot_names(&incarnation.0, incarnation.1).await,
+            published_before
+        );
+        // Discard the executor and its files, but keep the submitted storage write held.
+        executor.release().await?;
+
+        let cold = start_snapshotting(deps, &context, &store, Duration::from_secs(1), None).await?;
+        assert_eq!(agent.incarnation(&cold, &context).await?, incarnation);
+        let recovered = agent.describe(&cold).await?;
+        assert_eq!(
+            recovered,
+            [
+                "dir dir",
+                r#"dir/current.txt file links=1 writable=true content="before executor loss""#,
+            ]
+        );
+        assert!(store.completed_restore_names().contains(&baseline));
+        let (_, newer) = agent
+            .apply_and_confirm(
+                &cold,
+                Operation::Write {
+                    path: "dir/current.txt",
+                    content: "after cold recovery",
+                },
+            )
+            .await?;
+        assert_eq!(store.publication_result(&late), None);
+        held.release();
+        eventually(Duration::from_secs(30), || async {
+            Ok(store.publication_result(&late))
+        })
+        .await?
+        .map_err(anyhow::Error::msg)?;
+        let records = agent.records(&cold).await?;
+        assert!(!records.is_confirmed(&late));
+        assert!(records.is_confirmed(&newer));
+        let live = agent.describe(&cold).await?;
+        assert_eq!(
+            live,
+            [
+                "dir dir",
+                r#"dir/current.txt file links=1 writable=true content="after cold recovery""#,
+            ]
+        );
+        cold.release().await?;
+
+        let restarted =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(1), None).await?;
+        let restored = agent.describe(&restarted).await?;
+        assert!(store.completed_restore_names().contains(&newer));
+        assert!(!store.restored_names().contains(&late));
+        restarted.release().await?;
+        let root = tempfile::tempdir()?;
+        let replay = start_replaying(deps, &context, root.path()).await?;
+        let replayed = agent.describe(&replay).await?;
+        assert_eq!(restored, live);
+        assert_eq!(restored, replayed);
+        replay.release().await?;
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_late_snapshot_publication_after_a_cold_delete_cannot_reach_a_new_incarnation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(1), None).await?;
+        let agent = Agent::start(
+            &executor,
+            &context,
+            initial_file_system,
+            "late-publication-cold-delete",
+            &[],
+        )
+        .await?;
+        let (_, baseline) = agent
+            .apply_and_confirm(&executor, write("old-only.txt"))
+            .await?;
+        let old = agent.incarnation(&executor, &context).await?;
+        let held = store.hold_next_publication();
+        agent
+            .apply_all(
+                &executor,
+                &[Operation::Write {
+                    path: "state.txt",
+                    content: "deleted incarnation",
+                }],
+            )
+            .await?;
+        let late = eventually(Duration::from_secs(30), || async { Ok(held.name()) }).await?;
+        executor.release().await?;
+
+        let other =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(1), None).await?;
+        assert_eq!(agent.incarnation(&other, &context).await?, old);
+        let recovered = agent.describe(&other).await?;
+        assert_eq!(
+            recovered,
+            [
+                r#"old-only.txt file links=1 writable=true content="old-only.txt""#,
+                r#"state.txt file links=1 writable=true content="deleted incarnation""#,
+            ]
+        );
+        assert!(store.completed_restore_names().contains(&baseline));
+        let deleting = store.hold_next_delete_all();
+        other.delete_worker(&agent.worker_id).await?;
+        eventually(Duration::from_secs(30), || async { Ok(deleting.name()) }).await?;
+        assert_eq!(store.publication_result(&late), None);
+        deleting.release();
+        eventually(Duration::from_secs(30), || async {
+            Ok(store
+                .snapshot_names(&old.0, old.1)
+                .await
+                .is_empty()
+                .then_some(()))
+        })
+        .await?;
+        other
+            .start_agent(&agent.component.id, agent.agent.clone().unwrap())
+            .await?;
+        let new = agent.incarnation(&other, &context).await?;
+        assert_ne!(old.1, new.1);
+        let (_, newer) = agent
+            .apply_and_confirm(
+                &other,
+                Operation::Write {
+                    path: "state.txt",
+                    content: "new incarnation",
+                },
+            )
+            .await?;
+        assert_eq!(store.publication_result(&late), None);
+        held.release();
+        eventually(Duration::from_secs(30), || async {
+            Ok(store.publication_result(&late))
+        })
+        .await?
+        .map_err(anyhow::Error::msg)?;
+        // A submitted write can land after its executor shuts down. Another executor cannot
+        // drain that storage request: the orphan stays in the deleted incarnation's namespace.
+        assert!(store.snapshot_names(&old.0, old.1).await.contains(&late));
+        assert!(store.writes_after_delete_all().is_empty());
+        assert!(!store.snapshot_names(&new.0, new.1).await.contains(&late));
+        let records = agent.records(&other).await?;
+        assert!(!records.is_confirmed(&late));
+        assert!(records.is_confirmed(&newer));
+        let live = agent.describe(&other).await?;
+        assert_eq!(
+            live,
+            [r#"state.txt file links=1 writable=true content="new incarnation""#]
+        );
+        other.release().await?;
+
+        let cold = start_snapshotting(deps, &context, &store, Duration::from_secs(1), None).await?;
+        let restored = agent.describe(&cold).await?;
+        assert!(store.completed_restore_names().contains(&newer));
+        assert!(!store.restored_names().contains(&late));
+        cold.release().await?;
+        let root = tempfile::tempdir()?;
+        let replay = start_replaying(deps, &context, root.path()).await?;
+        assert_eq!(restored, live);
+        assert_eq!(restored, agent.describe(&replay).await?);
+        replay.release().await?;
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("4m")]
 async fn an_injected_upload_failure_falls_back_and_a_later_upload_recovers(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1146,7 +1487,7 @@ async fn a_start_on_another_executor_confirms_a_whole_snapshot_and_restores_it(
     .await
 }
 
-/// Changes the tree of `agent` with an upload that takes two seconds, stops the agent while the
+/// Changes the tree of `agent` with a held upload, stops the agent while the
 /// upload runs, and waits until the store holds the whole snapshot and the upload ended. Gives the
 /// tree before the stop and the name of the snapshot.
 async fn stop_during_an_upload(
@@ -1155,7 +1496,7 @@ async fn stop_during_an_upload(
     store: &TestFilesystemSnapshotStore,
     agent: &Agent,
 ) -> anyhow::Result<(Vec<String>, String)> {
-    store.set_save_delay(Duration::from_secs(2));
+    let held = store.hold_next_publication();
     agent
         .apply_all(
             executor,
@@ -1166,13 +1507,15 @@ async fn stop_during_an_upload(
         )
         .await?;
     let live = agent.describe(executor).await?;
-    let named = eventually(Duration::from_secs(30), || async {
-        let records = agent.records(executor).await?;
-        Ok(records.newest_name())
-    })
-    .await?;
+    let named = eventually(Duration::from_secs(30), || async { Ok(held.name()) }).await?;
     let (owned, fingerprint) = agent.incarnation(executor, context).await?;
     agent.stop(executor, context).await?;
+    held.release();
+    eventually(Duration::from_secs(30), || async {
+        Ok(store.publication_result(&named))
+    })
+    .await?
+    .map_err(anyhow::Error::msg)?;
     eventually(Duration::from_secs(30), || async {
         Ok(store
             .snapshot_names(&owned, fingerprint)
@@ -1181,9 +1524,6 @@ async fn stop_during_an_upload(
             .then_some(()))
     })
     .await?;
-    store.set_save_delay(Duration::ZERO);
-    // The upload asks for its confirmation right after the save; give it time to get its answer.
-    tokio::time::sleep(Duration::from_millis(500)).await;
     Ok((live, named))
 }
 
@@ -3322,20 +3662,10 @@ async fn a_terminal_interrupt_ends_a_manual_update_that_waits_for_an_upload(
 
 /// The target revision of a manual-update invocation entry.
 fn manual_update_target(entry: &OplogEntry) -> Option<ComponentRevision> {
-    let OplogEntry::PendingAgentInvocation { payload, .. } = entry else {
+    let OplogEntry::PendingAgentInvocation { operation, .. } = entry else {
         return None;
     };
-    let payload = match payload {
-        OplogPayload::Inline(payload) => (**payload).clone(),
-        OplogPayload::SerializedInline { bytes, .. } => {
-            golem_common::serialization::deserialize::<AgentInvocationPayload>(bytes).ok()?
-        }
-        OplogPayload::External { .. } => return None,
-    };
-    match payload {
-        AgentInvocationPayload::ManualUpdate { target_revision } => Some(target_revision),
-        _ => None,
-    }
+    operation.manual_update_target()
 }
 
 /// The incarnation of the shard manager that the test executors trust.

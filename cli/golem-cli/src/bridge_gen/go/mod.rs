@@ -1048,9 +1048,7 @@ impl GoBridgeGenerator {
         Ok(writer.finish(&self.package_name()))
     }
 
-    /// A struct holding the caller-supplied fields of an input schema, in
-    /// schema order. Fields the host injects — the principal — are left out: a
-    /// caller neither knows nor can override them.
+    /// A struct holding the fields of an input schema, in schema order.
     fn write_input_struct(
         &self,
         name: &str,

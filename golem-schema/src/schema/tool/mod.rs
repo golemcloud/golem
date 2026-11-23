@@ -43,6 +43,8 @@ pub mod argv;
 pub mod canonical;
 pub mod compatibility;
 pub mod constraints;
+pub mod http;
+pub use http::{CommandHttp, ToolHttpEndpoint, ToolHttpMount, ToolHttpPrefix};
 pub mod process;
 mod process_exit_status;
 pub use process_exit_status::ProcessExitStatus;
@@ -103,6 +105,7 @@ impl CommandIndex {
 pub struct Tool {
     pub version: String,
     pub requires_filesystem: bool,
+    pub http_mount: Option<ToolHttpMount>,
     pub commands: CommandTree,
     /// Named-type registry shared by this tool's commands. Typed positions in
     /// the command tree may reference these definitions via
@@ -121,6 +124,16 @@ impl Tool {
     pub fn name(&self) -> Option<&str> {
         self.commands.nodes.first().map(|node| node.name.as_str())
     }
+}
+
+/// The longest operation an invocation can have: an agent method name, or the
+/// [`tool_operation`] of a tool command. Deployment rejects longer ones.
+pub const MAX_INVOCATION_OPERATION_BYTES: usize = 512;
+
+/// The operation of an invocation of the command at the canonical `command_path` of the tool
+/// named `tool_name`: `tool:<tool>/<command path>`. Keyed invocation IDs are derived from it.
+pub fn tool_operation(tool_name: &impl std::fmt::Display, command_path: &[String]) -> String {
+    format!("tool:{tool_name}/{}", command_path.join("/"))
 }
 
 /// Metadata describing a tool middleware component.
@@ -226,6 +239,7 @@ pub struct CommandNode {
     pub name: String,
     pub aliases: Vec<String>,
     pub doc: Doc,
+    pub http: Option<CommandHttp>,
     pub globals: Globals,
     pub subcommands: Vec<CommandIndex>,
     pub body: Option<CommandBody>,

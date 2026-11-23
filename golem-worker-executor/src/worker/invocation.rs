@@ -21,7 +21,7 @@ use crate::durable_host::durability::{
 use crate::durable_host::schema_value_stream::StoreValueResolver;
 use crate::durable_host::tool::operation::OwnerFailureWinner;
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
-use crate::model::TrapType;
+use crate::model::{FailureProvenance, TrapType};
 use crate::preview2::exports::golem::agent::guest as guest_exports;
 use crate::preview2::exports::golem::api1_5_0::load_snapshot as load_snapshot_exports;
 use crate::preview2::exports::golem::api1_5_0::save_snapshot as save_snapshot_exports;
@@ -32,7 +32,7 @@ use crate::services::oplog::UnreadableOplog;
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use futures::FutureExt;
 use golem_common::model::AgentId;
-use golem_common::model::agent::{AgentMode, ParsedAgentKey};
+use golem_common::model::agent::{AgentMode, ParsedAgentKey, ResolvedOwnerContext};
 use golem_common::model::component_metadata::{AgentMethodStreamMetadata, ComponentMetadata};
 use golem_common::model::oplog::AgentError as OplogAgentError;
 use golem_common::model::tool::{ToolActivationSnapshot, ToolName};
@@ -61,8 +61,9 @@ impl<Ctx: WorkerCtx> super::Worker<Ctx> {
     pub(crate) async fn start_pending_invocation(
         &self,
         idempotency_key: InvocationId,
+        operation: golem_common::model::InvocationRequestOperation,
         payload: golem_common::model::oplog::OplogPayload<
-            golem_common::model::AgentInvocationPayload,
+            golem_common::model::StoredAgentInvocationPayload,
         >,
         context: golem_common::model::invocation_context::InvocationContextStack,
         wallet_pin: golem_common::model::card::InvocationWalletPin,
@@ -88,6 +89,7 @@ impl<Ctx: WorkerCtx> super::Worker<Ctx> {
             .oplog
             .add_agent_invocation_started_from_pending(
                 idempotency_key,
+                operation,
                 payload,
                 context,
                 wallet_pin,
@@ -287,9 +289,9 @@ async fn invoke_observed<Ctx: WorkerCtx>(
             .enter_operator_authorized_oplog_processor_invocation()
     });
 
-    let invocation_principal = call.principal();
+    let invocation_caller = call.caller();
     let durable_ctx = store.data_mut().durable_ctx_mut();
-    durable_ctx.set_invocation_principal(invocation_principal);
+    durable_ctx.set_invocation_caller(invocation_caller);
     durable_ctx.set_invocation_id(call.has_invocation_id());
     let call_future = async {
         let result = dispatch_call(&mut store, instance, call, &display_name).await;
@@ -306,7 +308,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         .catch_unwind()
         .await;
     let durable_ctx = store.data_mut().durable_ctx_mut();
-    durable_ctx.set_invocation_principal(None);
+    durable_ctx.set_invocation_caller(None);
     durable_ctx.set_invocation_id(false);
 
     if read_only_method.is_some() {
@@ -689,6 +691,7 @@ async fn materialize_streaming_result<Ctx: WorkerCtx>(
     let interrupted = store.data().durable_ctx().is_interrupting();
     let output = match classify_guest_call_settlement(
         store.data().agent_id(),
+        store.data().durable_ctx().last_replayed_index(),
         materialized,
         None,
         interrupted,
@@ -789,6 +792,7 @@ async fn apply_invocation_deadline<Ctx: WorkerCtx>(
                 )),
                 retry_from,
                 semantic_trap_retry_override: None,
+                provenance: FailureProvenance::Host,
             })
         }
         other => other,
@@ -810,36 +814,84 @@ pub(crate) enum GuestCallSettlementError {
 }
 
 /// Permanent guest instruction failures and uncaught wasm exceptions that a tool boundary can
-/// record as its own terminal.
-/// Host-call markers take precedence over an underlying Wasmtime trap. A Wasm backtrace alone
-/// does not establish guest origin. Agent and tool classification share the instruction predicate.
+/// record as its own terminal: the failures whose provenance is
+/// [`FailureProvenance::TargetInstruction`]. Agent and tool classification share the predicate.
 pub(crate) fn permanent_tool_guest_trap(error: &wasmtime::Error) -> Option<String> {
-    fn has_cause<T: std::error::Error + Send + Sync + 'static>(error: &wasmtime::Error) -> bool {
-        // Typed anyhow context is downcastable but is not an item in the source chain.
-        error.downcast_ref::<T>().is_some() || error.chain().any(|cause| cause.is::<T>())
-    }
-
-    if has_cause::<GolemSpecificWasmTrap>(error)
-        || has_cause::<ClassifiedHostError>(error)
-        || has_cause::<SemanticTrapRetryOverrideMarker>(error)
-        || has_cause::<DurableCallTrapContextMarker>(error)
-        || has_cause::<DurableRecoveryFailure>(error)
-        || has_cause::<UnreadableOplog>(error)
-        || has_cause::<WorkerExecutorError>(error)
-        || has_cause::<InterruptKind>(error)
-        || has_cause::<wasmtime_wasi::I32Exit>(error)
-    {
-        return None;
-    }
-
-    let permanent = crate::model::deterministic_guest_trap(error.root_cause());
-    permanent.then(|| {
+    (failure_provenance(error) == FailureProvenance::TargetInstruction).then(|| {
         error
             .chain()
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(": ")
     })
+}
+
+/// An error whose causes [`failure_provenance`] reads. Both `anyhow::Error` and
+/// `wasmtime::Error` keep typed context outside the source chain, so a cause is either the typed
+/// context or an item of the chain.
+pub(crate) trait FailureCauses {
+    fn causes<T: std::error::Error + Send + Sync + 'static>(&self) -> impl Iterator<Item = &T>;
+    fn root(&self) -> &(dyn std::error::Error + 'static);
+}
+
+impl FailureCauses for anyhow::Error {
+    fn causes<T: std::error::Error + Send + Sync + 'static>(&self) -> impl Iterator<Item = &T> {
+        self.downcast_ref::<T>()
+            .into_iter()
+            .chain(self.chain().filter_map(|cause| cause.downcast_ref::<T>()))
+    }
+
+    fn root(&self) -> &(dyn std::error::Error + 'static) {
+        self.root_cause()
+    }
+}
+
+impl FailureCauses for wasmtime::Error {
+    fn causes<T: std::error::Error + Send + Sync + 'static>(&self) -> impl Iterator<Item = &T> {
+        self.downcast_ref::<T>()
+            .into_iter()
+            .chain(self.chain().filter_map(|cause| cause.downcast_ref::<T>()))
+    }
+
+    fn root(&self) -> &(dyn std::error::Error + 'static) {
+        self.root_cause()
+    }
+}
+
+/// The provenance of the failure `error`. An interrupt or an exit is `Lifecycle`. Any host
+/// marker, executor error, Golem-specific trap or classified host error is `Host`; host-call
+/// markers take precedence over an underlying Wasmtime trap. Only then is a deterministic guest
+/// trap at the root, such as a Wasm instruction trap or an uncaught Wasm exception,
+/// `TargetInstruction`; a Wasm backtrace alone does not establish guest origin, and every other
+/// failure is `Host`.
+pub(crate) fn failure_provenance(error: &impl FailureCauses) -> FailureProvenance {
+    fn has<T: std::error::Error + Send + Sync + 'static>(error: &impl FailureCauses) -> bool {
+        error.causes::<T>().next().is_some()
+    }
+
+    if has::<InterruptKind>(error)
+        || has::<wasmtime_wasi::I32Exit>(error)
+        || error
+            .causes::<WorkerExecutorError>()
+            .any(|error| matches!(error, WorkerExecutorError::Interrupted { .. }))
+    {
+        return FailureProvenance::Lifecycle;
+    }
+    if has::<GolemSpecificWasmTrap>(error)
+        || has::<ClassifiedHostError>(error)
+        || has::<SemanticTrapRetryOverrideMarker>(error)
+        || has::<DurableCallTrapContextMarker>(error)
+        || has::<DurableRecoveryFailure>(error)
+        || has::<UnreadableOplog>(error)
+        || has::<WorkerExecutorError>(error)
+    {
+        return FailureProvenance::Host;
+    }
+    if crate::model::deterministic_guest_trap(error.root()) {
+        FailureProvenance::TargetInstruction
+    } else {
+        FailureProvenance::Host
+    }
 }
 
 fn is_guest_semantic_trap(error: &wasmtime::Error) -> bool {
@@ -916,6 +968,7 @@ fn unreadable_oplog_in(error: &wasmtime::Error) -> Option<(AgentId, WorkerExecut
 
 fn classify_guest_call_settlement<R>(
     own_agent_id: &AgentId,
+    replay_index: OplogIndex,
     result: wasmtime::Result<R>,
     tail_timeout: Option<(std::time::Duration, usize)>,
     interrupted: bool,
@@ -962,6 +1015,7 @@ fn classify_guest_call_settlement<R>(
                 },
                 DurableRecoveryFailureKind::Permanent => {
                     WorkerExecutorError::unexpected_oplog_entry(
+                        retry_from.unwrap_or(replay_index),
                         "valid durable recovery data",
                         details,
                     )
@@ -1079,7 +1133,13 @@ pub(crate) async fn run_tool_guest_call<Ctx: WorkerCtx, R>(
     }
     let ctx = store.data().durable_ctx();
     let interrupted = ctx.is_interrupting() || ctx.invocation_deadline_exceeded();
-    let result = classify_guest_call_settlement(store.data().agent_id(), result, None, interrupted);
+    let result = classify_guest_call_settlement(
+        store.data().agent_id(),
+        store.data().durable_ctx().last_replayed_index(),
+        result,
+        None,
+        interrupted,
+    );
     // Normal errors retain the service until Store disposal selects trap versus teardown cleanup.
     run.interrupted = false;
     result
@@ -1211,7 +1271,13 @@ pub(crate) async fn run_guest_call_settled_at<Ctx: WorkerCtx, R>(
     } else {
         None
     };
-    classify_guest_call_settlement(store.data().agent_id(), result, tail_timeout, interrupted)
+    classify_guest_call_settlement(
+        store.data().agent_id(),
+        store.data().durable_ctx().last_replayed_index(),
+        result,
+        tail_timeout,
+        interrupted,
+    )
 }
 
 /// Dispatches a single lowered invocation to the matching typed guest export
@@ -1305,6 +1371,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                     || store.data().durable_ctx().invocation_deadline_exceeded();
                 match classify_guest_call_settlement(
                     store.data().agent_id(),
+                    store.data().durable_ctx().last_replayed_index(),
                     result,
                     None,
                     interrupted,
@@ -1463,7 +1530,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             stdin,
             stdout,
             stderr,
-            principal,
+            caller,
         } => {
             let _usage = store.data().durable_ctx().begin_guest_resource_usage();
             store.data().durable_ctx().activate_live_resource_usage();
@@ -1477,7 +1544,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 stdin,
                 stdout,
                 stderr,
-                principal,
+                caller,
             )
             .await;
             let consumed_fuel =
@@ -1870,6 +1937,8 @@ pub enum InvokeResult {
         /// post-trap recovery path can honour it.
         semantic_trap_retry_override:
             Option<crate::durable_host::durability::SemanticTrapRetryOverride>,
+        /// Where the failure came from.
+        provenance: FailureProvenance,
     },
     /// The invoked function succeeded and produced a result
     Succeeded {
@@ -1902,6 +1971,7 @@ impl InvokeResult {
                 timed_out: false,
                 retry_from: OplogIndex::INITIAL,
                 semantic_trap_retry_override: None,
+                provenance: FailureProvenance::TargetReturned,
             }
         }
     }
@@ -1917,12 +1987,14 @@ impl InvokeResult {
                 error,
                 retry_from,
                 semantic_trap_retry_override,
+                provenance,
             } => Self::Failed {
                 consumed_fuel,
                 timed_out: false,
                 error,
                 retry_from,
                 semantic_trap_retry_override,
+                provenance,
             },
         }
     }
@@ -1943,12 +2015,14 @@ impl InvokeResult {
                 error,
                 retry_from,
                 semantic_trap_retry_override,
+                provenance,
             } => InvokeResult::Failed {
                 consumed_fuel,
                 timed_out: false,
                 error,
                 retry_from,
                 semantic_trap_retry_override,
+                provenance,
             },
         }
     }
@@ -1984,11 +2058,13 @@ impl InvokeResult {
                 error,
                 retry_from,
                 semantic_trap_retry_override,
+                provenance,
                 ..
             } => Some(TrapType::Error {
                 error: error.clone(),
                 retry_from: *retry_from,
                 semantic_trap_retry_override: semantic_trap_retry_override.clone(),
+                provenance: *provenance,
             }),
             InvokeResult::Interrupted { interrupt_kind, .. } => {
                 Some(TrapType::Interrupt(*interrupt_kind))
@@ -2029,12 +2105,12 @@ enum LoweredCall {
     Initialize {
         agent_type: String,
         input: SchemaValue,
-        principal: golem_common::model::agent::Principal,
+        caller: golem_common::model::caller::Caller,
     },
     Invoke {
         method_name: String,
         input: SchemaValue,
-        principal: golem_common::model::agent::Principal,
+        caller: golem_common::model::caller::Caller,
         expected_output: Box<ExpectedInvokeOutput>,
     },
     SaveSnapshot,
@@ -2058,7 +2134,7 @@ enum LoweredCall {
         stdin: bool,
         stdout: bool,
         stderr: bool,
-        principal: golem_common::model::agent::Principal,
+        caller: golem_common::model::caller::Caller,
     },
 }
 
@@ -2071,12 +2147,12 @@ enum PreparedCall {
     Initialize {
         agent_type: String,
         input: core_wire::SchemaValueTree,
-        principal: golem_common::model::agent::Principal,
+        caller: golem_common::model::caller::Caller,
     },
     Invoke {
         method_name: String,
         input: core_wire::SchemaValueTree,
-        principal: golem_common::model::agent::Principal,
+        caller: golem_common::model::caller::Caller,
         expected_output: Box<ExpectedInvokeOutput>,
     },
     SaveSnapshot,
@@ -2100,7 +2176,7 @@ enum PreparedCall {
         stdin: bool,
         stdout: bool,
         stderr: bool,
-        principal: golem_common::model::agent::Principal,
+        caller: golem_common::model::caller::Caller,
     },
 }
 
@@ -2111,11 +2187,11 @@ impl PreparedCall {
         matches!(self, Self::Invoke { .. } | Self::ExternalTool { .. })
     }
 
-    fn principal(&self) -> Option<golem_common::model::agent::Principal> {
+    fn caller(&self) -> Option<golem_common::model::caller::Caller> {
         match self {
-            Self::Initialize { principal, .. }
-            | Self::Invoke { principal, .. }
-            | Self::ExternalTool { principal, .. } => Some(principal.clone()),
+            Self::Initialize { caller, .. }
+            | Self::Invoke { caller, .. }
+            | Self::ExternalTool { caller, .. } => Some(caller.clone()),
             Self::SaveSnapshot | Self::LoadSnapshot { .. } | Self::ProcessOplogEntries { .. } => {
                 None
             }
@@ -2140,7 +2216,7 @@ fn materialize_call<Ctx: WorkerCtx>(
         LoweredCall::Initialize {
             agent_type,
             input,
-            principal,
+            caller,
         } => {
             let input =
                 encode_value_with(&input, store.data_mut().durable_ctx_mut()).map_err(|e| {
@@ -2151,13 +2227,13 @@ fn materialize_call<Ctx: WorkerCtx>(
             PreparedCall::Initialize {
                 agent_type,
                 input,
-                principal,
+                caller,
             }
         }
         LoweredCall::Invoke {
             method_name,
             input,
-            principal,
+            caller,
             expected_output,
         } => {
             let input = {
@@ -2171,7 +2247,7 @@ fn materialize_call<Ctx: WorkerCtx>(
             PreparedCall::Invoke {
                 method_name,
                 input,
-                principal,
+                caller,
                 expected_output,
             }
         }
@@ -2208,7 +2284,7 @@ fn materialize_call<Ctx: WorkerCtx>(
             stdin,
             stdout,
             stderr,
-            principal,
+            caller,
         } => PreparedCall::ExternalTool {
             activation: std::sync::Arc::from(activation),
             tool_name,
@@ -2217,7 +2293,7 @@ fn materialize_call<Ctx: WorkerCtx>(
             stdin,
             stdout,
             stderr,
-            principal,
+            caller,
         },
     })
 }
@@ -2225,12 +2301,11 @@ fn materialize_call<Ctx: WorkerCtx>(
 pub fn lower_invocation(
     invocation: AgentInvocation,
     component_metadata: &ComponentMetadata,
-    agent_id: Option<&ParsedAgentKey>,
+    owner_context: &ResolvedOwnerContext,
 ) -> Result<LoweredInvocation, WorkerExecutorError> {
+    let agent_id = owner_context.agent();
     match invocation {
-        AgentInvocation::AgentInitialization {
-            input, principal, ..
-        } => {
+        AgentInvocation::AgentInitialization { input, caller, .. } => {
             let agent_type = resolve_agent_type(component_metadata, agent_id)?;
             // The input carrier is already the schema-native parameter-record
             // value the guest export expects. Encoding to the wire tree (which
@@ -2242,14 +2317,14 @@ pub fn lower_invocation(
                 call: LoweredCall::Initialize {
                     agent_type: agent_type.type_name.to_string(),
                     input,
-                    principal,
+                    caller,
                 },
             })
         }
         AgentInvocation::AgentMethod {
             method_name,
             input,
-            principal,
+            caller,
             ..
         } => {
             let agent_type = resolve_agent_type(component_metadata, agent_id)?;
@@ -2292,7 +2367,7 @@ pub fn lower_invocation(
                 call: LoweredCall::Invoke {
                     method_name,
                     input,
-                    principal,
+                    caller,
                     expected_output,
                 },
             })
@@ -2305,7 +2380,7 @@ pub fn lower_invocation(
             stdout,
             stderr,
             activation,
-            principal,
+            caller,
             ..
         } => Ok(LoweredInvocation {
             display_name: format!("{tool_name}:{}", command_path.join("/")),
@@ -2318,7 +2393,7 @@ pub fn lower_invocation(
                 stdin,
                 stdout,
                 stderr,
-                principal,
+                caller,
             },
         }),
         AgentInvocation::ManualUpdate { .. } => Err(WorkerExecutorError::invalid_request(
@@ -2330,17 +2405,21 @@ pub fn lower_invocation(
             call: LoweredCall::SaveSnapshot,
         }),
         AgentInvocation::LoadSnapshot { snapshot, .. } => {
-            let agent_id = agent_id.ok_or_else(|| {
-                WorkerExecutorError::invalid_request(
-                    "load-snapshot needs an agent with constructor parameters".to_string(),
-                )
-            })?;
+            let input = match owner_context {
+                ResolvedOwnerContext::Agent(agent) => agent.parameters.value().clone(),
+                ResolvedOwnerContext::OplogProcessor => SchemaValue::Record { fields: Vec::new() },
+                ResolvedOwnerContext::ComponentBaseline => {
+                    return Err(WorkerExecutorError::invalid_request(
+                        "load-snapshot needs an agent with constructor parameters".to_string(),
+                    ));
+                }
+            };
             Ok(LoweredInvocation {
                 display_name: "load-snapshot".to_string(),
                 read_only_method: Some("load-snapshot".to_string()),
                 call: LoweredCall::LoadSnapshot {
                     snapshot: snapshot.into(),
-                    input: agent_id.parameters.value().clone(),
+                    input,
                 },
             })
         }
@@ -2493,9 +2572,10 @@ mod tests {
     use super::*;
     use golem_common::base_model::agent::Snapshotting;
     use golem_common::base_model::component_metadata::KnownExports;
-    use golem_common::model::agent::{AgentTypeName, Principal};
+    use golem_common::model::agent::AgentTypeName;
+    use golem_common::model::caller::Caller;
     use golem_common::model::invocation_context::InvocationContextStack;
-    use golem_common::model::oplog::RawSnapshotData;
+    use golem_common::model::oplog::{RawSnapshotData, ReplayStep};
     use golem_common::schema::TypedSchemaValue;
     use golem_common::schema::agent::{
         AgentConstructorSchema, AgentMethodSchema, NamedField, OutputSchema,
@@ -2568,7 +2648,9 @@ mod tests {
         ));
 
         let mut ordinary = Err(WorkerExecutorError::unexpected_oplog_entry(
-            "expected", "actual",
+            OplogIndex::from_u64(1),
+            "expected",
+            "actual",
         ));
         apply_selected_owner_failure(&mut ordinary, operations.selected_owner_failure().unwrap());
         assert!(matches!(ordinary, Err(WorkerExecutorError::Runtime { .. })));
@@ -2592,6 +2674,7 @@ mod tests {
                 verdict: SemanticTrapRetryVerdict::GiveUp,
                 retry_policy_state: RetryPolicyState::Counter(3),
             }),
+            provenance: crate::model::FailureProvenance::Host,
         });
         retain_invocation_failure(&mut result, Err(WorkerExecutorError::runtime("cleanup")));
         let Ok(InvokeResult::Failed {
@@ -2600,6 +2683,7 @@ mod tests {
             error,
             retry_from,
             semantic_trap_retry_override: Some(policy),
+            ..
         }) = result
         else {
             panic!("cleanup replaced the original failure");
@@ -2617,6 +2701,7 @@ mod tests {
     #[test]
     fn finalization_preserves_divergence_but_not_over_shard_loss() {
         let mut result = Err(WorkerExecutorError::unexpected_oplog_entry(
+            OplogIndex::from_u64(1),
             "observation",
             "disposal",
         ));
@@ -2655,6 +2740,7 @@ mod tests {
             },
         ] {
             let mut result = Err(WorkerExecutorError::unexpected_oplog_entry(
+                OplogIndex::from_u64(1),
                 "observation",
                 "disposal",
             ));
@@ -2676,6 +2762,7 @@ mod tests {
         retain_invocation_failure(
             &mut result,
             Err(WorkerExecutorError::unexpected_oplog_entry(
+                OplogIndex::from_u64(1),
                 "observation",
                 "disposal",
             )),
@@ -2741,6 +2828,7 @@ mod tests {
                 timed_out,
                 retry_from: OplogIndex::INITIAL,
                 semantic_trap_retry_override: None,
+                provenance: crate::model::FailureProvenance::Host,
             };
             assert_eq!(
                 result.is_snapshot_replay_divergence(),
@@ -2759,7 +2847,8 @@ mod tests {
 
     #[test]
     fn unexpected_oplog_trap_is_propagated_during_replay_only() {
-        let divergence = WorkerExecutorError::unexpected_oplog_entry("End", "Start");
+        let divergence =
+            WorkerExecutorError::unexpected_oplog_entry(OplogIndex::from_u64(4), "End", "Start");
         let error = anyhow::Error::new(divergence.clone()).context("guest call failed");
 
         assert_eq!(replay_divergence_from_trap(&error, false), Some(divergence));
@@ -2884,8 +2973,7 @@ mod tests {
     }
 
     /// Component metadata with one agent type whose `do-work` method takes two
-    /// user-supplied parameters (`count: u32`, `label: string`) plus an
-    /// auto-injected `principal` field.
+    /// parameters (`count: u32`, `label: string`).
     fn metadata() -> ComponentMetadata {
         let method = AgentMethodSchema {
             name: METHOD_NAME.to_string(),
@@ -2894,11 +2982,6 @@ mod tests {
             input_schema: InputSchema::Parameters(vec![
                 NamedField::user_supplied("count", SchemaType::u32()),
                 NamedField::user_supplied("label", SchemaType::string()),
-                NamedField::auto_injected(
-                    "principal",
-                    golem_common::schema::agent::AutoInjectedKind::Principal,
-                    SchemaType::string(),
-                ),
             ]),
             output_schema: OutputSchema::Unit,
             http_endpoint: Vec::new(),
@@ -2949,7 +3032,7 @@ mod tests {
             method_name: METHOD_NAME.to_string(),
             input,
             invocation_context: InvocationContextStack::fresh(),
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         }
     }
@@ -2961,8 +3044,12 @@ mod tests {
         let input = SchemaValue::Record {
             fields: vec![SchemaValue::U32(7), SchemaValue::String("hi".to_string())],
         };
-        let lowered = lower_invocation(method_invocation(input), &metadata, Some(&agent_id))
-            .expect("valid input should lower");
+        let lowered = lower_invocation(
+            method_invocation(input),
+            &metadata,
+            &ResolvedOwnerContext::Agent(Box::new(agent_id)),
+        )
+        .expect("valid input should lower");
         assert_eq!(lowered.display_name, METHOD_NAME);
         assert!(lowered.read_only_method.is_none());
     }
@@ -2970,6 +3057,7 @@ mod tests {
     fn load_snapshot_invocation() -> AgentInvocation {
         AgentInvocation::LoadSnapshot {
             idempotency_key: InvocationId(Uuid::from_u128(2)),
+            caller: crate::test_callers::sample_caller(),
             snapshot: RawSnapshotData {
                 data: vec![1, 2, 3],
                 mime_type: "application/octet-stream".to_string(),
@@ -2989,8 +3077,12 @@ mod tests {
                 constructor_input.clone(),
             ),
         );
-        let lowered = lower_invocation(load_snapshot_invocation(), &metadata(), Some(&agent_id))
-            .expect("snapshot load should lower");
+        let lowered = lower_invocation(
+            load_snapshot_invocation(),
+            &metadata(),
+            &ResolvedOwnerContext::Agent(Box::new(agent_id)),
+        )
+        .expect("snapshot load should lower");
 
         assert_eq!(lowered.display_name, "load-snapshot");
         assert_eq!(lowered.read_only_method.as_deref(), Some("load-snapshot"));
@@ -3002,7 +3094,11 @@ mod tests {
 
     #[test]
     fn load_snapshot_without_an_agent_key_is_rejected() {
-        let Err(err) = lower_invocation(load_snapshot_invocation(), &metadata(), None) else {
+        let Err(err) = lower_invocation(
+            load_snapshot_invocation(),
+            &metadata(),
+            &ResolvedOwnerContext::ComponentBaseline,
+        ) else {
             panic!("an owner without constructor parameters cannot load a snapshot");
         };
         assert!(
@@ -3012,13 +3108,56 @@ mod tests {
     }
 
     #[test]
+    fn load_snapshot_for_a_processor_passes_an_empty_constructor_record() {
+        let metadata = ComponentMetadata::from_parts(
+            KnownExports {
+                oplog_processor_interface: Some("golem:api/oplog-processor@1.5.0".into()),
+                save_snapshot_interface: Some("golem:api/save-snapshot@1.5.0".into()),
+                load_snapshot_interface: Some("golem:api/load-snapshot@1.5.0".into()),
+                ..Default::default()
+            },
+            vec![],
+            vec![],
+            Default::default(),
+        );
+        assert!(
+            metadata.has_oplog_processor()
+                && metadata.has_save_snapshot()
+                && metadata.has_load_snapshot()
+        );
+        let lowered = lower_invocation(
+            load_snapshot_invocation(),
+            &metadata,
+            &ResolvedOwnerContext::OplogProcessor,
+        )
+        .expect("a snapshot-capable processor must be able to restore its snapshot");
+        let LoweredCall::LoadSnapshot { input, .. } = lowered.call else {
+            panic!("expected load-snapshot");
+        };
+        assert_eq!(input, SchemaValue::Record { fields: Vec::new() });
+    }
+
+    #[test]
+    fn component_agent_without_recorded_parameters_cannot_resolve_an_owner() {
+        let error = ResolvedOwnerContext::from_authoritative_kind(
+            golem_common::model::agent::OwnerKind::ComponentAgent,
+            &AgentId::from_parts(42, 1),
+            None,
+            &metadata(),
+        )
+        .unwrap_err();
+        assert!(error.contains("no agent type"), "{error}");
+    }
+
+    #[test]
     fn save_snapshot_does_not_use_read_only_strictness() {
         let lowered = lower_invocation(
             AgentInvocation::SaveSnapshot {
                 idempotency_key: InvocationId(Uuid::from_u128(3)),
+                caller: Caller::anonymous(),
             },
             &metadata(),
-            Some(&agent_id()),
+            &ResolvedOwnerContext::Agent(Box::new(agent_id())),
         )
         .expect("snapshot save should lower");
 
@@ -3033,7 +3172,7 @@ mod tests {
         let Err(err) = lower_invocation(
             method_invocation(SchemaValue::U32(1)),
             &metadata,
-            Some(&agent_id),
+            &ResolvedOwnerContext::Agent(Box::new(agent_id)),
         ) else {
             panic!("non-record input must be rejected");
         };
@@ -3051,8 +3190,11 @@ mod tests {
         let input = SchemaValue::Record {
             fields: vec![SchemaValue::U32(7)],
         };
-        let Err(err) = lower_invocation(method_invocation(input), &metadata, Some(&agent_id))
-        else {
+        let Err(err) = lower_invocation(
+            method_invocation(input),
+            &metadata,
+            &ResolvedOwnerContext::Agent(Box::new(agent_id)),
+        ) else {
             panic!("arity mismatch must be rejected");
         };
         assert!(
@@ -3069,8 +3211,11 @@ mod tests {
         let input = SchemaValue::Record {
             fields: vec![SchemaValue::U32(7), SchemaValue::Bool(true)],
         };
-        let Err(err) = lower_invocation(method_invocation(input), &metadata, Some(&agent_id))
-        else {
+        let Err(err) = lower_invocation(
+            method_invocation(input),
+            &metadata,
+            &ResolvedOwnerContext::Agent(Box::new(agent_id)),
+        ) else {
             panic!("field type mismatch must be rejected");
         };
         assert!(
@@ -3095,7 +3240,7 @@ mod tests {
         let result = lower_invocation(
             method_invocation(SchemaValue::Record { fields: Vec::new() }),
             &metadata,
-            Some(&agent_id()),
+            &ResolvedOwnerContext::Agent(Box::new(agent_id())),
         );
         if let Err(error) = result {
             panic!("unexpected error: {error}");
@@ -3234,7 +3379,12 @@ mod tests {
                 invocation_uses_streams(&invocation, &metadata, Some(&agent_id())),
                 expected
             );
-            let lowered = lower_invocation(invocation, &metadata, Some(&agent_id())).unwrap();
+            let lowered = lower_invocation(
+                invocation,
+                &metadata,
+                &ResolvedOwnerContext::Agent(Box::new(agent_id())),
+            )
+            .unwrap();
             let LoweredCall::Invoke {
                 expected_output, ..
             } = lowered.call
@@ -3382,6 +3532,7 @@ mod tests {
         assert!(matches!(
             classify_guest_call_settlement::<()>(
                 &own_agent_id(),
+                OplogIndex::from_u64(1),
                 Err(wasmtime::Error::from_anyhow(
                     anyhow::Error::new(WorkerExecutorError::Interrupted {
                         kind: InterruptKind::Jump,
@@ -3420,7 +3571,13 @@ mod tests {
                 anyhow::Error::from(expected.clone()).context("host call"),
             ),
         ] {
-            match classify_guest_call_settlement::<()>(&own_agent_id(), Err(error), None, false) {
+            match classify_guest_call_settlement::<()>(
+                &own_agent_id(),
+                OplogIndex::from_u64(1),
+                Err(error),
+                None,
+                false,
+            ) {
                 Err(GuestCallSettlementError::Infrastructure(error)) => {
                     assert_eq!(error, expected)
                 }
@@ -3451,6 +3608,7 @@ mod tests {
             assert!(matches!(
                 classify_guest_call_settlement::<()>(
                     &own_agent_id(),
+                    OplogIndex::from_u64(1),
                     Err(wasmtime::Error::from_anyhow(error.context("host call"))),
                     None,
                     false,
@@ -3465,6 +3623,7 @@ mod tests {
         assert!(matches!(
             classify_guest_call_settlement::<()>(
                 &own_agent_id(),
+                OplogIndex::from_u64(1),
                 Err(wasmtime::Error::from_anyhow(
                     anyhow::Error::from(unavailable).context("host call")
                 )),
@@ -3505,14 +3664,20 @@ mod tests {
                 wasmtime::Error::new(error.downcast::<wasmtime::GcHeapOutOfMemory<()>>().unwrap());
             assert!(error.downcast_ref::<wasmtime::WasmBacktrace>().is_none());
             let error = if outer_failure {
-                match classify_guest_call_settlement::<()>(&own_agent_id(), Err(error), None, false)
-                {
+                match classify_guest_call_settlement::<()>(
+                    &own_agent_id(),
+                    OplogIndex::INITIAL,
+                    Err(error),
+                    None,
+                    false,
+                ) {
                     Err(GuestCallSettlementError::Trap(error)) => error,
                     other => panic!("GC exhaustion must remain a resource trap: {other:?}"),
                 }
             } else {
                 classify_guest_call_settlement(
                     &own_agent_id(),
+                    OplogIndex::INITIAL,
                     Ok::<_, wasmtime::Error>(Err::<(), _>(error)),
                     None,
                     false,
@@ -3539,6 +3704,7 @@ mod tests {
     fn guest_trap_and_settlement_failures_keep_distinct_provenance() {
         let guest_trap = classify_guest_call_settlement(
             &own_agent_id(),
+            OplogIndex::from_u64(1),
             Ok::<_, wasmtime::Error>(Err::<(), _>(wasmtime::Error::msg("guest trapped"))),
             None,
             false,
@@ -3556,6 +3722,7 @@ mod tests {
         let terminal = StreamTerminal::Failed(StreamError::Interrupted("source lost".into()));
         let result = classify_guest_call_settlement::<()>(
             &own_agent_id(),
+            OplogIndex::from_u64(1),
             Err(wasmtime::Error::from_anyhow(
                 StreamTerminalError {
                     authored_by: StreamTerminalAuthor::Protocol,
@@ -3592,6 +3759,7 @@ mod tests {
         assert!(matches!(
             classify_guest_call_settlement::<()>(
                 &own_agent_id(),
+                OplogIndex::from_u64(1),
                 Err(wasmtime::Error::from_anyhow(
                     wasmtime::Trap::UnreachableCodeReached.into(),
                 )),
@@ -3603,6 +3771,7 @@ mod tests {
         assert!(matches!(
             classify_guest_call_settlement::<()>(
                 &own_agent_id(),
+                OplogIndex::from_u64(1),
                 Err(wasmtime::Error::from_anyhow(
                     GolemSpecificWasmTrap::WorkerOutOfMemory.into(),
                 )),
@@ -3614,6 +3783,7 @@ mod tests {
         assert!(matches!(
             classify_guest_call_settlement::<()>(
                 &own_agent_id(),
+                OplogIndex::from_u64(1),
                 Err(wasmtime::Error::from_anyhow(
                     wasmtime::Trap::AsyncDeadlock.into(),
                 )),
@@ -3625,6 +3795,7 @@ mod tests {
         assert!(matches!(
             classify_guest_call_settlement::<()>(
                 &own_agent_id(),
+                OplogIndex::from_u64(1),
                 Err(wasmtime::Error::msg("host task failed")),
                 None,
                 false,
@@ -3634,6 +3805,7 @@ mod tests {
         assert!(matches!(
             classify_guest_call_settlement::<()>(
                 &own_agent_id(),
+                OplogIndex::from_u64(1),
                 Err(wasmtime::Error::msg("interrupted")),
                 None,
                 true,
@@ -3643,6 +3815,7 @@ mod tests {
         assert!(matches!(
             classify_guest_call_settlement::<()>(
                 &own_agent_id(),
+                OplogIndex::from_u64(1),
                 Err(wasmtime::Error::from_anyhow(
                     InterruptKind::Suspend(golem_common::model::Timestamp::now_utc()).into(),
                 )),
@@ -3774,7 +3947,12 @@ mod tests {
                 instruction_trap(),
             )),
             WorkerExecutorError::recovery_required("payload unavailable").into(),
-            WorkerExecutorError::unexpected_oplog_entry("expected", "actual").into(),
+            WorkerExecutorError::unexpected_oplog_entry(
+                OplogIndex::from_u64(1),
+                "expected",
+                "actual",
+            )
+            .into(),
             WorkerExecutorError::runtime("persistence failed").into(),
             GolemSpecificWasmTrap::WorkerOutOfMemory.into(),
             GolemSpecificWasmTrap::WorkerExceededMemoryLimit.into(),
@@ -3802,6 +3980,151 @@ mod tests {
                 .unwrap_err();
             assert!(error.downcast_ref::<wasmtime::WasmBacktrace>().is_some());
             assert_eq!(permanent_tool_guest_trap(&error), None, "{error:#}");
+        }
+    }
+
+    /// A guest instruction trap, with or without a Wasm backtrace, is a target failure; every
+    /// host failure that a host call raises is `Host`, also with a Wasm backtrace; an interrupt
+    /// or an exit is `Lifecycle`. `TrapType::from_error` and the failed invoke result carry the
+    /// same provenance.
+    #[test]
+    fn failure_provenance_separates_target_traps_from_host_failures() {
+        use crate::durable_host::durability::HostFailureKind;
+        use crate::model::FailureProvenance as Provenance;
+        use crate::workerctx::default::Context;
+
+        let engine = wasmtime::Engine::default();
+        let guest = wasmtime::Module::new(&engine, r#"(module (func (export "run") unreachable))"#)
+            .unwrap();
+        let mut store = wasmtime::Store::new(&engine, ());
+        let instance = wasmtime::Instance::new(&mut store, &guest, &[]).unwrap();
+        let guest_trap = instance
+            .get_typed_func::<(), ()>(&mut store, "run")
+            .unwrap()
+            .call(&mut store, ())
+            .unwrap_err();
+        assert!(
+            guest_trap
+                .downcast_ref::<wasmtime::WasmBacktrace>()
+                .is_some()
+        );
+
+        let host = wasmtime::Module::new(
+            &engine,
+            r#"(module
+                (import "host" "fail" (func $fail))
+                (func (export "run") call $fail))"#,
+        )
+        .unwrap();
+        let host_call_failure = |failure: anyhow::Error| {
+            let failure = std::sync::Mutex::new(Some(failure));
+            let mut linker = wasmtime::Linker::new(&engine);
+            linker
+                .func_wrap("host", "fail", move || -> wasmtime::Result<()> {
+                    Err(wasmtime::Error::from_anyhow(
+                        failure.lock().unwrap().take().unwrap(),
+                    ))
+                })
+                .unwrap();
+            let mut store = wasmtime::Store::new(&engine, ());
+            let instance = linker.instantiate(&mut store, &host).unwrap();
+            let error = instance
+                .get_typed_func::<(), ()>(&mut store, "run")
+                .unwrap()
+                .call(&mut store, ())
+                .unwrap_err();
+            assert!(error.downcast_ref::<wasmtime::WasmBacktrace>().is_some());
+            error
+        };
+
+        let cases = [
+            (guest_trap, Provenance::TargetInstruction),
+            (
+                wasmtime::Error::from_anyhow(
+                    anyhow::Error::new(wasmtime::Trap::UnreachableCodeReached)
+                        .context("guest-requested trap: panic"),
+                ),
+                Provenance::TargetInstruction,
+            ),
+            (
+                host_call_failure(anyhow::anyhow!("unclassified host failure")),
+                Provenance::Host,
+            ),
+            (
+                host_call_failure(anyhow::Error::new(ClassifiedHostError {
+                    kind: HostFailureKind::Transient,
+                    message: "transient".into(),
+                })),
+                Provenance::Host,
+            ),
+            (
+                host_call_failure(anyhow::Error::new(ClassifiedHostError {
+                    kind: HostFailureKind::Permanent,
+                    message: "permanent".into(),
+                })),
+                Provenance::Host,
+            ),
+            (
+                host_call_failure(GolemSpecificWasmTrap::WorkerOutOfMemory.into()),
+                Provenance::Host,
+            ),
+            (
+                host_call_failure(GolemSpecificWasmTrap::WorkerExceededMemoryLimit.into()),
+                Provenance::Host,
+            ),
+            (
+                host_call_failure(InterruptKind::Restart.into()),
+                Provenance::Lifecycle,
+            ),
+            (
+                host_call_failure(
+                    WorkerExecutorError::Interrupted {
+                        kind: InterruptKind::Restart,
+                    }
+                    .into(),
+                ),
+                Provenance::Lifecycle,
+            ),
+            (
+                host_call_failure(wasmtime_wasi::I32Exit(1).into()),
+                Provenance::Lifecycle,
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(failure_provenance(&error), expected, "{error:#}");
+            let error: anyhow::Error = error.into();
+            if let InvokeResult::Failed { provenance, .. } = InvokeResult::from_error::<Context>(
+                0,
+                &error,
+                OplogIndex::INITIAL,
+                AgentMode::Durable,
+            ) {
+                assert_eq!(provenance, expected, "{error:#}");
+                let TrapType::Error {
+                    provenance: from_trap,
+                    ..
+                } = TrapType::from_error::<Context>(
+                    &error,
+                    OplogIndex::INITIAL,
+                    AgentMode::Durable,
+                )
+                else {
+                    panic!("a failed invoke result comes from a trap error");
+                };
+                assert_eq!(from_trap, expected, "{error:#}");
+                let trap = TrapType::Error {
+                    error: OplogAgentError::Unknown("kept".into()),
+                    retry_from: OplogIndex::INITIAL,
+                    semantic_trap_retry_override: None,
+                    provenance: expected,
+                };
+                assert!(matches!(
+                    InvokeResult::from_trap_type(0, trap),
+                    InvokeResult::Failed { provenance, .. } if provenance == expected
+                ));
+            } else {
+                assert_eq!(expected, Provenance::Lifecycle, "{error:#}");
+            }
         }
     }
 
@@ -3841,7 +4164,13 @@ mod tests {
                 "the reproducer must exercise Wasmtime's attached backtrace context"
             );
             let Err(GuestCallSettlementError::Infrastructure(classified)) =
-                classify_guest_call_settlement::<()>(&own_agent_id(), Err(error), None, false)
+                classify_guest_call_settlement::<()>(
+                    &own_agent_id(),
+                    OplogIndex::from_u64(1),
+                    Err(error),
+                    None,
+                    false,
+                )
             else {
                 panic!("host failure must remain infrastructure");
             };
@@ -3866,6 +4195,7 @@ mod tests {
         );
         let result = classify_guest_call_settlement::<()>(
             &own_agent_id(),
+            OplogIndex::from_u64(1),
             Err(wasmtime::Error::from_anyhow(error)),
             None,
             false,
@@ -3886,6 +4216,7 @@ mod tests {
     fn bare_recovery_required_preserves_its_retry_point() {
         let result = classify_guest_call_settlement::<()>(
             &own_agent_id(),
+            OplogIndex::from_u64(1),
             Err(wasmtime::Error::from_anyhow(anyhow::Error::new(
                 WorkerExecutorError::recovery_required_from(
                     "completed prefix payload unavailable",
@@ -3915,6 +4246,7 @@ mod tests {
             .context("failed to download incoming body chunk payload");
         let result = classify_guest_call_settlement::<()>(
             &own_agent_id(),
+            OplogIndex::from_u64(1),
             Err(wasmtime::Error::from_anyhow(anyhow::Error::new(
                 DurableRecoveryFailure::new(DurableRecoveryFailureKind::Permanent, inner),
             ))),
@@ -3923,20 +4255,31 @@ mod tests {
         );
 
         let Err(GuestCallSettlementError::Infrastructure(
-            WorkerExecutorError::UnexpectedOplogEntry { expected, got },
+            WorkerExecutorError::UnexpectedOplogEntry { divergence },
         )) = result
         else {
             panic!("permanent recovery failure must remain non-retryable infrastructure");
         };
-        assert_eq!(expected, "valid durable recovery data");
-        assert!(got.contains("failed to download incoming body chunk payload"));
-        assert!(got.contains("payload 123 is missing"));
+        assert_eq!(divergence.oplog_index, OplogIndex::from_u64(1));
+        assert_eq!(
+            divergence.expected,
+            ReplayStep::described("valid durable recovery data")
+        );
+        let ReplayStep::Other(got) = divergence.actual else {
+            panic!("a recovery failure is described by its text");
+        };
+        assert!(
+            got.description
+                .contains("failed to download incoming body chunk payload")
+        );
+        assert!(got.description.contains("payload 123 is missing"));
     }
 
     #[test]
     fn settlement_timeout_is_infrastructure_even_after_root_return() {
         let result = classify_guest_call_settlement(
             &own_agent_id(),
+            OplogIndex::from_u64(1),
             Ok(()),
             Some((std::time::Duration::from_secs(2), 1)),
             false,

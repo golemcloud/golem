@@ -1,7 +1,7 @@
 use futures_concurrency::prelude::*;
 use golem_rust::agentic::{
-    AgentStream, InputStream, OutputStream, Principal, Secret as ConfigSecret, pump_tool_stdin,
-    spawn_local,
+    AgentStream, InputStream, InvocationContext, OutputStream, Principal, Secret as ConfigSecret,
+    pump_tool_stdin, spawn_local,
 };
 use golem_rust::golem_agentic::golem::agent::host as agent_host;
 use golem_rust::golem_agentic::golem::tool::host::{self as tool_host, ByteStreamFailure, ToolRpc};
@@ -397,19 +397,15 @@ pub trait Artifact {
         &self,
         request: MatrixRequest,
         multiplier: i64,
-        principal: golem_rust::agentic::Principal,
+        context: golem_rust::agentic::InvocationContext,
     ) -> Result<MatrixResult, MatrixError>;
 }
 
 struct MatrixArtifactImpl;
 
+/// `"<kind> <pair text>"`, or `"anonymous"`.
 fn matrix_principal(principal: &Principal) -> String {
-    match principal {
-        Principal::Anonymous => "anonymous".to_string(),
-        Principal::Oidc(value) => format!("oidc:{}", value.sub),
-        Principal::Agent(_) => "agent".to_string(),
-        Principal::GolemUser(_) => "golem-user".to_string(),
-    }
+    principal.to_string()
 }
 
 #[tool_implementation]
@@ -418,7 +414,7 @@ impl Artifact for MatrixArtifactImpl {
         &self,
         request: MatrixRequest,
         multiplier: i64,
-        principal: golem_rust::agentic::Principal,
+        context: golem_rust::agentic::InvocationContext,
     ) -> Result<MatrixResult, MatrixError> {
         if request.source == "reject.me" {
             return Err(MatrixError::Rejected(MatrixRejection {
@@ -442,8 +438,8 @@ impl Artifact for MatrixArtifactImpl {
                 .rev()
                 .collect::<Vec<_>>()
                 .join("|"),
-            principal: matrix_principal(&principal),
-            owner_agent_id: metadata.agent_id.agent_id,
+            principal: matrix_principal(context.caller().immediate()),
+            owner_agent_id: metadata.agent_id.uuid.to_string(),
         })
     }
 }
@@ -540,14 +536,14 @@ pub struct PermissionIssue {
 
 #[tool_definition(version = "1.0.0")]
 pub trait MatrixPermissionIssuer {
-    async fn issue(&self, principal: golem_rust::agentic::Principal) -> PermissionIssue;
+    async fn issue(&self, context: golem_rust::agentic::InvocationContext) -> PermissionIssue;
 }
 
 struct MatrixPermissionIssuerImpl;
 
 #[tool_implementation]
 impl MatrixPermissionIssuer for MatrixPermissionIssuerImpl {
-    async fn issue(&self, principal: Principal) -> PermissionIssue {
+    async fn issue(&self, context: InvocationContext) -> PermissionIssue {
         let card = permissions::derive_from_wallet(&Default::default(), None)
             .expect("matrix permission issuer derives a card from the owner wallet");
         let permissions::PersistentCard::Concrete(card) = card else {
@@ -556,11 +552,12 @@ impl MatrixPermissionIssuer for MatrixPermissionIssuerImpl {
         let owner_agent_id = golem_rust::get_self_metadata()
             .expect("matrix permission issuer owner metadata")
             .agent_id
-            .agent_id;
+            .uuid
+            .to_string();
         PermissionIssue {
             card,
             issuer: "rust".to_string(),
-            principal: matrix_principal(&principal),
+            principal: matrix_principal(context.caller().immediate()),
             owner_agent_id,
         }
     }
@@ -611,7 +608,8 @@ fn matrix_resource_evidence(principal: &Principal) -> (String, String, String) {
     let owner_agent_id = golem_rust::get_self_metadata()
         .expect("matrix resource owner metadata")
         .agent_id
-        .agent_id;
+        .uuid
+        .to_string();
     (
         "rust".to_string(),
         matrix_principal(principal),
@@ -624,7 +622,7 @@ pub trait Secret {
     async fn exchange(
         &self,
         secret: GuestSecretHandle,
-        principal: golem_rust::agentic::Principal,
+        context: golem_rust::agentic::InvocationContext,
     ) -> SecretExchange;
 }
 
@@ -632,8 +630,13 @@ struct SecretImpl;
 
 #[tool_implementation]
 impl Secret for SecretImpl {
-    async fn exchange(&self, secret: GuestSecretHandle, principal: Principal) -> SecretExchange {
-        let (provider, principal, owner_agent_id) = matrix_resource_evidence(&principal);
+    async fn exchange(
+        &self,
+        secret: GuestSecretHandle,
+        context: InvocationContext,
+    ) -> SecretExchange {
+        let (provider, principal, owner_agent_id) =
+            matrix_resource_evidence(context.caller().immediate());
         let revealed = reveal_string(&secret)
             .map(|value| value == "matrix-secret-value")
             .unwrap_or(false);
@@ -652,7 +655,7 @@ pub trait Quota {
     async fn exchange(
         &self,
         token: MatrixCapacityToken,
-        principal: golem_rust::agentic::Principal,
+        context: golem_rust::agentic::InvocationContext,
     ) -> QuotaExchange;
 }
 
@@ -660,8 +663,13 @@ struct QuotaImpl;
 
 #[tool_implementation]
 impl Quota for QuotaImpl {
-    async fn exchange(&self, token: MatrixCapacityToken, principal: Principal) -> QuotaExchange {
-        let (provider, principal, owner_agent_id) = matrix_resource_evidence(&principal);
+    async fn exchange(
+        &self,
+        token: MatrixCapacityToken,
+        context: InvocationContext,
+    ) -> QuotaExchange {
+        let (provider, principal, owner_agent_id) =
+            matrix_resource_evidence(context.caller().immediate());
         let reserved = token
             .0
             .reserve(1)
@@ -682,7 +690,7 @@ pub trait Permissions {
     async fn exchange(
         &self,
         card: PermissionCard,
-        principal: golem_rust::agentic::Principal,
+        context: golem_rust::agentic::InvocationContext,
     ) -> PermissionExchange;
 }
 
@@ -690,10 +698,15 @@ struct PermissionsImpl;
 
 #[tool_implementation]
 impl Permissions for PermissionsImpl {
-    async fn exchange(&self, card: PermissionCard, principal: Principal) -> PermissionExchange {
+    async fn exchange(
+        &self,
+        card: PermissionCard,
+        context: InvocationContext,
+    ) -> PermissionExchange {
         // Panics unless the received card is present and known to the host.
         let _ = card.id();
-        let (provider, principal, owner_agent_id) = matrix_resource_evidence(&principal);
+        let (provider, principal, owner_agent_id) =
+            matrix_resource_evidence(context.caller().immediate());
         PermissionExchange {
             provider,
             principal,
@@ -1105,7 +1118,7 @@ pub trait Streaming {
         mode: String,
         stdin: InputStream,
         stdout: OutputStream,
-        principal: golem_rust::agentic::Principal,
+        context: golem_rust::agentic::InvocationContext,
     ) -> Result<StreamSummary, StreamingError>;
 
     async fn no_stream(&self, value: String) -> Result<String, StreamingError>;
@@ -1393,12 +1406,7 @@ async fn send_idempotent_effect() {
 }
 
 fn principal_class(principal: &Principal) -> &'static str {
-    match principal {
-        Principal::Anonymous => "anonymous",
-        Principal::Oidc(_) => "oidc",
-        Principal::Agent(_) => "agent",
-        Principal::GolemUser(_) => "golem-user",
-    }
+    principal.kind().as_str()
 }
 
 async fn run_nested_principal(
@@ -1816,7 +1824,7 @@ impl Streaming for StreamingImpl {
         mode: String,
         mut stdin: InputStream,
         mut stdout: OutputStream,
-        principal: golem_rust::agentic::Principal,
+        context: golem_rust::agentic::InvocationContext,
     ) -> Result<StreamSummary, StreamingError> {
         if let Some(arguments) = mode.strip_prefix("rdbms-drop-trap:") {
             use golem_rust::bindings::golem::rdbms::postgres::DbConnection;
@@ -1862,8 +1870,13 @@ impl Streaming for StreamingImpl {
             wait_at_promise_checkpoint("piped-sink-before-read").await;
         }
         if mode == "principal" {
-            let output_closed =
-                !write_chunk(&mut stdout, principal_class(&principal).as_bytes().to_vec()).await;
+            let output_closed = !write_chunk(
+                &mut stdout,
+                principal_class(context.caller().immediate())
+                    .as_bytes()
+                    .to_vec(),
+            )
+            .await;
             let _ = stdout.finish().await;
             return Ok(StreamSummary {
                 chunks_read: 0,
@@ -1872,7 +1885,7 @@ impl Streaming for StreamingImpl {
             });
         }
         if mode == "nested-principal" {
-            return run_nested_principal(&principal, stdout).await;
+            return run_nested_principal(context.caller().immediate(), stdout).await;
         }
         if mode == "nested" {
             return run_nested(stdin, stdout).await;

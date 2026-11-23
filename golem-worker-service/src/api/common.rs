@@ -247,6 +247,9 @@ impl From<WorkerServiceError> for ApiEndpointError {
             WorkerServiceError::AgentNotFound(_) => {
                 Self::not_found(api::error_code::AGENT_NOT_FOUND, error)
             }
+            WorkerServiceError::InvocationNotFound(_) => {
+                Self::not_found(api::error_code::INVOCATION_NOT_FOUND, error)
+            }
             WorkerServiceError::AgentAccessDenied(_) => {
                 Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
             }
@@ -331,6 +334,13 @@ impl From<WorkerExecutorError> for ApiEndpointError {
             }
             WorkerExecutorError::CreateIdempotencyKeyConflict { .. } => {
                 Self::unprocessable_entity(api::error_code::CREATE_IDEMPOTENCY_KEY_CONFLICT, error)
+            }
+            WorkerExecutorError::InvocationCancelled => {
+                Self::conflict(api::error_code::INVOCATION_CANCELLED, error)
+            }
+            // Until running invocations can be cancelled, this is a conflict instead of `202`.
+            WorkerExecutorError::CannotCancelRunningInvocation => {
+                Self::conflict(api::error_code::CANNOT_CANCEL_RUNNING_INVOCATION, error)
             }
             WorkerExecutorError::InvocationFailed { error, stderr } => Self::internal_worker(
                 api::error_code::INTERNAL_AGENT_EXECUTION_FAILED,
@@ -539,6 +549,9 @@ impl From<RequestHandlerError> for ApiEndpointError {
             )) if matches!(&error, WorkerExecutorError::InvalidRequest { details } if details.starts_with("IdempotencyConflict:")) => {
                 error.into()
             }
+            RequestHandlerError::AgentInvocationFailed(WorkerServiceError::GolemError(
+                error @ WorkerExecutorError::AgentKeyCollision { .. },
+            )) => error.into(),
             RequestHandlerError::AgentInvocationFailed(
                 WorkerServiceError::AgentNotFound(_)
                 | WorkerServiceError::GolemError(WorkerExecutorError::AgentNotFound { .. }),
@@ -772,6 +785,25 @@ mod tests {
                 assert_eq!(body.code, api::error_code::INTERNAL_SHARDING_NOT_READY);
             }
             other => panic!("expected InternalError, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cancelled_and_running_cancel_map_to_distinct_conflicts() {
+        for (error, code) in [
+            (
+                WorkerExecutorError::InvocationCancelled,
+                api::error_code::INVOCATION_CANCELLED,
+            ),
+            (
+                WorkerExecutorError::CannotCancelRunningInvocation,
+                api::error_code::CANNOT_CANCEL_RUNNING_INVOCATION,
+            ),
+        ] {
+            match ApiEndpointError::from(error) {
+                ApiEndpointError::Conflict(Json(body)) => assert_eq!(body.code, code),
+                other => panic!("expected Conflict, got: {other:?}"),
+            }
         }
     }
 }

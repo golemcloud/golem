@@ -106,40 +106,116 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AgentId {
             + Clone
             + 'static,
     {
-        let routing_table = context
-            .routing_table_service()
-            .get_routing_table()
-            .await
-            .map_err(CallWorkerExecutorErrorWithContext::failed_to_get_routing_table)?;
-
-        tracing::debug!("Routing agent call for {self}");
-
-        match routing_table.lookup(self) {
-            None => Ok((None, None)),
-            Some(pod) => {
-                let clients = context.worker_executor_clients();
-
-                tracing::debug!("Calling agent {self} on pod: {pod:?}");
-
-                Ok((
-                    Some(
-                        clients
-                            .call(description, pod.uri(clients.uses_tls()), f)
-                            .await
-                            .map_err(|err| {
-                                CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
-                                    err, *pod,
-                                )
-                            })?,
-                    ),
-                    Some(*pod),
-                ))
-            }
-        }
+        call_agent_on_worker_executor(self, true, description, context, f).await
     }
 
     fn tracing_kind(&self) -> &'static str {
         "AgentId"
+    }
+}
+
+/// A call on an agent that the connection and the routing replay only when `replayable`. A call
+/// that failed after the worker service sent it can have had an effect on the executor that no
+/// response reports; such a call is not `replayable`. Without a replay, the connection still
+/// retires a dead connection, and the routing still retries when it found no executor or the
+/// executor refused the call before it did work. The status of a failed call keeps its message,
+/// and gets a code that the routing does not retry.
+pub struct AgentCall {
+    pub agent_id: AgentId,
+    pub replayable: bool,
+}
+
+#[async_trait]
+impl<Out: Send + 'static> CallOnExecutor<Out> for AgentCall {
+    type ResultOut = Out;
+
+    async fn call_on_worker_executor<F>(
+        &self,
+        description: impl AsRef<str> + Send,
+        context: &(impl HasRoutingTableService + HasWorkerExecutorClients + Send + Sync),
+        f: F,
+    ) -> Result<(Option<Self::ResultOut>, Option<Pod>), CallWorkerExecutorErrorWithContext>
+    where
+        F: for<'a> Fn(
+                &'a mut WorkerExecutorClient<OtelGrpcService<Channel>>,
+            )
+                -> Pin<Box<dyn Future<Output = Result<Out, Status>> + 'a + Send>>
+            + Send
+            + Sync
+            + Clone
+            + 'static,
+    {
+        call_agent_on_worker_executor(&self.agent_id, self.replayable, description, context, f)
+            .await
+    }
+
+    fn tracing_kind(&self) -> &'static str {
+        "AgentId"
+    }
+}
+
+/// The status of a call that is not replayed: a status that the routing retries gets the code
+/// `FAILED_PRECONDITION`, and keeps its code and message in its message.
+fn not_replayed(status: Status) -> Status {
+    if CallWorkerExecutorError::FailedToConnectToPod(status.clone()).is_retriable() {
+        Status::failed_precondition(format!(
+            "a call that cannot be replayed failed after it was sent ({}): {}",
+            status.code(),
+            status.message()
+        ))
+    } else {
+        status
+    }
+}
+
+async fn call_agent_on_worker_executor<Out, F>(
+    agent_id: &AgentId,
+    replayable: bool,
+    description: impl AsRef<str> + Send,
+    context: &(impl HasRoutingTableService + HasWorkerExecutorClients + Send + Sync),
+    f: F,
+) -> Result<(Option<Out>, Option<Pod>), CallWorkerExecutorErrorWithContext>
+where
+    Out: Send + 'static,
+    F: for<'a> Fn(
+            &'a mut WorkerExecutorClient<OtelGrpcService<Channel>>,
+        ) -> Pin<Box<dyn Future<Output = Result<Out, Status>> + 'a + Send>>
+        + Send
+        + Sync
+        + Clone
+        + 'static,
+{
+    let routing_table = context
+        .routing_table_service()
+        .get_routing_table()
+        .await
+        .map_err(CallWorkerExecutorErrorWithContext::failed_to_get_routing_table)?;
+
+    tracing::debug!("Routing agent call for {agent_id}");
+
+    match routing_table.lookup(agent_id) {
+        None => Ok((None, None)),
+        Some(pod) => {
+            let clients = context.worker_executor_clients();
+
+            tracing::debug!("Calling agent {agent_id} on pod: {pod:?}");
+
+            let uri = pod.uri(clients.uses_tls());
+            let result = if replayable {
+                clients.call(description, uri, f).await
+            } else {
+                clients
+                    .call_without_retry(description, uri, f)
+                    .await
+                    .map_err(not_replayed)
+            };
+            Ok((
+                Some(result.map_err(|err| {
+                    CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(err, *pod)
+                })?),
+                Some(*pod),
+            ))
+        }
     }
 }
 
@@ -303,6 +379,8 @@ impl From<WorkerExecutorError> for ResponseMapResult {
             WorkerExecutorError::AgentNotFound { .. }
             | WorkerExecutorError::AgentAlreadyExists { .. }
             | WorkerExecutorError::CreateIdempotencyKeyConflict { .. }
+            | WorkerExecutorError::InvocationCancelled
+            | WorkerExecutorError::CannotCancelRunningInvocation
             | WorkerExecutorError::ComponentNotFound { .. } => {
                 ResponseMapResult::Expected(error.into())
             }
@@ -617,5 +695,37 @@ impl RetrySpan {
                 attempt,
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CallWorkerExecutorError, not_replayed};
+    use golem_common::retriable_error::IsRetriableError;
+    use test_r::test;
+    use tonic::{Code, Status};
+
+    #[test]
+    fn a_call_that_cannot_be_replayed_fails_with_a_status_the_routing_does_not_retry() {
+        for code in [
+            Code::Unavailable,
+            Code::Unknown,
+            Code::Cancelled,
+            Code::DeadlineExceeded,
+            Code::Internal,
+            Code::Aborted,
+        ] {
+            let status = not_replayed(Status::new(code, "connection reset"));
+            assert!(
+                !CallWorkerExecutorError::FailedToConnectToPod(status.clone()).is_retriable(),
+                "{code:?}"
+            );
+            assert_eq!(status.code(), Code::FailedPrecondition, "{code:?}");
+            assert!(status.message().contains("connection reset"), "{code:?}");
+        }
+        // A status that the routing does not retry keeps its code.
+        let status = not_replayed(Status::not_found("no agent"));
+        assert_eq!(status.code(), Code::NotFound);
+        assert_eq!(status.message(), "no agent");
     }
 }

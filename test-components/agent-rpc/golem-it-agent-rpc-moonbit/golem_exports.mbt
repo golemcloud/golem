@@ -2,15 +2,12 @@
 
 ///|
 fn init {
-  @agentGuest.handlers.val = Some(
-    {
-      initialize: @agentExports.initialize,
-      invoke: @agentExports.invoke,
-      get_definition: @agentExports.get_definition,
-      discover_agent_types: @agentExports.discover_agent_types,
-    },
-  )
+  @agentGuest.handlers.val = Some({
+    initialize: @agentExports.initialize,
+    invoke: @agentExports.invoke,
+    get_definition: @agentExports.get_definition,
+    discover_agent_types: @agentExports.discover_agent_types,
+  })
   @saveSnapshot.handler.val = Some(@agentExports.save)
   @loadSnapshot.handler.val = Some(@agentExports.load)
 }
-

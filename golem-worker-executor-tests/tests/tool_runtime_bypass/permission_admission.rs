@@ -27,8 +27,8 @@ use axum::http::StatusCode;
 use axum::routing::post;
 use chrono::{DateTime, Utc};
 use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::extraction::extract_component_metadata;
-use golem_common::model::agent::{AgentTypeName, GolemUserPrincipal, Principal};
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
@@ -64,6 +64,7 @@ use golem_worker_executor::storage::scheduler::{
     ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError,
 };
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestCardService, TestContext, TestExecutorOverrides,
     TestWorkerExecutor, WorkerExecutorTestDependencies, start_with_overrides,
@@ -490,9 +491,7 @@ async fn probe(
                 },
             ),
             InvocationContextStack::fresh(),
-            Principal::GolemUser(GolemUserPrincipal {
-                account_id: fixture.account_id,
-            }),
+            callers::account(fixture.account_id),
             scope,
         )
         .await?;
@@ -1317,12 +1316,18 @@ impl SchedulerStorage for LostInvocationWake {
         id: &ScheduleId,
         owner: Uuid,
         until: DateTime<Utc>,
+        now: DateTime<Utc>,
     ) -> Result<bool, SchedulerStorageError> {
-        self.inner.extend_lease(id, owner, until).await
+        self.inner.extend_lease(id, owner, until, now).await
     }
 
-    async fn ack(&self, id: &ScheduleId, owner: Uuid) -> Result<bool, SchedulerStorageError> {
-        self.inner.ack(id, owner).await
+    async fn ack(
+        &self,
+        id: &ScheduleId,
+        owner: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<bool, SchedulerStorageError> {
+        self.inner.ack(id, owner, now).await
     }
 }
 
@@ -1431,12 +1436,7 @@ async fn existing_owner_schedule_retry_repairs_lost_wake_with_original_pending_i
                     nanos: at.timestamp_subsec_nanos() as i32,
                 }),
                 auth_ctx: Some(fixture.executor.auth_ctx().into()),
-                principal: Some(
-                    Principal::GolemUser(GolemUserPrincipal {
-                        account_id: fixture.account_id,
-                    })
-                    .into(),
-                ),
+                caller: Some(callers::account(fixture.account_id).into()),
                 environment_id: Some(fixture.environment_id.into()),
                 component_owner_account_id: Some(fixture.account_id.into()),
                 expected_callee_fingerprint: Some(fixture.fingerprint.0.into()),
@@ -1502,15 +1502,10 @@ async fn existing_owner_schedule_retry_repairs_lost_wake_with_original_pending_i
     changed_input.schedule_at = None;
     let mut changed_principal = request("read", "/public", due)?;
     changed_principal.schedule_at = None;
-    changed_principal.principal = Some(
-        Principal::GolemUser(GolemUserPrincipal {
-            account_id: AccountId::new(),
-        })
-        .into(),
-    );
+    changed_principal.caller = Some(callers::account(AccountId::new()).into());
     for (name, conflicting) in [
         ("changed input", changed_input),
-        ("changed principal", changed_principal),
+        ("changed caller", changed_principal),
     ] {
         let conflict = fixture
             .executor
@@ -1609,7 +1604,7 @@ async fn invoke_owner_method_with_scope(
             environment_id: Some(fixture.owner_component.environment_id.into()),
             auth_ctx: Some(fixture.executor.auth_ctx().into()),
             context: None,
-            principal: None,
+            caller: Some(callers::anonymous().into()),
             freshness_disposition: InvocationFreshnessDisposition::MayExist as i32,
             config: Vec::new(),
             attempt_id: None,

@@ -18,7 +18,7 @@ use golem_common::SafeDisplay;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::oplog::AgentError;
+use golem_common::model::oplog::{AgentError, ReplayDivergence};
 use golem_common::model::quota::ResourceName;
 use golem_common::model::{AgentId, OplogIndex, PromiseId, ShardId, Timestamp};
 use prost::Message;
@@ -93,8 +93,7 @@ pub enum WorkerExecutorError {
         details: String,
     },
     UnexpectedOplogEntry {
-        expected: String,
-        got: String,
+        divergence: Box<ReplayDivergence>,
     },
     /// The golem runtime encountered an error while exeucting the user error. Difference to ComponentTrapped is that the user component did not directly error here.
     Runtime {
@@ -181,6 +180,12 @@ pub enum WorkerExecutorError {
         next_oplog_index: OplogIndex,
         reason: StaleCursorReason,
     },
+    /// The invocation was cancelled before it started (pending or scheduled). Its outcome is
+    /// `cancelled`; reusing its key returns this again and never runs it.
+    InvocationCancelled,
+    /// A cancel request for an invocation that is running. Cancelling a running invocation is
+    /// not supported yet; until it is, this typed answer replaces the spec's `202`.
+    CannotCancelRunningInvocation,
 }
 
 /// Why an oplog read refuses a cursor.
@@ -354,10 +359,18 @@ impl WorkerExecutorError {
         }
     }
 
-    pub fn unexpected_oplog_entry(expected: impl Into<String>, got: impl Into<String>) -> Self {
+    /// A replay divergence at `oplog_index` between two steps that only a text describes.
+    pub fn unexpected_oplog_entry(
+        oplog_index: OplogIndex,
+        expected: impl Into<String>,
+        got: impl Into<String>,
+    ) -> Self {
+        Self::replay_divergence(ReplayDivergence::described(oplog_index, expected, got))
+    }
+
+    pub fn replay_divergence(divergence: ReplayDivergence) -> Self {
         Self::UnexpectedOplogEntry {
-            expected: expected.into(),
-            got: got.into(),
+            divergence: Box::new(divergence),
         }
     }
 
@@ -454,8 +467,8 @@ impl Display for WorkerExecutorError {
             Self::ValueMismatch { details } => {
                 write!(f, "Value mismatch: {details}")
             }
-            Self::UnexpectedOplogEntry { expected, got } => {
-                write!(f, "Unexpected oplog entry: expected {expected}, got {got}")
+            Self::UnexpectedOplogEntry { divergence } => {
+                write!(f, "{divergence}")
             }
             Self::Runtime { details } => {
                 write!(f, "Runtime error: {details}")
@@ -561,6 +574,10 @@ impl Display for WorkerExecutorError {
                 "Stale oplog cursor: the cursor to index {next_oplog_index} of the oplog of \
                  {agent_id} comes from the pages of another query"
             ),
+            Self::InvocationCancelled => write!(f, "Invocation was cancelled before execution"),
+            Self::CannotCancelRunningInvocation => {
+                write!(f, "The invocation is running and cannot be cancelled yet")
+            }
         }
     }
 }
@@ -612,6 +629,8 @@ impl Error for WorkerExecutorError {
             Self::ComponentServiceRefused { .. } => "Component service refused the request",
             Self::OplogFailed { .. } => "Oplog failed",
             Self::StaleCursor { .. } => "Stale oplog cursor",
+            Self::InvocationCancelled => "Invocation cancelled",
+            Self::CannotCancelRunningInvocation => "Cannot cancel a running invocation yet",
         }
     }
 }
@@ -655,6 +674,8 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::ComponentServiceRefused { .. } => "ComponentServiceRefused",
             Self::OplogFailed { .. } => "OplogFailed",
             Self::StaleCursor { .. } => "StaleCursor",
+            Self::InvocationCancelled => "InvocationCancelled",
+            Self::CannotCancelRunningInvocation => "CannotCancelRunningInvocation",
         }
     }
 
@@ -671,6 +692,8 @@ impl ApiErrorDetails for WorkerExecutorError {
             | Self::InvalidShardId { .. }
             | Self::OplogFenced { .. }
             | Self::StaleCursor { .. }
+            | Self::InvocationCancelled
+            | Self::CannotCancelRunningInvocation
             | Self::ComponentNotFound { .. } => true,
             Self::InvalidRequest { .. }
             | Self::AgentCreationFailed { .. }
@@ -755,6 +778,8 @@ impl From<WorkerExecutorError> for Status {
         match value {
             error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
             | WorkerExecutorError::CreateIdempotencyKeyConflict { .. }
+            | WorkerExecutorError::InvocationCancelled
+            | WorkerExecutorError::CannotCancelRunningInvocation
             | WorkerExecutorError::AgentKeyCollision { .. }
             | WorkerExecutorError::AgentAlreadyExists { .. }) => {
                 let code = if matches!(error, WorkerExecutorError::AgentAlreadyExists { .. }) {
@@ -981,13 +1006,18 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     golem::worker::v1::ValueMismatch { details },
                 )),
             },
-            WorkerExecutorError::UnexpectedOplogEntry { expected, got } => Self {
+            WorkerExecutorError::UnexpectedOplogEntry { divergence } => {
+                let divergence = divergence.into_proto_keeping_structure();
+                Self {
                     error: Some(
                         golem::worker::v1::worker_execution_error::Error::UnexpectedOplogEntry(
-                            golem::worker::v1::UnexpectedOplogEntry { expected, got },
+                            golem::worker::v1::UnexpectedOplogEntry {
+                                divergence: Some(divergence),
+                            },
                         ),
                     ),
-                },
+                }
+            }
             WorkerExecutorError::Runtime { details } => Self {
                 error: Some(golem::worker::v1::worker_execution_error::Error::RuntimeError(
                     golem::worker::v1::RuntimeError { details },
@@ -1090,6 +1120,20 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::PermissionDenied(
                         golem::worker::v1::PermissionDenied { details },
+                    ),
+                ),
+            },
+            WorkerExecutorError::InvocationCancelled => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::InvocationCancelled(
+                        golem::worker::v1::InvocationCancelled {},
+                    ),
+                ),
+            },
+            WorkerExecutorError::CannotCancelRunningInvocation => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::CannotCancelRunningInvocation(
+                        golem::worker::v1::CannotCancelRunningInvocation {},
                     ),
                 ),
             },
@@ -1343,10 +1387,12 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
             }),
             Some(golem::worker::v1::worker_execution_error::Error::UnexpectedOplogEntry(
                 unexpected_oplog_entry,
-            )) => Ok(Self::UnexpectedOplogEntry {
-                expected: unexpected_oplog_entry.expected,
-                got: unexpected_oplog_entry.got,
-            }),
+            )) => Ok(Self::replay_divergence(
+                unexpected_oplog_entry
+                    .divergence
+                    .ok_or("Missing field: divergence")?
+                    .try_into()?,
+            )),
             Some(golem::worker::v1::worker_execution_error::Error::InvalidShardId(
                 invalid_shard_id,
             )) => Ok(Self::InvalidShardId {
@@ -1415,6 +1461,12 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                     },
                 })
             }
+            Some(golem::worker::v1::worker_execution_error::Error::InvocationCancelled(_)) => {
+                Ok(Self::InvocationCancelled)
+            }
+            Some(
+                golem::worker::v1::worker_execution_error::Error::CannotCancelRunningInvocation(_),
+            ) => Ok(Self::CannotCancelRunningInvocation),
         }
     }
 }
@@ -1575,6 +1627,8 @@ mod read_only_violation_trap_tests {
                 agent_id: golem_common::model::AgentId::from_parts(7, 3),
                 requested_key: "Cart(\"a\")".to_string(),
             },
+            WorkerExecutorError::InvocationCancelled,
+            WorkerExecutorError::CannotCancelRunningInvocation,
         ] {
             let status: Status = expected.clone().into();
             assert_eq!(status.code(), tonic::Code::FailedPrecondition);

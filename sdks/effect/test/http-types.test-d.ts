@@ -14,7 +14,7 @@
  */
 
 import { Effect, Schema } from "effect"
-import { defineAgent, method, Method, Principal } from "../src/index.js"
+import { defineAgent, method, Method } from "../src/index.js"
 import * as Http from "../src/Http.js"
 import type {
   BindableKeys,
@@ -77,7 +77,7 @@ void Http.post("/streams", {
   durableStreams: { slots: [], load: { maxConcurrentReadersPerStream: "8" } },
 })
 
-// Principal-sensitive read-only dispatch is inferred exclusively from a PrincipalSchema input.
+// The read-only config has no `usesPrincipal` option: the caller comes from InvocationContext.
 void method({
   input: {},
   success: Schema.String,
@@ -900,7 +900,6 @@ void method({
 // request body.
 // ---------------------------------------------------------------------------
 
-// Injected principals do not require client bindings on bodyless endpoints.
 void method({
   input: {
     first: Schema.Union([Schema.Null, Schema.String]),
@@ -965,15 +964,15 @@ void method({
   // @ts-expect-error stream slots cannot bind explicitly from query
   http: [Http.get("/stream?events={events}")],
 })
+// A bodyless endpoint with no input needs no client bindings; the caller is injected.
 void method({
-  input: { principal: Principal.PrincipalSchema },
+  input: {},
   success: Schema.Struct({ secret: Schema.String }),
   http: [Http.get("/admin", { auth: true }), Http.head("/admin", { auth: true })],
 })
 
 void method({
   input: {
-    principal: Principal.PrincipalSchema,
     id: Schema.String,
     q: Schema.String,
     token: Schema.String,
@@ -986,13 +985,13 @@ void method({
 })
 
 void method({
-  input: { principal: Principal.PrincipalSchema, payload: Schema.String },
+  input: { payload: Schema.String },
   success: Schema.String,
   http: [Http.get("/admin", { auth: true })],
 })
 
 void method({
-  input: { principal: Principal.PrincipalSchema, payload: Schema.String },
+  input: { payload: Schema.String },
   success: Schema.String,
   http: [Http.head("/admin", { auth: true })],
 })

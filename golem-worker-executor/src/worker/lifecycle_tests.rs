@@ -47,9 +47,7 @@ async fn entity_fence_keeps_attached_store_and_registration_until_the_body_exits
         EntityInvocationId::new(entity.clone(), OplogIndex::from_u64(2)).unwrap(),
         OplogIndex::from_u64(1),
         activation,
-        Principal::Agent(golem_common::model::agent::AgentPrincipal {
-            agent_id: owner.agent_id,
-        }),
+        crate::test_callers::agent_principal(owner.agent_id),
         InvocationExecutionMode::Live,
         InvocationId(Uuid::new_v4()),
         false,

@@ -1,4 +1,5 @@
 use super::*;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 async fn exercise_python_sidecar(
@@ -239,12 +240,7 @@ async fn exercise_python_session(
                 target: Some(crate::agent::id_target(&worker_id)),
                 idempotency_key: Some(key.clone().into()),
                 auth_ctx: Some(executor.auth_ctx().into()),
-                principal: Some(
-                    Principal::GolemUser(GolemUserPrincipal {
-                        account_id: context.account_id,
-                    })
-                    .into(),
-                ),
+                caller: Some(callers::account(context.account_id).into()),
                 environment_id: Some(context.default_environment_id.into()),
                 component_owner_account_id: Some(context.account_id.into()),
                 expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),

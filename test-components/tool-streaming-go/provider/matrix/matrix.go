@@ -29,7 +29,6 @@ type Request struct {
 type InspectArgs struct {
 	Request    Request
 	Multiplier int64
-	Caller     golem.Principal
 }
 
 // The field names match the other SDKs' providers, so every caller decodes
@@ -59,20 +58,10 @@ var Inspect = Tool.Group("artifact").Command[InspectArgs, Result]("inspect", fun
 	s.Raises(ErrRejected)
 })
 
-func principalName(p golem.Principal) string {
-	switch p := p.(type) {
-	case golem.OidcPrincipal:
-		return "oidc:" + p.Sub
-	case golem.AgentPrincipal:
-		return "agent"
-	case golem.GolemUserPrincipal:
-		return "golem-user"
-	default:
-		return "anonymous"
-	}
-}
+// principalName is "<kind> <ref text>", or "anonymous".
+func principalName(p golem.Principal) string { return p.String() }
 
-var _ = Inspect.Handle(func(_ *tool.Context, a InspectArgs) (Result, error) {
+var _ = Inspect.Handle(func(ctx *tool.Context, a InspectArgs) (Result, error) {
 	if a.Request.Source == "reject.me" {
 		return Result{}, ErrRejected.New(Rejection{Field: "request.source", Reason: "unsupported source"})
 	}
@@ -84,7 +73,7 @@ var _ = Inspect.Handle(func(_ *tool.Context, a InspectArgs) (Result, error) {
 		NormalizedSource: strings.ToUpper(a.Request.Source),
 		WeightedSize:     int64(a.Request.Dimensions.Width)*int64(a.Request.Dimensions.Height)*a.Multiplier + int64(len(a.Request.Labels)),
 		LabelSummary:     strings.Join(labels, "|"),
-		Principal:        principalName(a.Caller),
+		Principal:        principalName(ctx.Caller().Immediate),
 		OwnerAgentID:     golem.MustGetSelfMetadata().AgentID.String(),
 	}, nil
 })

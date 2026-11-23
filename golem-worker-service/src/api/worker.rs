@@ -17,7 +17,7 @@ use crate::config::WebSocketTransportLimits;
 use crate::metrics::{ActiveHttpApiStream, HttpApiStreamKind};
 use crate::service::auth::AuthService;
 use crate::service::worker::ConnectWorkerStream;
-use crate::service::worker::{WorkerService, proxy_worker_connection};
+use crate::service::worker::{OplogRangeRead, WorkerService, proxy_worker_connection};
 use futures::StreamExt;
 use futures::TryStreamExt;
 use golem_common::base_model::api;
@@ -26,10 +26,10 @@ use golem_common::model::auth::TokenSecret;
 use golem_common::model::card::StoredCard;
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{OplogCursor, OplogScanAllowance};
 use golem_common::model::oplog::{PublicOplogEntryWithIndex, PublicOplogPageEntry};
-use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey, OwnedAgentId, PromiseId};
+use golem_common::model::{AgentFingerprint, AgentId, OwnedAgentId, PromiseId};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::{AuthCtx, GolemSecurityScheme, WrappedGolemSecuritySchema};
@@ -321,24 +321,42 @@ impl WorkerApi {
         cursor: Query<Option<OplogCursor>>,
         query: Query<Option<String>>,
         #[oai(name = "expectedFingerprint")] expected_fingerprint: Query<Option<AgentFingerprint>>,
+        /// The inclusive last index of a range read. Requires `from` and no `query`.
+        to: Query<Option<u64>>,
+        /// The remaining entry allowance of a range read. Goes with `scanMillis`.
+        #[oai(name = "scanEntries")]
+        scan_entries: Query<Option<u64>>,
+        /// The remaining time allowance of a range read, in milliseconds.
+        #[oai(name = "scanMillis")]
+        scan_millis: Query<Option<u64>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<GetOplogResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
         let agent_id = OwnedAgentId::new(environment_id.0, &agent_id.0);
         let record = recorded_http_api_request!("get_oplog", agent_id = agent_id.to_string());
 
-        let response = self
-            .get_oplog_internal(
+        let response = async {
+            let range = oplog_range_read(
+                from.0,
+                query.0.as_deref(),
+                to.0,
+                scan_entries.0,
+                scan_millis.0,
+            )?;
+            self.get_oplog_internal(
                 agent_id,
                 from.0,
                 count.0,
                 cursor.0,
                 query.0,
                 expected_fingerprint.0,
+                range,
                 auth,
             )
-            .instrument(record.span.clone())
-            .await;
+            .await
+        }
+        .instrument(record.span.clone())
+        .await;
 
         record.result(response)
     }
@@ -352,6 +370,7 @@ impl WorkerApi {
         cursor: Option<OplogCursor>,
         query: Option<String>,
         expected_fingerprint: Option<AgentFingerprint>,
+        range: Option<OplogRangeRead>,
         auth: AuthCtx,
     ) -> Result<Json<GetOplogResponse>> {
         let mut response = match (from, query) {
@@ -377,6 +396,7 @@ impl WorkerApi {
                         cursor,
                         count,
                         expected_fingerprint,
+                        range,
                         auth,
                     )
                     .await?
@@ -685,44 +705,6 @@ impl WorkerApi {
         record.result(response)
     }
 
-    /// Cancels a pending invocation if it has not started yet
-    ///
-    /// The invocation to be cancelled is identified by the idempotency key returned when the
-    /// invoke API accepted it.
-    #[oai(
-        path = "/:environment_id/agents/:agent_id/invocations/:idempotency_key",
-        method = "delete",
-        operation_id = "cancel_invocation"
-    )]
-    async fn cancel_invocation(
-        &self,
-        environment_id: Path<EnvironmentId>,
-        agent_id: Path<AgentId>,
-        idempotency_key: Path<IdempotencyKey>,
-        #[oai(name = "expectedFingerprint")] expected_fingerprint: Query<Option<AgentFingerprint>>,
-        token: GolemSecurityScheme,
-    ) -> Result<Json<CancelInvocationResponse>> {
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-        let agent_id = OwnedAgentId::new(environment_id.0, &agent_id.0);
-        let record = recorded_http_api_request!(
-            "cancel_invocation",
-            agent_id = agent_id.to_string(),
-            idempotency_key = idempotency_key.0.to_string(),
-        );
-
-        let response = async {
-            let canceled = self
-                .worker_service
-                .cancel_invocation(&agent_id, &idempotency_key.0, expected_fingerprint.0, auth)
-                .await?;
-            Ok(Json(CancelInvocationResponse { canceled }))
-        }
-        .instrument(record.span.clone())
-        .await;
-
-        record.result(response)
-    }
-
     /// Connect to an agent using a websocket and stream events
     #[oai(
         path = "/:environment_id/agents/:agent_id/connect",
@@ -795,4 +777,52 @@ fn make_component_file_path(name: String) -> Result<CanonicalFilePath> {
             golem_common::safe(format!("Invalid file name: {error}")),
         )
     })
+}
+
+/// The range selected by `to`, with optional paired entry and time allowances.
+fn oplog_range_read(
+    from: Option<u64>,
+    query: Option<&str>,
+    to: Option<u64>,
+    scan_entries: Option<u64>,
+    scan_millis: Option<u64>,
+) -> Result<Option<OplogRangeRead>> {
+    let invalid = |message: &str| {
+        ApiEndpointError::bad_request(
+            api::error_code::INVALID_OPLOG_QUERY_PARAMS,
+            golem_common::safe(message.to_string()),
+        )
+    };
+    let allowance = match (scan_entries, scan_millis) {
+        (Some(entries), Some(millis)) => Some(OplogScanAllowance { entries, millis }),
+        (None, None) => None,
+        _ => {
+            return Err(invalid(
+                "The 'scanEntries' and 'scanMillis' parameters go together",
+            ));
+        }
+    };
+    let Some(to) = to else {
+        if allowance.is_some() {
+            return Err(invalid(
+                "The 'scanEntries' and 'scanMillis' parameters need the 'to' parameter",
+            ));
+        }
+        return Ok(None);
+    };
+    if query.is_some() {
+        return Err(invalid(
+            "Cannot specify both the 'to' and the 'query' parameters",
+        ));
+    }
+    match from {
+        Some(from) if from >= 1 && from <= to => Ok(Some(OplogRangeRead {
+            to: OplogIndex::from_u64(to),
+            allowance,
+        })),
+        Some(_) => Err(invalid(
+            "The 'from' parameter of a range read must be at least 1 and at most 'to'",
+        )),
+        None => Err(invalid("The 'to' parameter needs the 'from' parameter")),
+    }
 }

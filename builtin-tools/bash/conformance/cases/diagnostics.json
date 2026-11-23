@@ -1,0 +1,120 @@
+{
+  "tier": "pr",
+  "description": "Diagnostics from uutils-backed and streaming commands, compared byte for byte with GNU.\n\nEach uutils utility runs in-process, so it must be told its own name (argv[0] is the shell) and\nload its own translations. These cases also pin that switching between utilities, including\nacross pipeline stages that interleave on one thread, never shows another utility's name or a\nraw translation key, and that I/O errors carry no Rust `(os error N)` suffix.",
+  "cases": [
+    {
+      "name": "diagnostics: dirname missing operand",
+      "script": "dirname; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diagnostics: basename missing operand",
+      "script": "basename; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diagnostics: cut without a list",
+      "script": "cut; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diagnostics: tr missing operand",
+      "script": "tr; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diagnostics: ls missing file",
+      "script": "ls /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diagnostics: cp missing source",
+      "script": "cp /nope /tmp/x; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diagnostics: rm missing file",
+      "script": "rm /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diagnostics: touch in a missing directory",
+      "script": "touch /nope/x; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diagnostics: sort missing file",
+      "script": "sort /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diagnostics: od missing file",
+      "script": "od /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diagnostics: cat missing file",
+      "script": "cat /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diagnostics: head missing file",
+      "script": "head /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diagnostics: tail missing file",
+      "script": "tail /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diagnostics: wc missing file",
+      "script": "wc /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diagnostics: uniq missing file",
+      "script": "uniq /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diagnostics: cut missing file",
+      "script": "cut -f1 /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diagnostics: tee into a missing directory",
+      "script": "echo x | tee /nope/x; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diagnostics: alternating utilities keep their own names",
+      "script": "ls /nope; dirname; ls /nope2; basename; cut; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "diagnostics: pipeline stages keep their own names",
+      "script": "ls /nope 2>&1 | cut -c1-5; cut 2>&1 | tr a-z A-Z; echo status=$?",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}

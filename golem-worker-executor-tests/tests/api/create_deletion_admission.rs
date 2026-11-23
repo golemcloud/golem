@@ -55,6 +55,7 @@ async fn exclusive_create_retries_after_deletion_instead_of_returning_a_missing_
         ignore_already_existing: false,
         auth_ctx: Some(executor.auth_ctx().into()),
         idempotency_key: Some(key.clone().into()),
+        caller: Some(golem_worker_executor_test_utils::callers::anonymous().into()),
         ..Default::default()
     };
     let blocked = executor
@@ -71,7 +72,9 @@ async fn exclusive_create_retries_after_deletion_instead_of_returning_a_missing_
         WorkerExecutorError::ShardingNotReady
     ));
 
-    executor.delete_worker(&agent).await?;
+    executor
+        .delete_worker_with_fingerprint(&agent, original)
+        .await?;
     let response = executor
         .client
         .clone()

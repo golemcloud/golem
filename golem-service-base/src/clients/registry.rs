@@ -25,19 +25,21 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::registry::ResourceUsageUpdate as GrpcResourceUsageUpdate;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
 use golem_api_grpc::proto::golem::registry::v1::{
-    AuthenticateTokenRequest, BatchGetCardsRequest, BatchGetExistingCardsRequest,
-    BatchUpdateResourceUsageRequest, CreateRuntimeCardRequest, DownloadComponentRequest,
-    GetActiveMcpForDomainRequest, GetActiveRoutesForDomainRequest, GetAgentSecretRevisionRequest,
-    GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
-    GetComponentMetadataRequest, GetCurrentEnvironmentStateRequest, GetDeployedAgentTypeRequest,
+    AuthenticateTokenRequest, AuthorizeEnvironmentRequest, BatchGetCardsRequest,
+    BatchGetExistingCardsRequest, BatchUpdateResourceUsageRequest, CreateRuntimeCardRequest,
+    DownloadComponentRequest, GetActiveMcpForDomainRequest, GetActiveRoutesForDomainRequest,
+    GetAgentSecretRevisionRequest, GetAgentTypeRequest, GetAllAgentTypesRequest,
+    GetAllDeployedComponentRevisionsRequest, GetComponentMetadataRequest,
+    GetCurrentEnvironmentStateRequest, GetDeployedAgentTypeRequest,
     GetDeployedComponentMetadataRequest, GetMcpRuntimeCredentialRequest,
     GetResourceDefinitionByIdRequest, GetResourceDefinitionByNameRequest, GetResourceLimitsRequest,
     GetToolDeploymentStateAtRevisionRequest, GetToolDeploymentStateRequest,
     ReportMcpResourceUnauthorizedRequest, ResolveAgentTypeByNamesRequest, ResolveComponentRequest,
     ResolveMcpImportRequest, ResolveTypeIdRequest, RevokeCardRequest, RuntimeCardData,
-    UpdateWorkerConnectionLimitRequest, authenticate_token_response, batch_get_cards_response,
-    batch_get_existing_cards_response, batch_update_resource_usage_response,
-    create_runtime_card_response, download_component_response, get_active_mcp_for_domain_response,
+    UpdateWorkerConnectionLimitRequest, authenticate_token_response,
+    authorize_environment_response, batch_get_cards_response, batch_get_existing_cards_response,
+    batch_update_resource_usage_response, create_runtime_card_response,
+    download_component_response, get_active_mcp_for_domain_response,
     get_active_routes_for_domain_response, get_agent_secret_revision_response,
     get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_component_metadata_response,
@@ -48,6 +50,10 @@ use golem_api_grpc::proto::golem::registry::v1::{
     report_mcp_resource_unauthorized_response, resolve_agent_type_by_names_response,
     resolve_component_response, resolve_mcp_import_response, resolve_type_id_response,
     revoke_card_response, update_worker_connection_limit_response,
+};
+use golem_api_grpc::proto::golem::registry::v1::{
+    GetGolemIssuerRequest, ResolveAgentTypeNameRequest, get_golem_issuer_response,
+    resolve_agent_type_name_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::AgentId;
@@ -66,6 +72,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+use golem_common::model::golem_issuer::GolemIssuer;
 use golem_common::model::mcp_import::{McpImportCredential, McpImportSource};
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
 use golem_common::model::tool::ToolDeploymentState;
@@ -183,6 +190,15 @@ pub trait RegistryService: Send + Sync {
         &self,
         token: &TokenSecret,
     ) -> Result<AuthCtx, RegistryServiceError>;
+
+    // installation api
+
+    /// The Golem issuer of the installation, which the registry keeps in its database.
+    async fn get_golem_issuer(&self) -> Result<GolemIssuer, RegistryServiceError> {
+        Err(RegistryServiceError::internal_client_error(
+            "get_golem_issuer is not supported by this registry service",
+        ))
+    }
 
     // limits api
     async fn get_resource_limits(
@@ -338,6 +354,16 @@ pub trait RegistryService: Send + Sync {
         auth_ctx: &AuthCtx,
     ) -> Result<ResolvedAgentType, RegistryServiceError>;
 
+    async fn authorize_environment(
+        &self,
+        _environment_id: EnvironmentId,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<(), RegistryServiceError> {
+        Err(RegistryServiceError::internal_client_error(
+            "authorize_environment is not supported by this registry service",
+        ))
+    }
+
     /// Resolves the type ID in an agent ID's tag. `None` when the environment never
     /// assigned it. Also resolves types that are no longer deployed.
     async fn resolve_type_id(
@@ -347,6 +373,17 @@ pub trait RegistryService: Send + Sync {
     ) -> Result<Option<ResolvedTypeId>, RegistryServiceError> {
         Err(RegistryServiceError::internal_client_error(
             "resolve_type_id is not supported by this registry service",
+        ))
+    }
+
+    /// Resolves a retained agent type name on every historical implementing component.
+    async fn resolve_agent_type_name(
+        &self,
+        _environment_id: EnvironmentId,
+        _name: &AgentTypeName,
+    ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError> {
+        Err(RegistryServiceError::internal_client_error(
+            "resolve_agent_type_name is not supported by this registry service",
         ))
     }
 
@@ -659,6 +696,30 @@ impl RegistryService for GrpcRegistryService {
                 Ok(auth_ctx)
             }
             Some(authenticate_token_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn get_golem_issuer(&self) -> Result<GolemIssuer, RegistryServiceError> {
+        let response = self
+            .client
+            .call("get_golem_issuer", move |client| {
+                Box::pin(client.get_golem_issuer(GetGolemIssuerRequest {}))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(get_golem_issuer_response::Result::Success(payload)) => {
+                payload.golem_issuer.parse().map_err(
+                    |error: golem_common::model::golem_issuer::GolemIssuerError| {
+                        RegistryServiceError::internal_client_error(format!(
+                            "the registry returned an invalid Golem issuer: {error}"
+                        ))
+                    },
+                )
+            }
+            Some(get_golem_issuer_response::Result::Error(error)) => Err(error.into()),
         }
     }
 
@@ -1413,6 +1474,29 @@ impl RegistryService for GrpcRegistryService {
         }
     }
 
+    async fn authorize_environment(
+        &self,
+        environment_id: EnvironmentId,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), RegistryServiceError> {
+        let auth_ctx = auth_ctx.clone();
+        let response = self
+            .client
+            .call("authorize_environment", move |client| {
+                Box::pin(client.authorize_environment(AuthorizeEnvironmentRequest {
+                    environment_id: Some(environment_id.into()),
+                    auth_ctx: Some(auth_ctx.clone().into()),
+                }))
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(authorize_environment_response::Result::Success(_)) => Ok(()),
+            Some(authorize_environment_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
     async fn resolve_type_id(
         &self,
         environment_id: EnvironmentId,
@@ -1436,6 +1520,33 @@ impl RegistryService for GrpcRegistryService {
                 payload.resolved.map(ResolvedTypeId::try_from).transpose()
             }
             Some(resolve_type_id_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn resolve_agent_type_name(
+        &self,
+        environment_id: EnvironmentId,
+        name: &AgentTypeName,
+    ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError> {
+        let name = name.0.clone();
+        let response = self
+            .client
+            .call("resolve_agent_type_name", move |client| {
+                Box::pin(client.resolve_agent_type_name(ResolveAgentTypeNameRequest {
+                    environment_id: Some(environment_id.into()),
+                    agent_type_name: name.clone(),
+                }))
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(resolve_agent_type_name_response::Result::Success(payload)) => payload
+                .agent_types
+                .into_iter()
+                .map(|agent_type| agent_type.try_into().map_err(Into::into))
+                .collect(),
+            Some(resolve_agent_type_name_response::Result::Error(error)) => Err(error.into()),
         }
     }
 

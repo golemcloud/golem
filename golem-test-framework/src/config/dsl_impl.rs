@@ -26,8 +26,8 @@ use futures::stream::SplitStream;
 use futures::{SinkExt, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_client::api::{
-    AgentClient, RegistryServiceClient, RegistryServiceClientLive, WorkerClient, WorkerClientLive,
-    WorkerError,
+    AgentClient, InvocationClient, RegistryServiceClient, RegistryServiceClientLive, WorkerClient,
+    WorkerClientLive, WorkerError,
 };
 use golem_client::model::{
     AgentKeyRequest, CompleteParameters, CreateAgentRequest, UpdateWorkerRequest,
@@ -351,6 +351,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .create_component(
                 &environment_id.0,
                 &ComponentCreation {
+                    package_metadata: None,
                     component_name,
                     config_schema: Default::default(),
                     component_provision_config: Default::default(),
@@ -450,6 +451,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .update_component(
                 &component_id.0,
                 &ComponentUpdate {
+                    package_metadata: None,
                     current_revision: previous_revision,
                     config_schema: None,
                     component_provision_config: None,
@@ -582,11 +584,11 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         component: &ComponentDto,
         agent_id: &ParsedAgentKey,
         idempotency_key: Option<&IdempotencyKey>,
-        principal: Option<golem_common::model::agent::Principal>,
+        caller: Option<golem_common::model::caller::Caller>,
         method_name: &str,
         params: TypedSchemaValue,
     ) -> anyhow::Result<AgentResult> {
-        if principal.is_some() {
+        if caller.is_some() {
             // The HTTP `AgentInvocationRequest` has no per-request `principal`
             // field — principal is derived from the request's auth headers.
             // Tests that need to override the principal must use the
@@ -684,6 +686,9 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     cursor.as_ref(),
                     None,
                     None,
+                    None,
+                    None,
+                    None,
                 )
                 .await
                 .map_err(|e| anyhow!("get_oplog failed for agent {agent_id}: {e}"))?;
@@ -711,6 +716,9 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &agent_id.agent_id.0,
                 Some(OplogIndex::INITIAL.as_u64()),
                 1,
+                None,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -744,6 +752,9 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     100,
                     cursor.as_ref(),
                     Some(query),
+                    None,
+                    None,
+                    None,
                     None,
                 )
                 .await
@@ -959,6 +970,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .find_agents_metadata(
                 &environment_id.0,
                 &agent_type.0,
+                None,
                 &WorkersMetadataRequest {
                     filter,
                     cursor: Some(cursor),
@@ -978,17 +990,14 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         let client = self
             .deps
             .worker_service()
-            .worker_http_client(&self.token)
+            .invocation_http_client(&self.token)
             .await;
-        let result = client
-            .cancel_invocation(
-                &agent_id.environment_id.0,
-                &agent_id.agent_id.0,
-                &idempotency_key.to_string(),
-                None,
-            )
+        let invocation_id =
+            golem_common::model::OwnedInvocationId::new(agent_id.agent_id, *idempotency_key);
+        let invocation = client
+            .cancel_invocation(&agent_id.environment_id.0, &invocation_id.to_string())
             .await?;
-        Ok(result.canceled)
+        Ok(invocation.state == golem_client::model::InvocationState::Cancelled)
     }
 
     async fn get_file_system_node(

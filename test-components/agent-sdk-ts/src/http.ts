@@ -8,6 +8,7 @@ import {
   KeyValue,
   Result,
   createWebhook,
+  type InvocationContext,
 } from "@golemcloud/golem-ts-sdk";
 
 // Response schemas for comprehensive HTTP method testing
@@ -341,30 +342,34 @@ export const CorsAgentImpl = CorsAgent.implement({
   },
 });
 
-// PrincipalAgent — echoes the caller `Principal` back as a WIT `principal`
-// variant value. Matches the base/decorator SDK exactly: each method declares a
-// bare `s.principal()` PARAMETER (`caller`), which is auto-injected — the host
-// supplies the per-call caller principal (WIT `field-source.auto-injected`), so
-// it consumes no wire field and is NOT bound from the HTTP path/query/header.
-// The handler returns it as `s.principal()` data. No phantom-agent workaround.
+// PrincipalAgent — reports who called. Each handler reads the caller from the
+// invocation context (its second argument); the context is not part of the
+// method input, so it consumes no wire field and is NOT bound from the HTTP
+// path/query/header. The result carries the kind of the original principal and
+// its `PrincipalRef` (absent for an anonymous caller) as plain data.
 // Exercised by `custom_api/agent_http_principal_ts.rs`.
+const CallerReport = z.object({
+  kind: z.string(),
+  ref: s.option(s.principalRef()),
+});
+
 export const PrincipalAgent = defineAgent({
   name: "PrincipalAgent",
   id: { agentName: z.string() },
   http: http.mount("/principal-agent/{agentName}"),
   methods: {
-    // only the auto-injected principal
+    // only the caller
     echoPrincipal: method({
-      input: { caller: s.principal() },
-      returns: z.object({ value: s.principal() }),
+      input: {},
+      returns: z.object({ value: CallerReport }),
       http: http.get("/echo-principal"),
     }),
 
-    // Principal alongside foo / bar bound from the path
+    // The caller alongside foo / bar bound from the path
     echoPrincipal2: method({
-      input: { foo: z.string(), bar: z.number(), caller: s.principal() },
+      input: { foo: z.string(), bar: z.number() },
       returns: z.object({
-        value: s.principal(),
+        value: CallerReport,
         foo: z.string(),
         bar: z.number(),
       }),
@@ -372,9 +377,9 @@ export const PrincipalAgent = defineAgent({
     }),
 
     echoPrincipal3: method({
-      input: { foo: z.string(), bar: z.number(), caller: s.principal() },
+      input: { foo: z.string(), bar: z.number() },
       returns: z.object({
-        value: s.principal(),
+        value: CallerReport,
         foo: z.string(),
         bar: z.number(),
       }),
@@ -382,27 +387,50 @@ export const PrincipalAgent = defineAgent({
     }),
 
     authedPrincipal: method({
-      input: { caller: s.principal() },
-      returns: z.object({ value: s.principal() }),
+      input: {},
+      returns: z.object({ value: CallerReport }),
       http: http.get("/authed-principal", { auth: true }),
     }),
+    authedReadonly: method({
+      input: {},
+      returns: z.string(),
+      readOnly: true,
+      http: http.get("/authed-readonly", { auth: true }),
+    }),
+    authedReadonlyPrincipal: method({
+      input: {},
+      returns: z.object({ value: CallerReport }),
+      readOnly: true,
+      http: http.get("/authed-readonly-principal", { auth: true }),
+    }),
   },
+});
+
+const callerReport = (ctx: InvocationContext) => ({
+  kind: ctx.caller.original.kind,
+  ref: ctx.caller.original.ref,
 });
 
 export const PrincipalAgentImpl = PrincipalAgent.implement({
   init: ({ id }) => ({ agentName: id.agentName }),
   methods: {
-    echoPrincipal({ caller }) {
-      return { value: caller };
+    echoPrincipal(_input, ctx) {
+      return { value: callerReport(ctx) };
     },
-    echoPrincipal2({ foo, bar, caller }) {
-      return { value: caller, foo, bar };
+    echoPrincipal2({ foo, bar }, ctx) {
+      return { value: callerReport(ctx), foo, bar };
     },
-    echoPrincipal3({ foo, bar, caller }) {
-      return { value: caller, foo, bar };
+    echoPrincipal3({ foo, bar }, ctx) {
+      return { value: callerReport(ctx), foo, bar };
     },
-    authedPrincipal({ caller }) {
-      return { value: caller };
+    authedPrincipal(_input, ctx) {
+      return { value: callerReport(ctx) };
+    },
+    authedReadonly() {
+      return this.agentName;
+    },
+    authedReadonlyPrincipal(_input, ctx) {
+      return { value: callerReport(ctx) };
     },
   },
 });

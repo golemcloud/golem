@@ -17,11 +17,17 @@ runs:
         wasm-rquickjs-version: '0.5.3'
         install-cargo-component: 'true'
     - uses: oven-sh/setup-bun@v2
+    - name: Install validation tooling for selected and control sources
+      shell: bash
+      run: |
+        npm ci --ignore-scripts --prefix .github/main-validation
+        npm ci --ignore-scripts --prefix .validation-control/.github/main-validation
     - uses: actions/setup-java@v5
       with:
         distribution: temurin
         java-version: '21'
     - uses: sbt/setup-sbt@v1
+    - uses: ./.validation-control/.github/actions/setup-mill
     - uses: hustcer/setup-moonbit@v1
       with:
         version: '0.10.18+6c83a7f62'

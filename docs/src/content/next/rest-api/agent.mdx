@@ -11,7 +11,7 @@ Path|Method|Protected
 | Property    | Comparator             | Description                   | Example                            |
 |-------------|------------------------|-------------------------------|------------------------------------|
 | key         | StringFilterComparator | Canonical key of the agent    | `key == Counter("a")`              |
-| id          | StringFilterComparator | ID of the agent               | `id == 00000007-…`                 |
+| id          | FilterComparator       | Full UUID of the agent        | `id == 00000007-0000-8000-8000-000000000001` |
 | version     | FilterComparator       | Component revision            | `version >= 0`                     |
 | status      | FilterComparator       | Status of the agent           | `status = Running`                 |
 | env.\[key\] | StringFilterComparator | Environment variable          | `env.var1 = value`                 |
@@ -28,6 +28,7 @@ Returns the metadata of the agents, and a cursor for the next page when there ar
 
 Name|Type|Required|Description
 ---|---|---|---
+component_name|string|No|Restrict results to agents whose recorded component has this name, not the type's current implementer.
 filter|array|No|Filter in the form `property op value`. When it is given more than once, every filter must match.
 cursor|string|No|Position where to start listing. To get the next page, pass the cursor of the previous response.
 count|integer|No|Count of listed values, default: 50
@@ -110,6 +111,7 @@ precise|boolean|No|If true, calculate the most up-to-date status for each agent,
         }
       ],
       "status": "Running",
+      "underlyingStatus": "Running",
       "componentRevision": 0,
       "retryCount": 0,
       "pendingInvocationCount": 0,
@@ -257,7 +259,7 @@ Path|Method|Protected
 | Type      | Comparator             | Description                  | Example                                                                             |
 |-----------|------------------------|------------------------------|-------------------------------------------------------------------------------------|
 | Key       | StringFilterComparator | Canonical key of the agent   | `{ "type": "Key", "comparator": "Equal", "value": "Counter(\"a\")" }`              |
-| Id        | StringFilterComparator | ID of the agent              | `{ "type": "Id", "comparator": "Equal", "value": "00000007-…" }`                   |
+| Id        | FilterComparator       | Full UUID of the agent       | `{ "type": "Id", "comparator": "Equal", "value": "00000007-0000-8000-8000-000000000001" }` |
 | Version   | FilterComparator       | Component revision           | `{ "type": "Version", "comparator": "GreaterEqual", "value": 0 }`                  |
 | Status    | FilterComparator       | Status of the agent          | `{ "type": "Status", "comparator": "Equal", "value": "Running" }`                  |
 | Env       | StringFilterComparator | Environment variable         | `{ "type": "Env", "name": "var1", "comparator": "Equal", "value": "value" }`       |
@@ -269,6 +271,12 @@ Path|Method|Protected
 ### Comparators
 - StringFilterComparator: `Equal`, `NotEqual`, `Like`, `NotLike`
 - FilterComparator: `Equal`, `NotEqual`, `GreaterEqual`, `Greater`, `LessEqual`, `Less`
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+component_name|string|No|Restrict results to agents whose recorded component has this name, not the type's current implementer.
 
 **Example Request JSON**
 ```json copy
@@ -361,6 +369,7 @@ Path|Method|Protected
         }
       ],
       "status": "Running",
+      "underlyingStatus": "Running",
       "componentRevision": 0,
       "retryCount": 0,
       "pendingInvocationCount": 0,
@@ -675,6 +684,14 @@ Path|Method|Protected
   "definition": {
     "version": "string",
     "requires_filesystem": true,
+    "http_mount": {
+      "path_prefix": [
+        {
+          "type": "Literal",
+          "value": "string"
+        }
+      ]
+    },
     "commands": {
       "nodes": [
         {
@@ -691,6 +708,56 @@ Path|Method|Protected
                 "body": "string"
               }
             ]
+          },
+          "http": {
+            "kind": "endpoint",
+            "value": {
+              "route_id": "string",
+              "http_method": {
+                "type": "Get"
+              },
+              "path_suffix": [
+                {
+                  "type": "Literal",
+                  "value": "string"
+                }
+              ],
+              "query_vars": [
+                {
+                  "queryParamName": "string",
+                  "variableName": "string"
+                }
+              ],
+              "header_vars": [
+                {
+                  "headerName": "string",
+                  "variableName": "string"
+                }
+              ],
+              "response_headers": [
+                {
+                  "name": "string",
+                  "value": "string"
+                }
+              ],
+              "mode": "durableStreams",
+              "durable_streams": {
+                "slots": [
+                  {
+                    "source": {
+                      "type": "input",
+                      "name": "string"
+                    },
+                    "name": "string",
+                    "contentType": "string"
+                  }
+                ],
+                "load": {
+                  "maxConcurrentReadersPerStream": 0,
+                  "maxAppendRequestsPerSecondPerStream": 0
+                }
+              }
+            }
           },
           "globals": {
             "options": [

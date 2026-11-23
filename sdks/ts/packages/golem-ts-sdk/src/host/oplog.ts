@@ -152,6 +152,8 @@ export type CreateParameters = {
   initialTotalLinearMemorySize: bigint;
   initialActivePlugins: PluginInstallationDescription[];
   localAgentConfig: LocalAgentConfigEntry[];
+  /** Whether the agent is a never-live sandbox. A marked agent reports the `sandboxed` status. */
+  neverLive: boolean;
 };
 
 export type OplogProcessorCheckpointParameters = {

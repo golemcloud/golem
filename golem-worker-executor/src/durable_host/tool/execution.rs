@@ -984,6 +984,7 @@ mod finalization_tests {
                     let task = FailTask(
                         pending.clone(),
                         anyhow::Error::new(WorkerExecutorError::unexpected_oplog_entry(
+                            OplogIndex::from_u64(1),
                             "secondary",
                             "failure",
                         )),
@@ -1115,7 +1116,11 @@ mod finalization_tests {
             .unwrap()
             .unwrap();
         let failure = TerminalCallError::new(
-            WorkerExecutorError::unexpected_oplog_entry("observation", "disposal"),
+            WorkerExecutorError::unexpected_oplog_entry(
+                OplogIndex::from_u64(1),
+                "observation",
+                "disposal",
+            ),
             DurableCallTrapContext { retry_from: child },
         );
         let errors = drive_tool_finalization(
@@ -1196,7 +1201,11 @@ mod finalization_tests {
     #[timeout("10s")]
     async fn finalization_infrastructure_failures_do_not_elect_owner_failure() {
         for error in [
-            WorkerExecutorError::unexpected_oplog_entry("observation", "disposal"),
+            WorkerExecutorError::unexpected_oplog_entry(
+                OplogIndex::from_u64(1),
+                "observation",
+                "disposal",
+            ),
             WorkerExecutorError::recovery_required("retry read"),
         ] {
             let operation = operation::tests::replay_operation(2);

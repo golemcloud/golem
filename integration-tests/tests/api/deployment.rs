@@ -88,11 +88,13 @@ fn cross_account_tool(version: &str) -> Tool {
     Tool {
         version: version.to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![CommandNode {
                 name: "search".to_string(),
                 aliases: Vec::new(),
                 doc: Doc::default(),
+                http: None,
                 globals: Globals::default(),
                 subcommands: Vec::new(),
                 body: Some(CommandBody {
@@ -731,6 +733,7 @@ async fn get_component_version_from_previous_deployment(
         .update_component(
             &component.id.0,
             &ComponentUpdate {
+                package_metadata: None,
                 current_revision: component.revision,
                 config_schema: None,
                 component_provision_config: None,
@@ -1015,6 +1018,7 @@ async fn filter_deployments_by_version(deps: &EnvBasedTestDependencies) -> anyho
         .update_component(
             &component.id.0,
             &ComponentUpdate {
+                package_metadata: None,
                 current_revision: component.revision,
                 config_schema: None,
                 component_provision_config: None,
@@ -1421,6 +1425,7 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
         .create_component(
             &publisher_env.id.0,
             &ComponentCreation {
+                package_metadata: None,
                 component_name: ComponentName::try_from("publisher-tools:search")
                     .map_err(anyhow::Error::msg)?,
                 config_schema: Default::default(),
@@ -1619,6 +1624,7 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
         .update_component(
             &publisher_component.id.0,
             &ComponentUpdate {
+                package_metadata: None,
                 current_revision: publisher_component.revision,
                 config_schema: None,
                 component_provision_config: None,
@@ -2338,6 +2344,7 @@ async fn deploy_counters_with_declarations(
         .update_component(
             &component.id.0,
             &ComponentUpdate {
+                package_metadata: None,
                 current_revision: component.revision,
                 config_schema: None,
                 component_provision_config: None,

@@ -70,12 +70,13 @@ pub use agent::{
     DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY, DURABLE_STREAM_SESSION_RECENT_CAPACITY,
     DurableStreamPublicBinding, DurableStreamSessionIndex, DurableStreamSessionStatus,
     EntityReplayBoundary, EntityReplayProgress, ExportForkAdmissions, ExportForkReservation,
-    FailedUpdateRecord, InvocationResultBloom, InvocationResultMembership,
-    InvocationResultPosition, InvocationStatus, LogLevel, OpenEntityReplayScope,
-    OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
-    PendingUpdateKind, PendingUpdateRef, RedactedAgentInvocationResult, ScheduleId,
-    ScheduledAction, SnapshotFiles, SuccessfulUpdateRecord, TimestampedAgentInvocation,
-    UsableAutomaticSnapshot,
+    FailedUpdateRecord, InvocationEnd, InvocationOperation, InvocationRequestOperation,
+    InvocationRequestRef, InvocationResultBloom, InvocationResultMembership,
+    InvocationResultPosition, InvocationStatus, LogLevel, MAX_INVOCATION_OPERATION_BYTES,
+    OpenEntityReplayScope, OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef,
+    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RedactedAgentInvocationResult,
+    RunningInvocation, ScheduleId, ScheduledAction, SnapshotFiles, StoredAgentInvocationPayload,
+    SuccessfulUpdateRecord, TimestampedAgentInvocation, UsableAutomaticSnapshot,
 };
 pub use card::{
     ReceivedCardTransferIndex, ReceivedCardTransferState, SourceCardTransferIndex,
@@ -101,7 +102,7 @@ use url::Url;
 use self::account::{AccountEmail, AccountId};
 use self::component::{AgentFilePermissions, ComponentId};
 #[cfg(test)]
-use crate::base_model::agent::{AgentMode, Principal};
+use crate::base_model::agent::AgentMode;
 pub use crate::base_model::*;
 
 impl Timestamp {

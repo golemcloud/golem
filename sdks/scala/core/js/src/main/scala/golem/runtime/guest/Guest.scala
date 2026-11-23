@@ -17,7 +17,7 @@
 package golem.runtime.guest
 
 import golem.host.{SchemaWireInterop, ToolWireInterop}
-import golem.host.js.{JsAgentId, JsSnapshot, PrincipalConverter}
+import golem.host.js.{JsAgentId, JsSnapshot, LegacySnapshotPrincipal}
 import golem.host.js.schema.{
   JsAgentError,
   JsMetadataEnvelope,
@@ -57,18 +57,15 @@ import scala.util.control.NonFatal
  * whose initializer runs on module load).
  */
 object Guest {
-  private var resolved: js.UndefOr[Resolved]                   = js.undefined
-  private var initializationPrincipal: Option[golem.Principal] = None
+  private var resolved: js.UndefOr[Resolved] = js.undefined
   private final case class Resolved(defn: golem.runtime.autowire.AgentDefinition[Any], instance: Any)
 
   private[runtime] def resetForTesting(): Unit = {
     resolved = js.undefined
-    initializationPrincipal = None
     ConfigHolder.clear()
   }
 
-  private[runtime] def stateForTesting: (Boolean, Option[golem.Principal]) =
-    (!js.isUndefined(resolved), initializationPrincipal)
+  private[runtime] def stateForTesting: Boolean = !js.isUndefined(resolved)
 
   private def invalidType(message: String): JsAgentError =
     JsAgentError.invalidType(message)
@@ -128,6 +125,35 @@ object Guest {
       methodName.substring(start, methodName.length - 1)
     } else methodName
 
+  /**
+   * Ends the context of a call when its future completes, however it completes.
+   * A result that holds a stream keeps the caller for its producer.
+   */
+  private def endWhenDone[A](context: golem.InvocationContext, call: Future[A])(
+    returnedStream: A => Boolean = (_: A) => false
+  ): Future[A] =
+    call.transform { result =>
+      context.end(result.toOption.exists(returnedStream))
+      result
+    }
+
+  private[runtime] def invocationResultHoldsStream(result: JsInvocationResult): Boolean = {
+    val typed = result.asInstanceOf[js.Dynamic].selectDynamic("result")
+    !js.isUndefined(typed) && typed != null && holdsStream(typed.selectDynamic("value"))
+  }
+
+  /**
+   * Whether an encoded value tree holds a stream, whose producer runs after the
+   * call returns.
+   */
+  private[runtime] def holdsStream(tree: js.Any): Boolean =
+    !js.isUndefined(tree) && tree != null && {
+      val nodes = tree.asInstanceOf[js.Dynamic].selectDynamic("valueNodes")
+      !js.isUndefined(nodes) && nodes.asInstanceOf[js.Array[js.Dynamic]].exists { node =>
+        node.selectDynamic("tag").asInstanceOf[Any] == "stream-value"
+      }
+    }
+
   private def initialize(agentTypeName: String, input: js.Dynamic): js.Promise[Unit] =
     if (!js.isUndefined(resolved)) {
       js.Promise.reject(customError("Agent is already initialized in this container")).asInstanceOf[js.Promise[Unit]]
@@ -136,10 +162,10 @@ object Guest {
         case None =>
           js.Promise.reject(invalidType("Invalid agent '" + agentTypeName + "'")).asInstanceOf[js.Promise[Unit]]
         case Some(defnAny) =>
-          val scalaPrincipal = InvocationContextHost.immediatePrincipal()
-          initializationPrincipal = Some(scalaPrincipal)
+          // The host is asked for the caller only if the constructor reads it.
+          val context = InvocationContextHost.current()
           // Avoid calling `.then` directly (Scala 3 scaladoc / TASTy reader can error on it during `doc`).
-          val initPromise              = defnAny.initializeAny(input.asInstanceOf[JsSchemaValueTree], scalaPrincipal)
+          val initPromise              = defnAny.initializeAny(input.asInstanceOf[JsSchemaValueTree], context)
           val initFuture: Future[Unit] =
             FutureInterop
               .fromPromise(initPromise)
@@ -153,7 +179,7 @@ object Guest {
                 case js.JavaScriptException(err) if isJsAgentError(err) =>
                   Future.failed(scala.scalajs.js.JavaScriptException(err))
               }
-          FutureInterop.toPromise(initFuture).asInstanceOf[js.Promise[Unit]]
+          FutureInterop.toPromise(endWhenDone(context, initFuture)()).asInstanceOf[js.Promise[Unit]]
       }
     }
 
@@ -163,7 +189,7 @@ object Guest {
     } else {
       val r                                                  = resolved.asInstanceOf[Resolved]
       val mn                                                 = normalizeMethodName(methodName)
-      val scalaPrincipal                                     = InvocationContextHost.immediatePrincipal()
+      val context                                            = InvocationContextHost.current()
       val onRejected: js.Function1[Any, js.Thenable[js.Any]] =
         js.Any.fromFunction1 { (err: Any) =>
           err match {
@@ -181,12 +207,15 @@ object Guest {
         }
       val resultPromise: js.Promise[js.Any] =
         FutureInterop.toPromise(
-          FutureInterop
-            .fromPromise(r.defn.invokeAny(r.instance, mn, input.asInstanceOf[JsSchemaValueTree], scalaPrincipal))
-            .map {
-              case Some(tree) => tree.asInstanceOf[js.Any]
-              case None       => js.undefined
-            }
+          endWhenDone[js.Any](
+            context,
+            FutureInterop
+              .fromPromise(r.defn.invokeAny(r.instance, mn, input.asInstanceOf[JsSchemaValueTree], context))
+              .map {
+                case Some(tree) => tree.asInstanceOf[js.Any]
+                case None       => js.undefined
+              }
+          )(holdsStream)
         )
       resultPromise.`catch`[js.Any](onRejected)
     }
@@ -212,6 +241,7 @@ object Guest {
     val scalaStdin     = stdin.toOption.map(new JsToolInputStream(_))
     var scalaStdout    = Option.empty[JsToolOutputStream]
     var scalaStderr    = Option.empty[JsToolOutputStream]
+    var toolContext    = Option.empty[golem.InvocationContext]
     val invoked        =
       try {
         val decodedInput =
@@ -242,10 +272,11 @@ object Guest {
                       Left(WitToolError.InvalidInput("tool invocation did not contain declared stderr stream"))
                     )
                   case Some(_) =>
-                    val scalaPrincipal = InvocationContextHost.immediatePrincipal()
+                    val context = InvocationContextHost.current()
+                    toolContext = Some(context)
                     scalaStdout = stdout.toOption.map(new JsToolOutputStream(_))
                     scalaStderr = stderr.toOption.map(new JsToolOutputStream(_))
-                    invoker(path, in, scalaStdin, scalaStdout, scalaStderr, scalaPrincipal)
+                    invoker(path, in, scalaStdin, scalaStdout, scalaStderr, context)
                 }
             }
         }
@@ -257,15 +288,22 @@ object Guest {
     // wire-encoded `tool-error`; a failed Future (user code error) propagates as
     // an unhandled rejection so it becomes a WASM trap.
     val completed = invoked.transformWith { invocationResult =>
-      val encoded = Future.fromTry(invocationResult).flatMap {
-        case Right(res) =>
-          res.result match {
-            case Some(value) => SchemaWireInterop.typedToJsAsync(value).map(value => JsInvocationResult(value))
-            case None        => Future.successful(JsInvocationResult(js.undefined))
-          }
-        case Left(error) =>
-          ToolWireInterop.toolErrorToJsAsync(error).flatMap(error => Future.failed(js.JavaScriptException(error)))
-      }
+      val encoded = Future
+        .fromTry(invocationResult)
+        .flatMap {
+          case Right(res) =>
+            res.result match {
+              case Some(value) => SchemaWireInterop.typedToJsAsync(value).map(value => JsInvocationResult(value))
+              case None        => Future.successful(JsInvocationResult(js.undefined))
+            }
+          case Left(error) =>
+            ToolWireInterop.toolErrorToJsAsync(error).flatMap(error => Future.failed(js.JavaScriptException(error)))
+        }
+        .transform { result =>
+          // A tool result that holds a stream keeps the caller for its producer.
+          toolContext.foreach(_.end(result.toOption.exists(invocationResultHoldsStream)))
+          result
+        }
       val cleanup = List(
         () => inputOwnership.close(),
         () => scalaStdin.map(_.close()).getOrElse(Future.successful(())),
@@ -386,30 +424,22 @@ object Guest {
           case Some(handlers) =>
             FutureInterop.toPromise(
               handlers.save(r.instance).map { data =>
-                val principal      = initializationPrincipal.getOrElse(golem.Principal.Anonymous)
-                val principalBytes = PrincipalConverter.toJson(principal)
                 data match {
                   case parts: MultipartSnapshot =>
                     val encoded = MultipartSnapshotCodec
-                      .encode(parts, principal)
+                      .encode(parts)
                       .fold(error => throw SnapshotError(error), identity)
                     JsSnapshot(toUint8Array(encoded.bytes), encoded.mimeType)
                   case payload: SnapshotPayload =>
                     if (payload.mimeType == "application/json") {
-                      val stateJson        = new String(payload.bytes, "UTF-8")
-                      val principalJsonStr = new String(principalBytes, "UTF-8")
-                      val envelope         = s"""{"version":1,"principal":$principalJsonStr,"state":$stateJson}"""
+                      val stateJson = new String(payload.bytes, "UTF-8")
+                      val envelope  = s"""{"version":2,"state":$stateJson}"""
                       JsSnapshot(toUint8Array(envelope.getBytes("UTF-8")), "application/json")
                     } else {
-                      val totalLength  = 1 + 4 + principalBytes.length + payload.bytes.length
-                      val fullSnapshot = new Array[Byte](totalLength)
-                      fullSnapshot(0) = 2.toByte
-                      fullSnapshot(1) = ((principalBytes.length >>> 24) & 0xff).toByte
-                      fullSnapshot(2) = ((principalBytes.length >>> 16) & 0xff).toByte
-                      fullSnapshot(3) = ((principalBytes.length >>> 8) & 0xff).toByte
-                      fullSnapshot(4) = (principalBytes.length & 0xff).toByte
-                      System.arraycopy(principalBytes, 0, fullSnapshot, 5, principalBytes.length)
-                      System.arraycopy(payload.bytes, 0, fullSnapshot, 5 + principalBytes.length, payload.bytes.length)
+                      // Binary v3: the version byte, then the agent's own state.
+                      val fullSnapshot = new Array[Byte](1 + payload.bytes.length)
+                      fullSnapshot(0) = BinarySnapshotVersion.toByte
+                      System.arraycopy(payload.bytes, 0, fullSnapshot, 1, payload.bytes.length)
                       JsSnapshot(toUint8Array(fullSnapshot), "application/octet-stream")
                     }
                 }
@@ -421,10 +451,21 @@ object Guest {
       }
   }
 
+  /**
+   * The binary snapshot version that 2.0 writes. Versions 1 and 2 are the 1.6
+   * forms.
+   */
+  private val BinarySnapshotVersion = 3
+
+  /**
+   * Reads a snapshot envelope. The 2.0 forms and the 1.6 forms (JSON v1,
+   * multipart v1, binary v1 and v2) are accepted; the principal of a 1.6
+   * envelope is checked and then dropped.
+   */
   private[runtime] def decodeSnapshotPayload(
     bytes: Array[Byte],
     mimeType: String
-  ): Either[String, (golem.Principal, SnapshotData)] =
+  ): Either[String, SnapshotData] =
     if (mimeType.takeWhile(_ != ';').trim.equalsIgnoreCase("multipart/mixed"))
       MultipartSnapshotCodec.decode(bytes, mimeType)
     else if (mimeType == "application/json") {
@@ -432,21 +473,26 @@ object Guest {
         case Left(error)     => Left(s"Failed to parse JSON snapshot envelope: $error")
         case Right(envelope) =>
           envelope.get("version").one.toOption match {
-            case None                                  => Left("JSON snapshot envelope is missing 'version'")
-            case Some(version) if version.print != "1" =>
+            case None                                                          => Left("JSON snapshot envelope is missing 'version'")
+            case Some(version) if version.print != "1" && version.print != "2" =>
               Left(s"Unsupported JSON snapshot version: ${version.print}")
-            case Some(_) =>
-              envelope.get("principal").one.toOption match {
-                case None                => Left("JSON snapshot envelope is missing 'principal'")
-                case Some(principalJson) =>
-                  PrincipalConverter.fromJson(principalJson.printBytes) match {
-                    case Left(error)      => Left(s"Failed to deserialize snapshot principal: $error")
-                    case Right(principal) =>
-                      envelope.get("state").one.toOption match {
-                        case None        => Left("JSON snapshot envelope is missing 'state'")
-                        case Some(state) => Right((principal, SnapshotPayload(state.printBytes, "application/json")))
-                      }
+            case Some(version) =>
+              val legacyPrincipal: Either[String, Unit] =
+                if (version.print == "1")
+                  envelope.get("principal").one.toOption match {
+                    case None                => Left("JSON snapshot envelope is missing 'principal'")
+                    case Some(principalJson) =>
+                      LegacySnapshotPrincipal
+                        .check(principalJson.printBytes)
+                        .left
+                        .map(error => s"Failed to deserialize snapshot principal: $error")
                   }
+                else Right(())
+              legacyPrincipal.flatMap { _ =>
+                envelope.get("state").one.toOption match {
+                  case None        => Left("JSON snapshot envelope is missing 'state'")
+                  case Some(state) => Right(SnapshotPayload(state.printBytes, "application/json"))
+                }
               }
           }
       }
@@ -455,8 +501,9 @@ object Guest {
     } else {
       val version = bytes(0) & 0xff
       version match {
-        case 1 => Right((golem.Principal.Anonymous, SnapshotPayload(bytes.drop(1), "application/octet-stream")))
-        case 2 =>
+        case 1                     => Right(SnapshotPayload(bytes.drop(1), "application/octet-stream"))
+        case BinarySnapshotVersion => Right(SnapshotPayload(bytes.drop(1), "application/octet-stream"))
+        case 2                     =>
           if (bytes.length < 5) Left("Version 2 snapshot too short for principal length")
           else {
             val principalLen =
@@ -467,10 +514,9 @@ object Guest {
             else {
               val principalEnd   = 5 + principalLen
               val principalBytes = java.util.Arrays.copyOfRange(bytes, 5, principalEnd)
-              PrincipalConverter.fromJson(principalBytes) match {
-                case Left(error)      => Left(s"Failed to deserialize snapshot principal: $error")
-                case Right(principal) =>
-                  Right((principal, SnapshotPayload(bytes.drop(principalEnd), "application/octet-stream")))
+              LegacySnapshotPrincipal.check(principalBytes) match {
+                case Left(error) => Left(s"Failed to deserialize snapshot principal: $error")
+                case Right(_)    => Right(SnapshotPayload(bytes.drop(principalEnd), "application/octet-stream"))
               }
             }
           }
@@ -492,17 +538,16 @@ object Guest {
             js.Promise.reject(customError(s"Agent '$agentTypeName' has no snapshot handlers"))
           case Some(defn) =>
             decodeSnapshotPayload(fromUint8Array(snapshot.payload), snapshot.mimeType) match {
-              case Left(error)                    => js.Promise.reject(error)
-              case Right((principal, agentState)) =>
+              case Left(error)       => js.Promise.reject(error)
+              case Right(agentState) =>
                 FutureInterop.toPromise(
                   FutureInterop
                     .fromPromise(
-                      defn.restoreAny(agentState, agentId, constructorInput, principal)
+                      defn.restoreAny(agentState, agentId, constructorInput)
                     )
                     .map { restored =>
                       val newResolved = Resolved(defn, restored.instance)
                       restored.config.foreach(ConfigHolder.set)
-                      initializationPrincipal = Some(principal)
                       resolved = newResolved
                       ()
                     }

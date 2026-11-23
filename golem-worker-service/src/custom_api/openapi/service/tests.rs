@@ -241,6 +241,6 @@ async fn worker_adapter_uses_derived_private_identity_and_canonical_input() {
     let contexts = harness.contexts.lock().unwrap();
     assert_eq!(contexts.len(), 1);
     assert!(matches!(contexts[0].auth, AuthCtx::System));
-    assert_eq!(contexts[0].principal, Principal::anonymous().into());
+    assert_eq!(contexts[0].caller, Caller::anonymous().into());
     assert!(contexts[0].context.is_none());
 }

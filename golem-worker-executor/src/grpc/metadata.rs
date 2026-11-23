@@ -19,7 +19,8 @@ use super::{
     UpdateMode, UsesAllDeps, Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl,
     extract_owned_agent_id, golem, info_span, to_protobuf_resource_description,
 };
-use crate::services::{HasAgentTypesService, HasComponentService};
+use crate::model::public_oplog::with_expected_request;
+use crate::services::{HasAgentTypesService, HasComponentService, HasOplogService};
 use golem_common::model::agent::{AgentKey, ParsedAgentKey};
 use golem_common::model::type_id::TypeId;
 
@@ -48,6 +49,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         )
         .await;
 
+        let metadata = self.with_expected_requests(metadata).await;
         Self::create_proto_metadata(metadata, last_error_and_retry_count)
     }
 
@@ -131,10 +133,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .get(&environment_id, type_id, filter)
             .await?;
 
-        let result: Vec<golem::worker::AgentMetadata> = workers
-            .into_iter()
-            .map(|worker_metadata| Self::create_proto_metadata(worker_metadata, None))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut result = Vec::new();
+        for worker_metadata in workers {
+            let worker_metadata = self.with_expected_requests(worker_metadata).await;
+            result.push(Self::create_proto_metadata(worker_metadata, None)?);
+        }
 
         Ok(result)
     }
@@ -176,12 +179,34 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &worker_metadata.last_known_status,
             )
             .await;
+            let worker_metadata = self.with_expected_requests(worker_metadata).await;
             let metadata =
                 Self::create_proto_metadata(worker_metadata, last_error_and_retry_count)?;
             result.push(metadata);
         }
 
         Ok((new_cursor.map(Cursor::from), result))
+    }
+
+    /// `metadata` with the request of the expected call of each failed update's divergence,
+    /// read from the recorded `Start` as the public oplog reads it.
+    async fn with_expected_requests(&self, mut metadata: AgentMetadata) -> AgentMetadata {
+        let owned_agent_id = metadata.owned_agent_id();
+        let agent_mode = metadata.agent_mode;
+        for failed_update in &mut metadata.last_known_status.failed_updates {
+            if let Some(divergence) = failed_update.divergence.take() {
+                failed_update.divergence = Some(
+                    with_expected_request(
+                        divergence,
+                        &self.oplog_service(),
+                        &owned_agent_id,
+                        agent_mode,
+                    )
+                    .await,
+                );
+            }
+        }
+        metadata
     }
 
     fn create_proto_metadata(
@@ -218,6 +243,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let mut updates = Vec::new();
 
         let latest_status = metadata.last_known_status;
+        let reported_status = latest_status.reported_status();
+        let underlying_status = latest_status.underlying_status();
         for pending_invocation in &latest_status.pending_invocations {
             if let Some(target_revision) = pending_invocation.manual_update_target_revision {
                 updates.push(golem::worker::UpdateRecord {
@@ -269,6 +296,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 update: Some(golem::worker::update_record::Update::Failed(
                     golem::worker::FailedUpdate {
                         details: failed_update.details.clone(),
+                        failure_class: failed_update.failure_class.proto_number(),
+                        divergence: failed_update
+                            .divergence
+                            .clone()
+                            .map(|divergence| (*divergence).into_proto_keeping_structure()),
                     },
                 )),
                 pending_update_index,
@@ -309,7 +341,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 })?,
             created_by: Some(metadata.created_by.into()),
             component_revision: latest_status.component_revision.into(),
-            status: Into::<golem::worker::AgentStatus>::into(latest_status.status).into(),
+            status: Into::<golem::worker::AgentStatus>::into(reported_status).into(),
+            underlying_status: underlying_status
+                .map(|status| Into::<golem::worker::AgentStatus>::into(status).into()),
             retry_count: last_error_and_retry_count
                 .as_ref()
                 .and_then(|last_error| {

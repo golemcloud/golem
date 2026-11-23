@@ -12,7 +12,7 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_response, invocation_session_completion, invocation_session_result,
 };
 use golem_common::model::AgentId;
-use golem_common::model::agent::Principal;
+use golem_common::model::caller::Caller;
 use golem_common::model::card::{
     AgentResourcePattern, AgentVerb, ClassPermissionTarget, EffectiveSurface, GrantSurface,
     PermissionTarget,
@@ -114,11 +114,13 @@ pub async fn invoke(
     let (_, body) = export.command().map_err(invalid)?;
     let request_key = InvocationRequestKey::external(None, idempotency_key.as_ref());
     let key = idempotency_key.unwrap_or_else(IdempotencyKey::fresh);
-    let owner_key = request_key.owner_key(&format!(
-        "tool:{}/{}",
-        export.tool_name,
-        export.command_path.join("/")
-    ));
+    let command_path = export
+        .definition
+        .canonical_command_path(&export.command_path)
+        .ok_or_else(|| invalid("the exported command path does not name a command".to_string()))?;
+    let owner_key = request_key.owner_key(
+        &golem_common::model::InvocationOperation::tool_operation(&export.tool_name, &command_path),
+    );
     let auth = invocation_auth(deployment, export, &owner_key);
     let input = PublicTypedValue {
         graph: input.graph().clone(),
@@ -153,7 +155,7 @@ pub async fn invoke(
             },
             Box::pin(ReceiverStream::new(receiver)),
             auth,
-            Principal::anonymous(),
+            Caller::anonymous(),
             request_key,
             |_| Ok(()),
         )
@@ -993,12 +995,14 @@ mod tests {
         let definition = NativeTool {
             version: "1.0.0".to_string(),
             requires_filesystem: false,
+            http_mount: None,
             schema: SchemaGraph::empty(),
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: "test".to_string(),
                     aliases: vec![],
                     doc: Doc::default(),
+                    http: None,
                     globals: Default::default(),
                     subcommands: vec![],
                     body: Some(CommandBody {

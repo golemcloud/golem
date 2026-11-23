@@ -70,7 +70,7 @@ use crate::model::oplog::{
     PublicOplogEntryWithIndex, PublicOplogPageEntry, PublicRetryPolicyState,
     PublicSnapshotAssistedUpdateDetails, PublicSnapshotData, PublicTypedAgentConfigEntry,
     PublicUpdateDescription, RawSnapshotData, SnapshotAssistedAutomaticUpdateParameters,
-    SnapshotAssistedUpdateDetails, SnapshotBasedUpdateParameters,
+    SnapshotAssistedUpdateDetails, SnapshotBasedUpdateParameters, UpdateFailureClass,
 };
 use crate::model::regions::OplogRegion;
 use crate::resource_runtime::ResourceTypeId;
@@ -128,6 +128,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .instance_id
                     .map(|id| id.into())
                     .ok_or("Missing instance_id in Create entry")?,
+                never_live: create.never_live,
             })),
             oplog_entry::Entry::Start(start) => Ok(PublicOplogEntry::Start(StartParams {
                 timestamp: start.timestamp.ok_or("Missing timestamp field")?.into(),
@@ -254,6 +255,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .retry_policy_state
                     .map(TryInto::try_into)
                     .transpose()?,
+                retry_at: error.retry_at.map(Into::into),
+                retrying_start_index: error.retrying_start_index.map(OplogIndex::from_u64),
             })),
             oplog_entry::Entry::RecoverySucceeded(recovery_succeeded) => Ok(
                 PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams {
@@ -369,6 +372,16 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                                 ),
                                 snapshot_index: OplogIndex::from_u64(details.snapshot_index),
                             })
+                        })
+                        .transpose()?,
+                    failure_class: UpdateFailureClass::from_proto_number(
+                        failed_update.failure_class,
+                    )?,
+                    divergence: failed_update
+                        .divergence
+                        .map(|divergence| {
+                            crate::model::oplog::ReplayDivergence::try_from(divergence)
+                                .map(Box::new)
                         })
                         .transpose()?,
                 }))
@@ -824,6 +837,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             .collect(),
                         agent_type_name: create.agent_type_name.map(|name| name.0),
                         instance_id: Some(create.instance_id.into()),
+                        never_live: create.never_live,
                     },
                 )),
             },
@@ -943,6 +957,8 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         error: error.error,
                         retry_from: error.retry_from.0,
                         retry_policy_state: error.retry_policy_state.map(Into::into),
+                        retry_at: error.retry_at.map(Into::into),
+                        retrying_start_index: error.retrying_start_index.map(|index| index.0),
                     },
                 )),
             },
@@ -1050,6 +1066,11 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                                         snapshot_index: details.snapshot_index.into(),
                                     }
                                 }),
+                            failure_class: failed_update.failure_class.proto_number(),
+                            divergence: failed_update
+                                .divergence
+                                .map(|divergence| (*divergence).try_into())
+                                .transpose()?,
                         },
                     )),
                 }
@@ -1918,6 +1939,7 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                         .map(|p| p.environment_plugin_grant_id)
                         .collect(),
                     instance_id: create.instance_id,
+                    never_live: create.never_live,
                 }),
             }),
             PublicOplogEntry::Start(start) => {
@@ -2026,6 +2048,8 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                 error: AgentError::Unknown(error.error),
                 retry_from: error.retry_from,
                 retry_policy_state: error.retry_policy_state.map(Into::into),
+                retry_at: error.retry_at,
+                retrying_start_index: error.retrying_start_index,
             }),
             PublicOplogEntry::RecoverySucceeded(p) => Ok(OplogEntry::RecoverySucceeded {
                 timestamp: p.timestamp,
@@ -2084,6 +2108,8 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                     }
                 }),
                 snapshot_fault: None,
+                failure_class: p.failure_class,
+                divergence: p.divergence,
             }),
             PublicOplogEntry::GrowMemory(p) => Ok(OplogEntry::GrowMemory {
                 timestamp: p.timestamp,

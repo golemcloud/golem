@@ -13,9 +13,11 @@
 // limitations under the License.
 
 use super::*;
+use crate::base_model::caller::test_support::sample_caller;
+use crate::base_model::caller::{AgentPrincipal, Principal};
 use crate::model::AgentId;
 use crate::model::account::{AccountEmail, AccountId};
-use crate::model::agent::{AgentPrincipal, AgentTypeName, GolemUserPrincipal};
+use crate::model::agent::AgentTypeName;
 use crate::model::component::ComponentName;
 use crate::model::environment::EnvironmentId;
 use crate::model::json::NormalizedJsonValue;
@@ -27,6 +29,7 @@ fn tool_definition() -> Tool {
     Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree { nodes: Vec::new() },
         schema: crate::schema::SchemaGraph::empty(),
     }
@@ -183,6 +186,16 @@ fn entity_invocation_id_protobuf_roundtrip_is_structured() {
     assert_eq!(decoded, invocation_id);
 }
 
+fn owner_principal(owner: &OwnedAgentId) -> Principal {
+    Principal::Agent(AgentPrincipal::of_agent(
+        "https://golem.example".to_string(),
+        owner.agent_id,
+        crate::model::AgentFingerprint(uuid::Uuid::from_u128(0xf1)),
+        AgentTypeName("Relay".to_string()),
+        owner.environment_id,
+    ))
+}
+
 #[test]
 fn entity_invocation_request_binary_roundtrip_preserves_activation() {
     let activation = activation();
@@ -214,9 +227,7 @@ fn entity_invocation_request_binary_roundtrip_preserves_activation() {
                 errors: Vec::new(),
             },
         }),
-        principal: Principal::GolemUser(GolemUserPrincipal {
-            account_id: AccountId::new(),
-        }),
+        caller: sample_caller(),
         plan: EntityInvocationPlanReference::Root {
             plan: EntityInvocationPlan::new(vec![EntityInvocationPlanLayer::Tool { activation }])
                 .unwrap(),
@@ -228,6 +239,7 @@ fn entity_invocation_request_binary_roundtrip_preserves_activation() {
     let decoded: EntityInvocationRequest = desert_rust::deserialize(&bytes).unwrap();
 
     assert_eq!(decoded, request);
+    assert_eq!(decoded.caller, sample_caller());
 }
 
 #[test]
@@ -441,9 +453,7 @@ fn invocation_scope_protobuf_roundtrip_preserves_activation_fingerprint() {
         .unwrap(),
         OplogIndex::from_u64(81),
         Arc::new(activation()),
-        Principal::Agent(AgentPrincipal {
-            agent_id: owner.agent_id,
-        }),
+        owner_principal(&owner),
         InvocationExecutionMode::ReplayingCompleted,
         InvocationId(uuid::Uuid::from_u128(0x0123456789abcdef_fedcba9876543210)),
         true,
@@ -496,9 +506,7 @@ fn invocation_scope_protobuf_requires_idempotency_key() {
         .unwrap(),
         OplogIndex::from_u64(81),
         Arc::new(activation()),
-        Principal::Agent(AgentPrincipal {
-            agent_id: owner.agent_id,
-        }),
+        owner_principal(&owner),
         InvocationExecutionMode::Live,
         InvocationId(uuid::Uuid::from_u128(0x0123456789abcdef_fedcba9876543212)),
         false,
@@ -529,9 +537,7 @@ fn middleware_invocation_scope_roundtrips_through_binary_and_protobuf() {
         .unwrap(),
         OplogIndex::from_u64(84),
         middleware_activation.clone(),
-        Principal::Agent(AgentPrincipal {
-            agent_id: owner.agent_id,
-        }),
+        owner_principal(&owner),
         InvocationExecutionMode::ReplayingIncomplete,
         InvocationId(uuid::Uuid::from_u128(0x0123456789abcdef_fedcba9876543214)),
         true,
@@ -555,7 +561,7 @@ fn middleware_invocation_scope_roundtrips_through_binary_and_protobuf() {
                 errors: Vec::new(),
             },
         }),
-        principal: scope.calling_principal().clone(),
+        caller: crate::base_model::caller::Caller::entry(scope.calling_principal().clone()),
         plan: EntityInvocationPlanReference::Root {
             plan: EntityInvocationPlan::new(vec![
                 EntityInvocationPlanLayer::Middleware {
@@ -701,9 +707,7 @@ fn mcp_activation_is_pinned_and_bound_to_bridge_revision_and_owner_environment()
             .unwrap(),
             OplogIndex::from_u64(7),
             Arc::new(activation.clone()),
-            Principal::Agent(AgentPrincipal {
-                agent_id: owner.agent_id,
-            }),
+            owner_principal(&owner),
             InvocationExecutionMode::ReplayingCompleted,
             InvocationId(uuid::Uuid::from_u128(0x0123456789abcdef_fedcba9876543216)),
             true,
@@ -886,9 +890,7 @@ fn invocation_scope_rejects_parent_that_does_not_precede_invocation_start() {
         owner: owner.clone(),
         entity: AgentEntity::Tool(ToolName::try_from("search").unwrap()),
     };
-    let principal = Principal::Agent(AgentPrincipal {
-        agent_id: owner.agent_id,
-    });
+    let principal = owner_principal(&owner);
 
     for parent_start_index in [OplogIndex::from_u64(42), OplogIndex::from_u64(43)] {
         let scope = EntityInvocationScope::new(

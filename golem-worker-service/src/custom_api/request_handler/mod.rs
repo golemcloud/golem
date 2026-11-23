@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::cache_headers::{CacheRouteKind, add_vary_headers, apply_response_cache_headers};
 use super::call_agent::CallAgentHandler;
 use super::cors::{
     apply_cors_outgoing_middleware, denied_preflight, handle_selected_preflight, is_cors_preflight,
@@ -55,14 +56,22 @@ pub struct RequestHandler {
 #[derive(Debug)]
 pub struct RequestFailure {
     pub error: RequestHandlerError,
-    pub cors_headers: http::HeaderMap,
+    pub response_headers: http::HeaderMap,
 }
 
 impl From<RequestHandlerError> for RequestFailure {
     fn from(error: RequestHandlerError) -> Self {
+        let mut response_headers = http::HeaderMap::new();
+        apply_response_cache_headers(
+            CacheRouteKind::Error,
+            &mut response_headers,
+            false,
+            false,
+            false,
+        );
         Self {
             error,
-            cors_headers: http::HeaderMap::new(),
+            response_headers,
         }
     }
 }
@@ -139,7 +148,11 @@ impl RequestHandler {
                 .headers()
                 .contains_key(http::header::UPGRADE)
         {
-            return Err(RequestHandlerError::RawRequest(StatusCode::NOT_IMPLEMENTED).into());
+            return finish_selected_response(
+                Err(RequestHandlerError::RawRequest(StatusCode::NOT_IMPLEMENTED)),
+                &request,
+                &matching_route,
+            );
         }
         let execute = require_available_security(&matching_route,
                 self.execute_route_and_middlewares(&mut request, &matching_route))
@@ -288,31 +301,58 @@ fn finish_selected_response(
         &selected.route.behavior,
         RichRouteBehaviour::Mount(mount) if matches!(mount.files, MountFileSource::Live { .. })
     );
-    match result {
-        Ok(mut response) => {
-            apply_cors_outgoing_middleware(&mut response, request, selected)?;
-            if live_files {
-                response.headers_mut().insert(
-                    http::header::CACHE_CONTROL,
-                    http::HeaderValue::from_static("no-store"),
-                );
+    let (mut response, mut error) = match result {
+        Ok(response) => (response, None),
+        Err(error) => (Response::default(), Some(error)),
+    };
+    if live_files {
+        response.headers_mut().insert(
+            http::header::CACHE_CONTROL,
+            http::HeaderValue::from_static("no-store"),
+        );
+    }
+    if let Err(cors_error) = apply_cors_outgoing_middleware(&mut response, request, selected) {
+        response = Response::default();
+        // Finalization can fail after an OAuth producer issued a credential.
+        // Discard its body and headers without weakening its privacy floor.
+        response.headers_mut().insert(
+            http::header::CACHE_CONTROL,
+            http::HeaderValue::from_static("private, no-store"),
+        );
+        error = Some(cors_error);
+    }
+    let kind = if error.is_some()
+        || response.status().is_client_error()
+        || response.status().is_server_error()
+    {
+        CacheRouteKind::Error
+    } else {
+        match &selected.route.behavior {
+            RichRouteBehaviour::CallAgent(_) => CacheRouteKind::Typed(None),
+            RichRouteBehaviour::Mount(mount) if mount.handler.is_some() => {
+                CacheRouteKind::RawHandler
             }
-            Ok(response)
+            RichRouteBehaviour::Mount(_) => CacheRouteKind::File,
+            RichRouteBehaviour::OpenApiSpec(_) => CacheRouteKind::OpenApi,
+            _ => CacheRouteKind::Protocol,
         }
-        Err(error) => {
-            let mut response = Response::default();
-            apply_cors_outgoing_middleware(&mut response, request, selected)?;
-            if live_files {
-                response.headers_mut().insert(
-                    http::header::CACHE_CONTROL,
-                    http::HeaderValue::from_static("no-store"),
-                );
-            }
-            Err(RequestFailure {
-                error,
-                cors_headers: response.headers().clone(),
-            })
-        }
+    };
+    apply_response_cache_headers(
+        kind,
+        response.headers_mut(),
+        request.authenticated_session().is_some(),
+        false,
+        false,
+    );
+    if let RichRouteSecurity::SessionFromHeader(security) = &selected.route.security {
+        add_vary_headers(response.headers_mut(), &[&security.header_name]);
+    }
+    match error {
+        Some(error) => Err(RequestFailure {
+            error,
+            response_headers: response.headers().clone(),
+        }),
+        None => Ok(response),
     }
 }
 
@@ -681,7 +721,11 @@ mod mounted_tests {
                     response.headers()[http::header::ACCESS_CONTROL_ALLOW_ORIGIN],
                     "https://client.example"
                 );
-                assert_eq!(response.headers()[http::header::VARY], "Origin");
+                assert_eq!(
+                    response.headers()[http::header::VARY],
+                    "Origin, Authorization, Cookie, Golem-Token"
+                );
+                assert_eq!(response.headers()[http::header::CACHE_CONTROL], "no-cache");
             }
         }
     }
@@ -768,7 +812,7 @@ mod mounted_tests {
             );
             let response = result.unwrap_or_else(|failure| {
                 let mut response = ApiEndpointError::from(failure.error).into_response();
-                response.headers_mut().extend(failure.cors_headers);
+                response.headers_mut().extend(failure.response_headers);
                 response
             });
             assert_eq!(response.status(), status);
@@ -799,6 +843,124 @@ mod mounted_tests {
                 );
                 assert_eq!(response.headers()["x-raw"].as_bytes(), &[0x80, 0xff]);
             }
+        }
+    }
+
+    #[test]
+    async fn selected_cache_policy_covers_authenticated_successes_errors_and_stream_heads() {
+        for kind in ["typed", "router", "filesystem"] {
+            for authenticated in [false, true] {
+                let mut route = test_route(
+                    1,
+                    "/",
+                    if kind == "typed" { Some("GET") } else { None },
+                    kind,
+                );
+                route.security = RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
+                    header_name: "x-session".into(),
+                });
+                let resolver = test_resolver(vec![route]);
+                let request = Request::builder()
+                    .uri("/".parse().unwrap())
+                    .header("host", "example.com")
+                    .header("x-session", "{}")
+                    .finish();
+                let selected = resolver.resolve_matching_route(&request).await.unwrap();
+                let mut request = RichRequest::new(request);
+                if authenticated {
+                    assert!(
+                        apply_session_from_header_security_middleware(&mut request, &selected)
+                            .unwrap()
+                            .is_none()
+                    );
+                }
+                for status in [
+                    StatusCode::OK,
+                    StatusCode::NOT_MODIFIED,
+                    StatusCode::BAD_REQUEST,
+                ] {
+                    let mut response =
+                        Response::builder()
+                            .status(status)
+                            .body(poem::Body::from_bytes_stream(futures::stream::poll_fn(
+                                |_| -> std::task::Poll<
+                                    Option<Result<bytes::Bytes, std::io::Error>>,
+                                > {
+                                    panic!("Cache finalization must not poll streaming bodies")
+                                },
+                            )));
+                    response.headers_mut().insert(
+                        http::header::CACHE_CONTROL,
+                        "public, max-age=60".parse().unwrap(),
+                    );
+                    response
+                        .headers_mut()
+                        .insert(http::header::VARY, "Accept-Language".parse().unwrap());
+                    let response =
+                        finish_selected_response(Ok(response), &request, &selected).unwrap();
+                    let expected = match (kind, authenticated) {
+                        ("filesystem", true) => "private, no-store",
+                        ("filesystem", false) => "no-store",
+                        (_, true) => "private, no-cache",
+                        (_, false) => "public, max-age=60",
+                    };
+                    assert_eq!(
+                        response.headers()[http::header::CACHE_CONTROL],
+                        expected,
+                        "{kind} {status}"
+                    );
+                    if !authenticated {
+                        assert_eq!(
+                            response.headers()[http::header::VARY],
+                            "Accept-Language, Authorization, Cookie, Golem-Token, x-session"
+                        );
+                    }
+                }
+                let failure = finish_selected_response(
+                    Err(anyhow!("storage failed").into()),
+                    &request,
+                    &selected,
+                )
+                .unwrap_err();
+                assert_eq!(
+                    failure.response_headers[http::header::CACHE_CONTROL],
+                    match (kind, authenticated) {
+                        ("filesystem", true) => "private, no-store",
+                        ("filesystem", false) => "no-store",
+                        (_, true) => "private, no-cache",
+                        (_, false) => "no-cache",
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    async fn cors_finalization_failures_remain_private_without_original_response_headers() {
+        for kind in ["router", "filesystem"] {
+            let mut route = test_route(1, "/", None, kind);
+            route.cors.allowed_patterns = vec![OriginPattern("https://client.example".into())];
+            let resolver = test_resolver(vec![route]);
+            let request = Request::builder()
+                .uri("/".parse().unwrap())
+                .header("host", "example.com")
+                .finish();
+            let selected = resolver.resolve_matching_route(&request).await.unwrap();
+            let mut request = RichRequest::new(request);
+            request.underlying.headers_mut().insert(
+                http::header::ORIGIN,
+                http::HeaderValue::from_bytes(&[0xff]).unwrap(),
+            );
+            let response = Response::builder()
+                .header("x-application", "discard")
+                .header("cache-control", "private, no-store")
+                .finish();
+            let failure = finish_selected_response(Ok(response), &request, &selected).unwrap_err();
+            assert_eq!(
+                failure.response_headers[http::header::CACHE_CONTROL],
+                "private, no-store"
+            );
+            assert!(!failure.response_headers.contains_key("x-application"));
         }
     }
 }

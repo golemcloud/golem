@@ -315,8 +315,9 @@ pub(super) async fn resolve_scope_derivation_parents<Ctx: WorkerCtx>(
 ) -> anyhow::Result<Result<Vec<ScopeDerivationParent>, permissions_types::PermissionError>> {
     if decided.len() != handles.len() {
         return Err(WorkerExecutorError::unexpected_oplog_entry(
-            format!("a derive-scope decision for {} parents", handles.len()),
+            ctx.state.replay_state.last_replayed_index(),
             format!("a derive-scope decision for {} parents", decided.len()),
+            format!("a derive-scope decision for {} parents", handles.len()),
         )
         .into());
     }

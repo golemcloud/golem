@@ -23,6 +23,7 @@ use golem_common::model::type_id::TypeId;
 use golem_common::schema::agent::RegisteredAgentTypeSchema;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::service::type_id_resolution::InvalidationGenerations;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -84,13 +85,21 @@ struct CachedAgentTypes {
         Option<WorkerExecutorError>,
     >,
     cached_agent_types_by_type_id:
-        Cache<(EnvironmentId, TypeId), (), RegisteredAgentType, Option<WorkerExecutorError>>,
+        Cache<(EnvironmentId, TypeId), (), FetchedAgentType, WorkerExecutorError>,
+    generations: Arc<InvalidationGenerations>,
+}
+
+#[derive(Clone)]
+struct FetchedAgentType {
+    generation: u64,
+    agent_type: Option<RegisteredAgentType>,
 }
 
 impl CachedAgentTypes {
     pub fn new(inner: Arc<dyn AgentTypesService>, cache_time_to_idle: Duration) -> Self {
         Self {
             inner,
+            generations: Arc::default(),
             cached_registered_agent_types: Cache::new(
                 None,
                 FullCacheEvictionMode::None,
@@ -170,28 +179,41 @@ impl AgentTypesService for CachedAgentTypes {
         owner_environment: EnvironmentId,
         type_id: TypeId,
     ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError> {
-        // Cached like `get`: direct RPC to an absent agent resolves the ID's type tag through
-        // this on every call.
-        let result = self
-            .cached_agent_types_by_type_id
-            .get_or_insert_simple(&(owner_environment, type_id), || {
-                Box::pin(async move {
-                    match self.inner.get_by_type_id(owner_environment, type_id).await {
-                        Ok(Some(r)) => Ok(r),
-                        Ok(None) => Err(None),
-                        Err(err) => Err(Some(err)),
-                    }
+        let key = (owner_environment, type_id);
+        loop {
+            let inner = self.inner.clone();
+            let generations = self.generations.clone();
+            let fetched = self
+                .cached_agent_types_by_type_id
+                .get_or_insert_simple_spawned(&key, move || async move {
+                    let generation = generations.current();
+                    let agent_type = inner.get_by_type_id(owner_environment, type_id).await?;
+                    Ok(FetchedAgentType {
+                        generation,
+                        agent_type,
+                    })
                 })
-            })
-            .await;
-        match result {
-            Ok(result) => Ok(Some(result)),
-            Err(None) => Ok(None),
-            Err(Some(err)) => Err(err),
+                .await?;
+            if self
+                .generations
+                .is_current(owner_environment, fetched.generation)
+            {
+                // A type that has not been assigned can appear in a later deployment.
+                if fetched.agent_type.is_none() {
+                    self.cached_agent_types_by_type_id
+                        .remove_if_cached(&key, |cached| cached.generation == fetched.generation)
+                        .await;
+                }
+                return Ok(fetched.agent_type);
+            }
+            self.cached_agent_types_by_type_id
+                .remove_if_cached(&key, |cached| cached.generation == fetched.generation)
+                .await;
         }
     }
 
     async fn invalidate_environment(&self, environment_id: EnvironmentId) {
+        let generation = self.generations.invalidate(environment_id);
         let keys = self.cached_registered_agent_types.keys().await;
         for key in keys
             .into_iter()
@@ -199,23 +221,25 @@ impl AgentTypesService for CachedAgentTypes {
         {
             self.cached_registered_agent_types.remove(&key).await;
         }
-        let keys = self.cached_agent_types_by_type_id.keys().await;
-        for key in keys
-            .into_iter()
-            .filter(|(env_id, _)| *env_id == environment_id)
-        {
-            self.cached_agent_types_by_type_id.remove(&key).await;
+        for (key, _) in self.cached_agent_types_by_type_id.iter().await {
+            if key.0 == environment_id {
+                self.cached_agent_types_by_type_id
+                    .remove_if_cached(&key, |cached| cached.generation < generation)
+                    .await;
+            }
         }
     }
 
     async fn invalidate_all(&self) {
+        let generation = self.generations.invalidate_all();
         let keys = self.cached_registered_agent_types.keys().await;
         for key in keys {
             self.cached_registered_agent_types.remove(&key).await;
         }
-        let keys = self.cached_agent_types_by_type_id.keys().await;
-        for key in keys {
-            self.cached_agent_types_by_type_id.remove(&key).await;
+        for (key, _) in self.cached_agent_types_by_type_id.iter().await {
+            self.cached_agent_types_by_type_id
+                .remove_if_cached(&key, |cached| cached.generation < generation)
+                .await;
         }
     }
 }
@@ -331,6 +355,168 @@ mod grpc {
 }
 
 pub use local::local_type_id;
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use golem_common::model::account::{AccountEmail, AccountId};
+    use golem_common::model::agent::{RegisteredAgentTypeImplementer, Snapshotting};
+    use golem_common::schema::agent::{
+        AgentConstructorSchema, AgentTypeKind, AgentTypeSchema, InputSchema,
+    };
+    use golem_schema::schema::SchemaGraph;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use test_r::{test, timeout};
+    use tokio::sync::Notify;
+
+    struct GatedAgentTypes {
+        value: Mutex<RegisteredAgentType>,
+        calls: AtomicUsize,
+        started: Notify,
+        release: Notify,
+    }
+
+    #[async_trait]
+    impl AgentTypesService for GatedAgentTypes {
+        async fn get_all(
+            &self,
+            _: EnvironmentId,
+            _: ComponentId,
+            _: ComponentRevision,
+        ) -> Result<Vec<RegisteredAgentTypeSchema>, WorkerExecutorError> {
+            unreachable!()
+        }
+        async fn get(
+            &self,
+            _: EnvironmentId,
+            _: ComponentId,
+            _: ComponentRevision,
+            _: &AgentTypeName,
+        ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError> {
+            unreachable!()
+        }
+        async fn get_by_type_id(
+            &self,
+            _: EnvironmentId,
+            _: TypeId,
+        ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError> {
+            let value = self.value.lock().unwrap().clone();
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                self.started.notify_one();
+                self.release.notified().await;
+            }
+            Ok(Some(value))
+        }
+    }
+
+    fn source() -> Arc<GatedAgentTypes> {
+        Arc::new(GatedAgentTypes {
+            value: Mutex::new(RegisteredAgentType {
+                type_id: TypeId::try_from(7u32).unwrap(),
+                agent_type: AgentTypeSchema {
+                    type_name: AgentTypeName("Counter".into()),
+                    kind: AgentTypeKind::Regular,
+                    description: String::new(),
+                    source_language: "rust".into(),
+                    schema: SchemaGraph::empty(),
+                    constructor: AgentConstructorSchema {
+                        name: None,
+                        description: String::new(),
+                        prompt_hint: None,
+                        input_schema: InputSchema::Parameters(vec![]),
+                    },
+                    methods: vec![],
+                    dependencies: vec![],
+                    mode: golem_common::model::agent::AgentMode::Durable,
+                    http_mount: None,
+                    snapshotting: Snapshotting::Disabled(golem_schema::Empty {}),
+                    config: vec![],
+                },
+                implemented_by: RegisteredAgentTypeImplementer {
+                    component_id: ComponentId::new(),
+                    component_revision: ComponentRevision::INITIAL,
+                    component_name: "A".into(),
+                    account_id: AccountId::new(),
+                    account_email: AccountEmail::new("owner@example.com"),
+                },
+            }),
+            calls: AtomicUsize::new(0),
+            started: Notify::new(),
+            release: Notify::new(),
+        })
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn type_id_lookup_retries_an_invalidated_in_flight_result() {
+        for invalidate_all in [false, true] {
+            let source = source();
+            let cache = Arc::new(CachedAgentTypes::new(
+                source.clone(),
+                Duration::from_secs(60),
+            ));
+            let env = EnvironmentId::new();
+            let id = source.value.lock().unwrap().type_id;
+            let first = tokio::spawn({
+                let cache = cache.clone();
+                async move { cache.get_by_type_id(env, id).await }
+            });
+            source.started.notified().await;
+            source.value.lock().unwrap().implemented_by.component_name = "B".into();
+            if invalidate_all {
+                cache.invalidate_all().await;
+            } else {
+                cache.invalidate_environment(env).await;
+            }
+            source.release.notify_one();
+            assert_eq!(
+                first
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap()
+                    .implemented_by
+                    .component_name,
+                "B"
+            );
+            assert_eq!(
+                cache
+                    .get_by_type_id(env, id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .implemented_by
+                    .component_name,
+                "B"
+            );
+            assert_eq!(source.calls.load(Ordering::SeqCst), 2);
+        }
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn type_id_lookup_producer_survives_its_first_callers_cancellation() {
+        let source = source();
+        let cache = Arc::new(CachedAgentTypes::new(
+            source.clone(),
+            Duration::from_secs(60),
+        ));
+        let env = EnvironmentId::new();
+        let id = source.value.lock().unwrap().type_id;
+        let first = tokio::spawn({
+            let cache = cache.clone();
+            async move { cache.get_by_type_id(env, id).await }
+        });
+        source.started.notified().await;
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+        source.release.notify_one();
+        let actual = cache.get_by_type_id(env, id).await.unwrap().unwrap();
+        assert_eq!(actual.implemented_by.component_name, "A");
+        assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+    }
+}
 
 mod local {
     use crate::services::agent_types::AgentTypesService;

@@ -240,12 +240,25 @@ where
         _ => horizon == baseline.oplog_idx,
     };
     if contiguous {
-        (
-            update_status_with_new_entries(agent_mode, baseline, entries, &this.config().retry)
-                .map_err(StatusError::from),
-            false,
-            horizon,
+        // Live appends keep the decoded lookup payloads; only a payload without one downloads.
+        let deleted = deleted_regions(baseline.deleted_regions.clone(), &entries);
+        let status = match hydrate_lookup_payloads(
+            this,
+            owned_agent_id,
+            agent_mode,
+            &baseline,
+            &deleted,
+            &mut entries,
         )
+        .await
+        {
+            Ok(()) => {
+                update_status_with_new_entries(agent_mode, baseline, entries, &this.config().retry)
+                    .map_err(StatusError::from)
+            }
+            Err(error) => Err(error),
+        };
+        (status, false, horizon)
     } else {
         // Opened-oplog reads include ephemeral handoffs. Never flush the newer buffered tail.
         let reader = StatusOplogReader::new(this, owned_agent_id, agent_mode, Some(oplog), horizon);
@@ -347,6 +360,15 @@ where
                 &mut entries,
             )
             .await?;
+            hydrate_lookup_payloads(
+                this,
+                owned_agent_id,
+                agent_mode,
+                &baseline,
+                &deleted,
+                &mut entries,
+            )
+            .await?;
             hydrate_initial_pending_evidence(reader, &mut baseline, &entries).await?;
             let finalize_oplog_processor_checkpoints =
                 entries.keys().next_back() == Some(&last_oplog_index);
@@ -433,6 +455,15 @@ where
             &mut entries,
         )
         .await?;
+        hydrate_lookup_payloads(
+            this,
+            owned_agent_id,
+            agent_mode,
+            &baseline,
+            &baseline.deleted_regions,
+            &mut entries,
+        )
+        .await?;
         hydrate_initial_pending_evidence(reader, &mut baseline, &entries).await?;
         let finalize_oplog_processor_checkpoints =
             entries.keys().next_back() == Some(&last_oplog_index);
@@ -449,6 +480,7 @@ where
             FoldedRegions {
                 deleted: regions.deleted.clone(),
                 skipped: regions.skipped.clone(),
+                unreplayed: regions.unreplayed.clone(),
                 steps: &regions.steps,
             },
             pending_updates,
@@ -459,7 +491,7 @@ where
     Ok(Some(baseline))
 }
 
-pub(super) async fn hydrate_stream_session_payloads<T>(
+pub(crate) async fn hydrate_stream_session_payloads<T>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
@@ -497,6 +529,92 @@ where
             *record = OplogPayload::Inline(Box::new(decoded));
         }
     }
+    Ok(())
+}
+
+/// Loads the request payloads of the address lookups in `entries` and the response payloads of
+/// their `End` entries, which the fold of `resolved_names` reads. An `End` is loaded only for a
+/// lookup that `baseline` keeps open, or whose `Start` is in `entries` and can link: a DNS query
+/// of a record type other than A or AAAA downloads no response.
+pub(crate) async fn hydrate_lookup_payloads<T>(
+    this: &T,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    baseline: &AgentStatusRecord,
+    deleted_regions: &DeletedRegions,
+    entries: &mut BTreeMap<OplogIndex, OplogEntry>,
+) -> Result<(), StatusError>
+where
+    T: HasOplogService + Sync,
+{
+    let mut lookups: HashSet<OplogIndex> = baseline
+        .resolved_names
+        .following
+        .open
+        .keys()
+        .copied()
+        .collect();
+    for (index, entry) in entries.iter_mut() {
+        if super::resolved_names::reads_start(*index, entry, deleted_regions) {
+            if let OplogEntry::Start {
+                request: Some(request),
+                observational_owner: None,
+                ..
+            } = entry
+            {
+                load_payload(this, owned_agent_id, agent_mode, *index, request).await?;
+                if super::resolved_names::opens_lookup(*index, request)? {
+                    lookups.insert(*index);
+                }
+            }
+        } else if let OplogEntry::End {
+            start_index,
+            response: Some(response),
+            ..
+        } = entry
+            && lookups.contains(start_index)
+            && !deleted_regions.is_in_deleted_region(*index)
+        {
+            load_payload(this, owned_agent_id, agent_mode, *index, response).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Replaces an external `payload` that holds no decoded value with its downloaded value.
+async fn load_payload<T, P>(
+    this: &T,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    index: OplogIndex,
+    payload: &mut OplogPayload<P>,
+) -> Result<(), StatusError>
+where
+    T: HasOplogService + Sync,
+    P: desert_rust::BinaryCodec + std::fmt::Debug + Clone + PartialEq + Send + Sync + 'static,
+{
+    if !matches!(payload, OplogPayload::External { cached: None, .. }) {
+        return Ok(());
+    }
+    let decoded = this
+        .oplog_service()
+        .download_payload(owned_agent_id, agent_mode, payload.clone())
+        .await
+        .map_err(|error| {
+            let source = OplogReadSource::Other("address lookup payload");
+            let error = match error {
+                OplogPayloadDownloadError::Backend(error) => OplogReadError::source_unavailable(
+                    source,
+                    format!("failed to load payload at oplog index {index}: {error:#}"),
+                ),
+                OplogPayloadDownloadError::Corrupt(error) => OplogReadError::corruption(
+                    source,
+                    format!("failed to load payload at oplog index {index}: {error:#}"),
+                ),
+            };
+            UnreadableOplog::new(&owned_agent_id.agent_id, error)
+        })?;
+    *payload = OplogPayload::Inline(Box::new(decoded));
     Ok(())
 }
 
@@ -581,7 +699,7 @@ pub(crate) async fn skipped_regions_at(
 ) -> Result<DeletedRegions, StatusError> {
     let reader = StatusOplogReader::new(this, owned_agent_id, AgentMode::Durable, None, horizon);
     // A manual update invocation changes only the manual admissions, which no skipped region
-    // depends on, so the read does not decode the invocation payloads.
+    // depends on, so the read leaves them out.
     let entries = read_region_entries(&reader, OplogIndex::INITIAL, 1024, false)
         .await?
         .ok_or("Missing fork source history")?;
@@ -617,8 +735,8 @@ pub(super) async fn read_region_entries(
             ) || manual_admissions
                 && matches!(
                     entry,
-                    OplogEntry::PendingAgentInvocation { payload, .. }
-                        if manual_update_target_revision_of(payload).is_some()
+                    OplogEntry::PendingAgentInvocation { operation, .. }
+                        if operation.manual_update_target().is_some()
                 )
         }));
     }

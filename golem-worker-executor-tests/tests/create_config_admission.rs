@@ -167,7 +167,7 @@ async fn identical_keyed_record_config_retry_is_admitted(
                     None,
                     None,
                     &InvocationContextStack::fresh(),
-                    Principal::anonymous(),
+                    callers::anonymous(),
                     InvocationFreshnessDisposition::MayExist,
                     CreateIntent::Create {
                         owner,

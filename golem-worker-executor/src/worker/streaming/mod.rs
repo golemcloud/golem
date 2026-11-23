@@ -23,9 +23,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let (idempotency_key, invocation_payload, invocation_context) = invocation.into_parts();
         let invocation_context = invocation_context
             .limit_depth(self.deps.config().limits.max_invocation_context_stack_depth);
-        let payload = self
+        let (operation, payload) = self
             .oplog
-            .upload_payload_owned(invocation_payload)
+            .upload_request(invocation_payload)
             .await
             .map_err(|error| {
                 WorkerExecutorError::invalid_request(format!(
@@ -36,6 +36,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(OplogEntry::pending_agent_invocation(
             None,
             idempotency_key,
+            Box::new(operation),
             payload,
             invocation_context.trace_id,
             invocation_context.trace_states,
@@ -869,7 +870,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         if attempt.effective_identity != prepared.attempt.effective_identity {
             return Err(WorkerExecutorError::invalid_request(
-                "Unauthorized: resume identity differs from the pinned principal and grant",
+                "Unauthorized: resume identity differs from the pinned caller and grant",
             ));
         }
 

@@ -372,6 +372,7 @@ async fn monthly_supersedes_restart_without_reclassifying_an_already_observed_de
             error: AgentError::InternalError("invocation timer elapsed".into()),
             retry_from: golem_common::model::OplogIndex::INITIAL,
             semantic_trap_retry_override: None,
+            provenance: crate::model::FailureProvenance::Host,
         };
         assert!(
             monthly_failure::<Context>(
@@ -385,7 +386,7 @@ async fn monthly_supersedes_restart_without_reclassifying_an_already_observed_de
             .is_none()
         );
         assert!(
-            matches!(trap, TrapType::Error { error: AgentError::InternalError(message), retry_from, semantic_trap_retry_override: None }
+            matches!(trap, TrapType::Error { error: AgentError::InternalError(message), retry_from, semantic_trap_retry_override: None, .. }
             if message == "invocation timer elapsed" && retry_from == golem_common::model::OplogIndex::INITIAL)
         );
         assert!(

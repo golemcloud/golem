@@ -79,12 +79,18 @@ impl RoutedTarget {
         component: &Component,
         constructor: &ParsedAgentKey,
     ) -> WorkerResult<Self> {
-        let key = canonical_key(component, constructor)?;
+        let constructor = constructor
+            .canonical_constructor(&component.metadata)
+            .map_err(WorkerServiceError::TypeChecker)?;
         Ok(Self {
             agent_id,
-            agent_type: Some(key.agent_type().clone()),
+            agent_type: Some(constructor.agent_type.clone()),
             target: id_target(agent_id),
-            constructor: Some(proto_key(key)?),
+            constructor: Some(
+                constructor
+                    .try_into()
+                    .map_err(WorkerServiceError::TypeChecker)?,
+            ),
             component_id: Some(component.id),
         })
     }

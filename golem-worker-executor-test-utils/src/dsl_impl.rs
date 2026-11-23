@@ -47,6 +47,7 @@ use golem_common::model::agent::{
 };
 use golem_common::model::agent::{AgentFileContentHash, AgentMode, AgentTypeName};
 use golem_common::model::agent::{AgentKey, OwnedAgentId};
+use golem_common::model::caller::Caller;
 use golem_common::model::component::{
     AgentFilePath, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
     ArchiveFilePath, ComponentDto, ComponentId, ComponentName, ComponentRevision, InitialAgentFile,
@@ -161,6 +162,110 @@ impl TestWorkerExecutor {
         Ok(result)
     }
 
+    /// The executor's `GetInvocation` answer for the invocation of an agent.
+    pub async fn get_invocation(
+        &self,
+        agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        invocation_id: golem_common::model::InvocationId,
+    ) -> anyhow::Result<
+        Result<
+            Option<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>,
+            golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError,
+        >,
+    > {
+        use golem_api_grpc::proto::golem::workerexecutor::v1::{
+            GetInvocationRequest, get_invocation_response,
+        };
+        let response = self
+            .client
+            .clone()
+            .get_invocation(GetInvocationRequest {
+                agent_id: Some((*agent_id).into()),
+                environment_id: Some(environment_id.into()),
+                auth_ctx: Some(self.auth_ctx().into()),
+                invocation_id: Some(invocation_id.into()),
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(get_invocation_response::Result::Success(success)) => Ok(Ok(success.invocation)),
+            Some(get_invocation_response::Result::Failure(error)) => Ok(Err(error)),
+            None => Err(anyhow!("Empty get invocation response")),
+        }
+    }
+
+    /// The executor's `ListInvocations` answer. `request` names the filters, page size and
+    /// cursor; the agent, environment and caller are filled in.
+    pub async fn list_invocations(
+        &self,
+        agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        request: golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsRequest,
+    ) -> anyhow::Result<
+        Result<
+            golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsSuccess,
+            golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError,
+        >,
+    > {
+        use golem_api_grpc::proto::golem::workerexecutor::v1::{
+            ListInvocationsRequest, list_invocations_response,
+        };
+        let response = self
+            .client
+            .clone()
+            .list_invocations(ListInvocationsRequest {
+                agent_id: Some((*agent_id).into()),
+                environment_id: Some(environment_id.into()),
+                auth_ctx: Some(self.auth_ctx().into()),
+                ..request
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(list_invocations_response::Result::Success(success)) => Ok(Ok(success)),
+            Some(list_invocations_response::Result::Failure(error)) => Ok(Err(error)),
+            None => Err(anyhow!("Empty list invocations response")),
+        }
+    }
+
+    /// The executor's `LookupInvocations` answer for the caller's idempotency key.
+    pub async fn lookup_invocations(
+        &self,
+        agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        idempotency_key: &IdempotencyKey,
+        operation: Option<&str>,
+    ) -> anyhow::Result<
+        Result<
+            Vec<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>,
+            golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError,
+        >,
+    > {
+        use golem_api_grpc::proto::golem::workerexecutor::v1::{
+            LookupInvocationsRequest, lookup_invocations_response,
+        };
+        let response = self
+            .client
+            .clone()
+            .lookup_invocations(LookupInvocationsRequest {
+                agent_id: Some((*agent_id).into()),
+                environment_id: Some(environment_id.into()),
+                auth_ctx: Some(self.auth_ctx().into()),
+                idempotency_key: Some(idempotency_key.clone().into()),
+                operation: operation.map(str::to_string),
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(lookup_invocations_response::Result::Success(success)) => {
+                Ok(Ok(success.invocations))
+            }
+            Some(lookup_invocations_response::Result::Failure(error)) => Ok(Err(error)),
+            None => Err(anyhow!("Empty lookup invocations response")),
+        }
+    }
+
     /// Reads one oplog entry in full through the streaming `GetOplogEntry` call.
     pub async fn get_oplog_entry(
         &self,
@@ -240,10 +345,13 @@ impl TestWorkerExecutor {
                         )
                         .map(|reason| reason.as_str_name())
                         .unwrap_or("UNKNOWN");
-                    terminal = Some(Err(anyhow!(
-                        "Agent invocation rejected ({reason}): {}",
-                        rejected.error
-                    )));
+                    terminal = Some(Err(match &rejected.worker_error {
+                        Some(worker_error) => anyhow!(
+                            "Agent invocation rejected ({reason}): {} ({worker_error:?})",
+                            rejected.error
+                        ),
+                        None => anyhow!("Agent invocation rejected ({reason}): {}", rejected.error),
+                    }));
                 }
                 Some(invocation_response::Response::Result(invocation_result)) => {
                     result = Some(invocation_result);
@@ -318,7 +426,7 @@ impl TestWorkerExecutor {
         constructor: Option<ProtoAgentKey>,
         request_key: InvocationRequestKey,
         idempotency_key: Option<&IdempotencyKey>,
-        principal: Option<golem_common::model::agent::Principal>,
+        principal: Option<Caller>,
         method_name: &str,
         params: TypedSchemaValue,
     ) -> anyhow::Result<AgentResult> {
@@ -340,7 +448,7 @@ impl TestWorkerExecutor {
                 environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
                 context: None,
-                principal: principal.map(Into::into),
+                caller: Some(principal.unwrap_or_else(Caller::anonymous).into()),
                 freshness_disposition:
                     golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                         as i32,
@@ -709,7 +817,7 @@ impl TestDsl for TestWorkerExecutor {
                 config: config.into_iter().map(|lac| lac.into()).collect(),
                 ignore_already_existing: upsert,
                 auth_ctx: Some(self.auth_ctx().into()),
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
                 invocation_context: None,
                 idempotency_key: None,
                 freshness_disposition: 0,
@@ -763,7 +871,7 @@ impl TestDsl for TestWorkerExecutor {
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(self.auth_ctx().into()),
             context: None,
-            principal: None,
+            caller: Some(Caller::anonymous().into()),
             freshness_disposition:
                 golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                     as i32,
@@ -786,7 +894,7 @@ impl TestDsl for TestWorkerExecutor {
         component: &ComponentDto,
         agent_id: &ParsedAgentKey,
         idempotency_key: Option<&IdempotencyKey>,
-        principal: Option<golem_common::model::agent::Principal>,
+        principal: Option<Caller>,
         method_name: &str,
         params: TypedSchemaValue,
     ) -> anyhow::Result<AgentResult> {
@@ -847,7 +955,8 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(agent_id.environment_id.into()),
                 target: Some(target.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
+                expected_fingerprint: None,
                 resolved_revert,
             })
             .await?
@@ -882,6 +991,8 @@ impl TestDsl for TestWorkerExecutor {
                     cursor,
                     count: 100,
                     auth_ctx: Some(self.auth_ctx().into()),
+                    to_oplog_index: None,
+                    scan_allowance: None,
                 })
                 .await?
                 .into_inner();
@@ -926,6 +1037,8 @@ impl TestDsl for TestWorkerExecutor {
                 cursor: None,
                 count: 1,
                 auth_ctx: Some(self.auth_ctx().into()),
+                to_oplog_index: None,
+                scan_allowance: None,
             })
             .await?
             .into_inner();
@@ -1004,7 +1117,8 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(agent_id.environment_id.into()),
                 recover_immediately,
                 auth_ctx: Some(self.auth_ctx().into()),
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
+                expected_fingerprint: None,
             })
             .await?
             .into_inner();
@@ -1028,7 +1142,8 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(agent_id.environment_id.into()),
                 force: Some(force),
                 auth_ctx: Some(self.auth_ctx().into()),
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
+                expected_fingerprint: None,
             })
             .await?
             .into_inner();
@@ -1083,7 +1198,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(agent_id.environment_id.into()),
                 component_owner_account_id: Some(self.context.account_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
             })
             .await?
             .into_inner();
@@ -1108,7 +1223,8 @@ impl TestDsl for TestWorkerExecutor {
                 mode: UpdateMode::Automatic.into(),
                 auth_ctx: Some(self.auth_ctx().into()),
                 disable_wakeup,
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
+                expected_fingerprint: None,
             })
             .await?
             .into_inner();
@@ -1139,7 +1255,8 @@ impl TestDsl for TestWorkerExecutor {
                 mode: UpdateMode::Automatic.into(),
                 auth_ctx: Some(self.auth_ctx().into()),
                 disable_wakeup,
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
+                expected_fingerprint: None,
             })
             .await?
             .into_inner();
@@ -1170,7 +1287,8 @@ impl TestDsl for TestWorkerExecutor {
                 mode: UpdateMode::Manual.into(),
                 auth_ctx: Some(self.auth_ctx().into()),
                 disable_wakeup,
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
+                expected_fingerprint: None,
             })
             .await?
             .into_inner();
@@ -1186,25 +1304,9 @@ impl TestDsl for TestWorkerExecutor {
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
     async fn delete_worker(&self, agent_id: &OwnedAgentId) -> anyhow::Result<()> {
-        let response = self
-            .client
-            .clone()
-            .delete_worker(DeleteWorkerRequest {
-                agent_id: Some(agent_id.agent_id.into()),
-                environment_id: Some(agent_id.environment_id.into()),
-                auth_ctx: Some(self.auth_ctx().into()),
-                principal: None,
-            })
-            .await?
-            .into_inner();
-
-        match response.result {
-            Some(delete_worker_response::Result::Success(_)) => Ok(()),
-            Some(delete_worker_response::Result::Failure(error)) => {
-                Err(anyhow!("Failed to delete worker: {error:?}"))
-            }
-            _ => Err(anyhow!("Failed to delete worker: unknown error")),
-        }
+        let fingerprint = self.get_worker_metadata(agent_id).await?.fingerprint;
+        self.delete_worker_with_fingerprint(agent_id, fingerprint)
+            .await
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
@@ -1300,8 +1402,9 @@ impl TestDsl for TestWorkerExecutor {
                 idempotency_key: Some((*idempotency_key).into()),
                 environment_id: Some(agent_id.environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
                 scheduled: None,
+                expected_fingerprint: None,
             })
             .await?
             .into_inner();
@@ -1330,7 +1433,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(agent_id.environment_id.into()),
                 component_owner_account_id: Some(self.context.account_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
             })
             .await?
             .into_inner();
@@ -1378,12 +1481,15 @@ impl TestDsl for TestWorkerExecutor {
             .client
             .clone()
             .get_file_contents(GetFileContentsRequest {
-                agent_id: Some(agent_id.agent_id.into()),
+                target: Some(ProtoAgentTarget {
+                    target: Some(agent_target::Target::Id(agent_id.agent_id.into())),
+                }),
+                component_id: None,
                 file_path: path.to_string(),
                 environment_id: Some(agent_id.environment_id.into()),
                 component_owner_account_id: Some(self.context.account_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
                 selection: Some(FileByteSelection::Full.into()),
             })
             .await?
@@ -1460,6 +1566,35 @@ impl TestDsl for TestWorkerExecutor {
 }
 
 impl TestWorkerExecutor {
+    /// Deletes the recorded incarnation without looking up its metadata again. This also
+    /// permits joining or retrying deletion after its durable state has been removed.
+    pub async fn delete_worker_with_fingerprint(
+        &self,
+        agent_id: &OwnedAgentId,
+        fingerprint: golem_common::model::AgentFingerprint,
+    ) -> anyhow::Result<()> {
+        let response = self
+            .client
+            .clone()
+            .delete_worker(DeleteWorkerRequest {
+                agent_id: Some(agent_id.agent_id.into()),
+                environment_id: Some(agent_id.environment_id.into()),
+                auth_ctx: Some(self.auth_ctx().into()),
+                caller: Some(Caller::anonymous().into()),
+                expected_fingerprint: Some(fingerprint.0.into()),
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(delete_worker_response::Result::Success(_)) => Ok(()),
+            Some(delete_worker_response::Result::Failure(error)) => {
+                Err(anyhow!("Failed to delete worker: {error:?}"))
+            }
+            _ => Err(anyhow!("Failed to delete worker: unknown error")),
+        }
+    }
+
     /// The request that creates the keyed agent of `key`, which the component implements, in the
     /// test's default environment, and returns an existing one as it is. Tests that drive the
     /// creation RPCs directly change its fields.
@@ -1478,7 +1613,7 @@ impl TestWorkerExecutor {
             config: Vec::new(),
             ignore_already_existing: true,
             auth_ctx: Some(self.auth_ctx().into()),
-            principal: None,
+            caller: Some(Caller::anonymous().into()),
             invocation_context: None,
             idempotency_key: None,
             freshness_disposition: 0,
@@ -1516,7 +1651,7 @@ impl TestWorkerExecutor {
                 config: Vec::new(),
                 ignore_already_existing: false,
                 auth_ctx: Some(self.auth_ctx().into()),
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
                 invocation_context: None,
                 idempotency_key: None,
                 freshness_disposition: 0,
@@ -1558,7 +1693,8 @@ impl TestWorkerExecutor {
                 component_owner_account_id: Some(self.context.account_id.into()),
                 component_owner_account_email: "test@golem".to_string(),
                 auth_ctx: Some(self.auth_ctx().into()),
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
+                expected_fingerprint: None,
             })
             .await?
             .into_inner();

@@ -24,6 +24,8 @@ tags:
 - name: EnvironmentToolGrants
 - name: EnvironmentToolMiddlewareGrants
 - name: HealthCheck
+- name: Invocation
+  description: API working on the invocations of agents
 - name: Login
   description: The login endpoints are implementing an OAuth2 flow.
 - name: McpDeployment
@@ -727,6 +729,33 @@ paths:
           type: string
           format: uuid
         in: query
+        required: false
+        deprecated: false
+        explode: true
+      - name: to
+        schema:
+          type: integer
+          format: uint64
+        in: query
+        description: The inclusive last index of a range read. Requires `from` and no `query`.
+        required: false
+        deprecated: false
+        explode: true
+      - name: scanEntries
+        schema:
+          type: integer
+          format: uint64
+        in: query
+        description: The remaining entry allowance of a range read. Goes with `scanMillis`.
+        required: false
+        deprecated: false
+        explode: true
+      - name: scanMillis
+        schema:
+          type: integer
+          format: uint64
+        in: query
+        description: The remaining time allowance of a range read, in milliseconds.
         required: false
         deprecated: false
         explode: true
@@ -1634,111 +1663,6 @@ paths:
       - Cookie: []
       - Token: []
       operationId: fork_worker
-  /v1/runtime/envs/{environment_id}/agents/{agent_id}/invocations/{idempotency_key}:
-    delete:
-      tags:
-      - Worker
-      summary: Cancels a pending invocation if it has not started yet
-      description: |-
-        The invocation to be cancelled is identified by the idempotency key returned when the
-        invoke API accepted it.
-      parameters:
-      - name: environment_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: agent_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: idempotency_key
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: expectedFingerprint
-        schema:
-          type: string
-          format: uuid
-        in: query
-        required: false
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/CancelInvocationResponse'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '413':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '415':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: A limit was exceeded, or the idempotency key was already used for a different request.
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: cancel_invocation
   /v1/runtime/envs/{environment_id}/agents/{agent_id}/connect:
     get:
       tags:
@@ -1942,7 +1866,7 @@ paths:
         | Property    | Comparator             | Description                   | Example                            |
         |-------------|------------------------|-------------------------------|------------------------------------|
         | key         | StringFilterComparator | Canonical key of the agent    | `key == Counter("a")`              |
-        | id          | StringFilterComparator | ID of the agent               | `id == 00000007-…`                 |
+        | id          | FilterComparator       | Full UUID of the agent        | `id == 00000007-0000-8000-8000-000000000001` |
         | version     | FilterComparator       | Component revision            | `version >= 0`                     |
         | status      | FilterComparator       | Status of the agent           | `status = Running`                 |
         | env.\[key\] | StringFilterComparator | Environment variable          | `env.var1 = value`                 |
@@ -1968,6 +1892,14 @@ paths:
           type: string
         in: path
         required: true
+        deprecated: false
+        explode: true
+      - name: component_name
+        schema:
+          type: string
+        in: query
+        description: Restrict results to agents whose recorded component has this name, not the type's current implementer.
+        required: false
         deprecated: false
         explode: true
       - name: filter
@@ -2268,7 +2200,7 @@ paths:
         | Type      | Comparator             | Description                  | Example                                                                             |
         |-----------|------------------------|------------------------------|-------------------------------------------------------------------------------------|
         | Key       | StringFilterComparator | Canonical key of the agent   | `{ "type": "Key", "comparator": "Equal", "value": "Counter(\"a\")" }`              |
-        | Id        | StringFilterComparator | ID of the agent              | `{ "type": "Id", "comparator": "Equal", "value": "00000007-…" }`                   |
+        | Id        | FilterComparator       | Full UUID of the agent       | `{ "type": "Id", "comparator": "Equal", "value": "00000007-0000-8000-8000-000000000001" }` |
         | Version   | FilterComparator       | Component revision           | `{ "type": "Version", "comparator": "GreaterEqual", "value": 0 }`                  |
         | Status    | FilterComparator       | Status of the agent          | `{ "type": "Status", "comparator": "Equal", "value": "Running" }`                  |
         | Env       | StringFilterComparator | Environment variable         | `{ "type": "Env", "name": "var1", "comparator": "Equal", "value": "value" }`       |
@@ -2294,6 +2226,14 @@ paths:
           type: string
         in: path
         required: true
+        deprecated: false
+        explode: true
+      - name: component_name
+        schema:
+          type: string
+        in: query
+        description: Restrict results to agents whose recorded component has this name, not the type's current implementer.
+        required: false
         deprecated: false
         explode: true
       requestBody:
@@ -2408,11 +2348,26 @@ paths:
         required: true
       responses:
         '200':
-          description: ''
+          description: |-
+            The invocation was accepted. `Golem-Invocation-Id` is its invocation ID, as in the REST
+            paths of invocations, and `Golem-Environment-Id` the environment in which the ID
+            resolves. An awaited invocation that is accepted and then fails answers an error, which
+            carries neither header.
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/AgentInvocationResult'
+          headers:
+            GOLEM-INVOCATION-ID:
+              required: true
+              deprecated: false
+              schema:
+                type: string
+            GOLEM-ENVIRONMENT-ID:
+              required: true
+              deprecated: false
+              schema:
+                type: string
         '400':
           description: ''
           content:
@@ -2503,11 +2458,24 @@ paths:
         required: true
       responses:
         '200':
-          description: ''
+          description: |-
+            An accepted invocation carries `Golem-Invocation-Id`, its invocation ID as in the REST
+            paths of invocations, and `Golem-Environment-Id`, the environment in which the ID
+            resolves. A lookup carries neither. The ID of a standalone tool invocation, which runs on
+            a fresh owner, cannot be read through the invocation endpoints.
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/NativeToolInvocationResponse'
+          headers:
+            GOLEM-INVOCATION-ID:
+              deprecated: false
+              schema:
+                type: string
+            GOLEM-ENVIRONMENT-ID:
+              deprecated: false
+              schema:
+                type: string
         '400':
           description: ''
           content:
@@ -2738,6 +2706,442 @@ paths:
       - Cookie: []
       - Token: []
       operationId: invoke_agent_session
+  /v1/runtime/envs/{environment_id}/invocations:
+    get:
+      tags:
+      - Invocation
+      summary: List the invocations of one agent
+      description: |-
+        Newest change first, with the invocation ID as tie-breaker. Pass `nextCursor` of a page as
+        `cursor` to get the next one; an invocation that changes while paging appears at most once.
+        `since` and `until` are inclusive bounds on the last change.
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: agent
+        schema:
+          type: string
+          format: uuid
+        in: query
+        description: The agent ID
+        required: true
+        deprecated: false
+        explode: true
+      - name: operation
+        schema:
+          type: string
+        in: query
+        description: Only invocations of this method name or `tool:<tool>/<command path>`
+        required: false
+        deprecated: false
+        explode: true
+      - name: state
+        schema:
+          type: array
+          default: []
+          items:
+            $ref: '#/components/schemas/InvocationState'
+        in: query
+        description: Only invocations in one of these states
+        required: false
+        deprecated: false
+        explode: true
+      - name: kind
+        schema:
+          $ref: '#/components/schemas/InvocationKind'
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      - name: since
+        schema:
+          type: string
+          format: date-time
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      - name: until
+        schema:
+          type: string
+          format: date-time
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      - name: pageSize
+        schema:
+          type: integer
+          format: uint32
+        in: query
+        description: At most 1000; the default is 100
+        required: false
+        deprecated: false
+        explode: true
+      - name: cursor
+        schema:
+          type: string
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/InvocationPage'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: list_invocations
+  /v1/runtime/envs/{environment_id}/invocations/lookup:
+    get:
+      tags:
+      - Invocation
+      summary: Find the invocations that the caller started on an agent with an idempotency key
+      description: |-
+        The key is matched in the caller's own idempotency scope, against every method and tool
+        command the agent ran, including those a later revision removed. A removed method is
+        found only while one of its invocations has the method name outside an external payload;
+        otherwise pass `operation`. A caller without a scope, and a key used through an HTTP
+        route, find nothing. No match is `404`.
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: agent
+        schema:
+          type: string
+          format: uuid
+        in: query
+        description: The agent ID
+        required: true
+        deprecated: false
+        explode: true
+      - name: operation
+        schema:
+          type: string
+        in: query
+        description: Only the invocation of this method name or `tool:<tool>/<command path>`
+        required: false
+        deprecated: false
+        explode: true
+      - name: Idempotency-Key
+        schema:
+          type: string
+        in: header
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/InvocationLookupResult'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: lookup_invocations
+  /v1/runtime/envs/{environment_id}/invocations/{invocation_id}:
+    get:
+      tags:
+      - Invocation
+      summary: Get an invocation, with its result once it is terminal
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: invocation_id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Invocation'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_invocation
+  /v1/runtime/envs/{environment_id}/invocations/{invocation_id}/cancel:
+    post:
+      tags:
+      - Invocation
+      summary: Cancel an invocation
+      description: |-
+        A `pending` or `scheduled` invocation becomes `cancelled` at once and never runs. A
+        terminal invocation keeps its state. Both answer `200` with the invocation's state.
+        Cancelling an invocation that already started is not supported yet and answers `409`
+        with the code `CANNOT_CANCEL_RUNNING_INVOCATION`.
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: invocation_id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/InvocationSummary'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: cancel_invocation
 components:
   schemas:
     AccountCardHolder:
@@ -3193,6 +3597,11 @@ components:
             $ref: '#/components/schemas/TypedAgentConfigEntry'
         status:
           $ref: '#/components/schemas/AgentStatus'
+        underlyingStatus:
+          description: The folded status underneath `status`. Present only when `status` is `Sandboxed`.
+          allOf:
+          - $ref: '#/components/schemas/AgentStatus'
+          - description: The folded status underneath `status`. Present only when `status` is `Sandboxed`.
         componentRevision:
           type: integer
           format: uint64
@@ -3375,6 +3784,7 @@ components:
       - Retrying
       - Failed
       - Exited
+      - Sandboxed
     AgentStatusFilter:
       type: object
       title: AgentStatusFilter
@@ -4065,14 +4475,6 @@ components:
           type: boolean
         negatable:
           type: boolean
-    CancelInvocationResponse:
-      type: object
-      title: CancelInvocationResponse
-      required:
-      - canceled
-      properties:
-        canceled:
-          type: boolean
     Card:
       type: object
       title: Card
@@ -4410,6 +4812,31 @@ components:
           allOf:
           - $ref: '#/components/schemas/CommandAnnotations'
           - nullable: true
+    CommandHttp:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - endpoint
+          value:
+            $ref: '#/components/schemas/ToolHttpEndpoint'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - prefix
+          value:
+            $ref: '#/components/schemas/ToolHttpPrefix'
     CommandNode:
       type: object
       required:
@@ -4427,6 +4854,11 @@ components:
             type: string
         doc:
           $ref: '#/components/schemas/Doc'
+        http:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/CommandHttp'
+          - nullable: true
         globals:
           $ref: '#/components/schemas/Globals'
         subcommands:
@@ -4567,6 +4999,13 @@ components:
           type: boolean
           description: Creates the keyed agent of the parameters, which fails when the key is current.
           default: false
+    CustomHttpMethod:
+      type: object
+      required:
+      - value
+      properties:
+        value:
+          type: string
     DeactivatePluginResponse:
       type: object
       title: DeactivatePluginResponse
@@ -4707,6 +5146,90 @@ components:
         ordinal:
           type: integer
           format: uint64
+    DurableStreamInputSlotSource:
+      type: object
+      title: DurableStreamInputSlotSource
+      required:
+      - name
+      properties:
+        name:
+          type: string
+    DurableStreamOutputSlotSource:
+      type: object
+      title: DurableStreamOutputSlotSource
+      required:
+      - name
+      properties:
+        name:
+          type: string
+    DurableStreamRouteLoadOptions:
+      type: object
+      title: DurableStreamRouteLoadOptions
+      properties:
+        maxConcurrentReadersPerStream:
+          type: integer
+          format: uint32
+        maxAppendRequestsPerSecondPerStream:
+          type: integer
+          format: uint32
+    DurableStreamRouteOptions:
+      type: object
+      title: DurableStreamRouteOptions
+      required:
+      - slots
+      properties:
+        slots:
+          type: array
+          items:
+            $ref: '#/components/schemas/DurableStreamSlotOptions'
+        load:
+          $ref: '#/components/schemas/DurableStreamRouteLoadOptions'
+    DurableStreamSlotOptions:
+      type: object
+      title: DurableStreamSlotOptions
+      required:
+      - source
+      properties:
+        source:
+          $ref: '#/components/schemas/DurableStreamSlotSource'
+        name:
+          type: string
+        contentType:
+          type: string
+    DurableStreamSlotSource:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DurableStreamSlotSource_DurableStreamInputSlotSource'
+      - $ref: '#/components/schemas/DurableStreamSlotSource_DurableStreamOutputSlotSource'
+      discriminator:
+        propertyName: type
+        mapping:
+          input: '#/components/schemas/DurableStreamSlotSource_DurableStreamInputSlotSource'
+          output: '#/components/schemas/DurableStreamSlotSource_DurableStreamOutputSlotSource'
+    DurableStreamSlotSource_DurableStreamInputSlotSource:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - input
+            example: input
+      - $ref: '#/components/schemas/DurableStreamInputSlotSource'
+    DurableStreamSlotSource_DurableStreamOutputSlotSource:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - output
+            example: output
+      - $ref: '#/components/schemas/DurableStreamOutputSlotSource'
     DurationValuePayload:
       type: object
       required:
@@ -4717,7 +5240,6 @@ components:
           format: int64
     Empty:
       type: object
-      title: Empty
     EnvironmentId:
       type: object
       required:
@@ -5431,6 +5953,7 @@ components:
       - timestamp
       - targetRevision
       - mode
+      - failureClass
       properties:
         timestamp:
           type: string
@@ -5447,6 +5970,20 @@ components:
           $ref: '#/components/schemas/AgentUpdateMode'
         snapshotAssistedDetails:
           $ref: '#/components/schemas/SnapshotAssistedUpdateMetadata'
+        failureClass:
+          description: Why the update failed.
+          allOf:
+          - $ref: '#/components/schemas/UpdateFailureClass'
+          - description: Why the update failed.
+        divergence:
+          description: |-
+            The first divergence from the recorded history, when the replay of the target
+            diverged at a recorded entry.
+          allOf:
+          - $ref: '#/components/schemas/ReplayDivergence'
+          - description: |-
+              The first divergence from the recorded history, when the replay of the target
+              diverged at a recorded entry.
     FallibleResultParameters:
       type: object
       title: FallibleResultParameters
@@ -5463,6 +6000,17 @@ components:
         literal:
           type: string
           nullable: true
+    FileResponseHeader:
+      type: object
+      title: FileResponseHeader
+      required:
+      - name
+      - value
+      properties:
+        name:
+          type: string
+        value:
+          type: string
     FilterComparator:
       type: string
       enum:
@@ -5598,6 +6146,8 @@ components:
         lastIndex:
           type: integer
           format: uint64
+        scan:
+          $ref: '#/components/schemas/OplogScan'
     Globals:
       type: object
       required:
@@ -5612,6 +6162,17 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/FlagSpec'
+    HeaderVariable:
+      type: object
+      title: HeaderVariable
+      required:
+      - headerName
+      - variableName
+      properties:
+        headerName:
+          type: string
+        variableName:
+          type: string
     HostStreamKind:
       type: string
       description: |-
@@ -5619,6 +6180,126 @@ components:
         to. The kind determines how the entry's payload is interpreted.
       enum:
       - P3HttpRequestBody
+    HttpMethod:
+      type: object
+      oneOf:
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Get
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Head
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Post
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Put
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Delete
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Connect
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Options
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Trace
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Patch
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Custom
+        - $ref: '#/components/schemas/CustomHttpMethod'
+    HttpRouteMode:
+      type: string
+      enum:
+      - durableStreams
+      - plain
+      - sse
+      - webSocket
     ImpliesC:
       type: object
       required:
@@ -5642,6 +6323,125 @@ components:
     InterruptResponse:
       type: object
       title: InterruptResponse
+    Invocation:
+      type: object
+      title: Invocation
+      description: |-
+        An invocation with its result. `result` is present once the invocation is `completed` or
+        `failed`; a completed constructor run has no result.
+      required:
+      - summary
+      properties:
+        summary:
+          $ref: '#/components/schemas/InvocationSummary'
+        result:
+          $ref: '#/components/schemas/InvocationOutcome'
+    InvocationFailure:
+      type: object
+      title: InvocationFailure
+      required:
+      - error
+      properties:
+        error:
+          type: string
+    InvocationKind:
+      type: string
+      enum:
+      - method
+      - constructor
+      - tool
+    InvocationLookupResult:
+      type: object
+      title: InvocationLookupResult
+      required:
+      - invocations
+      properties:
+        invocations:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvocationSummary'
+    InvocationMethodResult:
+      type: object
+      title: InvocationMethodResult
+      required:
+      - value
+      properties:
+        value:
+          $ref: '#/components/schemas/ExternalTypedSchemaValue'
+    InvocationOutcome:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/InvocationOutcome_InvocationMethodResult'
+      - $ref: '#/components/schemas/InvocationOutcome_InvocationToolResult'
+      - $ref: '#/components/schemas/InvocationOutcome_InvocationFailure'
+      discriminator:
+        propertyName: type
+        mapping:
+          Method: '#/components/schemas/InvocationOutcome_InvocationMethodResult'
+          Tool: '#/components/schemas/InvocationOutcome_InvocationToolResult'
+          Failure: '#/components/schemas/InvocationOutcome_InvocationFailure'
+    InvocationOutcome_InvocationFailure:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Failure
+            example: Failure
+      - $ref: '#/components/schemas/InvocationFailure'
+    InvocationOutcome_InvocationMethodResult:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Method
+            example: Method
+      - $ref: '#/components/schemas/InvocationMethodResult'
+    InvocationOutcome_InvocationToolResult:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Tool
+            example: Tool
+      - $ref: '#/components/schemas/InvocationToolResult'
+    InvocationPage:
+      type: object
+      title: InvocationPage
+      required:
+      - invocations
+      properties:
+        invocations:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvocationSummary'
+        nextCursor:
+          type: string
+          description: Present when more invocations may follow
+    InvocationState:
+      type: string
+      description: The lifecycle state of an invocation.
+      enum:
+      - scheduled
+      - pending
+      - running
+      - waiting
+      - retrying
+      - interrupted
+      - completed
+      - failed
+      - cancelled
     InvocationStatus:
       type: string
       description: Status of an idempotency key lookup on a worker.
@@ -5649,6 +6449,50 @@ components:
       - unknown
       - pending
       - complete
+      - cancelled
+    InvocationSummary:
+      type: object
+      title: InvocationSummary
+      description: |-
+        One invocation of an agent. `kind` and `operation` are absent when the invocation's request
+        is not known.
+      required:
+      - invocationId
+      - agentId
+      - environmentId
+      - state
+      - changedAt
+      properties:
+        invocationId:
+          type: string
+          description: '`<agent ID>.<UUID>`'
+        agentId:
+          type: string
+          format: uuid
+        environmentId:
+          type: string
+          format: uuid
+        state:
+          $ref: '#/components/schemas/InvocationState'
+        kind:
+          $ref: '#/components/schemas/InvocationKind'
+        operation:
+          type: string
+          description: The method name, or `tool:<tool>/<command path>`. Absent for the constructor run.
+        acceptedAt:
+          type: string
+          format: date-time
+        changedAt:
+          type: string
+          format: date-time
+    InvocationToolResult:
+      type: object
+      title: InvocationToolResult
+      required:
+      - result
+      properties:
+        result:
+          $ref: '#/components/schemas/NativeToolResult'
     JsonSnapshotData:
       type: object
       title: JsonSnapshotData
@@ -5656,6 +6500,13 @@ components:
       - data
       properties:
         data: {}
+    LiteralSegment:
+      type: object
+      required:
+      - value
+      properties:
+        value:
+          type: string
     LoadSnapshotParameters:
       type: object
       title: LoadSnapshotParameters
@@ -6061,6 +6912,48 @@ components:
         end:
           type: integer
           format: uint64
+    OplogScan:
+      type: object
+      title: OplogScan
+      description: The scan accounting of an oplog range read.
+      required:
+      - limit
+      - chargedEntries
+      - chargedMillis
+      - exhausted
+      properties:
+        limit:
+          $ref: '#/components/schemas/OplogScanAllowance'
+        chargedEntries:
+          type: integer
+          format: uint64
+          description: |-
+            The oplog entries that the read charged: the entries that it read to find the component
+            revision at the start of the range, and the entries that it read for the page, also those
+            that the byte limit of the page left out.
+        chargedMillis:
+          type: integer
+          format: uint64
+          description: The time that the read charged, rounded up to a millisecond.
+        exhausted:
+          type: boolean
+          description: The read stopped before the end of the range because it spent the allowance.
+    OplogScanAllowance:
+      type: object
+      title: OplogScanAllowance
+      description: |-
+        The scan allowance of an oplog range read: the number of oplog entries that it may read, and
+        how long it may read.
+      required:
+      - entries
+      - millis
+      properties:
+        entries:
+          type: integer
+          format: uint64
+        millis:
+          type: integer
+          format: uint64
     OptionShape:
       type: object
       oneOf:
@@ -6166,6 +7059,42 @@ components:
       - file
       - directory
       - any
+    PathSegment:
+      type: object
+      oneOf:
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Literal
+        - $ref: '#/components/schemas/LiteralSegment'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - PathVariable
+        - $ref: '#/components/schemas/PathVariable'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - RemainingPathVariable
+        - $ref: '#/components/schemas/PathVariable'
     PathSpec:
       type: object
       required:
@@ -6186,6 +7115,13 @@ components:
           items:
             type: string
           nullable: true
+    PathVariable:
+      type: object
+      required:
+      - variableName
+      properties:
+        variableName:
+          type: string
     PendingUpdate:
       type: object
       title: PendingUpdate
@@ -8342,6 +9278,17 @@ components:
           format: int32
         unit:
           type: string
+    QueryVariable:
+      type: object
+      title: QueryVariable
+      required:
+      - queryParamName
+      - variableName
+      properties:
+        queryParamName:
+          type: string
+        variableName:
+          type: string
     QuotaTokenSpec:
       type: object
       properties:
@@ -8474,6 +9421,143 @@ components:
             - either
           value:
             type: char
+    ReplayDivergence:
+      type: object
+      title: ReplayDivergence
+      description: |-
+        Where a replay left the recorded history: the first entry at which the replay did not
+        reproduce the recorded execution, what the oplog holds there and what the replay did instead.
+      required:
+      - oplogIndex
+      - expected
+      - actual
+      - mismatched
+      properties:
+        oplogIndex:
+          type: integer
+          format: uint64
+          description: The oplog index of the first divergence.
+        expected:
+          description: What the oplog holds at the index.
+          allOf:
+          - $ref: '#/components/schemas/ReplayStep'
+          - description: What the oplog holds at the index.
+        actual:
+          description: What the replay did at the index.
+          allOf:
+          - $ref: '#/components/schemas/ReplayStep'
+          - description: What the replay did at the index.
+        mismatched:
+          type: array
+          description: |-
+            The identity fields on which `expected` and `actual` differ; empty when the steps differ
+            in kind.
+          items:
+            $ref: '#/components/schemas/StartIdentityField'
+    ReplayHostCall:
+      type: object
+      title: ReplayHostCall
+      description: |-
+        A host call of a replay: the identity of a recorded `Start`, or of the call that the replay
+        made in its place.
+      required:
+      - functionName
+      - durableFunctionType
+      - carriesRequest
+      properties:
+        functionName:
+          type: string
+        durableFunctionType:
+          $ref: '#/components/schemas/PublicDurableFunctionType'
+        parentStartIndex:
+          type: integer
+          format: uint64
+        invocationId:
+          $ref: '#/components/schemas/DurableInvocationId'
+        observationalOwner:
+          type: integer
+          format: uint64
+        carriesRequest:
+          type: boolean
+          description: |-
+            Whether the call carries a request: `true` for a durable call, `false` for a durable
+            scope.
+        request:
+          description: The request of the call, when it is known.
+          allOf:
+          - $ref: '#/components/schemas/TypedSchemaValue'
+          - description: The request of the call, when it is known.
+    ReplayStep:
+      type: object
+      description: |-
+        One step of a replay: a host call, the end of an invocation, the end of the recorded
+        history, or another step that a text describes.
+      oneOf:
+      - $ref: '#/components/schemas/ReplayStep_ReplayHostCall'
+      - $ref: '#/components/schemas/ReplayStep_Empty'
+      - $ref: '#/components/schemas/ReplayStep_Empty'
+      - $ref: '#/components/schemas/ReplayStep_ReplayStepDescription'
+      discriminator:
+        propertyName: type
+        mapping:
+          HostCall: '#/components/schemas/ReplayStep_ReplayHostCall'
+          InvocationEnd: '#/components/schemas/ReplayStep_Empty'
+          EndOfHistory: '#/components/schemas/ReplayStep_Empty'
+          Other: '#/components/schemas/ReplayStep_ReplayStepDescription'
+    ReplayStepDescription:
+      type: object
+      title: ReplayStepDescription
+      description: A step of a replay that a text describes.
+      required:
+      - description
+      properties:
+        description:
+          type: string
+    ReplayStep_Empty:
+      description: |-
+        One step of a replay: a host call, the end of an invocation, the end of the recorded
+        history, or another step that a text describes.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - EndOfHistory
+            example: EndOfHistory
+      - $ref: '#/components/schemas/Empty'
+    ReplayStep_ReplayHostCall:
+      description: |-
+        One step of a replay: a host call, the end of an invocation, the end of the recorded
+        history, or another step that a text describes.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - HostCall
+            example: HostCall
+      - $ref: '#/components/schemas/ReplayHostCall'
+    ReplayStep_ReplayStepDescription:
+      description: |-
+        One step of a replay: a host call, the end of an invocation, the end of the recorded
+        history, or another step that a text describes.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Other
+            example: Other
+      - $ref: '#/components/schemas/ReplayStepDescription'
     ResultSpec:
       type: object
       properties:
@@ -10054,6 +11138,16 @@ components:
           type: string
         filesystemSnapshot:
           type: string
+    StartIdentityField:
+      type: string
+      description: An identity field of a recorded `Start`, which a replayed host call must match.
+      enum:
+      - function-name
+      - function-type
+      - invocation-id
+      - observational-owner
+      - request-presence
+      - parent
     StoredCard:
       type: object
       oneOf:
@@ -10213,10 +11307,73 @@ components:
           type: string
         requires_filesystem:
           type: boolean
+        http_mount:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/ToolHttpMount'
+          - nullable: true
         commands:
           $ref: '#/components/schemas/CommandTree'
         schema:
           $ref: '#/components/schemas/SchemaGraph'
+    ToolHttpEndpoint:
+      type: object
+      required:
+      - http_method
+      - path_suffix
+      - query_vars
+      - header_vars
+      - response_headers
+      properties:
+        route_id:
+          type: string
+          nullable: true
+        http_method:
+          $ref: '#/components/schemas/HttpMethod'
+        path_suffix:
+          type: array
+          items:
+            $ref: '#/components/schemas/PathSegment'
+        query_vars:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueryVariable'
+        header_vars:
+          type: array
+          items:
+            $ref: '#/components/schemas/HeaderVariable'
+        response_headers:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileResponseHeader'
+        mode:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/HttpRouteMode'
+          - nullable: true
+        durable_streams:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/DurableStreamRouteOptions'
+          - nullable: true
+    ToolHttpMount:
+      type: object
+      required:
+      - path_prefix
+      properties:
+        path_prefix:
+          type: array
+          items:
+            $ref: '#/components/schemas/PathSegment'
+    ToolHttpPrefix:
+      type: object
+      required:
+      - path_suffix
+      properties:
+        path_suffix:
+          type: array
+          items:
+            $ref: '#/components/schemas/PathSegment'
     ToolResultSpec:
       type: object
       required:
@@ -10292,6 +11449,17 @@ components:
           type: string
         body:
           $ref: '#/components/schemas/SchemaValue'
+    UpdateFailureClass:
+      type: string
+      description: Why an update failed.
+      enum:
+      - divergence
+      - target-trap
+      - not-replayable
+      - target-rejected
+      - interrupted
+      - operational
+      - other
     UpdateRecord:
       type: object
       oneOf:
@@ -10864,6 +12032,7 @@ components:
       - initialActivePlugins
       - localAgentConfig
       - instanceId
+      - neverLive
       properties:
         timestamp:
           type: string
@@ -10910,6 +12079,8 @@ components:
         instanceId:
           type: string
           format: uuid
+        neverLive:
+          type: boolean
     r#CreateResourceParams:
       type: object
       title: r#CreateResourceParams
@@ -11006,6 +12177,12 @@ components:
           format: uint64
         retryPolicyState:
           $ref: '#/components/schemas/PublicRetryPolicyState'
+        retryAt:
+          type: string
+          format: date-time
+        retryingStartIndex:
+          type: integer
+          format: uint64
     r#ExitedParams:
       type: object
       title: r#ExitedParams
@@ -11021,6 +12198,7 @@ components:
       required:
       - timestamp
       - targetRevision
+      - failureClass
       properties:
         timestamp:
           type: string
@@ -11035,6 +12213,10 @@ components:
         updateAttemptIndex:
           type: integer
           format: uint64
+        failureClass:
+          $ref: '#/components/schemas/UpdateFailureClass'
+        divergence:
+          $ref: '#/components/schemas/ReplayDivergence'
     r#GrowMemoryParams:
       type: object
       title: r#GrowMemoryParams

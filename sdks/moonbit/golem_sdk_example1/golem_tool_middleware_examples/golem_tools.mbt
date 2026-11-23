@@ -35,6 +35,7 @@ fn __golem_tool_rebase_node(
     globals: node.globals,
     subcommands: node.subcommands.map(index => index + offset),
     body: node.body,
+    http: node.http,
   }
 }
 
@@ -44,6 +45,7 @@ fn __golem_tool_extract_prepared(def : @tool.ToolDef) -> @tool.ToolDef {
   {
     version: def.version,
     requires_filesystem: def.requires_filesystem,
+    http_mount: def.http_mount,
     commands: def.commands[1:].map(node => __golem_tool_rebase_node(node, -1)),
   }
 }
@@ -64,6 +66,7 @@ fn __golem_tool_append_prepared(
     globals: root.globals,
     subcommands: __golem_tool_concat_array(root.subcommands, [offset]),
     body: root.body,
+    http: root.http,
   }
   for node in child.commands {
     commands.push(__golem_tool_rebase_node(node, offset))
@@ -71,6 +74,7 @@ fn __golem_tool_append_prepared(
   {
     version: def.version,
     requires_filesystem: def.requires_filesystem,
+    http_mount: def.http_mount,
     commands,
   }
 }
@@ -82,6 +86,7 @@ fn __golem_tool_def_raw_Messages() -> @tool.ToolDef {
     let def : @tool.ToolDef = {
       version: "0.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: [
         {
           name: "messages",
@@ -94,6 +99,7 @@ fn __golem_tool_def_raw_Messages() -> @tool.ToolDef {
           globals: { options: [], flags: [], },
           subcommands: [1],
           body: None,
+          http: None,
         },
         {
           name: "send",
@@ -145,6 +151,7 @@ fn __golem_tool_def_raw_Messages() -> @tool.ToolDef {
               open_world: true,
             }),
           }),
+          http: None,
         },
       ],
     }
@@ -162,11 +169,13 @@ fn __golem_tool_def_prepare_Messages(
   override_name : String?,
   override_doc : @toolCommon.Doc?,
   override_aliases : Array[String]?,
+  override_http : @toolCommon.CommandHttp?,
 ) -> @tool.ToolDef {
   try {
     let carrier : @tool.ToolDef = {
       version: "0.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: [
         {
           name: "__golem_ancestry",
@@ -175,6 +184,7 @@ fn __golem_tool_def_prepare_Messages(
           globals: strict_ancestors,
           subcommands: [],
           body: None,
+          http: None,
         },
       ],
     }
@@ -186,6 +196,7 @@ fn __golem_tool_def_prepare_Messages(
         override_name,
         override_doc,
         override_aliases,
+        override_http?,
       ),
     )
     let def = prepared
@@ -204,6 +215,7 @@ fn __golem_tool_def_Messages() -> @tool.ToolDef {
     None,
     None,
     None,
+    None,
   ).normalize_inherited_globals() catch {
     error => abort("invalid generated tool definition: " + repr(error))
   }
@@ -218,7 +230,7 @@ async fn __golem_tool_invoke_Messages(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderOutput?,
   __golem_stderr : @tool.ProviderOutput?,
-  __golem_principal : @tool.Principal,
+  __golem_context : @tool.InvocationContext,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() == 1 &&
     ["send"].contains(__golem_command_path[0]) {
@@ -313,6 +325,7 @@ fn __golem_tool_def_raw_PublicFiles() -> @tool.ToolDef {
     let def : @tool.ToolDef = {
       version: "0.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: [
         {
           name: "public-files",
@@ -325,6 +338,7 @@ fn __golem_tool_def_raw_PublicFiles() -> @tool.ToolDef {
           globals: { options: [], flags: [], },
           subcommands: [1],
           body: None,
+          http: None,
         },
         {
           name: "read",
@@ -376,6 +390,7 @@ fn __golem_tool_def_raw_PublicFiles() -> @tool.ToolDef {
               open_world: true,
             }),
           }),
+          http: None,
         },
       ],
     }
@@ -393,11 +408,13 @@ fn __golem_tool_def_prepare_PublicFiles(
   override_name : String?,
   override_doc : @toolCommon.Doc?,
   override_aliases : Array[String]?,
+  override_http : @toolCommon.CommandHttp?,
 ) -> @tool.ToolDef {
   try {
     let carrier : @tool.ToolDef = {
       version: "0.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: [
         {
           name: "__golem_ancestry",
@@ -406,6 +423,7 @@ fn __golem_tool_def_prepare_PublicFiles(
           globals: strict_ancestors,
           subcommands: [],
           body: None,
+          http: None,
         },
       ],
     }
@@ -417,6 +435,7 @@ fn __golem_tool_def_prepare_PublicFiles(
         override_name,
         override_doc,
         override_aliases,
+        override_http?,
       ),
     )
     let def = prepared
@@ -435,6 +454,7 @@ fn __golem_tool_def_PublicFiles() -> @tool.ToolDef {
     None,
     None,
     None,
+    None,
   ).normalize_inherited_globals() catch {
     error => abort("invalid generated tool definition: " + repr(error))
   }
@@ -449,7 +469,7 @@ async fn __golem_tool_invoke_PublicFiles(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderOutput?,
   __golem_stderr : @tool.ProviderOutput?,
-  __golem_principal : @tool.Principal,
+  __golem_context : @tool.InvocationContext,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() == 1 &&
     ["read"].contains(__golem_command_path[0]) {
@@ -544,6 +564,7 @@ fn __golem_tool_def_raw_Storage() -> @tool.ToolDef {
     let def : @tool.ToolDef = {
       version: "0.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: [
         {
           name: "storage",
@@ -556,6 +577,7 @@ fn __golem_tool_def_raw_Storage() -> @tool.ToolDef {
           globals: { options: [], flags: [], },
           subcommands: [1],
           body: None,
+          http: None,
         },
         {
           name: "fetch",
@@ -607,6 +629,7 @@ fn __golem_tool_def_raw_Storage() -> @tool.ToolDef {
               open_world: true,
             }),
           }),
+          http: None,
         },
       ],
     }
@@ -624,11 +647,13 @@ fn __golem_tool_def_prepare_Storage(
   override_name : String?,
   override_doc : @toolCommon.Doc?,
   override_aliases : Array[String]?,
+  override_http : @toolCommon.CommandHttp?,
 ) -> @tool.ToolDef {
   try {
     let carrier : @tool.ToolDef = {
       version: "0.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: [
         {
           name: "__golem_ancestry",
@@ -637,6 +662,7 @@ fn __golem_tool_def_prepare_Storage(
           globals: strict_ancestors,
           subcommands: [],
           body: None,
+          http: None,
         },
       ],
     }
@@ -648,6 +674,7 @@ fn __golem_tool_def_prepare_Storage(
         override_name,
         override_doc,
         override_aliases,
+        override_http?,
       ),
     )
     let def = prepared
@@ -666,6 +693,7 @@ fn __golem_tool_def_Storage() -> @tool.ToolDef {
     None,
     None,
     None,
+    None,
   ).normalize_inherited_globals() catch {
     error => abort("invalid generated tool definition: " + repr(error))
   }
@@ -680,7 +708,7 @@ async fn __golem_tool_invoke_Storage(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderOutput?,
   __golem_stderr : @tool.ProviderOutput?,
-  __golem_principal : @tool.Principal,
+  __golem_context : @tool.InvocationContext,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() == 1 &&
     ["fetch"].contains(__golem_command_path[0]) {
@@ -785,6 +813,7 @@ fn __golem_tool_wire_Messages() -> @toolCommon.Tool {
         globals: { options: [], flags: [], },
         subcommands: [1],
         body: None,
+        http: None,
       },
       {
         name: "send",
@@ -838,12 +867,14 @@ fn __golem_tool_wire_Messages() -> @toolCommon.Tool {
             open_world: true,
           }),
         }),
+        http: None,
       },
     ]
     let root = __golem_schema.push(@types.RecordType([]))
     {
       version: "0.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: { nodes, },
       schema: {
         type_nodes: __golem_schema.nodes,
@@ -873,6 +904,7 @@ fn __golem_tool_wire_PublicFiles() -> @toolCommon.Tool {
         globals: { options: [], flags: [], },
         subcommands: [1],
         body: None,
+        http: None,
       },
       {
         name: "read",
@@ -926,12 +958,14 @@ fn __golem_tool_wire_PublicFiles() -> @toolCommon.Tool {
             open_world: true,
           }),
         }),
+        http: None,
       },
     ]
     let root = __golem_schema.push(@types.RecordType([]))
     {
       version: "0.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: { nodes, },
       schema: {
         type_nodes: __golem_schema.nodes,
@@ -961,6 +995,7 @@ fn __golem_tool_wire_Storage() -> @toolCommon.Tool {
         globals: { options: [], flags: [], },
         subcommands: [1],
         body: None,
+        http: None,
       },
       {
         name: "fetch",
@@ -1014,12 +1049,14 @@ fn __golem_tool_wire_Storage() -> @toolCommon.Tool {
             open_world: true,
           }),
         }),
+        http: None,
       },
     ]
     let root = __golem_schema.push(@types.RecordType([]))
     {
       version: "0.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: { nodes, },
       schema: {
         type_nodes: __golem_schema.nodes,

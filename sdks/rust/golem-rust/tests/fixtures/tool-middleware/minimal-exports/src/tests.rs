@@ -1,4 +1,4 @@
-use golem_rust::agentic::{Component, Principal, get_tool_invoker_by_name};
+use golem_rust::agentic::{Component, InvocationContext, get_tool_invoker_by_name};
 use golem_rust::golem_agentic::exports::golem::{
     agent::guest as agent,
     tool::{guest as tool, tool_middleware_guest as middleware},
@@ -35,10 +35,13 @@ async fn only_implemented_capabilities_are_live() {
             );
         }
         use golem_rust::load_snapshot::exports::golem::api::load_snapshot;
-        let result = <Component as load_snapshot::Guest>::load(load_snapshot::Snapshot {
-            payload: b"not a snapshot envelope".to_vec(),
-            mime_type: "application/json".into(),
-        })
+        let result = <Component as load_snapshot::Guest>::load(
+            load_snapshot::Snapshot {
+                payload: b"not a snapshot envelope".to_vec(),
+                mime_type: "application/json".into(),
+            },
+            input(),
+        )
         .await;
         assert_eq!(
             result.unwrap_err(),
@@ -77,7 +80,7 @@ async fn only_implemented_capabilities_are_live() {
             None,
             None,
             None,
-            Principal::Anonymous,
+            InvocationContext::anonymous(),
         )
         .await
     } else {

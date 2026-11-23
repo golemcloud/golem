@@ -5656,6 +5656,175 @@ async fn every_protected_storage_config_and_secret_import_enforces_permissions(
     Ok(())
 }
 
+/// Starts an agent whose grant reads only index 3 of its own oplog, for the tests of
+/// `enrich-oplog-entries`.
+async fn start_oplog_enrichment_grant_agent(
+    executor: &TestWorkerExecutor,
+    authority: &ScopeCardAuthority,
+    context: &TestContext,
+    host_api_tests: &PrecompiledComponent,
+    agent_name: &str,
+) -> anyhow::Result<(
+    golem_common::model::component::ComponentDto,
+    golem_common::model::agent::ParsedAgentKey,
+    OwnedAgentId,
+)> {
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .name(agent_name)
+        .without_default_host_permissions("GolemHostApi")
+        .try_update_agent_provision_config("GolemHostApi", |config| {
+            for grant in [
+                "agent(?agent) @ * : view : *",
+                "oplog(?agent) @ * : read : start=3:end=3",
+            ] {
+                config
+                    .initial_permissions
+                    .lower_bound
+                    .positive
+                    .push(parse_polymorphic_permission(grant)?);
+            }
+            Ok::<_, golem_common::model::card::CardParseError>(())
+        })?
+        .store()
+        .await?;
+    let agent = agent_key!("GolemHostApi", agent_name);
+    configure_scope_card_root(authority, &component, &agent)?;
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    Ok((component, agent, worker))
+}
+
+/// `enrich-oplog-entries` reads the recorded `Start` at the divergence index of a raw failed
+/// update, which the guest supplies, so the oplog grant must cover that index as well as the
+/// index of the entry. A grant for the entry's index alone refuses a forged divergence outside it.
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn oplog_enrichment_requires_the_grant_for_the_divergence_index(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let (component, agent, _worker) = start_oplog_enrichment_grant_agent(
+        &executor,
+        &authority,
+        &context,
+        host_api_tests,
+        "oplog-enrichment-divergence-grant",
+    )
+    .await?;
+
+    for (divergence_index, granted) in [(None, true), (Some(3u64), true), (Some(1u64), false)] {
+        let enriched = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent,
+                "enrich_forged_failed_update_result",
+                data_value!(3u64, divergence_index),
+            )
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert_eq!(
+            enriched.is_ok(),
+            granted,
+            "divergence index {divergence_index:?}: {enriched:?}"
+        );
+    }
+    Ok(())
+}
+
+/// The repair of an incomplete `enrich-oplog-entries` call reads the entries of the current guest
+/// arguments, which an updated guest can change after the recorded `Start` was authorized. So the
+/// repair checks the grant for its read set again: an allowed `Start` whose `End` was lost repairs
+/// to a denial once the grant is revoked, and repairs to the enriched entries while it holds.
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn an_incomplete_oplog_enrichment_checks_the_grant_again_when_repaired(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let (component, agent, worker) = start_oplog_enrichment_grant_agent(
+        &executor,
+        &authority,
+        &context,
+        host_api_tests,
+        "incomplete-oplog-enrichment-grant",
+    )
+    .await?;
+
+    for revoke in [false, true] {
+        // Lose the End of an allowed call, so that the retry repairs it from its Start alone.
+        let (entered, release) = executor.gate_next_oplog_function_end(
+            &worker.agent_id,
+            HostFunctionName::GolemApiEnrichOplogEntries,
+            true,
+        );
+        let invocation = executor.invoke_and_await_agent(
+            &component,
+            &agent,
+            "enrich_forged_failed_update_result",
+            data_value!(3u64, Some(3u64)),
+        );
+        let lose_end = async {
+            entered.await.expect("the enrichment must reach its End");
+            if revoke {
+                authority.revoke();
+            }
+            release.send(()).expect("the End must still be waiting");
+        };
+        let (enriched, ()) = tokio::join!(invocation, lose_end);
+        let enriched = enriched?.into_typed::<Result<(), String>>()?;
+        if revoke {
+            assert!(
+                enriched
+                    .as_ref()
+                    .is_err_and(|error| error.contains("permission denied")),
+                "the repair must check the revoked grant, got {enriched:?}"
+            );
+        } else {
+            assert_eq!(enriched, Ok(()), "the repair of a granted read must enrich");
+        }
+    }
+
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let starts = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name == "golem::api::oplog::enrich-oplog-entries" =>
+            {
+                Some((entry.oplog_index, start.denial.is_some()))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        starts.iter().map(|(_, denied)| *denied).collect::<Vec<_>>(),
+        vec![false, false],
+        "each call must keep its allowed Start, and its retry must repair it: {starts:?}"
+    );
+    for (start_index, _) in starts {
+        assert!(
+            oplog.iter().any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::End(end) if end.start_index == start_index
+            )),
+            "the repair must complete the Start at {start_index}"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]

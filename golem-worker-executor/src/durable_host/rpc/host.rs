@@ -30,7 +30,7 @@ use super::{
     spawn_streaming_invoke_and_await_task, start_rpc_binding_call, start_rpc_connection_call,
     streaming_target_fingerprint,
 };
-use super::{EphemeralRpcTarget, RpcBinding, dispatch_target};
+use super::{EphemeralRpcTarget, dispatch_target};
 use crate::durable_host::DurabilityHost;
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::CallReplayOutcome;
@@ -91,6 +91,7 @@ use golem_common::model::oplog::payload::HostRequestGolemRpcCreate;
 use golem_common::model::oplog::types::SerializableRpcError;
 use golem_common::model::oplog::{HostRequestGolemApiAgentId, HostResponseGolemAgentLookupAgentId};
 use golem_common::model::oplog::{HostRequestGolemRpcBindSelf, HostResponseGolemRpcUnit};
+use golem_common::model::oplog::{HostRequestGolemRpcGetById, HostResponseGolemRpcCreated};
 use golem_common::schema::agent::AgentTypeSchema;
 use golem_schema::schema::wit::PermissionCardHandleRep;
 use golem_schema::schema::wit::wire as core_wire;
@@ -347,14 +348,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let environment_id = self.owned_agent_id.environment_id;
         let component_id = remote.registered.implemented_by.component_id;
         let type_id = remote.registered.type_id;
-        let target = match keyed_target(environment_id, type_id, component_id, constructor) {
-            Ok(target) => target,
-            Err(err) => {
-                return Ok(Err(RpcError::RemoteAgentError(
-                    WitAgentError::InvalidInput(err.to_string()),
-                )));
-            }
-        };
         let RemoteAgentType {
             registered,
             agent_type,
@@ -364,13 +357,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         if registered.agent_type.mode == AgentMode::Ephemeral {
             // A client of an ephemeral agent type is a logical proxy: every invocation runs on
-            // a new one-shot instance. Its logical ID is the key derivation, which no ephemeral
-            // agent has.
-            let constructor = target
-                .new_owner
-                .and_then(|owner| owner.constructor)
-                .expect("a keyed target has a constructor");
-            let mut logical_remote_agent_id = target.owned_agent_id;
+            // a new one-shot instance. Its logical ID never addresses an instance.
+            let logical_id = AgentId::ephemeral_proxy(environment_id, type_id, &constructor)
+                .map_err(anyhow::Error::msg)?;
+            let mut logical_remote_agent_id = OwnedAgentId::new(environment_id, &logical_id);
             let (handle, span) = start_rpc_connection_call::<_, GolemRpcWasmRpcUpsert>(
                 self,
                 HostRequestGolemRpcCreate {
@@ -420,6 +410,14 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .map(Ok);
         }
 
+        let target = match keyed_target(environment_id, type_id, component_id, constructor) {
+            Ok(target) => target,
+            Err(err) => {
+                return Ok(Err(RpcError::RemoteAgentError(
+                    WitAgentError::InvalidInput(err.to_string()),
+                )));
+            }
+        };
         let (handle, span) = start_rpc_connection_call::<_, GolemRpcWasmRpcUpsert>(
             self,
             HostRequestGolemRpcCreate {
@@ -432,7 +430,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             self,
             handle,
             span,
-            RpcBinding::Upsert(Box::new(target)),
+            Box::new(target),
             agent_type,
             component_id,
             method_streams,
@@ -449,35 +447,190 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         self.check_read_only_allows("golem::rpc::wasm-rpc::get-by-id")
             .map_err(wasmtime::Error::from)?;
         let agent_id = AgentId::from(agent_id);
-        let remote = match self.remote_agent_type(&agent_type_name).await? {
-            Ok(remote) => remote,
-            Err(error) => return Ok(Err(error)),
+        let name = AgentTypeName(agent_type_name);
+        let request = HostRequestGolemRpcGetById {
+            remote_agent_id: agent_id,
+            agent_type_name: name.clone(),
         };
-        if agent_id.type_id() != Some(remote.registered.type_id) {
-            return Ok(Err(RpcError::NotFound(format!(
-                "Agent {agent_id} is not an agent of type {agent_type_name}"
-            ))));
-        }
-        let (handle, span) = start_rpc_connection_call::<_, GolemRpcWasmRpcGetById>(
+        let (mut handle, span, recorded) = start_rpc_binding_call::<_, GolemRpcWasmRpcGetById>(
             self,
-            HostRequestGolemRpcCreate {
-                remote_agent_id: agent_id,
-            },
+            request.clone(),
+            &agent_id,
             true,
         )
         .await?;
-        let owned_agent_id = OwnedAgentId::new(self.owned_agent_id.environment_id, &agent_id);
-        bind_rpc_connection(
+        let start_index = handle.start_index();
+        if recorded != request {
+            return Err(handle.trap(WorkerExecutorError::unexpected_oplog_entry(
+                start_index,
+                format!("get-by-id {request:?}"),
+                format!("get-by-id {recorded:?}"),
+            )));
+        }
+        let creation_index = (!self.state.snapshotting_mode).then(|| handle.start_index());
+        let target_environment_id = self.owned_agent_id.environment_id;
+        let response = 'binding: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => break 'binding response,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+            let lookup_result = {
+                let auth_ctx = handle.agent_auth_ctx().clone();
+                let lookup = async {
+                    let metadata = self
+                        .state
+                        .worker_service
+                        .get(&OwnedAgentId::new(target_environment_id, &agent_id))
+                        .await?
+                        .filter(|metadata| {
+                            metadata.initial_worker_metadata.agent_type_name.as_ref() == Some(&name)
+                                && metadata.initial_worker_metadata.environment_id
+                                    == target_environment_id
+                        })
+                        .ok_or_else(|| WorkerExecutorError::worker_not_found(agent_id))?;
+                    let initial = metadata.initial_worker_metadata;
+                    let revision = metadata
+                        .last_known_status
+                        .ok_or_else(|| {
+                            WorkerExecutorError::runtime(
+                                "Cannot resolve the existing agent's revision",
+                            )
+                        })?
+                        .component_revision;
+                    let component = self
+                        .component_service()
+                        .get_metadata(initial.component_id, Some(revision))
+                        .await?;
+                    let agent_type = component
+                        .metadata
+                        .find_agent_type_by_name(&name)
+                        .ok_or_else(|| WorkerExecutorError::worker_not_found(agent_id))?
+                        .clone();
+                    let type_id = agent_id
+                        .type_id()
+                        .ok_or_else(|| WorkerExecutorError::worker_not_found(agent_id))?;
+                    let registered = RegisteredAgentType {
+                        type_id,
+                        agent_type,
+                        implemented_by:
+                            golem_common::model::agent::RegisteredAgentTypeImplementer {
+                                component_id: component.id,
+                                component_revision: component.revision,
+                                component_name: component.component_name.0.clone(),
+                                account_id: component.account_id,
+                                account_email: component.account_email.clone(),
+                            },
+                    };
+                    let remote = RemoteAgentType::new(
+                        registered.clone(),
+                        &component,
+                        self.owner_component_metadata(),
+                    )
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                    let mut owner = remote.owner;
+                    if let AgentOwnerPattern::Agent { agent, .. } = &mut owner {
+                        *agent = AgentOwnerLeafPattern::agent(agent_id, Some(name.clone()));
+                    }
+                    auth_ctx
+                        .authorize_permission(
+                            &crate::durable_host::authorization::targets::agent_target(
+                                owner,
+                                AgentVerb::Invoke,
+                                AgentResourcePattern::Any,
+                            ),
+                        )
+                        .map_err(|error| {
+                            WorkerExecutorError::permission_denied(error.to_string())
+                        })?;
+                    Ok::<_, WorkerExecutorError>((initial.fingerprint, registered))
+                };
+                let interrupt = self.create_interrupt_signal().map(Error::from);
+                tokio::pin!(lookup);
+                match futures::future::select(lookup, interrupt).await {
+                    Either::Left((result, _)) => Ok(result),
+                    Either::Right((error, _)) => Err(error),
+                }
+            };
+            let result = match lookup_result {
+                Ok(result) => result,
+                Err(error) => return Err(handle.trap(error)),
+            };
+            let (result, agent_type, type_id) = match result {
+                Ok((fingerprint, registered)) => (
+                    Ok((agent_id, fingerprint)),
+                    Some(golem_common::schema::RegisteredAgentTypeSchema {
+                        agent_type: registered.agent_type,
+                        implemented_by: registered.implemented_by,
+                    }),
+                    Some(registered.type_id),
+                ),
+                Err(
+                    error @ (WorkerExecutorError::AgentNotFound { .. }
+                    | WorkerExecutorError::PermissionDenied { .. }),
+                ) => (Err(InternalRpcError::from(error).into()), None, None),
+                Err(error) => return Err(handle.trap(error)),
+            };
+            handle
+                .complete(
+                    self,
+                    HostResponseGolemRpcCreated {
+                        result,
+                        agent_type,
+                        type_id,
+                        target_environment_id,
+                    },
+                )
+                .await?
+        };
+        let (bound_id, fingerprint) = match response.result {
+            Ok(binding) => binding,
+            Err(error) => {
+                finish_span_in_memory(self, span.span_id())?;
+                return Ok(Err(InternalRpcError::from(error).into()));
+            }
+        };
+        let (Some(schema), Some(type_id)) = (response.agent_type, response.type_id) else {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                start_index,
+                "get-by-id End with the recorded agent type",
+                "get-by-id End without the recorded agent type",
+            )
+            .into());
+        };
+        let component = self
+            .component_service()
+            .get_metadata(
+                schema.implemented_by.component_id,
+                Some(schema.implemented_by.component_revision),
+            )
+            .await?;
+        let remote = RemoteAgentType::new(
+            RegisteredAgentType {
+                type_id,
+                agent_type: schema.agent_type,
+                implemented_by: schema.implemented_by,
+            },
+            &component,
+            self.owner_component_metadata(),
+        )?;
+        reconstruct_wasm_rpc_resource(
             self,
-            handle,
+            bound_id,
+            response.target_environment_id,
+            fingerprint,
+            vec![],
+            vec![],
             span,
-            RpcBinding::Existing(owned_agent_id),
             remote.agent_type,
             remote.registered.implemented_by.component_id,
             remote.method_streams,
             remote.owner,
+            creation_index,
         )
         .await
+        .map(Ok)
     }
 
     async fn bind_self(
@@ -669,11 +822,13 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     InvocationFreshnessDisposition::MayExist
                 };
             if !handle.is_live() && recorded_rpc_denial(self, &handle).await?.is_some() {
+                let start_index = handle.start_index();
                 let response = replay_rpc_denial(self, handle).await?;
-                return Ok(Err(denied_rpc_failure(response.result)?.into()));
+                return Ok(Err(denied_rpc_failure(start_index, response.result)?.into()));
             }
             let started = handle.recorded_span_started(self).await?.ok_or_else(|| {
                 WorkerExecutorError::unexpected_oplog_entry(
+                    handle.start_index(),
                     "streaming RPC Start carrying span_started",
                     format!(
                         "streaming RPC Start at {} without span metadata",
@@ -683,10 +838,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             })?;
             let span = restore_embedded_span(self, &started)?;
             if self.is_live() && !handle.is_live() {
+                let start_index = handle.start_index();
                 handle = match handle.replay(self).await? {
                     CallReplayOutcome::Incomplete(handle) => handle,
                     CallReplayOutcome::Replayed(_) => {
                         return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            start_index,
                             "incomplete RPC before a newly authored invocation span",
                             "completed RPC",
                         )
@@ -700,6 +857,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .logical_streaming_origin
                 .ok_or_else(|| {
                     WorkerExecutorError::unexpected_oplog_entry(
+                        handle.start_index(),
                         "streaming RPC Start with logical origin",
                         format!(
                             "streaming RPC Start at {} without logical origin",
@@ -811,6 +969,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let remote_result = {
                 let rpc = self.rpc();
                 let agent_id = *self.agent_id();
+                let caller = golem_common::model::caller::Caller::entry(self.self_principal());
                 let created_by = self.created_by();
                 let stack = self.clone_as_inherited_stack(span.span_id());
                 let interrupt_signal = interrupt_signal.map(Error::from);
@@ -832,6 +991,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         &agent_id,
                         &prepared.env,
                         stack,
+                        &caller,
                         prepared.config,
                         &auth_ctx,
                         scope_card,
@@ -949,8 +1109,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             }
             ResolvedCall::Replay(handle) => {
                 if recorded_rpc_denial(self, &handle).await?.is_some() {
+                    let start_index = handle.start_index();
                     let response = replay_rpc_denial(self, handle).await?;
-                    return Ok(Err(denied_rpc_failure(response.result)?.into()));
+                    return Ok(Err(denied_rpc_failure(start_index, response.result)?.into()));
                 }
                 handle
             }
@@ -976,6 +1137,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let dispatched_scope_card = scope_card.clone();
         let started = handle.recorded_span_started(self).await?.ok_or_else(|| {
             WorkerExecutorError::unexpected_oplog_entry(
+                handle.start_index(),
                 "dispatched RPC Start carrying span_started",
                 format!(
                     "RPC Start at {} without span metadata",
@@ -1101,8 +1263,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             }
             ResolvedCall::Replay(handle) => {
                 if recorded_rpc_denial(self, &handle).await?.is_some() {
+                    let start_index = handle.start_index();
                     let response = replay_rpc_denial(self, handle).await?;
-                    return Ok(Err(denied_rpc_failure(response.result)?.into()));
+                    return Ok(Err(denied_rpc_failure(start_index, response.result)?.into()));
                 }
                 handle
             }
@@ -1127,6 +1290,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         .map_err(|error| handle.trap(error))?;
         let started = handle.recorded_span_started(self).await?.ok_or_else(|| {
             WorkerExecutorError::unexpected_oplog_entry(
+                handle.start_index(),
                 "fire-and-forget RPC Start carrying span_started",
                 format!(
                     "RPC Start at {} without span metadata",
@@ -1327,6 +1491,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             }
             let started = handle.recorded_span_started(self).await?.ok_or_else(|| {
                 WorkerExecutorError::unexpected_oplog_entry(
+                    handle.start_index(),
                     "streaming RPC Start carrying span_started",
                     format!(
                         "streaming RPC Start at {} without span metadata",
@@ -1336,10 +1501,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             })?;
             let span = restore_embedded_span(self, &started)?;
             if self.is_live() && !handle.is_live() {
+                let start_index = handle.start_index();
                 handle = match handle.replay(self).await? {
                     CallReplayOutcome::Incomplete(handle) => handle,
                     CallReplayOutcome::Replayed(_) => {
                         return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            start_index,
                             "incomplete RPC before a newly authored invocation span",
                             "completed RPC",
                         )
@@ -1353,6 +1520,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .logical_streaming_origin
                 .ok_or_else(|| {
                     WorkerExecutorError::unexpected_oplog_entry(
+                        handle.start_index(),
                         "streaming RPC Start with logical origin",
                         format!(
                             "streaming RPC Start at {} without logical origin",
@@ -1494,6 +1662,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         .retry_properties("invoke-and-await", &remote_agent_id),
                     span_id: span.span_id().clone(),
                     cancel_token: tokio_util::sync::CancellationToken::new(),
+                    retry_auth_ctx: None,
                 }),
                 child_pollables: Vec::new(),
                 drop_pending: false,
@@ -1613,6 +1782,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         .map_err(|error| handle.trap(error))?;
         let started = handle.recorded_span_started(self).await?.ok_or_else(|| {
             WorkerExecutorError::unexpected_oplog_entry(
+                handle.start_index(),
                 "RPC Start carrying span_started",
                 format!(
                     "RPC Start at {} without span metadata",
@@ -1676,10 +1846,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 expected_callee_fingerprint,
                 retry_properties.clone(),
                 span.span_id(),
+                handle.trap_context().retry_from,
                 handle.start_index(),
                 initial_freshness_disposition,
                 scope_card,
-                auth_ctx,
+                auth_ctx.clone(),
             );
 
             let fut = self.table().push(FutureInvokeResultEntry {
@@ -1697,6 +1868,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     retry_properties: retry_properties.clone(),
                     span_id: span.span_id().clone(),
                     cancel_token: tokio_util::sync::CancellationToken::new(),
+                    retry_auth_ctx: Some(auth_ctx),
                 }),
                 child_pollables: Vec::new(),
                 drop_pending: false,
@@ -1726,6 +1898,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     retry_properties: retry_properties.clone(),
                     span_id: span.span_id().clone(),
                     cancel_token: tokio_util::sync::CancellationToken::new(),
+                    retry_auth_ctx: None,
                 }),
                 child_pollables: Vec::new(),
                 drop_pending: false,
@@ -1824,7 +1997,7 @@ async fn bind_rpc_connection<Ctx: WorkerCtx, F>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     handle: DurableCallSession<F, NotCancellable>,
     span: Arc<InvocationContextSpan>,
-    binding: RpcBinding,
+    binding: Box<ResolvedTarget>,
     agent_type: Arc<AgentTypeSchema>,
     component_id: ComponentId,
     method_streams: Arc<BTreeMap<String, bool>>,
@@ -1851,7 +2024,7 @@ where
                 };
                 return reconstruct_wasm_rpc_resource(
                     ctx,
-                    binding.owned_agent_id().agent_id,
+                    binding.owned_agent_id.agent_id,
                     response.target_environment_id,
                     fingerprint,
                     vec![],

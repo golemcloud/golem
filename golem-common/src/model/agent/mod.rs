@@ -19,14 +19,18 @@ mod invocation;
 mod key;
 mod normalisation;
 mod protobuf;
+mod resolved_names;
 mod status;
 
 pub use key::AgentKey;
+pub use resolved_names::{
+    FollowedLookups, MAX_RESOLVED_NAME_LINKS, OpenLookup, ResolvedNameIndex, ResolvedNames,
+};
 
 pub use invocation::{
     AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationPayload,
-    AgentInvocationResult, PendingInvocationRef, RedactedAgentInvocationResult,
-    TimestampedAgentInvocation,
+    AgentInvocationResult, InvocationRequestOperation, PendingInvocationRef,
+    RedactedAgentInvocationResult, StoredAgentInvocationPayload, TimestampedAgentInvocation,
 };
 pub use status::{
     AgentMetadata, AgentStatusRecord, AssistedSelection, AuthoritativeSnapshot,
@@ -34,10 +38,11 @@ pub use status::{
     DEFAULT_INVOCATION_RESULT_BLOOM_HASHES, DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY,
     DURABLE_STREAM_SESSION_RECENT_CAPACITY, DurableStreamPublicBinding, DurableStreamSessionIndex,
     DurableStreamSessionStatus, EntityReplayBoundary, EntityReplayProgress, ExportForkAdmissions,
-    ExportForkReservation, FailedUpdateRecord, InvocationResultBloom, InvocationResultMembership,
-    InvocationResultPosition, OpenEntityReplayScope, OplogProcessorCheckpointState,
-    PendingCardEventRef, PendingUpdateKind, PendingUpdateRef, SnapshotFiles,
-    SuccessfulUpdateRecord, UsableAutomaticSnapshot,
+    ExportForkReservation, FailedUpdateRecord, InvocationEnd, InvocationOperation,
+    InvocationRequestRef, InvocationResultBloom, InvocationResultMembership,
+    InvocationResultPosition, MAX_INVOCATION_OPERATION_BYTES, OpenEntityReplayScope,
+    OplogProcessorCheckpointState, PendingCardEventRef, PendingUpdateKind, PendingUpdateRef,
+    RunningInvocation, SnapshotFiles, SuccessfulUpdateRecord, UsableAutomaticSnapshot,
 };
 
 #[cfg(test)]
@@ -266,8 +271,9 @@ impl ParsedAgentKey {
         agent_type: AgentTypeName,
         parameters: TypedSchemaValue,
     ) -> Result<Self, String> {
-        let key = AgentKey::new(agent_type, parameters).map_err(|err| err.to_string())?;
-        Ok(key.into())
+        let constructor = Self::new(agent_type, parameters);
+        constructor.canonical_parameters()?;
+        Ok(constructor)
     }
 
     pub fn parse(
@@ -292,8 +298,16 @@ impl ParsedAgentKey {
         parameters: &str,
         resolver: impl AgentTypeSchemaResolver,
     ) -> Result<Self, String> {
-        let (key, _) = AgentKey::parse_parts(&agent_type_name.0, parameters, resolver)?;
-        Ok(key.into())
+        use structural_format::{normalize_structural, parse_structural_typed};
+        let agent_type = resolver.resolve_agent_type_schema_by_name(agent_type_name)?;
+        let root = constructor_parameter_record(&agent_type);
+        let value =
+            parse_structural_typed(&normalize_structural(parameters), &agent_type.schema, &root)
+                .map_err(|err| err.to_string())?;
+        Self::try_new(
+            agent_type_name.clone(),
+            typed_constructor_parameters(&agent_type, value),
+        )
     }
 
     pub fn parse_agent_type_name(s: &str) -> Result<AgentTypeName, String> {
@@ -311,6 +325,15 @@ impl ParsedAgentKey {
             .map_err(|err| err.to_string())
     }
 
+    /// Validates constructor parameters against the implementing component's schema,
+    /// without imposing the length limit of a key.
+    pub fn canonical_constructor(
+        &self,
+        resolver: impl AgentTypeSchemaResolver,
+    ) -> Result<Self, String> {
+        Self::parse_parameters(&self.agent_type, &self.canonical_parameters()?, resolver)
+    }
+
     /// The key of this constructor, read back from its canonical parameter text against the
     /// constructor schema that `resolver` gives, so its parameters carry the implementing
     /// component's graph instead of the caller's. Each service that derives a keyed agent ID
@@ -319,9 +342,8 @@ impl ParsedAgentKey {
         &self,
         resolver: impl AgentTypeSchemaResolver,
     ) -> Result<AgentKey, String> {
-        let (key, _) =
-            AgentKey::parse_parts(&self.agent_type.0, &self.canonical_parameters()?, resolver)?;
-        Ok(key)
+        let constructor = self.canonical_constructor(resolver)?;
+        AgentKey::new(constructor.agent_type, constructor.parameters).map_err(|err| err.to_string())
     }
 }
 
@@ -362,12 +384,6 @@ pub fn constructor_parameter_record(agent_type: &AgentTypeSchema) -> SchemaType 
             .input_schema
             .fields()
             .iter()
-            .filter(|field| {
-                matches!(
-                    field.source,
-                    crate::schema::agent::FieldSource::UserSupplied
-                )
-            })
             .map(|field| NamedFieldType {
                 name: field.name.clone(),
                 body: field.schema.clone(),
@@ -388,6 +404,8 @@ pub enum InvocationStatus {
     Pending,
     /// The invocation has completed (successfully or with an error).
     Complete,
+    /// The invocation was cancelled before it started.
+    Cancelled,
 }
 
 /// An agent ID with the environment that owns it

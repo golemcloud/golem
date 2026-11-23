@@ -45,19 +45,12 @@ import scala.scalajs.js
 //   - `agent-error.custom-error` carries a `typed-schema-value`.
 // ---------------------------------------------------------------------------
 
-/** `auto-injected-kind` is a plain string enum (`"principal"`). */
-object JsAutoInjectedKind {
-  val principal: String = "principal"
-}
-
 @js.native
 sealed trait JsFieldSource extends js.Object {
   def tag: String = js.native
 }
 object JsFieldSource {
-  def userSupplied: JsFieldSource               = JsShape.tagOnly[JsFieldSource]("user-supplied")
-  def autoInjected(kind: String): JsFieldSource = JsShape.tagged[JsFieldSource]("auto-injected", kind)
-  def autoInjectedPrincipal: JsFieldSource      = autoInjected(JsAutoInjectedKind.principal)
+  def userSupplied: JsFieldSource = JsShape.tagOnly[JsFieldSource]("user-supplied")
 }
 
 @js.native

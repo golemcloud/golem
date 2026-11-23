@@ -61,6 +61,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     initial_active_plugins,
                     local_agent_config,
                     instance_id,
+                    never_live,
                 } = *parameters;
                 let metadata = components
                     .get_metadata(owner_component_id, Some(component_revision))
@@ -105,6 +106,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     initial_active_plugins: initial_plugins,
                     local_agent_config,
                     instance_id,
+                    never_live,
                 }));
             }
             golem_common::model::oplog::OplogEnrichmentEntry::Other(value) => value,
@@ -124,21 +126,17 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 span_started,
                 denial,
             } => {
-                let request_value = if let Some(request_payload) = request {
-                    let host_request: HostRequest = oplog_service
-                        .download_payload(owned_agent_id, agent_mode, request_payload)
-                        .await?;
-
-                    let request_value = match host_request {
-                        HostRequest::EntityInvocation(request) => request.input,
-                        HostRequest::McpToolCall(request) => request.input,
-                        other => other
-                            .into_typed_schema_value()
-                            .map_err(|error| error.to_string())?,
-                    };
-                    Some(request_value)
-                } else {
-                    None
+                let request_value = match request {
+                    Some(request_payload) => Some(
+                        public_host_request(
+                            request_payload,
+                            &oplog_service,
+                            owned_agent_id,
+                            agent_mode,
+                        )
+                        .await?,
+                    ),
+                    None => None,
                 };
 
                 Ok(PublicOplogEntry::Start(StartParams {
@@ -222,15 +220,17 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::AgentInvocationStarted {
                 timestamp,
                 invocation_id: idempotency_key,
+                operation,
                 payload,
                 trace_id,
                 trace_states,
                 invocation_context,
                 wallet_pin,
             } => {
-                let invocation_payload: AgentInvocationPayload = oplog_service
+                let invocation_payload = oplog_service
                     .download_payload(owned_agent_id, agent_mode, payload)
-                    .await?;
+                    .await?
+                    .with_operation(*operation)?;
 
                 let invocation_context_stack = InvocationContextStack::from_oplog_data(
                     trace_id,
@@ -319,6 +319,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 error,
                 retry_from,
                 retry_policy_state,
+                retry_at,
+                retrying_start_index,
                 ..
             } => Ok(PublicOplogEntry::Error(ErrorParams {
                 timestamp,
@@ -327,6 +329,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 error: error.to_string(""),
                 retry_from,
                 retry_policy_state: retry_policy_state.map(Into::into),
+                retry_at,
+                retrying_start_index,
             })),
             OplogEntry::RecoverySucceeded { timestamp } => Ok(PublicOplogEntry::RecoverySucceeded(
                 RecoverySucceededParams { timestamp },
@@ -346,14 +350,16 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 not_before,
                 invocation_id: idempotency_key,
+                operation,
                 payload,
                 trace_id,
                 trace_states,
                 invocation_context,
             } => {
-                let invocation_payload: AgentInvocationPayload = oplog_service
+                let invocation_payload = oplog_service
                     .download_payload(owned_agent_id, agent_mode, payload)
-                    .await?;
+                    .await?
+                    .with_operation(*operation)?;
 
                 let invocation_context_stack = InvocationContextStack::from_oplog_data(
                     trace_id,
@@ -467,11 +473,26 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 snapshot_assisted_details,
                 update_attempt_index,
                 snapshot_fault: _,
+                failure_class,
+                divergence,
             } => Ok(PublicOplogEntry::FailedUpdate(FailedUpdateParams {
                 timestamp,
                 target_revision,
                 details,
                 update_attempt_index,
+                failure_class,
+                divergence: match divergence {
+                    Some(divergence) => Some(
+                        with_expected_request(
+                            divergence,
+                            &oplog_service,
+                            owned_agent_id,
+                            agent_mode,
+                        )
+                        .await,
+                    ),
+                    None => None,
+                },
                 snapshot_assisted_details: snapshot_assisted_details.map(|details| {
                     PublicFailedSnapshotAssistedUpdateDetails {
                         pending_update_index: details.pending_update_index,
@@ -995,4 +1016,68 @@ fn make_plugin_installation_description(
         plugin_version: installation.plugin_version,
         parameters: installation.parameters,
     }
+}
+
+/// The public value of the request of a recorded `Start`.
+async fn public_host_request(
+    request_payload: OplogPayload<HostRequest>,
+    oplog_service: &Arc<dyn OplogService>,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+) -> Result<TypedSchemaValue, String> {
+    let host_request: HostRequest = oplog_service
+        .download_payload(owned_agent_id, agent_mode, request_payload)
+        .await?;
+
+    match host_request {
+        HostRequest::EntityInvocation(request) => Ok(request.input),
+        HostRequest::McpToolCall(request) => Ok(request.input),
+        other => other
+            .into_typed_schema_value()
+            .map_err(|error| error.to_string()),
+    }
+}
+
+/// `divergence` with the request of its expected host call, which the recorded `Start` at the
+/// index of the divergence holds, projected like the request of a public `Start`. The request
+/// stays unknown when the entry at the index is not a `Start` of the same function or its
+/// request does not read.
+pub(crate) async fn with_expected_request(
+    mut divergence: Box<ReplayDivergence>,
+    oplog_service: &Arc<dyn OplogService>,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+) -> Box<ReplayDivergence> {
+    let ReplayStep::HostCall(expected) = &mut divergence.expected else {
+        return divergence;
+    };
+    if expected.request.is_some() || !expected.carries_request {
+        return divergence;
+    }
+    let index = divergence.oplog_index;
+    let request = match oplog_service
+        .read_exact(owned_agent_id, agent_mode, index, 1)
+        .await
+        .map(|mut entries| entries.remove(&index))
+    {
+        Ok(Some(OplogEntry::Start {
+            function_name,
+            request: Some(request),
+            ..
+        })) if function_name.to_string() == expected.function_name => {
+            public_host_request(request, oplog_service, owned_agent_id, agent_mode).await
+        }
+        Ok(_) => Err(format!(
+            "the entry at {index} is not a Start of {} with a request",
+            expected.function_name
+        )),
+        Err(error) => Err(error.to_string()),
+    };
+    match request {
+        Ok(request) => expected.request = Some(Box::new(request)),
+        Err(error) => {
+            tracing::error!(%index, %error, "Failed to read the expected request of a replay divergence")
+        }
+    }
+    divergence
 }

@@ -118,7 +118,7 @@ async fn go_ambient_native_client_executes_through_golem() {
         indoc! {r#"
             use golem_rust::schema::{SchemaValue, TypedSchemaValue};
             use golem_rust::tool::{
-                InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool,
+                InputStream, InvocationResult, InvocationContext, OutputStream, RawCustomToolError, Tool,
                 ToolInvokeError, UnderlyingTool,
             };
             use golem_rust::universal_tool_middleware;
@@ -132,7 +132,7 @@ async fn go_ambient_native_client_executes_through_golem() {
                 stdin: Option<InputStream>,
                 stdout: Option<OutputStream>,
                 stderr: Option<OutputStream>,
-                _principal: Principal,
+                _ctx: InvocationContext,
                 underlying: UnderlyingTool,
             ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
                 let input = if tool_name == "native-conformance"

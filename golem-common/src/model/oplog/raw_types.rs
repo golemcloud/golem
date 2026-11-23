@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::base_model::account::AccountId;
-use crate::base_model::agent::{AgentMode, OwnerKind, Principal};
+use crate::base_model::agent::{AgentMode, OwnerKind};
+use crate::base_model::caller::Caller;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::regions::OplogRegion;
 use crate::base_model::{AgentId, IdempotencyKey, OplogIndex};
@@ -63,16 +64,19 @@ pub struct CreateParameters {
     pub local_agent_config: Vec<UntypedAgentConfigEntry>,
     pub instance_id: Uuid,
     pub create_request: CreateRequest,
+    /// Whether the owner is a never-live sandbox. A marked owner reports the `Sandboxed` status.
+    /// The mark never changes after the `Create` entry.
+    pub never_live: bool,
 }
 
-/// The request that created an owner: its kind, its idempotency key, and the principal and
-/// invocation context of its caller.
+/// The request that created an owner: its kind, its idempotency key, and the caller and
+/// invocation context of its creator.
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub struct CreateRequest {
     pub kind: CreateRequestKind,
     pub idempotency_key: Option<IdempotencyKey>,
-    pub principal: Principal,
+    pub caller: Caller,
     pub trace_id: TraceId,
     pub trace_states: Vec<String>,
     pub invocation_context: Vec<SpanData>,
@@ -82,13 +86,13 @@ impl CreateRequest {
     pub fn new(
         kind: CreateRequestKind,
         idempotency_key: Option<IdempotencyKey>,
-        principal: Principal,
+        caller: Caller,
         invocation_context: &InvocationContextStack,
     ) -> Self {
         Self {
             kind,
             idempotency_key,
-            principal,
+            caller,
             trace_id: invocation_context.trace_id.clone(),
             trace_states: invocation_context.trace_states.clone(),
             invocation_context: invocation_context.to_oplog_data(),
@@ -145,6 +149,7 @@ pub struct CreateProjectionParameters {
     pub initial_active_plugins: HashSet<EnvironmentPluginGrantId>,
     pub local_agent_config: Vec<UntypedAgentConfigEntry>,
     pub instance_id: Uuid,
+    pub never_live: bool,
 }
 
 impl From<CreateParameters> for CreateProjectionParameters {
@@ -168,6 +173,7 @@ impl From<CreateParameters> for CreateProjectionParameters {
             local_agent_config,
             instance_id,
             create_request: _,
+            never_live,
         } = value;
         Self {
             agent_id,
@@ -184,6 +190,7 @@ impl From<CreateParameters> for CreateProjectionParameters {
             initial_active_plugins,
             local_agent_config,
             instance_id,
+            never_live,
         }
     }
 }

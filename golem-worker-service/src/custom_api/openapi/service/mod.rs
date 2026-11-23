@@ -21,7 +21,8 @@ use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt, stream};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::AgentInvocationResult;
-use golem_common::model::agent::{ParsedAgentKey, Principal};
+use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::caller::Caller;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
@@ -143,7 +144,7 @@ impl ProviderInvoker for WorkerProviderInvoker {
                 call.environment_id,
                 component.account_id,
                 AuthCtx::System,
-                Principal::anonymous().into(),
+                Caller::anonymous().into(),
                 None,
                 None,
             )

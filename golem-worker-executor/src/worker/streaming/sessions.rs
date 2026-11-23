@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::InvocationId;
+use golem_common::model::caller::{Caller, Principal};
 
 use crate::worker::*;
 
@@ -156,7 +157,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         idempotency_key: &InvocationId,
     ) -> Result<Option<golem_common::model::DurableStreamSessionStatus>, WorkerExecutorError> {
-        let status = self.state_actor.status().await;
+        // Session expiry and stream-slot requests can reach a generation whose state actor a
+        // deletion stopped without holding a task-scope bind.
+        let status = self.try_get_last_known_status().await?;
         self.worker_service()
             .lookup_durable_stream_session(
                 &self.owned_agent_id,
@@ -571,11 +574,11 @@ pub(in crate::worker) fn stream_agent_authority(effective_identity: &[u8]) -> Op
         return None;
     }
     last.and_then(|value| {
-        golem_api_grpc::proto::golem::component::Principal::decode(value)
+        golem_api_grpc::proto::golem::component::Caller::decode(value)
             .ok()
-            .and_then(|principal| Principal::try_from(principal).ok())
+            .and_then(|caller| Caller::try_from(caller).ok())
     })
-    .is_some_and(|principal| matches!(principal, Principal::Agent(_)))
+    .is_some_and(|caller| matches!(caller.immediate, Principal::Agent(_)))
     .then_some(authority?)
 }
 
@@ -948,10 +951,9 @@ pub(in crate::worker) fn validate_stream_session_record(
 
 #[cfg(test)]
 mod tests {
-    use super::stream_effective_identity_is_agent;
+    use super::{stream_agent_authority, stream_effective_identity_is_agent};
     use golem_api_grpc::proto::golem::auth::{AuthCtx, UserAuthCtx, auth_ctx};
     use golem_common::model::AgentId;
-    use golem_common::model::agent::{AgentPrincipal, Principal};
     use prost::Message;
     use test_r::test;
 
@@ -977,11 +979,8 @@ mod tests {
             })),
         }
         .encode_to_vec();
-        let agent: golem_api_grpc::proto::golem::component::Principal =
-            Principal::Agent(AgentPrincipal {
-                agent_id: AgentId::from_parts(7, 1),
-            })
-            .into();
+        let agent: golem_api_grpc::proto::golem::component::Caller =
+            crate::test_callers::agent_caller(AgentId::from_parts(7, 1)).into();
 
         assert!(!stream_effective_identity_is_agent(&identity(
             std::slice::from_ref(&user)
@@ -993,5 +992,34 @@ mod tests {
             user,
             agent.encode_to_vec()
         ])));
+    }
+
+    #[test]
+    fn stream_agent_authority_reads_the_caller_identity() {
+        use golem_common::model::caller::Caller;
+
+        let caller_identity = |caller: &Caller| {
+            let wire: golem_api_grpc::proto::golem::component::Caller = caller.clone().into();
+            identity(&[AuthCtx::default().encode_to_vec(), wire.encode_to_vec()])
+        };
+        let agent = crate::test_callers::agent_caller(AgentId::from_parts(7, 1));
+        let identity_of_agent = caller_identity(&agent);
+        assert!(stream_agent_authority(&identity_of_agent).is_some());
+        assert!(stream_effective_identity_is_agent(&identity_of_agent));
+
+        let user = Caller::entry(crate::test_callers::user_principal());
+        assert!(stream_agent_authority(&caller_identity(&user)).is_none());
+
+        let mut agent_for_user = agent.clone();
+        agent_for_user.original = user.original.clone();
+        assert!(stream_agent_authority(&caller_identity(&agent_for_user)).is_some());
+        let mut user_via_agent_root = user;
+        user_via_agent_root.original = agent.original;
+        assert!(stream_agent_authority(&caller_identity(&user_via_agent_root)).is_none());
+
+        let mut garbage = Vec::new();
+        garbage.extend_from_slice(&3u64.to_be_bytes());
+        garbage.extend_from_slice(&[0xff, 0xff, 0xff]);
+        assert!(stream_agent_authority(&garbage).is_none());
     }
 }

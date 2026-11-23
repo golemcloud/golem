@@ -153,6 +153,8 @@ object AgentHostApi {
     def Failed: AgentStatus = "failed"
 
     def Exited: AgentStatus = "exited"
+
+    def Sandboxed: AgentStatus = "sandboxed"
   }
 
   object UpdateMode {

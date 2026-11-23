@@ -156,8 +156,11 @@ async fn routed_stream_session(
         .add(OplogEntry::pending_agent_invocation(
             None,
             identity.invocation.idempotency_key,
+            Box::new(golem_common::model::InvocationRequestOperation::SaveSnapshot),
             OplogPayload::Inline(Box::new(
-                golem_common::model::AgentInvocationPayload::SaveSnapshot,
+                golem_common::model::StoredAgentInvocationPayload::SaveSnapshot {
+                    caller: golem_common::model::caller::Caller::anonymous(),
+                },
             )),
             TraceId::generate(),
             vec![],

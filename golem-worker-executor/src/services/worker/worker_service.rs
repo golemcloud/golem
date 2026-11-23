@@ -124,6 +124,7 @@ impl WorkerService for DefaultWorkerService {
                     local_agent_config,
                     instance_id,
                     create_request,
+                    never_live,
                 } = *parameters;
                 debug_assert_eq!(persisted_agent_mode, agent_mode);
                 debug_assert_eq!(AgentFingerprint(instance_id), resolved_fingerprint);
@@ -185,6 +186,7 @@ impl WorkerService for DefaultWorkerService {
                             ..Default::default()
                         },
                         agent_mode,
+                        never_live,
                         ..AgentStatusRecord::default()
                     },
                     fingerprint: AgentFingerprint(instance_id),
@@ -251,6 +253,13 @@ impl WorkerService for DefaultWorkerService {
                         };
 
                         // Cold path: no in-memory previous, reconcile against stored fields.
+                        // The persisted result index is a cache of the same oplog, so it goes
+                        // with the status it was caught up to and is rebuilt from the oplog.
+                        // Ephemeral agents have no persisted index.
+                        if agent_mode != AgentMode::Ephemeral {
+                            self.clear_invocation_result_index(owned_agent_id, fingerprint)
+                                .await?;
+                        }
                         self.write_cached_status(
                             owned_agent_id,
                             fingerprint,
@@ -341,12 +350,6 @@ impl WorkerService for DefaultWorkerService {
 
         self.remove_cached_status(owned_agent_id, fingerprint)
             .await?;
-        self.remove_all_fields(
-            owned_agent_id,
-            Self::invocation_result_index_namespace(owned_agent_id, fingerprint),
-            "invocation-result index",
-        )
-        .await?;
         self.stream_session_index
             .clear(owned_agent_id, fingerprint)
             .await
@@ -414,6 +417,11 @@ impl WorkerService for DefaultWorkerService {
         fingerprint: AgentFingerprint,
     ) -> Result<(), WorkerExecutorError> {
         record_worker_call("remove_cached_status");
+        // The result index is part of the status cache. Besides deletion, the cached status is
+        // removed when the oplog is fully archived, so that an archived agent keeps nothing in
+        // primary storage; the index goes with it and is rebuilt from the oplog on next access.
+        self.clear_invocation_result_index(owned_agent_id, fingerprint)
+            .await?;
         self.remove_split_status(
             owned_agent_id,
             Self::status_namespace(owned_agent_id, fingerprint),
@@ -692,10 +700,57 @@ impl WorkerService for DefaultWorkerService {
                         &status.deleted_regions,
                         &entries,
                         |key, position| {
-                            mappings.insert(*key, position);
+                            if !(position.end == InvocationEnd::Cancelled
+                                && mappings.contains_key(key))
+                            {
+                                mappings.insert(*key, position);
+                            }
                         },
                     );
                     advanced.covered_through = *entries.keys().max().unwrap();
+
+                    // A withdrawal never replaces a result that an earlier chunk indexed.
+                    let withdrawals: Vec<InvocationId> = mappings
+                        .iter()
+                        .filter(|(_, position)| position.end == InvocationEnd::Cancelled)
+                        .map(|(key, _)| *key)
+                        .collect();
+                    for key in withdrawals {
+                        let indexed = self
+                            .key_value_storage
+                            .with_entity(
+                                "worker",
+                                "read_invocation_result_index",
+                                "invocation_result",
+                            )
+                            .get_raw(namespace.clone(), &invocation_result_index_field(&key))
+                            .await
+                            .map_err(WorkerExecutorError::runtime)?;
+                        let indexed = match indexed
+                            .map(|value| try_deserialize::<PersistedInvocationResult>(&value))
+                            .transpose()
+                        {
+                            Ok(None) => None,
+                            Ok(Some(Some(indexed))) => Some(indexed),
+                            Ok(Some(None)) | Err(_) => {
+                                // A field that does not decode makes the whole index suspect.
+                                self.invalidate_invocation_result_index(
+                                    &namespace,
+                                    expected_metadata.as_deref(),
+                                )
+                                .await?;
+                                continue 'reload;
+                            }
+                        };
+                        if indexed.is_some_and(|indexed| {
+                            indexed.revert_generation == advanced.revert_generation
+                                && !status
+                                    .deleted_regions
+                                    .is_in_deleted_region(indexed.position.terminal)
+                        }) {
+                            mappings.remove(&key);
+                        }
+                    }
 
                     let mut fields = Vec::with_capacity(mappings.len() + 1);
                     for (key, position) in mappings {
@@ -748,6 +803,66 @@ impl WorkerService for DefaultWorkerService {
         .await
     }
 
+    async fn list_invocation_result_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+        status: &AgentStatusRecord,
+    ) -> Result<Option<Vec<(InvocationId, InvocationResultPosition)>>, String> {
+        let namespace = Self::invocation_result_index_namespace(owned_agent_id, fingerprint);
+        let fields = self
+            .key_value_storage
+            .with_entity(
+                "worker",
+                "list_invocation_result_index",
+                "invocation_result",
+            )
+            .get_all_raw(namespace.clone())
+            .await?;
+        let Some(raw_metadata) = fields
+            .iter()
+            .find(|(field, _)| field == INVOCATION_RESULT_INDEX_METADATA_FIELD)
+            .map(|(_, value)| value.to_vec())
+        else {
+            return Ok(None);
+        };
+        let Ok(metadata) = deserialize::<InvocationResultIndexMetadata>(&raw_metadata) else {
+            return Ok(None);
+        };
+        if metadata.revert_generation != status.invocation_results.revert_generation()
+            || !invocation_result_index_is_complete(&metadata, status)
+        {
+            return Ok(None);
+        }
+
+        let mut results = Vec::with_capacity(fields.len().saturating_sub(1));
+        for (field, value) in &fields {
+            let Some(key) = field.strip_prefix(INVOCATION_RESULT_INDEX_FIELD_PREFIX) else {
+                continue;
+            };
+            let key = key
+                .parse::<InvocationId>()
+                .map_err(|error| error.to_string());
+            let value = try_deserialize::<PersistedInvocationResult>(value);
+            let (Ok(key), Ok(Some(value))) = (key, value) else {
+                // A field that does not decode makes the whole index suspect: the next catch-up
+                // rebuilds it from the oplog.
+                self.invalidate_invocation_result_index(&namespace, Some(&raw_metadata))
+                    .await
+                    .map_err(|error| error.to_string())?;
+                return Ok(None);
+            };
+            if value.revert_generation == metadata.revert_generation
+                && !status
+                    .deleted_regions
+                    .is_in_deleted_region(value.position.terminal)
+            {
+                results.push((key, value.position));
+            }
+        }
+        Ok(Some(results))
+    }
+
     async fn lookup_invocation_result_index(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -779,19 +894,22 @@ impl WorkerService for DefaultWorkerService {
             return Ok(InvocationResultIndexLookup::Incomplete);
         }
 
-        let complete = metadata.covered_through >= status.oplog_idx
-            || status
-                .invocation_results
-                .oldest_retained_index()
-                .is_some_and(|oldest| oldest <= metadata.covered_through);
-        if !complete {
+        if !invocation_result_index_is_complete(&metadata, status) {
             return Ok(InvocationResultIndexLookup::Incomplete);
         }
 
         let Some(value) = values.get(1).and_then(Option::as_ref) else {
             return Ok(InvocationResultIndexLookup::DefinitiveMiss);
         };
-        let value: PersistedInvocationResult = deserialize(value)?;
+        let Ok(Some(value)) = try_deserialize::<PersistedInvocationResult>(value) else {
+            // A field that does not decode makes the whole index suspect: the next catch-up
+            // rebuilds it from the oplog.
+            let namespace = Self::invocation_result_index_namespace(owned_agent_id, fingerprint);
+            self.invalidate_invocation_result_index(&namespace, values[0].as_deref())
+                .await
+                .map_err(|error| error.to_string())?;
+            return Ok(InvocationResultIndexLookup::Incomplete);
+        };
         if value.revert_generation != metadata.revert_generation
             || status
                 .deleted_regions

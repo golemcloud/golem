@@ -186,6 +186,9 @@ async fn oplog_page(
             cursor.as_ref(),
             query.as_deref(),
             None,
+            None,
+            None,
+            None,
         )
         .await
         .map_service_error()

@@ -102,6 +102,7 @@ expectedFingerprint|string|No|-
     }
   ],
   "status": "Running",
+  "underlyingStatus": "Running",
   "componentRevision": 0,
   "retryCount": 0,
   "pendingInvocationCount": 0,
@@ -289,6 +290,9 @@ count|integer|Yes|-
 cursor|#/components/schemas/OplogCursor|No|-
 query|string|No|-
 expectedFingerprint|string|No|-
+to|integer|No|The inclusive last index of a range read. Requires `from` and no `query`.
+scanEntries|integer|No|The remaining entry allowance of a range read. Goes with `scanMillis`.
+scanMillis|integer|No|The remaining time allowance of a range read, in milliseconds.
 
 **Example Response JSON**
 
@@ -389,7 +393,8 @@ expectedFingerprint|string|No|-
             }
           }
         ],
-        "instanceId": "64d2028c-ae87-4069-a624-66089d957ef9"
+        "instanceId": "64d2028c-ae87-4069-a624-66089d957ef9",
+        "neverLive": true
       }
     }
   ],
@@ -399,7 +404,16 @@ expectedFingerprint|string|No|-
     "queryHash": "string"
   },
   "firstIndexInChunk": 0,
-  "lastIndex": 0
+  "lastIndex": 0,
+  "scan": {
+    "limit": {
+      "entries": 0,
+      "millis": 0
+    },
+    "chargedEntries": 0,
+    "chargedMillis": 0,
+    "exhausted": true
+  }
 }
 ```
 
@@ -517,7 +531,8 @@ expectedFingerprint|string|No|-
         }
       }
     ],
-    "instanceId": "64d2028c-ae87-4069-a624-66089d957ef9"
+    "instanceId": "64d2028c-ae87-4069-a624-66089d957ef9",
+    "neverLive": true
   }
 }
 ```
@@ -708,29 +723,6 @@ expectedFingerprint|string|No|-
 ```json copy
 {
   "agentId": "bc309ecf-5f66-4057-93c5-6611cc9cb7b2"
-}
-```
-
-## Cancels a pending invocation if it has not started yet
-
-Path|Method|Protected
----|---|---
-`/v1/runtime/envs/{environment_id}/agents/{agent_id}/invocations/{idempotency_key}`|DELETE|Yes
-
-The invocation to be cancelled is identified by the idempotency key returned when the
-invoke API accepted it.
-
-**Query Parameters**
-
-Name|Type|Required|Description
----|---|---|---
-expectedFingerprint|string|No|-
-
-**Example Response JSON**
-
-```json copy
-{
-  "canceled": true
 }
 ```
 

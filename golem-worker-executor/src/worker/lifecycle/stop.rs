@@ -536,6 +536,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             error: cached_error.clone(),
                             retry_from: OplogIndex::INITIAL,
                             semantic_trap_retry_override: None,
+                            provenance: crate::model::FailureProvenance::Host,
                         },
                         stderr: cached_stderr.clone(),
                     }),
@@ -714,7 +715,7 @@ pub(in crate::worker) fn invocation_keys_to_fail(
         }
     }
 
-    if let Some(current_key) = &status.current_idempotency_key
+    if let Some(current_key) = status.current_idempotency_key()
         && !keys.contains(current_key)
     {
         keys.push(*current_key);

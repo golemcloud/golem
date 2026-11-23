@@ -83,9 +83,12 @@ const (
 	AgentStatusFailed
 	// AgentStatusExited: the agent exited and can no longer be invoked.
 	AgentStatusExited
+	// AgentStatusSandboxed: the agent is a never-live sandbox that only replays
+	// its history.
+	AgentStatusSandboxed
 )
 
-var agentStatusNames = [...]string{"running", "idle", "suspended", "interrupted", "retrying", "failed", "exited"}
+var agentStatusNames = [...]string{"running", "idle", "suspended", "interrupted", "retrying", "failed", "exited", "sandboxed"}
 
 func (s AgentStatus) String() string {
 	if int(s) < len(agentStatusNames) {
@@ -113,9 +116,13 @@ type AgentMetadata struct {
 }
 
 func agentMetadataFromWit(w apiHost.AgentMetadata) AgentMetadata {
+	agentTypeName := None[string]()
+	if w.AgentTypeName.IsSome() {
+		agentTypeName = Some(w.AgentTypeName.Some())
+	}
 	return AgentMetadata{
 		AgentID:           agentIDFromWit(w.AgentId),
-		AgentTypeName:     optionFromWit(w.AgentTypeName),
+		AgentTypeName:     agentTypeName,
 		Fingerprint:       uuidFromWit(w.Fingerprint),
 		Args:              w.Args,
 		Env:               pairsToMap(w.Env),

@@ -1,6 +1,6 @@
 use golem_rust::tool::{
-    InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool,
-    ToolInvokeError, UnderlyingTool,
+    InputStream, InvocationContext, InvocationResult, OutputStream, Principal, RawCustomToolError,
+    Tool, ToolInvokeError, UnderlyingTool,
 };
 use golem_rust::{
     FromSchema, FromWire, IntoSchema, IntoWire, WireSchema, agent_definition, agent_implementation,
@@ -142,22 +142,9 @@ struct RateLimitParameters {
 }
 
 fn principal_key(principal: &Principal) -> String {
-    match principal {
-        Principal::Oidc(principal) => format!(
-            "oidc:{}:{}:{}",
-            principal.issuer.len(),
-            principal.issuer,
-            principal.sub
-        ),
-        Principal::Agent(principal) => {
-            let uuid = &principal.agent_id.uuid;
-            format!("agent:{:016x}{:016x}", uuid.high_bits, uuid.low_bits)
-        }
-        Principal::GolemUser(principal) => {
-            let uuid = &principal.account_id.uuid;
-            format!("golem-user:{:016x}{:016x}", uuid.high_bits, uuid.low_bits)
-        }
-        Principal::Anonymous => "anonymous".to_string(),
+    match principal.principal_ref() {
+        Some(principal_ref) => principal_ref.to_string(),
+        None => "anonymous".to_string(),
     }
 }
 
@@ -175,7 +162,7 @@ async fn persistent_rate_limit(
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
     stderr: Option<OutputStream>,
-    principal: Principal,
+    context: InvocationContext,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     if parameters.policy.is_empty() {
@@ -196,7 +183,7 @@ async fn persistent_rate_limit(
     );
     let admission = backend
         .admit(
-            principal_key(&principal),
+            principal_key(context.caller().immediate()),
             generate_idempotency_key().to_string(),
         )
         .await;

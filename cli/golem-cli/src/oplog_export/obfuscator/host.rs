@@ -471,6 +471,9 @@ fn pair_graphs(name: &HostFunctionName) -> Option<PairGraphs> {
         HostFunctionName::P3SocketsTypesTcpSocketReceiveAcquire => {
             pair::<host_functions::P3SocketsTypesTcpSocketReceiveAcquire>(Bare::Neither)
         }
+        HostFunctionName::P3SocketsTypesTcpSocketSendChunk => {
+            pair::<host_functions::P3SocketsTypesTcpSocketSendChunk>(Bare::Neither)
+        }
         HostFunctionName::P3SocketsTypesUdpSocketSend => {
             pair::<host_functions::P3SocketsTypesUdpSocketSend>(Bare::Neither)
         }
@@ -580,6 +583,12 @@ fn pair_graphs(name: &HostFunctionName) -> Option<PairGraphs> {
         HostFunctionName::P3SocketsTypesUdpSocketConnect => {
             pair::<host_functions::P3SocketsTypesUdpSocketConnect>(Bare::Neither)
         }
+        HostFunctionName::P3SocketsTypesUdpSocketBind => {
+            pair::<host_functions::P3SocketsTypesUdpSocketBind>(Bare::Neither)
+        }
+        HostFunctionName::P3SocketsTypesUdpSocketDisconnect => {
+            pair::<host_functions::P3SocketsTypesUdpSocketDisconnect>(Bare::Neither)
+        }
         HostFunctionName::GolemToolRpcInvokeAndAwait => {
             pair::<host_functions::GolemToolRpcInvokeAndAwait>(Bare::Neither)
         }
@@ -657,6 +666,64 @@ fn pair_graphs(name: &HostFunctionName) -> Option<PairGraphs> {
         HostFunctionName::SocketsUdpPermissionCheck => {
             pair::<host_functions::SocketsUdpPermissionCheck>(Bare::Neither)
         }
+        HostFunctionName::SocketsTcpStartBind => {
+            pair::<host_functions::SocketsTcpStartBind>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpStartConnect => {
+            pair::<host_functions::SocketsTcpStartConnect>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpFinishConnect => {
+            pair::<host_functions::SocketsTcpFinishConnect>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpInputStreamRead => {
+            pair::<host_functions::SocketsTcpInputStreamRead>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpInputStreamBlockingRead => {
+            pair::<host_functions::SocketsTcpInputStreamBlockingRead>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpInputStreamSkip => {
+            pair::<host_functions::SocketsTcpInputStreamSkip>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpInputStreamBlockingSkip => {
+            pair::<host_functions::SocketsTcpInputStreamBlockingSkip>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpOutputStreamCheckWrite => {
+            pair::<host_functions::SocketsTcpOutputStreamCheckWrite>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpOutputStreamWriteReady => {
+            pair::<host_functions::SocketsTcpOutputStreamWriteReady>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpOutputStreamWrite => {
+            pair::<host_functions::SocketsTcpOutputStreamWrite>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpOutputStreamBlockingWriteAndFlush => {
+            pair::<host_functions::SocketsTcpOutputStreamBlockingWriteAndFlush>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpOutputStreamWriteZeroes => {
+            pair::<host_functions::SocketsTcpOutputStreamWriteZeroes>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpOutputStreamBlockingWriteZeroesAndFlush => {
+            pair::<host_functions::SocketsTcpOutputStreamBlockingWriteZeroesAndFlush>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpOutputStreamFlush => {
+            pair::<host_functions::SocketsTcpOutputStreamFlush>(Bare::Neither)
+        }
+        HostFunctionName::SocketsTcpOutputStreamBlockingFlush => {
+            pair::<host_functions::SocketsTcpOutputStreamBlockingFlush>(Bare::Neither)
+        }
+        HostFunctionName::SocketsUdpStartBind => {
+            pair::<host_functions::SocketsUdpStartBind>(Bare::Neither)
+        }
+        HostFunctionName::SocketsUdpStream => {
+            pair::<host_functions::SocketsUdpStream>(Bare::Neither)
+        }
+        HostFunctionName::SocketsUdpReceive => {
+            pair::<host_functions::SocketsUdpReceive>(Bare::Neither)
+        }
+        HostFunctionName::SocketsUdpCheckSend => {
+            pair::<host_functions::SocketsUdpCheckSend>(Bare::Neither)
+        }
+        HostFunctionName::SocketsUdpSend => pair::<host_functions::SocketsUdpSend>(Bare::Neither),
         HostFunctionName::GolemPermissionsSelfWallet => {
             pair::<host_functions::GolemPermissionsSelfWallet>(Bare::Neither)
         }

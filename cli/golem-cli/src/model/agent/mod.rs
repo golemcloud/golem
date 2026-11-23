@@ -40,7 +40,7 @@ use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentConfigEntryDto, UpdateRecord};
 use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, ParsedAgentKey};
-use golem_common::model::component::{ComponentName, ComponentRevision};
+use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogErrorKind;
@@ -239,6 +239,8 @@ pub struct AgentMetadataView {
     pub config: Vec<AgentConfigEntryDto>,
     pub default_config: Vec<AgentConfigEntryDto>,
     pub status: AgentStatus,
+    /// The replayed state underneath a `Sandboxed` status.
+    pub underlying_status: Option<AgentStatus>,
     pub component_revision: ComponentRevision,
     pub retry_count: u32,
 
@@ -272,6 +274,7 @@ impl From<AgentMetadata> for AgentMetadataView {
             config: value.config,
             default_config: Vec::new(),
             status: value.status,
+            underlying_status: value.underlying_status,
             component_revision: value.component_revision,
             retry_count: value.retry_count,
             pending_invocation_count: value.pending_invocation_count,
@@ -352,6 +355,7 @@ pub struct AgentMetadata {
     pub env: HashMap<String, String>,
     pub config: Vec<AgentConfigEntryDto>,
     pub status: AgentStatus,
+    pub underlying_status: Option<AgentStatus>,
     pub component_revision: ComponentRevision,
     pub retry_count: u32,
     pub pending_invocation_count: u64,
@@ -394,6 +398,7 @@ impl AgentMetadata {
             env: value.env,
             config: value.config.into_iter().map(Into::into).collect(),
             status: value.status,
+            underlying_status: value.underlying_status,
             component_revision: value.component_revision,
             retry_count: value.retry_count,
             pending_invocation_count: value.pending_invocation_count,
@@ -421,29 +426,46 @@ pub struct AgentsMetadataResponseView {
     pub cursor: Option<String>,
 }
 
-/// The `agent list` cursor. Listing is per agent type, so it holds the scan cursor of each
-/// listed agent type that still has more results. A type that the cursor does not name was
-/// fully listed. Its text form is opaque to users: base64url of a JSON object from agent type
-/// name to scan cursor.
+/// The `agent list` cursor. Each component and agent type pair has its own scan cursor,
+/// because a moved type can contribute agents from both components. A pair absent from the
+/// cursor was fully listed. The text form is opaque to users.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AgentListCursor(BTreeMap<String, String>);
+pub struct AgentListCursor(BTreeMap<ComponentId, BTreeMap<String, String>>);
 
 impl AgentListCursor {
-    pub fn insert(&mut self, agent_type: &AgentTypeName, cursor: ScanCursor) {
-        self.0.insert(agent_type.0.clone(), cursor.into_inner());
+    pub fn insert(
+        &mut self,
+        component: ComponentId,
+        agent_type: &AgentTypeName,
+        cursor: ScanCursor,
+    ) {
+        self.0
+            .entry(component)
+            .or_default()
+            .insert(agent_type.0.clone(), cursor.into_inner());
     }
 
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    pub fn agent_types(&self) -> impl Iterator<Item = &str> {
-        self.0.keys().map(String::as_str)
+    pub fn scans(&self) -> impl Iterator<Item = (ComponentId, &str)> {
+        self.0.iter().flat_map(|(component, types)| {
+            types.keys().map(move |name| (*component, name.as_str()))
+        })
     }
 
-    /// Where listing `agent_type` resumes: `None` when the type was fully listed.
-    pub fn resume_at(&self, agent_type: &AgentTypeName) -> Option<ScanCursor> {
-        self.0.get(&agent_type.0).cloned().map(ScanCursor::new)
+    /// Where listing this component and type resumes: `None` when it was fully listed.
+    pub fn resume_at(
+        &self,
+        component: ComponentId,
+        agent_type: &AgentTypeName,
+    ) -> Option<ScanCursor> {
+        self.0
+            .get(&component)?
+            .get(&agent_type.0)
+            .cloned()
+            .map(ScanCursor::new)
     }
 
     pub fn encode(&self) -> String {
@@ -464,9 +486,9 @@ impl AgentListCursor {
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(text.trim())
             .map_err(|_| invalid())?;
-        let cursors: BTreeMap<String, String> =
+        let cursors: BTreeMap<ComponentId, BTreeMap<String, String>> =
             serde_json::from_slice(&bytes).map_err(|_| invalid())?;
-        if cursors.is_empty() {
+        if cursors.is_empty() || cursors.values().any(BTreeMap::is_empty) {
             return Err(invalid());
         }
         Ok(Self(cursors))
@@ -808,9 +830,15 @@ impl MessageWithFields for AgentGetView {
                         update_history,
                         "{}",
                         format!(
-                            "{}: Failed update to {}{}{}",
+                            "{}: Failed update to {} ({}){}{}{}",
                             update.timestamp,
                             update.target_revision,
+                            update.failure_class,
+                            update
+                                .divergence
+                                .as_ref()
+                                .map(|divergence| format!(": {divergence}"))
+                                .unwrap_or_default(),
                             update
                                 .details
                                 .as_ref()
@@ -880,7 +908,14 @@ impl MessageWithFields for AgentGetView {
                 !self.metadata.config.is_empty(),
                 |config| format_untyped_config(config),
             )
-            .fmt_field_optional("Status", &self.metadata.status, self.precise, format_status)
+            .fmt_field_optional(
+                "Status",
+                &(self.metadata.status, self.metadata.underlying_status),
+                self.precise,
+                |(status, underlying_status)| {
+                    format_reported_status(status, underlying_status.as_ref())
+                },
+            )
             .fmt_field_optional(
                 "Retry count",
                 &self.metadata.retry_count,
@@ -892,6 +927,12 @@ impl MessageWithFields for AgentGetView {
                 &self.metadata.pending_invocation_count,
                 self.metadata.pending_invocation_count > 0,
                 |n| n.to_string(),
+            )
+            .fmt_field_optional(
+                "Update history",
+                &update_history,
+                !update_history.is_empty(),
+                |history| history.trim_end().to_string(),
             )
             .fmt_field_optional(
                 "Failure category",
@@ -987,6 +1028,7 @@ impl AgentsMetadataResponseView {
                 AgentStatus::Retrying => ComfyColor::Yellow,
                 AgentStatus::Failed => ComfyColor::Red,
                 AgentStatus::Exited => ComfyColor::White,
+                AgentStatus::Sandboxed => ComfyColor::Magenta,
             }
         } else {
             ComfyColor::Reset
@@ -1154,8 +1196,19 @@ fn format_status(status: &AgentStatus) -> String {
         AgentStatus::Retrying => status_name.yellow(),
         AgentStatus::Failed => status_name.bright_red(),
         AgentStatus::Exited => status_name.white(),
+        AgentStatus::Sandboxed => status_name.magenta(),
     }
     .to_string()
+}
+
+fn format_reported_status(status: &AgentStatus, underlying_status: Option<&AgentStatus>) -> String {
+    match underlying_status {
+        Some(underlying_status) => format!(
+            "{} (replayed state: {underlying_status})",
+            format_status(status)
+        ),
+        None => format_status(status),
+    }
 }
 
 fn format_retry_count(retry_count: &u32) -> String {
@@ -1173,30 +1226,38 @@ mod tests {
 
     #[test]
     fn agent_list_cursor_resumes_only_the_types_it_names() {
+        let component = ComponentId::new();
+        let moved_to = ComponentId::new();
         let counter = AgentTypeName("CounterAgent".to_string());
         let chat = AgentTypeName("ChatAgent".to_string());
         let mut cursor = AgentListCursor::default();
-        cursor.insert(&counter, ScanCursor::new("0/17".to_string()));
+        cursor.insert(component, &counter, ScanCursor::new("0/17".to_string()));
+        cursor.insert(moved_to, &counter, ScanCursor::new("2/3".to_string()));
 
         let decoded = AgentListCursor::decode(&cursor.encode()).unwrap();
 
         assert_eq!(decoded, cursor);
         assert_eq!(
-            decoded.resume_at(&counter),
+            decoded.resume_at(component, &counter),
             Some(ScanCursor::new("0/17".to_string()))
         );
-        assert_eq!(decoded.resume_at(&chat), None);
+        assert_eq!(decoded.resume_at(component, &chat), None);
+        assert_eq!(
+            decoded.resume_at(moved_to, &counter),
+            Some(ScanCursor::new("2/3".to_string()))
+        );
     }
 
     #[test]
     fn agent_list_cursor_round_trips_the_scan_cursors_of_several_agent_types() {
+        let component = ComponentId::new();
         let counter = AgentTypeName("CounterAgent".to_string());
         let chat = AgentTypeName("ChatAgent".to_string());
         let done = AgentTypeName("DoneAgent".to_string());
         let mut cursor = AgentListCursor::default();
         assert!(cursor.is_empty());
-        cursor.insert(&counter, ScanCursor::new("0/17".to_string()));
-        cursor.insert(&chat, ScanCursor::new("3/2".to_string()));
+        cursor.insert(component, &counter, ScanCursor::new("0/17".to_string()));
+        cursor.insert(component, &chat, ScanCursor::new("3/2".to_string()));
         assert!(!cursor.is_empty());
 
         let encoded = cursor.encode();
@@ -1210,18 +1271,18 @@ mod tests {
 
         assert_eq!(decoded, cursor);
         assert_eq!(
-            decoded.agent_types().collect::<Vec<_>>(),
-            vec!["ChatAgent", "CounterAgent"]
+            decoded.scans().collect::<Vec<_>>(),
+            vec![(component, "ChatAgent"), (component, "CounterAgent")]
         );
         assert_eq!(
-            decoded.resume_at(&counter),
+            decoded.resume_at(component, &counter),
             Some(ScanCursor::new("0/17".to_string()))
         );
         assert_eq!(
-            decoded.resume_at(&chat),
+            decoded.resume_at(component, &chat),
             Some(ScanCursor::new("3/2".to_string()))
         );
-        assert_eq!(decoded.resume_at(&done), None);
+        assert_eq!(decoded.resume_at(component, &done), None);
         assert_eq!(
             AgentListCursor::decode(&format!(" {encoded}\n")).unwrap(),
             cursor

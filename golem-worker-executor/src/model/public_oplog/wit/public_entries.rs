@@ -96,6 +96,7 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
         })
         .collect::<Result<Vec<_>, String>>()?,
         instance_id: instance_id.into(),
+        never_live: never_live,
     } }
     Start { record StartParams => StartParameters {
         timestamp: timestamp.into(),
@@ -154,6 +155,8 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
             let internal: golem_common::model::RetryPolicyState = s.into();
             internal.into()
         }),
+        retry_at: retry_at.map(Into::into),
+        retrying_start_index: retrying_start_index.map(Into::into),
     } }
     RecoverySucceeded { override (PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams { timestamp })) => Ok({
                     Self::RecoverySucceeded(timestamp.into())
@@ -208,6 +211,10 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
                 snapshot_index: details.snapshot_index.into(),
             }
         }),
+        failure_class: update_failure_class_to_wit(failure_class),
+        divergence: divergence
+            .map(|divergence| replay_divergence_to_wit(*divergence))
+            .transpose()?,
     } }
     GrowMemory { record GrowMemoryParams => GrowMemoryParameters {
         timestamp: timestamp.into(),

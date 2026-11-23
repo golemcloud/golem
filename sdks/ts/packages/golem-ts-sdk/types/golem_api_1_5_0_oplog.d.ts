@@ -163,6 +163,11 @@ declare module 'golem:api/oplog@1.5.0' {
     initialActivePlugins: PluginInstallationDescription[];
     localAgentConfig: LocalAgentConfigEntry[];
     instanceId: Uuid;
+    /**
+     * Whether the agent is a never-live sandbox. A marked agent reports the
+     * `sandboxed` status.
+     */
+    neverLive: boolean;
   };
   /**
    * Identifies a durable call by its place in a call order.
@@ -326,6 +331,10 @@ declare module 'golem:api/oplog@1.5.0' {
     retryFrom: OplogIndex;
     /** Persistent retry policy state, if a semantic retry policy is active. */
     retryPolicyState?: RetryPolicyState;
+    /** When the failed host call retries, for an in-function retry. */
+    retryAt?: Datetime;
+    /** The start of the host call that waits until `retry-at`. */
+    retryingStartIndex?: OplogIndex;
   };
   export type OplogRegion = {
     start: OplogIndex;
@@ -538,6 +547,63 @@ declare module 'golem:api/oplog@1.5.0' {
     /** The entries of the durable calls that the target revision's initializer made, if any */
     bootstrap?: OplogRegion;
   };
+  /**
+   * Why an update failed
+   */
+  export type UpdateFailureClass = "divergence" | "target-trap" | "not-replayable" | "target-rejected" | "interrupted" | "operational" | "other";
+  /**
+   * The identity of a recorded `Start`, or of the call that a replay made in its place
+   */
+  export type ReplayHostCall = {
+    functionName: string;
+    durableFunctionType: WrappedFunctionType;
+    parentStartIndex?: OplogIndex;
+    invocationId?: DurableInvocationId;
+    observationalOwner?: OplogIndex;
+    /** Whether the call carries a request: true for a durable call, false for a durable scope */
+    carriesRequest: boolean;
+    /** The request of the call, when it is known */
+    request?: TypedSchemaValue;
+  };
+  /**
+   * One step of a replay
+   */
+  export type ReplayStep =
+  /** A host call */
+  {
+    tag: 'host-call'
+    val: ReplayHostCall
+  } |
+  /** The end of an invocation */
+  {
+    tag: 'invocation-end'
+  } |
+  /** The end of the recorded history */
+  {
+    tag: 'end-of-history'
+  } |
+  /** Another step, which the text describes */
+  {
+    tag: 'other'
+    val: string
+  };
+  /**
+   * An identity field of a recorded `Start`, which a replayed host call must match
+   */
+  export type StartIdentityField = "function-name" | "function-type" | "invocation-id" | "observational-owner" | "request-presence" | "parent";
+  /**
+   * The first entry at which a replay did not reproduce the recorded execution
+   */
+  export type ReplayDivergence = {
+    /** The oplog index of the first divergence */
+    oplogIndex: OplogIndex;
+    /** What the oplog holds at the index */
+    expected: ReplayStep;
+    /** What the replay did at the index */
+    actual: ReplayStep;
+    /** The identity fields on which the two steps differ; empty when the steps differ in kind */
+    mismatched: StartIdentityField[];
+  };
   export type FailedSnapshotAssistedUpdateDetails = {
     pendingUpdateIndex: OplogIndex;
     sourceComponentRevision: ComponentRevision;
@@ -550,6 +616,13 @@ declare module 'golem:api/oplog@1.5.0' {
     details?: string;
     snapshotAssistedDetails?: FailedSnapshotAssistedUpdateDetails;
     updateAttemptIndex?: OplogIndex;
+    /** Why the update failed */
+    failureClass: UpdateFailureClass;
+    /**
+     * The first divergence from the recorded history, when the replay of the target diverged
+     * at a recorded entry
+     */
+    divergence?: ReplayDivergence;
   };
   export type GrowMemoryParameters = {
     timestamp: Datetime;
@@ -845,6 +918,11 @@ declare module 'golem:api/oplog@1.5.0' {
     initialActivePlugins: EnvironmentPluginGrantId[];
     localAgentConfig: RawLocalAgentConfigEntry[];
     instanceId: Uuid;
+    /**
+     * Whether the agent is a never-live sandbox. A marked agent reports the
+     * `sandboxed` status.
+     */
+    neverLive: boolean;
   };
   export type RawStartParameters = {
     timestamp: Datetime;
@@ -956,9 +1034,46 @@ declare module 'golem:api/oplog@1.5.0' {
     record: OplogPayload;
     summary?: DurableStreamEventSummary;
   };
+  /**
+   * The command of an external tool that a request runs
+   */
+  export type RawExternalToolOperation = {
+    toolName: string;
+    commandPath: string[];
+  };
+  /**
+   * What an accepted request runs. The request entries store it next to the payload, which
+   * does not repeat it.
+   */
+  export type RawInvocationRequestOperation =
+  {
+    tag: 'manual-update'
+    val: ComponentRevision
+  } |
+  {
+    tag: 'agent-initialization'
+  } |
+  {
+    tag: 'agent-method'
+    val: string
+  } |
+  {
+    tag: 'external-tool'
+    val: RawExternalToolOperation
+  } |
+  {
+    tag: 'load-snapshot'
+  } |
+  {
+    tag: 'save-snapshot'
+  } |
+  {
+    tag: 'process-oplog-entries'
+  };
   export type RawAgentInvocationStartedParameters = {
     timestamp: Datetime;
     invocationId: Uuid;
+    operation: RawInvocationRequestOperation;
     payload: OplogPayload;
     traceId: string;
     traceStates: string[];
@@ -988,11 +1103,16 @@ declare module 'golem:api/oplog@1.5.0' {
     retryFrom: OplogIndex;
     /** Persistent retry policy state, if a semantic retry policy is active. */
     retryPolicyState?: RetryPolicyState;
+    /** When the failed host call retries, for an in-function retry. */
+    retryAt?: Datetime;
+    /** The start of the host call that waits until `retry-at`. */
+    retryingStartIndex?: OplogIndex;
   };
   export type RawPendingAgentInvocationParameters = {
     timestamp: Datetime;
     notBefore?: Datetime;
     invocationId: Uuid;
+    operation: RawInvocationRequestOperation;
     payload: OplogPayload;
     traceId: string;
     traceStates: string[];

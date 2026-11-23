@@ -78,7 +78,7 @@ object SourceDiscovery {
     name: String,
     params: List[ConstructorParam],
     returnTypeExpr: String,
-    principalParams: List[Boolean]
+    contextParams: List[Boolean]
   )
 
   /** Discovered `@agentImplementation` class. */
@@ -439,12 +439,15 @@ object SourceDiscovery {
     }
   }
 
-  /** Check if a type AST represents `Principal` or `golem.Principal`. */
-  private def isPrincipalType(tpe: Type): Boolean =
+  /**
+   * Check if a type AST represents `InvocationContext` or
+   * `golem.InvocationContext`.
+   */
+  private def isInvocationContextType(tpe: Type): Boolean =
     tpe match {
-      case Type.Name("Principal")                 => true
-      case Type.Select(_, Type.Name("Principal")) => true
-      case _                                      => false
+      case Type.Name("InvocationContext")                 => true
+      case Type.Select(_, Type.Name("InvocationContext")) => true
+      case _                                              => false
     }
 
   /** Extract non-constructor methods from a trait body. */
@@ -452,28 +455,28 @@ object SourceDiscovery {
     templ.stats.flatMap {
       case d: Decl.Def =>
         val params = d.paramClauseGroups.flatMap(_.paramClauses).flatMap(_.values).flatMap { param =>
-          param.decltpe.map(tpe => (ConstructorParam(param.name.value, tpe.syntax), isPrincipalType(tpe)))
+          param.decltpe.map(tpe => (ConstructorParam(param.name.value, tpe.syntax), isInvocationContextType(tpe)))
         }
         Some(
           DiscoveredMethod(
             name = d.name.value,
             params = params.map(_._1),
             returnTypeExpr = d.decltpe.syntax,
-            principalParams = params.map(_._2)
+            contextParams = params.map(_._2)
           )
         )
       case d: Defn.Def =>
         d.decltpe match {
           case Some(retTpe) =>
             val params = d.paramClauseGroups.flatMap(_.paramClauses).flatMap(_.values).flatMap { param =>
-              param.decltpe.map(tpe => (ConstructorParam(param.name.value, tpe.syntax), isPrincipalType(tpe)))
+              param.decltpe.map(tpe => (ConstructorParam(param.name.value, tpe.syntax), isInvocationContextType(tpe)))
             }
             Some(
               DiscoveredMethod(
                 name = d.name.value,
                 params = params.map(_._1),
                 returnTypeExpr = retTpe.syntax,
-                principalParams = params.map(_._2)
+                contextParams = params.map(_._2)
               )
             )
           case None => None // Skip methods with no explicit return type

@@ -60,8 +60,13 @@ where
         };
         let owned = OwnedAgentId::new(request.environment_id()?, &agent_id);
         self.ensure_worker_belongs_to_this_executor(&owned.agent_id)?;
-        let operation = format!("tool:{}/{}", tool.tool_name, tool.command_path.join("/"));
-        if !tool.fresh_owner && owned.agent_id.type_tag() == RESERVED_TYPE_TAG {
+        let operation = golem_common::model::InvocationOperation::tool_operation(
+            &tool.tool_name,
+            &tool.command_path,
+        );
+        let mode = request.mode();
+        let virtual_lookup = mode == Mode::Lookup && owned.agent_id.type_tag() == RESERVED_TYPE_TAG;
+        if !tool.fresh_owner && owned.agent_id.type_tag() == RESERVED_TYPE_TAG && !virtual_lookup {
             return Err(WorkerExecutorError::invalid_request(
                 "existing tool target must be a real agent",
             ));
@@ -76,12 +81,14 @@ where
         } else {
             None
         };
-        // An existing owner is named by its fingerprint, and the guard pins that incarnation in
-        // every mode. A virtual owner has no incarnation a caller can name.
+        // An existing agent is named by its fingerprint, and the guard pins that incarnation in
+        // every mode. A virtual receipt can also be observed without a fingerprint; its lookup
+        // acquires only an existing owner and never starts it.
         let expected_fingerprint = match (tool.fresh_owner, request.expected_callee_fingerprint) {
             (false, Some(fingerprint)) => {
                 Some(golem_common::model::AgentFingerprint(fingerprint.into()))
             }
+            (false, None) if virtual_lookup => None,
             (true, None) => None,
             (true, Some(_)) => {
                 return Err(WorkerExecutorError::invalid_request(
@@ -94,13 +101,7 @@ where
                 ));
             }
         };
-        let principal = request
-            .principal
-            .clone()
-            .map(TryInto::try_into)
-            .transpose()
-            .map_err(WorkerExecutorError::invalid_request)?
-            .unwrap_or_else(Principal::anonymous);
+        let caller = crate::grpc::extract_caller(&request.caller)?;
         let context = self
             .limit_invocation_context_stack_depth(from_proto_invocation_context(&request.context));
         let scope_card: Option<ScopeCard> = request
@@ -109,7 +110,6 @@ where
             .map(TryInto::try_into)
             .transpose()
             .map_err(WorkerExecutorError::permission_denied)?;
-        let mode = request.mode();
         if scope_card.is_some() && mode != Mode::Await {
             return Err(WorkerExecutorError::permission_denied(
                 "scope cards are supported only for invoke-and-await",
@@ -148,7 +148,7 @@ where
                 let (worker, response_lease) = Worker::get_exact_existing_suspended_for_response(
                     self,
                     &owned,
-                    principal,
+                    caller,
                     Some(expected),
                 )
                 .await?;
@@ -176,10 +176,9 @@ where
                     )?;
                     return Ok(response);
                 };
-                let (worker, response_lease) = Worker::get_exact_existing_suspended_for_response(
-                    self, &owned, principal, None,
-                )
-                .await?;
+                let (worker, response_lease) =
+                    Worker::get_exact_existing_suspended_for_response(self, &owned, caller, None)
+                        .await?;
                 scope
                     .bind(&worker.tasks)
                     .map_err(WorkerExecutorError::runtime)?;
@@ -193,6 +192,9 @@ where
                     output.idempotency_key = response.idempotency_key;
                     output.invocation_status = Some(InvocationStatus::Complete);
                     response = output;
+                }
+                LookupResult::Complete(Err(WorkerExecutorError::InvocationCancelled)) => {
+                    response.invocation_status = Some(InvocationStatus::Cancelled)
                 }
                 LookupResult::Complete(Err(error)) => return Err(error),
                 LookupResult::Pending => {
@@ -312,6 +314,11 @@ where
                     .map_err(WorkerExecutorError::invalid_request)?,
                 activation.registered_tool.deployment_revision,
             )?;
+            crate::worker::require_canonical_command_path(
+                &activation,
+                &tool_name,
+                &tool.command_path,
+            )?;
             let at = DateTime::from_timestamp(
                 timestamp.seconds,
                 timestamp.nanos.try_into().map_err(|_| {
@@ -333,7 +340,7 @@ where
                     &owner_key,
                     component.revision,
                     &context,
-                    principal.clone(),
+                    caller.clone(),
                 )
                 .await?;
             scope
@@ -354,7 +361,7 @@ where
                 stderr: false,
                 activation,
                 invocation_context: context.clone(),
-                principal: principal.clone(),
+                caller: caller.clone(),
                 scope_card,
             };
             worker.schedule_invocation(invocation, at).await?;
@@ -377,7 +384,7 @@ where
                     owned.environment_id,
                     &owner_key,
                     &context,
-                    principal.clone(),
+                    caller.clone(),
                 )
                 .await?;
         }
@@ -387,7 +394,7 @@ where
         let (worker, _response_lease) = Worker::get_exact_existing_suspended_for_response(
             self,
             &owned,
-            principal.clone(),
+            caller.clone(),
             expected_fingerprint,
         )
         .await?;
@@ -427,7 +434,7 @@ where
                 tool.stderr,
                 expected_deployment_revision,
                 context,
-                principal,
+                caller,
                 scope_card,
             )
             .await?;

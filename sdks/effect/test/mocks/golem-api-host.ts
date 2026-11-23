@@ -35,6 +35,7 @@ export type AgentStatus =
   | "retrying"
   | "failed"
   | "exited"
+  | "sandboxed"
 export type FilterComparator =
   | "equal"
   | "not-equal"

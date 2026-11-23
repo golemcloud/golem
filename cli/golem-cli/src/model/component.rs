@@ -56,7 +56,7 @@ use golem_common::model::tool::{ToolDeploymentMetadata, ToolName, ToolProvisionC
 use golem_common::model::tool_middleware::{ToolMiddlewareDeploymentMetadata, ToolMiddlewareName};
 use golem_common::model::{diff, tool};
 use golem_common::schema::agent::{
-    AgentTypeKind, AgentTypeSchema, ComponentConfigSchema, FieldSource, InputSchema, OutputSchema,
+    AgentTypeKind, AgentTypeSchema, ComponentConfigSchema, InputSchema, OutputSchema,
 };
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::tool::Tool;
@@ -499,6 +499,7 @@ pub fn agent_type_reads_identity_from_env(agent_type: &AgentTypeSchema) -> bool 
 #[derive(Debug)]
 pub struct ComponentDeployProperties {
     pub wasm_path: PathBuf,
+    pub package_metadata: Option<golem_common::model::component::ComponentPackageMetadata>,
     pub config_schema: ComponentConfigSchema,
     pub component_config: Vec<AgentConfigEntryDto>,
     pub component_initial_card: Option<ParsedInitialPermissionCard>,
@@ -724,7 +725,6 @@ pub(crate) fn render_input_schema(
     input
         .fields()
         .iter()
-        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
         .map(|field| {
             let rendered_type = render_type_for_language(lang, graph, &field.schema, true);
             if show_param_names {

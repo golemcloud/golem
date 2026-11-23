@@ -139,7 +139,7 @@ struct MatrixCoreArtifact {}
 fn matrix_core_inspect(
   request : MatrixRequest,
   multiplier : Int64,
-  principal : @tool.Principal,
+  context : @tool.InvocationContext,
   owner_agent_id : String,
 ) -> Result[MatrixResult, MatrixCoreError] {
   if request.source == "reject.me" {
@@ -151,12 +151,7 @@ fn matrix_core_inspect(
       }),
     )
   }
-  let principal = match principal {
-    Anonymous => "anonymous"
-    Oidc(oidc) => "oidc:" + oidc.sub
-    Agent(_) => "agent"
-    GolemUser(_) => "golem-user"
-  }
+  let principal = context.caller().immediate.to_string()
   let weighted_size = request.dimensions.width.to_int64() *
     request.dimensions.height.to_int64() *
     multiplier +
@@ -176,12 +171,12 @@ fn matrix_core_inspect(
 pub fn MatrixCoreArtifact::inspect(
   request : MatrixRequest,
   multiplier : Int64,
-  principal : @tool.Principal,
+  context : @tool.InvocationContext,
 ) -> Result[MatrixResult, MatrixCoreError] {
   matrix_core_inspect(
     request,
     multiplier,
-    principal,
+    context,
     self_agent_id_text(),
   )
 }

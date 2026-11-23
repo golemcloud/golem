@@ -436,6 +436,7 @@ impl From<AgentStatus> for golem::worker::AgentStatus {
             AgentStatus::Retrying => golem::worker::AgentStatus::Retrying,
             AgentStatus::Failed => golem::worker::AgentStatus::Failed,
             AgentStatus::Exited => golem::worker::AgentStatus::Exited,
+            AgentStatus::Sandboxed => golem::worker::AgentStatus::Sandboxed,
         }
     }
 }
@@ -957,6 +958,9 @@ impl From<golem_api_grpc::proto::golem::worker::InvocationStatus> for Invocation
             golem_api_grpc::proto::golem::worker::InvocationStatus::Complete => {
                 InvocationStatus::Complete
             }
+            golem_api_grpc::proto::golem::worker::InvocationStatus::Cancelled => {
+                InvocationStatus::Cancelled
+            }
         }
     }
 }
@@ -972,6 +976,9 @@ impl From<InvocationStatus> for golem_api_grpc::proto::golem::worker::Invocation
             }
             InvocationStatus::Complete => {
                 golem_api_grpc::proto::golem::worker::InvocationStatus::Complete
+            }
+            InvocationStatus::Cancelled => {
+                golem_api_grpc::proto::golem::worker::InvocationStatus::Cancelled
             }
         }
     }

@@ -14,8 +14,8 @@
 
 use super::WorkerResult;
 use super::{
-    ConnectWorkerStream, InvocationRequestStream, InvocationResponseStream, WorkerClient,
-    WorkerServiceError,
+    ConnectWorkerStream, InvocationRequestStream, InvocationResponseStream, OplogRangeRead,
+    WorkerClient, WorkerServiceError,
 };
 use crate::api::agents::{
     AgentInvocationMode, AgentInvocationRequest, AgentInvocationResult, AgentKeyRequest,
@@ -50,13 +50,14 @@ use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentUpdateMode;
 use golem_common::model::agent::RegisteredAgentType;
 use golem_common::model::agent::{
-    AgentConfigSource, AgentMode, AgentTypeName, GolemUserPrincipal,
-    InvocationFreshnessDisposition, OwnerKind, ParsedAgentKey, Principal,
+    AgentConfigSource, AgentMode, AgentTypeName, InvocationFreshnessDisposition, OwnerKind,
+    ParsedAgentKey,
 };
 use golem_common::model::agent::{
     AgentMetadataDto, AgentTarget, ResolvedRevert, RevertWorkerTarget, ScheduleId,
 };
 use golem_common::model::application::ApplicationName;
+use golem_common::model::caller::{AccountAuthentication, AccountPrincipal, Caller, Principal};
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{
     AgentInvocationIdPattern, AgentMethodName, AgentPluginName, AgentResourcePattern, AgentVerb,
@@ -71,6 +72,7 @@ use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::filesystem::{
     FileByteSelection, FileReadError, FileReadHead, validate_file_read_path,
 };
+use golem_common::model::golem_issuer::GolemIssuer;
 use golem_common::model::invocation_session_public::{
     InvocationSelector, PublicAgentTarget, PublicConfigEntry, PublicErrorCode,
     PublicNativeToolTarget, PublicTypedValue,
@@ -659,6 +661,7 @@ pub struct WorkerService {
     worker_client: Arc<dyn WorkerClient>,
     agent_resolution_cache: Arc<AgentResolutionCache>,
     agent_types: Arc<AgentTypeResolver>,
+    golem_issuer: GolemIssuer,
 }
 
 pub struct PublicAgentSessionStart {
@@ -734,6 +737,7 @@ impl WorkerService {
         worker_client: Arc<dyn WorkerClient>,
         agent_resolution_cache: Arc<AgentResolutionCache>,
         agent_types: Arc<AgentTypeResolver>,
+        golem_issuer: GolemIssuer,
     ) -> Self {
         Self {
             component_service,
@@ -742,7 +746,17 @@ impl WorkerService {
             worker_client,
             agent_resolution_cache,
             agent_types,
+            golem_issuer,
         }
+    }
+
+    /// The caller of a request that an account token authenticated: the account in both roles.
+    pub fn rest_caller(&self, auth: &AuthCtx) -> Caller {
+        Caller::entry(Principal::Account(AccountPrincipal {
+            issuer: self.golem_issuer.to_string(),
+            account_id: auth.account_id(),
+            authentication: AccountAuthentication::ApiToken,
+        }))
     }
 
     /// Reads the agent that a request names by its ID; this never creates the agent. When it
@@ -818,15 +832,24 @@ impl WorkerService {
             return Ok(());
         }
         let denied = || WorkerServiceError::AgentAccessDenied(agent_id.agent_id);
+        self.agent_types
+            .authorize_environment(agent_id.environment_id, auth_ctx)
+            .await
+            .map_err(|error| match error {
+                RegistryServiceError::Unauthorized(_)
+                | RegistryServiceError::NotFound(_)
+                | RegistryServiceError::CouldNotAuthenticate(_) => denied(),
+                other => other.into(),
+            })?;
         let Some(tagged) = self
             .agent_types
             .tagged(agent_id.environment_id, agent_id.agent_id)
             .await?
         else {
-            return Err(denied());
+            return Ok(());
         };
         let Some(implementer) = tagged.implemented_by else {
-            return Err(denied());
+            return Ok(());
         };
         let component = self
             .component_service
@@ -883,6 +906,43 @@ impl WorkerService {
         Ok((registered, component))
     }
 
+    /// Authorizes the retained namespace before scanning agents, without requiring its
+    /// current implementer. Every returned agent still needs its recorded owner's permission.
+    async fn retained_agent_types(
+        &self,
+        environment_id: EnvironmentId,
+        name: &AgentTypeName,
+        auth: &AuthCtx,
+    ) -> WorkerResult<Vec<(RegisteredAgentType, Component)>> {
+        let mut allowed = Vec::new();
+        for registered in self.agent_types.retained(environment_id, name).await? {
+            let component = self
+                .component_service
+                .get_revision(
+                    registered.implemented_by.component_id,
+                    registered.implemented_by.component_revision,
+                )
+                .await?;
+            if authorize_agent_type(
+                auth,
+                &component,
+                name,
+                AgentVerb::View,
+                AgentResourcePattern::Empty,
+            )
+            .is_ok()
+            {
+                allowed.push((registered, component));
+            }
+        }
+        if allowed.is_empty() {
+            return Err(
+                RegistryServiceError::NotFound(format!("Agent type {name} not found")).into(),
+            );
+        }
+        Ok(allowed)
+    }
+
     /// The fingerprint of the incarnation a streaming invocation reaches. An expected
     /// fingerprint must match the existing agent; otherwise the agent is created or joined.
     #[allow(clippy::too_many_arguments)]
@@ -894,7 +954,7 @@ impl WorkerService {
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
-        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         expected: Option<golem_schema::proto::golem::common::Uuid>,
     ) -> WorkerResult<AgentFingerprint> {
         if expected.is_some() || !target.creates() {
@@ -927,7 +987,7 @@ impl WorkerService {
                 component.environment_id,
                 auth_ctx,
                 invocation_context,
-                principal,
+                caller,
                 None,
             )
             .await
@@ -947,7 +1007,7 @@ impl WorkerService {
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
-        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
         resource: AgentResourcePattern,
     ) -> WorkerResult<(AgentId, ComponentRevision, AgentFingerprint)> {
@@ -964,7 +1024,7 @@ impl WorkerService {
                 component.environment_id,
                 auth_ctx,
                 invocation_context,
-                principal,
+                caller,
                 idempotency_key,
             )
             .await?;
@@ -979,7 +1039,7 @@ impl WorkerService {
     pub async fn launch_agent(
         &self,
         component_id: ComponentId,
-        constructor: golem_common::model::agent::AgentKey,
+        constructor: ParsedAgentKey,
         unkeyed_id: Option<AgentId>,
         method_name: Option<String>,
         prepare: bool,
@@ -988,7 +1048,7 @@ impl WorkerService {
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
-        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> WorkerResult<(AgentId, ComponentRevision, AgentFingerprint)> {
@@ -998,11 +1058,15 @@ impl WorkerService {
             .await?;
         let trusted_internal_caller = matches!(&auth_ctx, AuthCtx::System | AuthCtx::Agent(_));
         let (target, constructor) = match unkeyed_id {
-            None => (AgentTarget::Key(constructor), None),
-            Some(agent_id) => (
-                AgentTarget::Id(agent_id),
-                Some(ParsedAgentKey::from(constructor)),
+            None => (
+                AgentTarget::Key(
+                    constructor
+                        .canonical_key(&component.metadata)
+                        .map_err(WorkerServiceError::TypeChecker)?,
+                ),
+                None,
             ),
+            Some(agent_id) => (AgentTarget::Id(agent_id), Some(constructor)),
         };
         let resource = method_name
             .clone()
@@ -1033,7 +1097,7 @@ impl WorkerService {
                 ignore_already_existing,
                 auth_ctx,
                 invocation_context,
-                principal,
+                caller,
                 idempotency_key,
                 freshness_disposition,
             )
@@ -1047,7 +1111,7 @@ impl WorkerService {
                 ignore_already_existing,
                 auth_ctx,
                 invocation_context,
-                principal,
+                caller,
                 idempotency_key,
                 resource,
             )
@@ -1067,7 +1131,7 @@ impl WorkerService {
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
-        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> WorkerResult<(AgentId, ComponentRevision, AgentFingerprint)> {
@@ -1090,7 +1154,7 @@ impl WorkerService {
                 component.environment_id,
                 auth_ctx,
                 invocation_context,
-                principal,
+                caller,
                 idempotency_key,
                 freshness_disposition,
             )
@@ -1150,19 +1214,25 @@ impl WorkerService {
         // the routing layer's retries. A retried delete cannot tell "I already deleted it"
         // from "it was never here", but a read can, so the read settles whether the agent
         // was there when the caller asked, before any delete goes out.
-        self.managed_agent(
-            agent_id,
-            expected_fingerprint,
-            &auth_ctx,
-            &[AgentPermission::Agent(
-                AgentVerb::Delete,
-                AgentResourcePattern::Empty,
-            )],
-        )
-        .await?;
+        let agent = self
+            .managed_agent(
+                agent_id,
+                expected_fingerprint,
+                &auth_ctx,
+                &[AgentPermission::Agent(
+                    AgentVerb::Delete,
+                    AgentResourcePattern::Empty,
+                )],
+            )
+            .await?;
 
         self.worker_client
-            .delete(&agent_id.agent_id, agent_id.environment_id, auth_ctx)
+            .delete(
+                &agent_id.agent_id,
+                agent_id.environment_id,
+                agent.metadata.fingerprint,
+                auth_ctx,
+            )
             .await?;
 
         Ok(())
@@ -1202,22 +1272,24 @@ impl WorkerService {
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
-        self.managed_agent(
-            agent_id,
-            expected_fingerprint,
-            &auth_ctx,
-            &[AgentPermission::Agent(
-                AgentVerb::Interrupt,
-                AgentResourcePattern::Empty,
-            )],
-        )
-        .await?;
+        let agent = self
+            .managed_agent(
+                agent_id,
+                expected_fingerprint,
+                &auth_ctx,
+                &[AgentPermission::Agent(
+                    AgentVerb::Interrupt,
+                    AgentResourcePattern::Empty,
+                )],
+            )
+            .await?;
 
         self.worker_client
             .interrupt(
                 &agent_id.agent_id,
                 recover_immediately,
                 agent_id.environment_id,
+                agent.metadata.fingerprint,
                 auth_ctx,
             )
             .await?;
@@ -1245,33 +1317,58 @@ impl WorkerService {
         Ok(agent.metadata)
     }
 
-    /// Lists the agents of one agent type of the environment's current deployment.
+    /// Lists existing agents of a retained type, including removed declarations.
     #[allow(clippy::too_many_arguments)]
     pub async fn find_metadata(
         &self,
         environment_id: EnvironmentId,
         agent_type_name: &AgentTypeName,
+        component_name: Option<&str>,
         filter: Option<AgentFilter>,
         cursor: ScanCursor,
         count: u64,
         precise: bool,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<AgentMetadataDto>)> {
-        let (registered, _) = self
-            .deployed_agent_type(environment_id, agent_type_name, &auth_ctx)
+        let registered = self
+            .retained_agent_types(environment_id, agent_type_name, &auth_ctx)
             .await?;
 
-        self.worker_client
+        let (cursor, agents) = self
+            .worker_client
             .find_metadata(
-                registered.type_id,
+                registered[0].0.type_id,
                 filter,
                 cursor,
                 count,
                 precise,
                 environment_id,
-                auth_ctx,
+                auth_ctx.clone(),
             )
-            .await
+            .await?;
+        let mut metadata = Vec::with_capacity(agents.len());
+        for agent in agents {
+            let component = self
+                .component_service
+                .get_revision(agent.component_id, agent.metadata.component_revision)
+                .await?;
+            if component_name.is_some_and(|name| name != component.component_name.0) {
+                continue;
+            }
+            if authorize_agent_type(
+                &auth_ctx,
+                &component,
+                agent_type_name,
+                AgentVerb::View,
+                AgentResourcePattern::Empty,
+            )
+            .is_err()
+            {
+                continue;
+            }
+            metadata.push(agent.metadata);
+        }
+        Ok((cursor, metadata))
     }
 
     pub async fn resume(
@@ -1281,19 +1378,26 @@ impl WorkerService {
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
-        self.managed_agent(
-            agent_id,
-            expected_fingerprint,
-            &auth_ctx,
-            &[AgentPermission::Agent(
-                AgentVerb::Resume,
-                AgentResourcePattern::Empty,
-            )],
-        )
-        .await?;
+        let agent = self
+            .managed_agent(
+                agent_id,
+                expected_fingerprint,
+                &auth_ctx,
+                &[AgentPermission::Agent(
+                    AgentVerb::Resume,
+                    AgentResourcePattern::Empty,
+                )],
+            )
+            .await?;
 
         self.worker_client
-            .resume(&agent_id.agent_id, force, agent_id.environment_id, auth_ctx)
+            .resume(
+                &agent_id.agent_id,
+                force,
+                agent_id.environment_id,
+                agent.metadata.fingerprint,
+                auth_ctx,
+            )
             .await?;
 
         Ok(())
@@ -1308,16 +1412,17 @@ impl WorkerService {
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<OplogIndex> {
-        self.managed_agent(
-            agent_id,
-            expected_fingerprint,
-            &auth_ctx,
-            &[AgentPermission::Agent(
-                AgentVerb::UpdateRevision,
-                AgentResourcePattern::Empty,
-            )],
-        )
-        .await?;
+        let agent = self
+            .managed_agent(
+                agent_id,
+                expected_fingerprint,
+                &auth_ctx,
+                &[AgentPermission::Agent(
+                    AgentVerb::UpdateRevision,
+                    AgentResourcePattern::Empty,
+                )],
+            )
+            .await?;
 
         self.worker_client
             .update(
@@ -1326,11 +1431,14 @@ impl WorkerService {
                 target_revision,
                 disable_wakeup,
                 agent_id.environment_id,
+                agent.metadata.fingerprint,
                 auth_ctx,
             )
             .await
     }
 
+    /// Reads an oplog page. With `range`, the read is a range read: it reads no entry after
+    /// `range.to`, and the response accounts its scan.
     pub async fn get_oplog(
         &self,
         agent_id: &OwnedAgentId,
@@ -1338,13 +1446,19 @@ impl WorkerService {
         cursor: Option<OplogCursor>,
         count: u64,
         expected_fingerprint: Option<AgentFingerprint>,
+        range: Option<OplogRangeRead>,
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let start = cursor
             .as_ref()
             .map(|cursor| cursor.next_oplog_index)
             .unwrap_or_else(|| from_oplog_index.into());
-        let end = start.checked_add(count.saturating_sub(1));
+        let end = start
+            .checked_add(count.saturating_sub(1))
+            .map(|end| match range {
+                Some(range) => end.min(range.to.into()),
+                None => end,
+            });
         self.managed_agent(
             agent_id,
             expected_fingerprint,
@@ -1362,6 +1476,7 @@ impl WorkerService {
                 from_oplog_index,
                 cursor,
                 count,
+                range,
                 agent_id.environment_id,
                 auth_ctx,
             )
@@ -1514,7 +1629,7 @@ impl WorkerService {
             RoutedTarget::keyed(environment_id, registered.type_id, &component, constructor)?;
         self.worker_client
             .get_file_contents(
-                &target.agent_id,
+                &target,
                 path,
                 selection,
                 environment_id,
@@ -1543,7 +1658,7 @@ impl WorkerService {
         let contents_stream = self
             .worker_client
             .get_file_contents(
-                &agent_id.agent_id,
+                &RoutedTarget::existing(agent_id.agent_id, agent.metadata.agent_type_name.clone()),
                 path.clone(),
                 FileByteSelection::Full,
                 agent_id.environment_id,
@@ -1601,7 +1716,7 @@ impl WorkerService {
         verb: AgentVerb,
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<()> {
+    ) -> WorkerResult<AgentFingerprint> {
         let agent = self
             .read_agent(
                 agent_id,
@@ -1627,7 +1742,8 @@ impl WorkerService {
                 verb,
                 AgentResourcePattern::PluginName(AgentPluginName(plugin_name)),
             )],
-        )
+        )?;
+        Ok(agent.metadata.fingerprint)
     }
 
     pub async fn activate_plugin(
@@ -1637,20 +1753,22 @@ impl WorkerService {
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
-        self.plugin_agent(
-            agent_id,
-            plugin_priority,
-            AgentVerb::ActivatePlugin,
-            expected_fingerprint,
-            &auth_ctx,
-        )
-        .await?;
+        let fingerprint = self
+            .plugin_agent(
+                agent_id,
+                plugin_priority,
+                AgentVerb::ActivatePlugin,
+                expected_fingerprint,
+                &auth_ctx,
+            )
+            .await?;
 
         self.worker_client
             .activate_plugin(
                 &agent_id.agent_id,
                 plugin_priority,
                 agent_id.environment_id,
+                fingerprint,
                 auth_ctx,
             )
             .await
@@ -1663,34 +1781,36 @@ impl WorkerService {
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
-        self.plugin_agent(
-            agent_id,
-            plugin_priority,
-            AgentVerb::DeactivatePlugin,
-            expected_fingerprint,
-            &auth_ctx,
-        )
-        .await?;
+        let fingerprint = self
+            .plugin_agent(
+                agent_id,
+                plugin_priority,
+                AgentVerb::DeactivatePlugin,
+                expected_fingerprint,
+                &auth_ctx,
+            )
+            .await?;
 
         self.worker_client
             .deactivate_plugin(
                 &agent_id.agent_id,
                 plugin_priority,
                 agent_id.environment_id,
+                fingerprint,
                 auth_ctx,
             )
             .await
     }
 
     /// Forks the source agent into `target_agent_id`, or, without one, into a new ID that
-    /// Golem issues with the source's type tag. Returns the fork's ID. `principal` is the
+    /// Golem issues with the source's type tag. Returns the fork's ID. `caller` is the
     /// forking caller the target records; `None` records the account of `auth_ctx`.
     pub async fn fork_worker(
         &self,
         source_agent_id: &OwnedAgentId,
         target_agent_id: Option<AgentId>,
         oplog_index_cut_off: OplogIndex,
-        principal: Option<Principal>,
+        caller: Option<Caller>,
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<AgentId> {
@@ -1717,11 +1837,7 @@ impl WorkerService {
                 AgentId::random(type_id)
             }
         };
-        let principal = principal.unwrap_or_else(|| {
-            Principal::GolemUser(GolemUserPrincipal {
-                account_id: auth_ctx.account_id(),
-            })
-        });
+        let caller = caller.unwrap_or_else(|| self.rest_caller(&auth_ctx));
         self.worker_client
             .fork_worker(
                 &source_agent_id.agent_id,
@@ -1730,7 +1846,8 @@ impl WorkerService {
                 source_agent_id.environment_id,
                 agent.component.account_id,
                 agent.component.account_email.clone(),
-                principal,
+                caller,
+                agent.metadata.fingerprint,
                 auth_ctx,
             )
             .await?;
@@ -1828,6 +1945,7 @@ impl WorkerService {
                 target,
                 resolved_revert,
                 agent_id.environment_id,
+                agent.metadata.fingerprint,
                 auth_ctx,
             )
             .await?;
@@ -1844,16 +1962,17 @@ impl WorkerService {
     ) -> WorkerResult<bool> {
         let accepted_id = parse_final_invocation_id(&idempotency_key.value)?;
         let invocation_id = AgentInvocationIdPattern::Uuid(accepted_id.0);
-        self.managed_agent(
-            agent_id,
-            expected_fingerprint,
-            &auth_ctx,
-            &[AgentPermission::Agent(
-                AgentVerb::CancelInvocation,
-                AgentResourcePattern::InvocationId(invocation_id),
-            )],
-        )
-        .await?;
+        let agent = self
+            .managed_agent(
+                agent_id,
+                expected_fingerprint,
+                &auth_ctx,
+                &[AgentPermission::Agent(
+                    AgentVerb::CancelInvocation,
+                    AgentResourcePattern::InvocationId(invocation_id),
+                )],
+            )
+            .await?;
 
         self.worker_client
             .cancel_invocation(
@@ -1862,11 +1981,12 @@ impl WorkerService {
                 agent_id.environment_id,
                 auth_ctx,
                 None,
+                Some(agent.metadata.fingerprint),
             )
             .await
     }
 
-    /// Internal token control uses the recorded scheduling principal, not operator permission.
+    /// Internal token control uses the recorded scheduling caller, not operator permission.
     pub async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
@@ -1894,6 +2014,7 @@ impl WorkerService {
                         target_environment_id: Some(target.environment_id.into()),
                     },
                 ),
+                None,
             )
             .await
     }
@@ -2241,7 +2362,7 @@ impl WorkerService {
                     &component,
                     constructor,
                 )?,
-                InvocationFreshnessDisposition::KnownFresh,
+                InvocationFreshnessDisposition::MayExist,
             ),
             AgentBinding::Fresh => Self::invocation_target(
                 environment_id,
@@ -2305,7 +2426,7 @@ impl WorkerService {
         freshness_disposition: InvocationFreshnessDisposition,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: AuthCtx,
-        principal: golem_api_grpc::proto::golem::component::Principal,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> WorkerResult<AgentInvocationOutput> {
@@ -2344,7 +2465,7 @@ impl WorkerService {
             environment_id,
             component.account_id,
             auth_ctx,
-            principal,
+            caller,
             scope_card,
             expected_fingerprint,
         )
@@ -2441,11 +2562,21 @@ impl WorkerService {
             let component = self
                 .creating_component(environment_id, component_id)
                 .await?;
-            let owner_key = request_key.owner_key(&format!(
-                "tool:{}/{}",
-                tool.tool_name,
-                tool.command_path.join("/")
-            ));
+            let command_path = self
+                .canonical_tool_command_path(
+                    &component,
+                    &ToolBindingOwner::ComponentBaseline {
+                        component_id: component.id,
+                    },
+                    &tool.tool_name,
+                    &tool.command_path,
+                )
+                .await?;
+            let owner_key =
+                request_key.owner_key(&golem_common::model::InvocationOperation::tool_operation(
+                    &tool.tool_name,
+                    &command_path,
+                ));
             let target = RoutedTarget::fresh_tool_owner(
                 AgentId::external_tool_owner(environment_id, component.id, &owner_key),
                 component.id,
@@ -2455,15 +2586,17 @@ impl WorkerService {
                 &agent_owner(&component, target.agent_id, None),
                 &[permission],
             )?;
+            if let Some(tool) = start.external_tool.as_mut() {
+                tool.command_path = command_path;
+            }
             (target, component)
         } else {
             let constructor = start
                 .constructor
                 .clone()
-                .map(golem_common::model::agent::AgentKey::try_from)
+                .map(ParsedAgentKey::try_from)
                 .transpose()
-                .map_err(WorkerServiceError::TypeChecker)?
-                .map(ParsedAgentKey::from);
+                .map_err(WorkerServiceError::TypeChecker)?;
             self.resolve_requested_target(
                 environment_id,
                 start_target(&start)?,
@@ -2524,7 +2657,9 @@ impl WorkerService {
                         config,
                         auth_ctx.clone(),
                         start.context.clone(),
-                        start.principal.clone(),
+                        start.caller.clone().ok_or_else(|| {
+                            WorkerServiceError::TypeChecker("caller is missing".to_string())
+                        })?,
                         start.expected_callee_fingerprint,
                     )
                     .await?;
@@ -2822,11 +2957,8 @@ impl WorkerService {
                 stream.take_host_endpoint::<u64>()
             })
             .map_err(WorkerServiceError::TypeChecker)?;
-        let principal: golem_api_grpc::proto::golem::component::Principal =
-            Principal::GolemUser(GolemUserPrincipal {
-                account_id: auth.account_id(),
-            })
-            .into();
+        let caller: golem_api_grpc::proto::golem::component::Caller =
+            self.rest_caller(&auth).into();
         let method_uses_streams = invocation_component
             .metadata
             .agent_method_stream_metadata(&invocation_agent_type.type_name, &method.name)
@@ -2845,7 +2977,7 @@ impl WorkerService {
                     config.clone(),
                     auth.clone(),
                     None,
-                    Some(principal.clone()),
+                    caller.clone(),
                     expected_fingerprint.map(|fingerprint| fingerprint.0.into()),
                 )
                 .await?;
@@ -2873,7 +3005,7 @@ impl WorkerService {
             idempotency_key: Some(idempotency_key.into()),
             context: None,
             auth_ctx: Some(auth.into()),
-            principal: Some(principal),
+            caller: Some(caller),
             environment_id: Some(environment_id.into()),
             config: config.into_iter().map(Into::into).collect(),
             component_owner_account_id: Some(component_owner_account_id.into()),
@@ -2920,12 +3052,9 @@ impl WorkerService {
         tail: InvocationRequestStream,
         auth: AuthCtx,
     ) -> WorkerResult<InvocationResponseStream> {
-        let principal: golem_api_grpc::proto::golem::component::Principal =
-            Principal::GolemUser(GolemUserPrincipal {
-                account_id: auth.account_id(),
-            })
-            .into();
-        resume.principal = Some(principal);
+        let caller: golem_api_grpc::proto::golem::component::Caller =
+            self.rest_caller(&auth).into();
+        resume.caller = Some(caller);
         self.resume_agent_session(resume, tail, auth).await
     }
 
@@ -3014,11 +3143,8 @@ impl WorkerService {
             &method.input_schema,
             output_schema.as_ref(),
         );
-        let principal: golem_api_grpc::proto::golem::component::Principal =
-            Principal::GolemUser(GolemUserPrincipal {
-                account_id: auth.account_id(),
-            })
-            .into();
+        let caller: golem_api_grpc::proto::golem::component::Caller =
+            self.rest_caller(&auth).into();
         let trusted_resume = ResumeAttach {
             idempotency_key: Some(
                 parse_final_invocation_id(&resume.session.idempotency_key)
@@ -3034,7 +3160,7 @@ impl WorkerService {
             operation: resume.operation as i32,
             cursors: resume.cursors,
             auth_ctx: Some(auth.into()),
-            principal: Some(principal),
+            caller: Some(caller),
         };
         let initial_request = InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(trusted_resume)),
@@ -3067,9 +3193,7 @@ impl WorkerService {
         auth: AuthCtx,
         validate_identity: impl FnOnce(&SessionAgentIdentity) -> Result<(), PublicSchemaValueError>,
     ) -> Result<StartedPublicAgentSession, PublicAgentSessionStartError> {
-        let principal = Principal::GolemUser(GolemUserPrincipal {
-            account_id: auth.account_id(),
-        });
+        let caller = self.rest_caller(&auth);
         let request_key = InvocationRequestKey::external(
             auth.idempotency_scope(),
             Some(&IdempotencyKey::new(start.idempotency_key.clone())),
@@ -3078,7 +3202,7 @@ impl WorkerService {
             start,
             tail,
             auth,
-            principal,
+            caller,
             request_key,
             validate_identity,
         )
@@ -3090,7 +3214,7 @@ impl WorkerService {
         start: PublicToolSessionStart,
         tail: InvocationRequestStream,
         auth: AuthCtx,
-        principal: Principal,
+        caller: Caller,
         request_key: InvocationRequestKey,
         validate_identity: impl FnOnce(&SessionAgentIdentity) -> Result<(), PublicSchemaValueError>,
     ) -> Result<StartedPublicAgentSession, PublicAgentSessionStartError> {
@@ -3099,20 +3223,20 @@ impl WorkerService {
         let env_name = EnvironmentName::try_from(start.environment)
             .map_err(WorkerServiceError::TypeChecker)?;
         let idempotency_key = IdempotencyKey::new(start.idempotency_key);
-        let operation = format!("tool:{}/{}", start.tool_name, start.command_path.join("/"));
         let (agent_id, component_id) = match start.target {
             PublicNativeToolTarget::Agent { agent_id } => (Some(agent_id), None),
             PublicNativeToolTarget::Component { component_id } => {
                 (None, Some(ComponentId(component_id)))
             }
         };
-        let (routed, component, expected_callee_fingerprint, fresh_owner) = self
+        let (routed, component, expected_callee_fingerprint, fresh_owner, command_path) = self
             .tool_target(
                 start.environment_id,
                 agent_id,
                 component_id,
                 &request_key,
-                &operation,
+                &start.tool_name,
+                &start.command_path,
                 false,
                 AgentVerb::Invoke,
                 &auth,
@@ -3143,7 +3267,7 @@ impl WorkerService {
         };
         let target = SessionInvocationTarget::ExternalTool {
             tool_name: start.tool_name.clone(),
-            command_path: start.command_path.clone(),
+            command_path: command_path.clone(),
         };
         let identity = SessionAgentIdentity {
             component_id: component_id.0,
@@ -3152,7 +3276,7 @@ impl WorkerService {
             target: target.clone(),
         };
         validate_identity(&identity)?;
-        let principal: golem_api_grpc::proto::golem::component::Principal = principal.into();
+        let caller: golem_api_grpc::proto::golem::component::Caller = caller.into();
         let mut trusted_start = InvocationStart {
             target: None,
             constructor: None,
@@ -3163,7 +3287,7 @@ impl WorkerService {
             idempotency_key: Some(idempotency_key.into()),
             context: None,
             auth_ctx: Some(auth.into()),
-            principal: Some(principal),
+            caller: Some(caller),
             environment_id: Some(component.environment_id.into()),
             config: Vec::new(),
             component_owner_account_id: Some(component.account_id.into()),
@@ -3179,7 +3303,7 @@ impl WorkerService {
             origin_invocation: None,
             external_tool: Some(ExternalToolInvocation {
                 tool_name: start.tool_name,
-                command_path: start.command_path,
+                command_path,
                 input: Some(input),
                 stdin: start.stdin,
                 stdout: start.stdout,
@@ -3264,11 +3388,8 @@ impl WorkerService {
             )],
         )
         .await?;
-        let principal: golem_api_grpc::proto::golem::component::Principal =
-            Principal::GolemUser(GolemUserPrincipal {
-                account_id: auth.account_id(),
-            })
-            .into();
+        let caller: golem_api_grpc::proto::golem::component::Caller =
+            self.rest_caller(&auth).into();
         let trusted_resume = ResumeAttach {
             idempotency_key: Some(
                 parse_final_invocation_id(&resume.session.idempotency_key)
@@ -3284,7 +3405,7 @@ impl WorkerService {
             operation: resume.operation as i32,
             cursors: resume.cursors,
             auth_ctx: Some(auth.into()),
-            principal: Some(principal),
+            caller: Some(caller),
         };
         let initial_request = InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(trusted_resume)),
@@ -3370,7 +3491,7 @@ impl WorkerService {
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
-        principal: golem_api_grpc::proto::golem::component::Principal,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> WorkerResult<AgentInvocationOutput> {
@@ -3435,7 +3556,7 @@ impl WorkerService {
                 environment_id,
                 account_id,
                 auth_ctx,
-                principal,
+                caller,
                 scope_card,
                 expected_fingerprint,
             )
@@ -3559,6 +3680,7 @@ impl WorkerService {
             RoutedTarget::unkeyed(agent_id, &component, &constructor)?
         };
 
+        let caller = self.rest_caller(&auth).into();
         let (agent_id, _, agent_fingerprint) = self
             .create(
                 &target,
@@ -3568,7 +3690,7 @@ impl WorkerService {
                 false,
                 auth,
                 None,
-                None,
+                caller,
                 Some(request_key.owner_key("create")),
                 AgentResourcePattern::Any,
             )
@@ -3600,6 +3722,7 @@ impl WorkerService {
         let target =
             RoutedTarget::keyed(environment_id, registered.type_id, &component, &constructor)?;
 
+        let caller = self.rest_caller(&auth).into();
         let (agent_id, _, agent_fingerprint) = self
             .create(
                 &target,
@@ -3609,7 +3732,7 @@ impl WorkerService {
                 true,
                 auth,
                 None,
-                None,
+                caller,
                 None,
                 AgentResourcePattern::Any,
             )
@@ -3621,8 +3744,8 @@ impl WorkerService {
         })
     }
 
-    /// REST lookup: the keyed agent of the parameters, which this never creates. An agent at the
-    /// keyed ID that does not own the key is not found.
+    /// REST lookup: the keyed agent of the parameters, which this never creates. An occupied
+    /// address with another key returns a collision after authorization.
     pub async fn lookup_agent_rest(
         &self,
         environment_id: EnvironmentId,
@@ -3630,9 +3753,26 @@ impl WorkerService {
         request: AgentKeyRequest,
         auth: AuthCtx,
     ) -> WorkerResult<AgentReference> {
-        let (registered, component) = self
-            .deployed_agent_type(environment_id, agent_type_name, &auth)
+        let mut retained = self
+            .retained_agent_types(environment_id, agent_type_name, &auth)
             .await?;
+        let (registered, component) = match self
+            .agent_types
+            .deployed(environment_id, agent_type_name)
+            .await?
+        {
+            Some(registered) => {
+                let component = self
+                    .component_service
+                    .get_revision(
+                        registered.implemented_by.component_id,
+                        registered.implemented_by.component_revision,
+                    )
+                    .await?;
+                (registered.as_ref().clone(), component)
+            }
+            None => retained.remove(0),
+        };
         if registered.agent_type.mode == AgentMode::Ephemeral {
             return Err(WorkerServiceError::TypeChecker(
                 "An ephemeral agent has no key".to_string(),
@@ -3655,7 +3795,11 @@ impl WorkerService {
             )
             .await?;
         if agent.metadata.canonical_key.as_deref() != Some(key.to_string().as_str()) {
-            return Err(WorkerServiceError::AgentNotFound(agent_id));
+            return Err(WorkerExecutorError::AgentKeyCollision {
+                agent_id,
+                requested_key: key.to_string(),
+            }
+            .into());
         }
         Ok(AgentReference {
             agent_id,
@@ -3665,7 +3809,8 @@ impl WorkerService {
 
     /// The target of a tool call: an existing agent, or a fresh owner on a component of the
     /// environment. Returns the target, the component, the expected fingerprint of an
-    /// existing agent, and whether the owner is fresh.
+    /// existing agent, whether the owner is fresh, and the canonical form of the command path,
+    /// from which the invocation ID and a fresh owner's agent ID are derived.
     #[allow(clippy::too_many_arguments)]
     async fn tool_target(
         &self,
@@ -3673,11 +3818,18 @@ impl WorkerService {
         agent_id: Option<AgentId>,
         component_id: Option<ComponentId>,
         request_key: &InvocationRequestKey,
-        operation: &str,
+        tool_name: &str,
+        command_path: &[String],
         lookup: bool,
         verb: AgentVerb,
         auth: &AuthCtx,
-    ) -> WorkerResult<(RoutedTarget, Component, Option<AgentFingerprint>, bool)> {
+    ) -> WorkerResult<(
+        RoutedTarget,
+        Component,
+        Option<AgentFingerprint>,
+        bool,
+        Vec<String>,
+    )> {
         match (agent_id, component_id) {
             (Some(agent_id), None) => {
                 let agent = self
@@ -3694,18 +3846,47 @@ impl WorkerService {
                             .to_string(),
                     ));
                 }
+                let owner = match (&agent.metadata.owner_kind, &agent.metadata.agent_type_name) {
+                    (OwnerKind::ComponentAgent, Some(agent_type_name)) => {
+                        ToolBindingOwner::AgentType {
+                            agent_type_name: agent_type_name.clone(),
+                        }
+                    }
+                    _ => ToolBindingOwner::ComponentBaseline {
+                        component_id: agent.component.id,
+                    },
+                };
+                let command_path = self
+                    .canonical_tool_command_path(&agent.component, &owner, tool_name, command_path)
+                    .await?;
                 let fingerprint = agent.metadata.fingerprint;
-                Ok((agent.routed(), agent.component, Some(fingerprint), false))
+                Ok((
+                    agent.routed(),
+                    agent.component,
+                    Some(fingerprint),
+                    false,
+                    command_path,
+                ))
             }
             (None, Some(component_id)) if !lookup => {
                 let component = self
                     .creating_component(environment_id, Some(component_id))
                     .await?;
+                let command_path = self
+                    .canonical_tool_command_path(
+                        &component,
+                        &ToolBindingOwner::ComponentBaseline { component_id },
+                        tool_name,
+                        command_path,
+                    )
+                    .await?;
+                let operation =
+                    golem_common::model::InvocationOperation::tool_operation(&tool_name, &command_path);
                 let target = RoutedTarget::fresh_tool_owner(
                     AgentId::external_tool_owner(
                         environment_id,
                         component_id,
-                        &request_key.owner_key(operation),
+                        &request_key.owner_key(&operation),
                     ),
                     component_id,
                 );
@@ -3714,7 +3895,7 @@ impl WorkerService {
                     &agent_owner(&component, target.agent_id, None),
                     &[AgentPermission::Agent(verb, AgentResourcePattern::Any)],
                 )?;
-                Ok((target, component, None, true))
+                Ok((target, component, None, true, command_path))
             }
             _ => Err(WorkerServiceError::TypeChecker(
                 "exactly one of agent_id and component_id is required, and a lookup names the agent"
@@ -3774,18 +3955,14 @@ impl WorkerService {
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32
             }
         };
-        let operation = format!(
-            "tool:{}/{}",
-            request.tool_name,
-            request.command_path.join("/")
-        );
-        let (target, component, expected_callee_fingerprint, fresh_owner) = self
+        let (target, component, expected_callee_fingerprint, fresh_owner, command_path) = self
             .tool_target(
                 environment_id,
                 request.agent_id,
                 request.component_id,
                 &request_key,
-                &operation,
+                &request.tool_name,
+                &request.command_path,
                 lookup,
                 agent_verb_for_invocation_mode(proto_mode),
                 &auth,
@@ -3801,11 +3978,8 @@ impl WorkerService {
                     "external tool input cannot cross the worker boundary: {error}"
                 ))
             })?;
-        let principal: golem_api_grpc::proto::golem::component::Principal =
-            Principal::GolemUser(GolemUserPrincipal {
-                account_id: auth.account_id(),
-            })
-            .into();
+        let caller: golem_api_grpc::proto::golem::component::Caller =
+            self.rest_caller(&auth).into();
         let mut start = InvocationStart {
             target: None,
             constructor: None,
@@ -3816,7 +3990,7 @@ impl WorkerService {
             idempotency_key: idempotency_key.map(Into::into),
             context: None,
             auth_ctx: Some(auth.into()),
-            principal: Some(principal),
+            caller: Some(caller),
             environment_id: Some(environment_id.into()),
             config: Vec::new(),
             component_owner_account_id: Some(component.account_id.into()),
@@ -3836,7 +4010,7 @@ impl WorkerService {
             origin_invocation: None,
             external_tool: Some(ExternalToolInvocation {
                 tool_name: request.tool_name,
-                command_path: request.command_path,
+                command_path,
                 input,
                 stdin: false,
                 stdout: false,
@@ -3857,30 +4031,7 @@ impl WorkerService {
             .ok_or_else(|| WorkerServiceError::Internal("Missing idempotency key".to_string()))?;
         let result = match output.result {
             golem_common::model::AgentInvocationResult::ExternalTool { result } => {
-                Some(match result {
-                    Ok(success) => NativeToolResult::Success(NativeToolSuccess {
-                        result: success
-                            .result
-                            .map(|value| (*value).try_into().map(Box::new))
-                            .transpose()
-                            .map_err(|error| {
-                                WorkerServiceError::Internal(format!(
-                                    "external tool result cannot cross the external JSON boundary: {error}"
-                                ))
-                            })?,
-                    }),
-                    Err(error) => {
-                        if let golem_common::model::tool::SerializableToolRpcError::RemoteToolError(tool_error) = &error
-                            && let golem_common::model::tool::SerializableToolError::CustomError(value) = tool_error.as_ref()
-                        {
-                            golem_common::schema::ExternalTypedSchemaValue::try_from(value.payload.clone())
-                                .map_err(|error| WorkerServiceError::Internal(format!(
-                                    "external tool error cannot cross the external JSON boundary: {error}"
-                                )))?;
-                        }
-                        NativeToolResult::Failure(NativeToolFailure { error })
-                    }
-                })
+                Some(native_tool_result(result)?)
             }
             _ if proto_mode
                 != golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32 =>
@@ -3961,6 +4112,24 @@ impl WorkerService {
                 ));
             }
         };
+        let (definition, deployment_revision) = self
+            .effective_tool_definition(&component, &owner, &request.tool_name)
+            .await?;
+        Ok(NativeToolDefinition {
+            definition,
+            component_revision: component.revision,
+            deployment_revision,
+        })
+    }
+
+    /// The definition of the tool named `tool_name` as `owner` of `component` sees it, with the
+    /// deployment revision that selected it.
+    async fn effective_tool_definition(
+        &self,
+        component: &Component,
+        owner: &ToolBindingOwner,
+        tool_name: &str,
+    ) -> WorkerResult<(golem_common::schema::tool::Tool, DeploymentRevision)> {
         let state = self
             .component_service
             .get_tool_deployment_state(component.environment_id, component.id, component.revision)
@@ -3970,14 +4139,13 @@ impl WorkerService {
                     "no tool deployment is active for the target".to_string(),
                 )
             })?;
-        let tool_name = ToolName::try_from(request.tool_name.as_str())
-            .map_err(WorkerServiceError::TypeChecker)?;
+        let tool_name = ToolName::try_from(tool_name).map_err(WorkerServiceError::TypeChecker)?;
         let registered = state.registered_tools.get(&tool_name).ok_or_else(|| {
             WorkerServiceError::TypeChecker(format!("tool '{tool_name}' is not registered"))
         })?;
         if !state
             .tool_bindings
-            .get(&owner)
+            .get(owner)
             .is_some_and(|bindings| bindings.contains_key(&tool_name))
         {
             return Err(WorkerServiceError::TypeChecker(format!(
@@ -3986,15 +4154,33 @@ impl WorkerService {
         }
         let definition = state
             .tool_middleware_chains
-            .get(&owner)
+            .get(owner)
             .and_then(|chains| chains.get(&tool_name))
             .map(|chain| chain.effective_definition.clone())
             .unwrap_or_else(|| registered.registration.definition.clone());
-        Ok(NativeToolDefinition {
-            definition,
-            component_revision: component.revision,
-            deployment_revision: state.deployment_revision,
-        })
+        Ok((definition, state.deployment_revision))
+    }
+
+    /// The canonical form of `command_path` in the tool named `tool_name` as `owner` of
+    /// `component` sees it. Invocation IDs are derived from the canonical form, so an alias and
+    /// the name of a command give the same ID.
+    async fn canonical_tool_command_path(
+        &self,
+        component: &Component,
+        owner: &ToolBindingOwner,
+        tool_name: &str,
+        command_path: &[String],
+    ) -> WorkerResult<Vec<String>> {
+        let (definition, _) = self
+            .effective_tool_definition(component, owner, tool_name)
+            .await?;
+        definition
+            .canonical_command_path(command_path)
+            .ok_or_else(|| {
+                WorkerServiceError::TypeChecker(format!(
+                    "command path {command_path:?} does not name a command of tool '{tool_name}'"
+                ))
+            })
     }
 
     /// REST invoke: on the agent with `agentId`, which must have the type, or on the agent of
@@ -4008,9 +4194,6 @@ impl WorkerService {
         idempotency_key: Option<IdempotencyKey>,
         auth: AuthCtx,
     ) -> WorkerResult<AgentInvocationResult> {
-        let (registered, component) = self
-            .deployed_agent_type(environment_id, agent_type_name, &auth)
-            .await?;
         let method_name = request.method.clone();
         let proto_mode = match request.mode {
             AgentInvocationMode::Await => {
@@ -4030,7 +4213,19 @@ impl WorkerService {
         let (target, component, freshness_disposition) =
             match (request.agent_id, request.parameters) {
                 (Some(agent_id), None) => {
-                    if agent_id.type_id() != Some(registered.type_id) {
+                    let retained = self
+                        .retained_agent_types(environment_id, agent_type_name, &auth)
+                        .await
+                        .map_err(|error| match error {
+                            WorkerServiceError::RegistryServiceError(
+                                RegistryServiceError::NotFound(_),
+                            ) => WorkerServiceError::AgentNotFound(agent_id),
+                            other => other,
+                        })?;
+                    if !retained
+                        .iter()
+                        .any(|(registered, _)| agent_id.type_id() == Some(registered.type_id))
+                    {
                         return Err(WorkerServiceError::AgentNotFound(agent_id));
                     }
                     let agent = self
@@ -4041,6 +4236,9 @@ impl WorkerService {
                             &[permission],
                         )
                         .await?;
+                    if agent.metadata.agent_type_name.as_ref() != Some(agent_type_name) {
+                        return Err(WorkerServiceError::AgentNotFound(agent_id));
+                    }
                     (
                         agent.routed(),
                         agent.component,
@@ -4048,6 +4246,9 @@ impl WorkerService {
                     )
                 }
                 (None, Some(parameters)) => {
+                    let (registered, component) = self
+                        .deployed_agent_type(environment_id, agent_type_name, &auth)
+                        .await?;
                     let constructor = Self::rest_constructor(&registered, parameters)?;
                     let (target, freshness_disposition) = Self::invocation_target(
                         environment_id,
@@ -4142,11 +4343,8 @@ impl WorkerService {
             nanos: dt.timestamp_subsec_nanos() as i32,
         });
 
-        let principal: golem_api_grpc::proto::golem::component::Principal =
-            Principal::GolemUser(GolemUserPrincipal {
-                account_id: auth.account_id(),
-            })
-            .into();
+        let caller: golem_api_grpc::proto::golem::component::Caller =
+            self.rest_caller(&auth).into();
 
         let mut output = self
             .worker_client
@@ -4163,7 +4361,7 @@ impl WorkerService {
                 environment_id,
                 component.account_id,
                 auth.clone(),
-                principal,
+                caller,
                 None,
                 expected_fingerprint,
             )
@@ -4181,39 +4379,15 @@ impl WorkerService {
                 let decode_revision = output
                     .component_revision
                     .unwrap_or(invocation_component.revision);
-                let component_metadata_for_decode = self
-                    .component_service
-                    .get_revision(invocation_component.id, decode_revision)
+                let typed_output = self
+                    .agent_method_output_to_external(
+                        invocation_component.id,
+                        decode_revision,
+                        agent_type_name,
+                        &method_name,
+                        output_value,
+                    )
                     .await?;
-                let decode_agent_type = component_metadata_for_decode
-                    .metadata
-                    .find_agent_type_by_name_ref(agent_type_name)
-                    .ok_or_else(|| {
-                        WorkerServiceError::Internal(format!(
-                            "Agent type {agent_type_name} not found in component metadata at revision {decode_revision}",
-                        ))
-                    })?;
-                let decode_method = decode_agent_type
-                    .methods
-                    .iter()
-                    .find(|m| m.name == method_name)
-                    .ok_or_else(|| {
-                        WorkerServiceError::Internal(format!(
-                            "Agent method {method_name} not found in agent type {agent_type_name} at revision {decode_revision}",
-                        ))
-                    })?;
-                let mut output_graph = decode_agent_type.schema.clone();
-                output_graph.root = decode_method
-                    .output_schema
-                    .schema()
-                    .cloned()
-                    .unwrap_or_else(|| SchemaType::tuple(Vec::new()));
-                let typed_output = TypedSchemaValue::new(output_graph, output_value);
-                let typed_output = typed_output.try_into().map_err(|error| {
-                    WorkerServiceError::Internal(format!(
-                        "Agent method result cannot cross the external JSON boundary: {error}"
-                    ))
-                })?;
                 Ok(AgentInvocationResult {
                     agent_id: response_agent_id,
                     idempotency_key: response_idempotency_key,
@@ -4229,10 +4403,101 @@ impl WorkerService {
             }),
         }
     }
+
+    /// Decodes an agent method's result with the method's output schema at the revision that
+    /// produced it, so a method that a later revision removed still decodes.
+    async fn agent_method_output_to_external(
+        &self,
+        component_id: ComponentId,
+        revision: ComponentRevision,
+        agent_type_name: &AgentTypeName,
+        method_name: &str,
+        output_value: golem_common::schema::SchemaValue,
+    ) -> WorkerResult<golem_common::schema::ExternalTypedSchemaValue> {
+        let component = self
+            .component_service
+            .get_revision(component_id, revision)
+            .await?;
+        let agent_type = component
+            .metadata
+            .find_agent_type_by_name_ref(agent_type_name)
+            .ok_or_else(|| {
+                WorkerServiceError::Internal(format!(
+                    "Agent type {agent_type_name} not found in component metadata at revision {revision}",
+                ))
+            })?;
+        let method = agent_type
+            .methods
+            .iter()
+            .find(|m| m.name == method_name)
+            .ok_or_else(|| {
+                WorkerServiceError::Internal(format!(
+                    "Agent method {method_name} not found in agent type {agent_type_name} at revision {revision}",
+                ))
+            })?;
+        let mut output_graph = agent_type.schema.clone();
+        output_graph.root = method
+            .output_schema
+            .schema()
+            .cloned()
+            .unwrap_or_else(|| SchemaType::tuple(Vec::new()));
+        TypedSchemaValue::new(output_graph, output_value)
+            .try_into()
+            .map_err(|error| {
+                WorkerServiceError::Internal(format!(
+                    "Agent method result cannot cross the external JSON boundary: {error}"
+                ))
+            })
+    }
 }
+
+/// Converts a tool invocation's result to its REST form.
+fn native_tool_result(
+    result: Result<
+        golem_common::model::tool::SerializableToolInvocationResult,
+        golem_common::model::tool::SerializableToolRpcError,
+    >,
+) -> WorkerResult<NativeToolResult> {
+    Ok(match result {
+        Ok(success) => NativeToolResult::Success(NativeToolSuccess {
+            result: success
+                .result
+                .map(|value| (*value).try_into().map(Box::new))
+                .transpose()
+                .map_err(|error| {
+                    WorkerServiceError::Internal(format!(
+                        "external tool result cannot cross the external JSON boundary: {error}"
+                    ))
+                })?,
+        }),
+        Err(error) => {
+            if let golem_common::model::tool::SerializableToolRpcError::RemoteToolError(tool_error) =
+                &error
+                && let golem_common::model::tool::SerializableToolError::CustomError(value) =
+                    tool_error.as_ref()
+            {
+                golem_common::schema::ExternalTypedSchemaValue::try_from(value.payload.clone())
+                    .map_err(|error| {
+                        WorkerServiceError::Internal(format!(
+                            "external tool error cannot cross the external JSON boundary: {error}"
+                        ))
+                    })?;
+            }
+            NativeToolResult::Failure(NativeToolFailure { error })
+        }
+    })
+}
+
+mod invocations;
+
+pub use invocations::InvocationListQuery;
 
 #[cfg(test)]
 mod tests {
+    fn test_golem_issuer() -> GolemIssuer {
+        "https://golem.test".parse().unwrap()
+    }
+
     use super::{
         AgentBinding, PublicAgentSessionStart, PublicAgentSessionStartError, WorkerService,
         agent_verb_for_invocation_mode, decode_public_agent_config, decode_public_schema_value,
@@ -4267,11 +4532,12 @@ mod tests {
         RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget,
     };
     use golem_common::model::agent::{
-        AgentConfigSource, AgentKey, AgentMode, AgentTypeName, GolemUserPrincipal,
-        HttpEndpointDetails, InvocationFreshnessDisposition, OwnerKind, ParsedAgentKey, Principal,
-        RegisteredAgentType, RegisteredAgentTypeImplementer, ResolvedAgentType, Snapshotting,
+        AgentConfigSource, AgentKey, AgentMode, AgentTypeName, HttpEndpointDetails,
+        InvocationFreshnessDisposition, OwnerKind, ParsedAgentKey, RegisteredAgentType,
+        RegisteredAgentTypeImplementer, ResolvedAgentType, Snapshotting,
     };
     use golem_common::model::application::{ApplicationId, ApplicationName};
+    use golem_common::model::caller::{Caller, Principal};
     use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
     use golem_common::model::card::{
         AgentInvocationIdPattern, AgentMethodName, AgentPluginName, AgentResourcePattern,
@@ -4288,6 +4554,7 @@ mod tests {
     use golem_common::model::diff::Hash;
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
     use golem_common::model::filesystem::{FileByteSelection, FileReadHead};
+    use golem_common::model::golem_issuer::GolemIssuer;
     use golem_common::model::invocation_session_public::{
         InvocationSelector, PublicAgentTarget, PublicConfigEntry,
     };
@@ -4402,6 +4669,7 @@ mod tests {
     #[derive(Clone)]
     struct TestRegistryService {
         resolved: ResolvedAgentType,
+        removed: bool,
     }
 
     #[async_trait]
@@ -4534,11 +4802,41 @@ mod tests {
             Ok(self.resolved.clone())
         }
 
+        async fn authorize_environment(
+            &self,
+            environment_id: EnvironmentId,
+            auth_ctx: &AuthCtx,
+        ) -> Result<(), RegistryServiceError> {
+            use golem_common::model::card::owner::EnvironmentOwnerPattern;
+            use golem_common::model::card::{EnvironmentResourcePattern, EnvironmentVerb};
+            if environment_id != self.resolved.environment_id {
+                return Err(RegistryServiceError::NotFound("environment".into()));
+            }
+            auth_ctx
+                .authorize_permission(&PermissionTarget::Environment(ClassPermissionTarget {
+                    owner: EnvironmentOwnerPattern::Environment {
+                        account: AccountEmail::new("weather@golem"),
+                        application: ApplicationName::try_from("weather-app").unwrap(),
+                        environment: EnvironmentName::try_from("prod").unwrap(),
+                    },
+                    verb: Some(EnvironmentVerb::View),
+                    resource: EnvironmentResourcePattern::Any,
+                }))
+                .map_err(|error| RegistryServiceError::Unauthorized(error.to_string()))
+        }
+
         async fn resolve_type_id(
             &self,
             environment_id: EnvironmentId,
             type_id: TypeId,
         ) -> Result<Option<ResolvedTypeId>, RegistryServiceError> {
+            if environment_id == self.resolved.environment_id && type_id.get() == 43 {
+                return Ok(Some(ResolvedTypeId {
+                    kind: TypeIdKind::Tool,
+                    name: "test-tool".into(),
+                    implemented_by: None,
+                }));
+            }
             let registered = &self.resolved.registered_agent_type;
             Ok(
                 (environment_id == self.resolved.environment_id && type_id == registered.type_id)
@@ -4550,13 +4848,27 @@ mod tests {
             )
         }
 
+        async fn resolve_agent_type_name(
+            &self,
+            environment_id: EnvironmentId,
+            name: &AgentTypeName,
+        ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError> {
+            let registered = &self.resolved.registered_agent_type;
+            Ok((environment_id == self.resolved.environment_id
+                && *name == registered.agent_type.type_name)
+                .then(|| registered.clone())
+                .into_iter()
+                .collect())
+        }
+
         async fn get_deployed_agent_type(
             &self,
             environment_id: EnvironmentId,
             agent_type_name: &AgentTypeName,
         ) -> Result<Option<RegisteredAgentType>, RegistryServiceError> {
             let registered = &self.resolved.registered_agent_type;
-            Ok((environment_id == self.resolved.environment_id
+            Ok((!self.removed
+                && environment_id == self.resolved.environment_id
                 && *agent_type_name == registered.agent_type.type_name)
                 .then(|| registered.clone()))
         }
@@ -4642,13 +4954,15 @@ mod tests {
             environment_id: EnvironmentId,
             component_id: ComponentId,
             revision: ComponentRevision,
-        ) -> Result<Option<golem_common::model::tool::ToolDeploymentState>, ComponentServiceError>
-        {
+        ) -> Result<
+            Option<Arc<golem_common::model::tool::ToolDeploymentState>>,
+            ComponentServiceError,
+        > {
             self.tool_queries
                 .lock()
                 .unwrap()
                 .push((environment_id, component_id, revision));
-            Ok(self.tool_state.clone())
+            Ok(self.tool_state.clone().map(Arc::new))
         }
 
         async fn get_current_by_id_in_cache(&self, component_id: ComponentId) -> Option<Component> {
@@ -4735,6 +5049,8 @@ mod tests {
         created_targets: Mutex<Vec<RoutedTarget>>,
         invoked_targets: Mutex<Vec<RoutedTarget>>,
         created_agent_ids: Mutex<Vec<AgentId>>,
+        created_callers: Mutex<Vec<Caller>>,
+        forked_callers: Mutex<Vec<Caller>>,
         creating_idempotency_keys: Mutex<Vec<Option<IdempotencyKey>>>,
         creating_ignore_already_existing: Mutex<Vec<bool>>,
         metadata_environment_id: Mutex<Option<EnvironmentId>>,
@@ -4749,9 +5065,12 @@ mod tests {
         effects: Mutex<Vec<&'static str>>,
         invocation_output: Mutex<AgentInvocationOutput>,
         metadata_component_revision: Mutex<Option<ComponentRevision>>,
+        listed_agents: Mutex<(Option<ScanCursor>, Vec<ExistingAgent>)>,
         deleted_agent_ids: Mutex<Vec<AgentId>>,
         fingerprint: AgentFingerprint,
         oplog_entry_reads: Mutex<Vec<(OplogIndex, Option<ComponentRevision>)>>,
+        invocation_summary:
+            Mutex<Option<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>>,
         revert_resolution_error: Mutex<Option<String>>,
     }
 
@@ -4766,6 +5085,8 @@ mod tests {
                 created_targets: Mutex::new(Vec::new()),
                 invoked_targets: Mutex::new(Vec::new()),
                 created_agent_ids: Mutex::new(Vec::new()),
+                created_callers: Mutex::new(Vec::new()),
+                forked_callers: Mutex::new(Vec::new()),
                 creating_idempotency_keys: Mutex::new(Vec::new()),
                 creating_ignore_already_existing: Mutex::new(Vec::new()),
                 metadata_environment_id: Mutex::new(None),
@@ -4780,9 +5101,11 @@ mod tests {
                 effects: Mutex::new(Vec::new()),
                 invocation_output: Mutex::new(invocation_output),
                 metadata_component_revision: Mutex::new(None),
+                listed_agents: Mutex::new((None, Vec::new())),
                 deleted_agent_ids: Mutex::new(Vec::new()),
                 fingerprint: AgentFingerprint::new(),
                 oplog_entry_reads: Mutex::new(Vec::new()),
+                invocation_summary: Mutex::new(None),
                 revert_resolution_error: Mutex::new(None),
             }
         }
@@ -4877,7 +5200,7 @@ mod tests {
             _: EnvironmentId,
             _: AuthCtx,
             _: Option<InvocationContext>,
-            _: Option<golem_api_grpc::proto::golem::component::Principal>,
+            _: golem_api_grpc::proto::golem::component::Caller,
             _: Option<IdempotencyKey>,
             _: InvocationFreshnessDisposition,
         ) -> WorkerResult<(AgentId, AgentFingerprint)> {
@@ -4898,9 +5221,13 @@ mod tests {
             _: EnvironmentId,
             _: AuthCtx,
             _: Option<InvocationContext>,
-            _: Option<golem_api_grpc::proto::golem::component::Principal>,
+            caller: golem_api_grpc::proto::golem::component::Caller,
             idempotency_key: Option<IdempotencyKey>,
         ) -> WorkerResult<(AgentId, AgentFingerprint)> {
+            self.created_callers
+                .lock()
+                .unwrap()
+                .push(Caller::try_from(caller).unwrap());
             self.creating_ignore_already_existing
                 .lock()
                 .unwrap()
@@ -4928,8 +5255,10 @@ mod tests {
             &self,
             agent_id: &AgentId,
             _: EnvironmentId,
+            expected_fingerprint: AgentFingerprint,
             _: AuthCtx,
         ) -> WorkerResult<()> {
+            assert_eq!(expected_fingerprint, self.fingerprint);
             self.effects.lock().unwrap().push("delete");
             self.deleted_agent_ids.lock().unwrap().push(*agent_id);
             Ok(())
@@ -4950,8 +5279,10 @@ mod tests {
             _: &AgentId,
             _: bool,
             _: EnvironmentId,
+            expected_fingerprint: AgentFingerprint,
             _: AuthCtx,
         ) -> WorkerResult<()> {
+            assert_eq!(expected_fingerprint, self.fingerprint);
             self.effects.lock().unwrap().push("interrupt");
             Ok(())
         }
@@ -4981,6 +5312,7 @@ mod tests {
                         env: HashMap::new(),
                         config: Vec::new(),
                         status: AgentStatus::Idle,
+                        underlying_status: None,
                         component_revision,
                         retry_count: 0,
                         pending_invocation_count: 0,
@@ -5021,8 +5353,8 @@ mod tests {
             _: bool,
             _: EnvironmentId,
             _: AuthCtx,
-        ) -> WorkerResult<(Option<ScanCursor>, Vec<AgentMetadataDto>)> {
-            unimplemented!()
+        ) -> WorkerResult<(Option<ScanCursor>, Vec<ExistingAgent>)> {
+            Ok(self.listed_agents.lock().unwrap().clone())
         }
 
         async fn resume(
@@ -5030,8 +5362,10 @@ mod tests {
             _: &AgentId,
             _: bool,
             _: EnvironmentId,
+            expected_fingerprint: AgentFingerprint,
             _: AuthCtx,
         ) -> WorkerResult<()> {
+            assert_eq!(expected_fingerprint, self.fingerprint);
             self.effects.lock().unwrap().push("resume");
             Ok(())
         }
@@ -5043,8 +5377,10 @@ mod tests {
             _: ComponentRevision,
             _: bool,
             _: EnvironmentId,
+            expected_fingerprint: AgentFingerprint,
             _: AuthCtx,
         ) -> WorkerResult<OplogIndex> {
+            assert_eq!(expected_fingerprint, self.fingerprint);
             self.effects.lock().unwrap().push("update");
             Ok(OplogIndex::INITIAL)
         }
@@ -5055,6 +5391,7 @@ mod tests {
             _: OplogIndex,
             _: Option<OplogCursor>,
             _: u64,
+            _: Option<super::OplogRangeRead>,
             _: EnvironmentId,
             _: AuthCtx,
         ) -> Result<GetOplogResponse, super::WorkerServiceError> {
@@ -5064,6 +5401,7 @@ mod tests {
                 next: None,
                 first_index_in_chunk: 0,
                 last_index: 0,
+                scan: None,
             })
         }
 
@@ -5110,6 +5448,7 @@ mod tests {
                 next: None,
                 first_index_in_chunk: 0,
                 last_index: 0,
+                scan: None,
             })
         }
 
@@ -5137,7 +5476,7 @@ mod tests {
 
         async fn get_file_contents(
             &self,
-            _: &AgentId,
+            _: &RoutedTarget,
             _: CanonicalFilePath,
             _: FileByteSelection,
             _: EnvironmentId,
@@ -5163,8 +5502,10 @@ mod tests {
             _: &AgentId,
             _: PluginPriority,
             _: EnvironmentId,
+            expected_fingerprint: AgentFingerprint,
             _: AuthCtx,
         ) -> WorkerResult<()> {
+            assert_eq!(expected_fingerprint, self.fingerprint);
             self.effects.lock().unwrap().push("activate-plugin");
             Ok(())
         }
@@ -5174,8 +5515,10 @@ mod tests {
             _: &AgentId,
             _: PluginPriority,
             _: EnvironmentId,
+            expected_fingerprint: AgentFingerprint,
             _: AuthCtx,
         ) -> WorkerResult<()> {
+            assert_eq!(expected_fingerprint, self.fingerprint);
             self.effects.lock().unwrap().push("deactivate-plugin");
             Ok(())
         }
@@ -5188,9 +5531,12 @@ mod tests {
             _: EnvironmentId,
             _: AccountId,
             _: AccountEmail,
-            _: Principal,
+            caller: Caller,
+            expected_fingerprint: AgentFingerprint,
             _: AuthCtx,
         ) -> WorkerResult<()> {
+            self.forked_callers.lock().unwrap().push(caller);
+            assert_eq!(expected_fingerprint, self.fingerprint);
             self.effects.lock().unwrap().push("fork");
             Ok(())
         }
@@ -5201,8 +5547,10 @@ mod tests {
             _: RevertWorkerTarget,
             _: Option<ResolvedRevert>,
             _: EnvironmentId,
+            expected_fingerprint: AgentFingerprint,
             _: AuthCtx,
         ) -> WorkerResult<()> {
+            assert_eq!(expected_fingerprint, self.fingerprint);
             self.effects.lock().unwrap().push("revert");
             Ok(())
         }
@@ -5230,9 +5578,45 @@ mod tests {
             _: EnvironmentId,
             _: AuthCtx,
             _: Option<golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation>,
+            expected_fingerprint: Option<AgentFingerprint>,
         ) -> WorkerResult<bool> {
+            assert_eq!(expected_fingerprint, Some(self.fingerprint));
             self.effects.lock().unwrap().push("cancel-invocation");
             Ok(true)
+        }
+
+        async fn get_invocation(
+            &self,
+            _: &AgentId,
+            _: &golem_common::model::InvocationId,
+            _: EnvironmentId,
+            _: AuthCtx,
+        ) -> WorkerResult<Option<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>>
+        {
+            Ok(self.invocation_summary.lock().unwrap().clone())
+        }
+
+        async fn list_invocations(
+            &self,
+            _: &AgentId,
+            _: golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsRequest,
+            _: EnvironmentId,
+            _: AuthCtx,
+        ) -> WorkerResult<golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsSuccess>
+        {
+            unimplemented!()
+        }
+
+        async fn lookup_invocations(
+            &self,
+            _: &AgentId,
+            _: &IdempotencyKey,
+            _: Option<String>,
+            _: EnvironmentId,
+            _: AuthCtx,
+        ) -> WorkerResult<Vec<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>>
+        {
+            unimplemented!()
         }
 
         async fn invoke_agent(
@@ -5249,7 +5633,7 @@ mod tests {
             environment_id: EnvironmentId,
             _: AccountId,
             _: AuthCtx,
-            _: golem_api_grpc::proto::golem::component::Principal,
+            _: golem_api_grpc::proto::golem::component::Caller,
             _: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
             expected_fingerprint: Option<AgentFingerprint>,
         ) -> WorkerResult<AgentInvocationOutput> {
@@ -5338,7 +5722,12 @@ mod tests {
                 let operation = start
                     .external_tool
                     .as_ref()
-                    .map(|tool| format!("tool:{}/{}", tool.tool_name, tool.command_path.join("/")))
+                    .map(|tool| {
+                        golem_common::model::InvocationOperation::tool_operation(
+                            &tool.tool_name,
+                            &tool.command_path,
+                        )
+                    })
                     .unwrap_or_else(|| start.method_name.clone().unwrap_or_default());
                 prepared
                     .finalize(*agent_id, self.fingerprint, &operation)
@@ -5418,6 +5807,53 @@ mod tests {
         ))
     }
 
+    /// The harness's tool `weather`: one subcommand `current`, with the alias `now`.
+    fn weather_tool_definition() -> golem_common::schema::tool::Tool {
+        use golem_common::schema::tool::{
+            CommandBody, CommandIndex, CommandNode, CommandTree, Doc, Tool,
+        };
+        let body = CommandBody {
+            positionals: Default::default(),
+            options: vec![],
+            flags: vec![],
+            constraints: vec![],
+            stdin: None,
+            stdout: None,
+            stderr: None,
+            result: None,
+            errors: vec![],
+            annotations: None,
+        };
+        Tool {
+            version: "1.0.0".into(),
+            requires_filesystem: false,
+            http_mount: None,
+            schema: SchemaGraph::empty(),
+            commands: CommandTree {
+                nodes: vec![
+                    CommandNode {
+                        name: "weather".into(),
+                        aliases: vec![],
+                        doc: Doc::default(),
+                        http: None,
+                        globals: Default::default(),
+                        subcommands: vec![CommandIndex(1)],
+                        body: None,
+                    },
+                    CommandNode {
+                        name: "current".into(),
+                        aliases: vec!["now".into()],
+                        doc: Doc::default(),
+                        http: None,
+                        globals: Default::default(),
+                        subcommands: vec![],
+                        body: Some(body),
+                    },
+                ],
+            },
+        }
+    }
+
     impl RestHarness {
         fn new(mode: AgentMode) -> Self {
             Self::new_with_method_schema(mode, InputSchema::Parameters(vec![]), OutputSchema::Unit)
@@ -5466,6 +5902,7 @@ mod tests {
             ));
             *worker_client.metadata_environment_id.lock().unwrap() = Some(environment_id);
             let registry = Arc::new(TestRegistryService {
+                removed: false,
                 resolved: ResolvedAgentType {
                     registered_agent_type: RegisteredAgentType {
                         type_id: test_type_id(),
@@ -5490,12 +5927,23 @@ mod tests {
                 Duration::from_secs(60),
             ));
             let agent_types = agent_type_resolver(registry);
+            let tool_state = crate::service::component::tests::tool_deployment_state(
+                &component,
+                "weather",
+                weather_tool_definition(),
+                [
+                    ToolBindingOwner::ComponentBaseline { component_id },
+                    ToolBindingOwner::AgentType {
+                        agent_type_name: agent_type_name.clone(),
+                    },
+                ],
+            );
 
             Self {
                 worker_service: WorkerService::new(
                     Arc::new(StaticComponentService {
                         components: vec![component],
-                        tool_state: None,
+                        tool_state: Some(tool_state),
                         tool_queries: Mutex::new(vec![]),
                     }),
                     Arc::new(AllowAllAuthService),
@@ -5503,6 +5951,7 @@ mod tests {
                     worker_client.clone(),
                     agent_resolution_cache,
                     agent_types,
+                    test_golem_issuer(),
                 ),
                 worker_client,
                 agent_type_name,
@@ -5559,6 +6008,7 @@ mod tests {
             ));
             *worker_client.metadata_environment_id.lock().unwrap() = Some(environment_id);
             let registry = Arc::new(TestRegistryService {
+                removed: false,
                 resolved: ResolvedAgentType {
                     registered_agent_type: RegisteredAgentType {
                         type_id: test_type_id(),
@@ -5596,6 +6046,7 @@ mod tests {
                     worker_client.clone(),
                     agent_resolution_cache,
                     agent_types,
+                    test_golem_issuer(),
                 ),
                 worker_client,
                 agent_type_name,
@@ -5725,7 +6176,7 @@ mod tests {
                 operation: ResumeOperation::Resume as i32,
                 cursors: Vec::new(),
                 auth_ctx: Some(AuthCtx::system().into()),
-                principal: Some(Default::default()),
+                caller: Some(Default::default()),
             }
         }
     }
@@ -5827,6 +6278,7 @@ mod tests {
             ),
             created_at: Utc::now(),
             wasm_hash: Hash::empty(),
+            package_metadata: None,
             object_store_key: String::new(),
         }
     }
@@ -5914,6 +6366,181 @@ mod tests {
     }
 
     #[test]
+    async fn removed_type_lookup_and_listing_use_retained_declarations() {
+        let mut harness = RestHarness::new(AgentMode::Durable);
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        *harness.worker_client.metadata_canonical_key.lock().unwrap() =
+            Some(harness.agent_key().to_string());
+        let component = harness
+            .worker_service
+            .component_service
+            .get_revision(harness.component_id, harness.component_revision)
+            .await
+            .unwrap();
+        harness.worker_service.agent_types = agent_type_resolver(Arc::new(TestRegistryService {
+            removed: true,
+            resolved: ResolvedAgentType {
+                registered_agent_type: RegisteredAgentType {
+                    type_id: harness.type_id,
+                    agent_type: component.metadata.agent_types()[0].clone(),
+                    implemented_by: RegisteredAgentTypeImplementer {
+                        component_id: component.id,
+                        component_revision: component.revision,
+                        component_name: component.component_name.0.clone(),
+                        account_id: component.account_id,
+                        account_email: component.account_email.clone(),
+                    },
+                },
+                environment_id: harness.environment_id,
+                deployment_revision: DeploymentRevision::INITIAL,
+                current_deployment_revision: None,
+            },
+        }));
+        let reference = harness
+            .worker_service
+            .lookup_agent_rest(
+                harness.environment_id,
+                &harness.agent_type_name,
+                AgentKeyRequest {
+                    parameters: empty_json_tuple(),
+                },
+                AuthCtx::system(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reference.agent_id, harness.keyed_agent_id());
+        let existing = harness
+            .worker_client
+            .get_metadata(
+                &reference.agent_id,
+                harness.environment_id,
+                AuthCtx::system(),
+            )
+            .await
+            .unwrap();
+        *harness.worker_client.listed_agents.lock().unwrap() = (None, vec![existing]);
+        let (_, agents) = harness
+            .worker_service
+            .find_metadata(
+                harness.environment_id,
+                &harness.agent_type_name,
+                None,
+                None,
+                ScanCursor::default(),
+                10,
+                false,
+                AuthCtx::system(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].agent_id, reference.agent_id);
+        let mut request = harness.invoke_request();
+        request.agent_id = Some(reference.agent_id);
+        request.parameters = None;
+        let invocation = harness
+            .invoke_rest(request.clone(), None, AuthCtx::system())
+            .await
+            .unwrap();
+        assert_eq!(invocation.agent_id, reference.agent_id);
+        let wrong_name = harness
+            .worker_service
+            .invoke_agent_rest(
+                harness.environment_id,
+                &AgentTypeName("other-agent".into()),
+                request,
+                None,
+                AuthCtx::system(),
+            )
+            .await;
+        assert!(
+            matches!(wrong_name, Err(WorkerServiceError::AgentNotFound(id)) if id == reference.agent_id)
+        );
+        assert!(
+            harness
+                .worker_service
+                .upsert_agent_rest(
+                    harness.environment_id,
+                    &harness.agent_type_name,
+                    AgentKeyRequest {
+                        parameters: empty_json_tuple()
+                    },
+                    AuthCtx::system(),
+                )
+                .await
+                .is_err(),
+            "creates still require a deployed type"
+        );
+    }
+
+    #[test]
+    async fn component_selection_uses_each_agents_recorded_owner_and_preserves_the_cursor() {
+        let mut harness = RestHarness::new(AgentMode::Durable);
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        let current_id = AgentId::from_parts(harness.type_id.get(), 1);
+        let current = harness
+            .worker_client
+            .get_metadata(&current_id, harness.environment_id, AuthCtx::system())
+            .await
+            .unwrap();
+        let current_component = harness
+            .worker_service
+            .component_service
+            .get_revision(harness.component_id, harness.component_revision)
+            .await
+            .unwrap();
+        let mut previous_component = current_component.clone();
+        previous_component.id = ComponentId::new();
+        previous_component.component_name = ComponentName("previous-component".into());
+        let mut previous = current.clone();
+        previous.component_id = previous_component.id;
+        previous.metadata.agent_id = AgentId::from_parts(harness.type_id.get(), 2);
+        let previous_id = previous.metadata.agent_id;
+        harness.worker_service.component_service = Arc::new(StaticComponentService {
+            components: vec![current_component, previous_component],
+            tool_state: None,
+            tool_queries: Mutex::new(vec![]),
+        });
+        let cursor = Some(ScanCursor::new("next-page".into()));
+        *harness.worker_client.listed_agents.lock().unwrap() =
+            (cursor.clone(), vec![previous, current]);
+
+        for (filter, expected) in [
+            (None, vec![previous_id, current_id]),
+            (Some("weather-component"), vec![current_id]),
+            (Some("previous-component"), vec![previous_id]),
+            (Some("another-component"), vec![]),
+        ] {
+            let (next, agents) = harness
+                .worker_service
+                .find_metadata(
+                    harness.environment_id,
+                    &harness.agent_type_name,
+                    filter,
+                    None,
+                    ScanCursor::default(),
+                    10,
+                    false,
+                    AuthCtx::system(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(next, cursor);
+            assert_eq!(
+                agents
+                    .into_iter()
+                    .map(|agent| agent.agent_id)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn lookup_invocation_requires_view_agent_permission() {
         assert_eq!(
             agent_verb_for_invocation_mode(
@@ -5934,6 +6561,53 @@ mod tests {
     }
 
     #[test]
+    fn key_limit_is_not_a_constructor_limit() {
+        for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+            let name = AgentTypeName("Doc".into());
+            let mut ty = test_agent_type(name.clone(), mode);
+            ty.constructor.input_schema = InputSchema::Parameters(vec![NamedField::user_supplied(
+                "body",
+                SchemaType::string(),
+            )]);
+            let env = EnvironmentId::new();
+            let component = test_component(
+                ComponentId::new(),
+                env,
+                AccountId::new(),
+                ComponentRevision::INITIAL,
+                ty.clone(),
+            );
+            for body in ["a".repeat(10), "a".repeat(520), "é".repeat(260)] {
+                let constructor = ParsedAgentKey::new(
+                    name.clone(),
+                    golem_common::model::agent::typed_constructor_parameters(
+                        &ty,
+                        SchemaValue::Record {
+                            fields: vec![SchemaValue::String(body.clone())],
+                        },
+                    ),
+                );
+                if mode == AgentMode::Durable {
+                    let keyed = RoutedTarget::keyed(env, test_type_id(), &component, &constructor);
+                    assert_eq!(keyed.is_ok(), body.len() == 10);
+                    if let Err(error) = keyed {
+                        assert!(error.to_string().contains("Agent key is too long"));
+                    }
+                }
+                let routed = RoutedTarget::unkeyed(
+                    AgentId::random(test_type_id()),
+                    &component,
+                    &constructor,
+                )
+                .expect("a constructor is not a key");
+                let (_, wire_constructor, _) = routed.invoke_fields();
+                let decoded = ParsedAgentKey::try_from(wire_constructor.unwrap()).unwrap();
+                assert_eq!(decoded, constructor);
+            }
+        }
+    }
+
+    #[test]
     async fn explicit_create_requires_any_invoke_grant_and_preserves_the_creating_key() {
         let harness = RestHarness::new(AgentMode::Durable);
         let agent_id = harness.keyed_agent_id();
@@ -5949,7 +6623,7 @@ mod tests {
                 .worker_service
                 .launch_agent(
                     harness.component_id,
-                    harness.agent_key(),
+                    harness.agent_key().into(),
                     None,
                     None,
                     false,
@@ -5962,7 +6636,7 @@ mod tests {
                         resource,
                     )]),
                     None,
-                    None,
+                    Caller::anonymous().into(),
                     Some(key.clone()),
                     InvocationFreshnessDisposition::MayExist,
                 )
@@ -6003,7 +6677,7 @@ mod tests {
         let launch = |prepare: bool, permission: PermissionTarget, key: Option<IdempotencyKey>| {
             harness.worker_service.launch_agent(
                 harness.component_id,
-                harness.agent_key(),
+                harness.agent_key().into(),
                 None,
                 Some("run".to_string()),
                 prepare,
@@ -6012,7 +6686,7 @@ mod tests {
                 true,
                 auth_ctx_with_permissions(vec![permission]),
                 None,
-                None,
+                Caller::anonymous().into(),
                 key,
                 InvocationFreshnessDisposition::MayExist,
             )
@@ -6162,6 +6836,7 @@ mod tests {
                 OplogIndex::from_u64(5),
                 None,
                 3,
+                None,
                 None,
                 auth_ctx.clone(),
             )
@@ -6593,6 +7268,83 @@ mod tests {
     }
 
     #[test]
+    async fn rest_fork_defaults_to_the_account_caller() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        let auth = AuthCtx::system();
+        let source = harness.owned(&harness.keyed_agent_id());
+        let target = AgentId::random(harness.type_id);
+
+        harness
+            .worker_service
+            .fork_worker(
+                &source,
+                Some(target),
+                OplogIndex::from_u64(4),
+                None,
+                None,
+                auth.clone(),
+            )
+            .await
+            .unwrap();
+        let explicit = Caller::anonymous();
+        harness
+            .worker_service
+            .fork_worker(
+                &source,
+                Some(target),
+                OplogIndex::from_u64(4),
+                Some(explicit.clone()),
+                None,
+                auth.clone(),
+            )
+            .await
+            .unwrap();
+
+        let callers = harness.worker_client.forked_callers.lock().unwrap().clone();
+        assert_eq!(
+            callers,
+            vec![harness.worker_service.rest_caller(&auth), explicit]
+        );
+        assert!(matches!(callers[0].original, Principal::Account(_)));
+    }
+
+    #[test]
+    async fn rest_create_records_the_account_caller() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let auth = AuthCtx::system();
+        harness
+            .worker_service
+            .create_agent_rest(
+                harness.environment_id,
+                &harness.agent_type_name,
+                harness.create_request(true),
+                None,
+                auth.clone(),
+            )
+            .await
+            .unwrap();
+
+        let callers = harness
+            .worker_client
+            .created_callers
+            .lock()
+            .unwrap()
+            .clone();
+        assert_eq!(callers, vec![harness.worker_service.rest_caller(&auth)]);
+        assert_eq!(
+            callers[0].original.pair().unwrap().to_string(),
+            format!(
+                "(\"{}\",\"account:{}\")",
+                test_golem_issuer(),
+                auth.account_id().0.hyphenated()
+            )
+        );
+    }
+
+    #[test]
     async fn create_agent_rest_keyed_create_is_exclusive_at_the_keyed_id() {
         let harness = RestHarness::new(AgentMode::Durable);
 
@@ -6713,6 +7465,53 @@ mod tests {
                 .created_targets()
                 .iter()
                 .all(RoutedTarget::creates)
+        );
+    }
+
+    #[test]
+    async fn lookup_distinguishes_an_authorized_key_collision_from_absence() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let lookup = |auth| {
+            harness.worker_service.lookup_agent_rest(
+                harness.environment_id,
+                &harness.agent_type_name,
+                AgentKeyRequest {
+                    parameters: empty_json_tuple(),
+                },
+                auth,
+            )
+        };
+        assert!(matches!(
+            lookup(AuthCtx::system()).await,
+            Err(WorkerServiceError::AgentNotFound(_))
+        ));
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        *harness.worker_client.metadata_canonical_key.lock().unwrap() =
+            Some(harness.agent_key().to_string());
+        let reference = lookup(AuthCtx::system()).await.unwrap();
+        assert_eq!(reference.agent_id, harness.keyed_agent_id());
+        assert_eq!(
+            reference.agent_fingerprint,
+            harness.worker_client.fingerprint
+        );
+        let denied = lookup(auth_ctx_with_permissions(vec![])).await.unwrap_err();
+
+        *harness.worker_client.metadata_canonical_key.lock().unwrap() =
+            Some("weather-agent(1)".into());
+        assert!(matches!(lookup(AuthCtx::system()).await,
+            Err(WorkerServiceError::GolemError(WorkerExecutorError::AgentKeyCollision { agent_id, .. }))
+            if agent_id == harness.keyed_agent_id()));
+        let denied_collision = lookup(auth_ctx_with_permissions(vec![])).await.unwrap_err();
+        assert_eq!(
+            denied_collision.to_string(),
+            denied.to_string(),
+            "denied callers must not learn about a collision"
+        );
+        assert!(
+            harness.worker_client.created_targets().is_empty(),
+            "lookup must not create"
         );
     }
 
@@ -6843,7 +7642,23 @@ mod tests {
         assert_eq!(start.method_name.as_deref(), Some("run"));
         assert!(start.input.is_some());
         assert!(start.auth_ctx.is_some());
-        assert!(start.principal.is_some());
+        let expected_caller = harness.worker_service.rest_caller(&AuthCtx::system());
+        let caller = Caller::try_from(start.caller.clone().unwrap()).unwrap();
+        assert_eq!(caller, expected_caller);
+        assert!(caller.original.equals(&caller.immediate));
+        assert!(caller.tokens.is_empty());
+        let Principal::Account(account) = &caller.original else {
+            panic!("expected an account caller, got {:?}", caller.original);
+        };
+        assert_eq!(account.account_id, AuthCtx::system().account_id());
+        assert_eq!(
+            caller.original.pair().unwrap().to_string(),
+            format!(
+                "(\"{}\",\"account:{}\")",
+                test_golem_issuer(),
+                AuthCtx::system().account_id().0.hyphenated()
+            )
+        );
         assert_eq!(
             EnvironmentId::try_from(start.environment_id.unwrap()).unwrap(),
             harness.environment_id
@@ -7217,15 +8032,12 @@ mod tests {
         let requested = resume.clone();
         let auth = AuthCtx::system();
         let expected_auth = auth.clone().into();
-        let expected_principal: golem_api_grpc::proto::golem::component::Principal =
-            Principal::GolemUser(GolemUserPrincipal {
-                account_id: auth.account_id(),
-            })
-            .into();
+        let expected_caller: golem_api_grpc::proto::golem::component::Caller =
+            harness.worker_service.rest_caller(&auth).into();
 
         resume.auth_ctx = None;
-        resume.principal = Some(Default::default());
-        let stale_principal = resume.principal.clone();
+        resume.caller = Some(Default::default());
+        let stale_caller = resume.caller.clone();
         let _responses = harness
             .worker_service
             .resume_public_agent_session(resume, Box::pin(stream::empty()), auth)
@@ -7250,8 +8062,8 @@ mod tests {
         assert_eq!(routed.operation, requested.operation);
         assert_eq!(routed.cursors, requested.cursors);
         assert_eq!(routed.auth_ctx, Some(expected_auth));
-        assert_eq!(routed.principal, Some(expected_principal));
-        assert_ne!(routed.principal, stale_principal);
+        assert_eq!(routed.caller, Some(expected_caller));
+        assert_ne!(routed.caller, stale_caller);
     }
 
     #[test]
@@ -7281,14 +8093,14 @@ mod tests {
     }
 
     #[test]
-    async fn trusted_resume_preserves_the_pinned_principal() {
+    async fn trusted_resume_preserves_the_pinned_caller() {
         let harness = RestHarness::new(AgentMode::Durable);
         harness
             .worker_client
             .set_metadata_component_revision(harness.component_revision);
         let mut resume = harness.public_resume();
-        let pinned_principal = Some(Default::default());
-        resume.principal = pinned_principal.clone();
+        let pinned_caller = Some(Default::default());
+        resume.caller = pinned_caller.clone();
 
         let _responses = harness
             .worker_service
@@ -7297,7 +8109,7 @@ mod tests {
             .unwrap();
 
         let (_, routed) = harness.worker_client.invocation_session_resume();
-        assert_eq!(routed.principal, pinned_principal);
+        assert_eq!(routed.caller, pinned_caller);
     }
 
     #[test]
@@ -7504,7 +8316,7 @@ mod tests {
                         InvocationFreshnessDisposition::KnownFresh,
                         Vec::new(),
                         AuthCtx::system(),
-                        Principal::anonymous().into(),
+                        Caller::anonymous().into(),
                         None,
                         fingerprint,
                     )
@@ -7566,7 +8378,7 @@ mod tests {
                 InvocationFreshnessDisposition::MayExist,
                 Vec::new(),
                 AuthCtx::system(),
-                Principal::anonymous().into(),
+                Caller::anonymous().into(),
                 None,
                 fingerprint,
             )
@@ -7719,7 +8531,7 @@ mod tests {
                     InvocationFreshnessDisposition::MayExist,
                     Vec::new(),
                     AuthCtx::system(),
-                    Principal::anonymous().into(),
+                    Caller::anonymous().into(),
                     None,
                     None,
                 )
@@ -7786,6 +8598,7 @@ mod tests {
             ));
             components.get_current_by_id(a.id).await.unwrap();
             let agent_types = agent_type_resolver(Arc::new(TestRegistryService {
+                removed: false,
                 resolved: ResolvedAgentType {
                     registered_agent_type: RegisteredAgentType {
                         type_id: test_type_id(),
@@ -7890,6 +8703,7 @@ mod tests {
                 harness.worker_client.clone(),
                 harness.worker_service.agent_resolution_cache.clone(),
                 agent_types,
+                test_golem_issuer(),
             ));
             let handler = CallAgentHandler::new(worker_service.clone());
             let mut request = RichRequest::new(
@@ -7935,7 +8749,7 @@ mod tests {
                     InvocationFreshnessDisposition::MayExist,
                     vec![],
                     AuthCtx::system(),
-                    Principal::anonymous().into(),
+                    Caller::anonymous().into(),
                     None,
                     None,
                 )
@@ -8152,6 +8966,30 @@ mod tests {
     }
 
     #[test]
+    async fn fresh_durable_binding_uses_distinct_targets_without_ephemeral_freshness() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let request_key = InvocationRequestKey::external(None, None);
+        let mut targets = HashSet::new();
+        for _ in 0..2 {
+            let (target, _, freshness) = harness
+                .worker_service
+                .bound_invocation_target(
+                    harness.component_id,
+                    &harness.constructor(),
+                    AgentBinding::Fresh,
+                    &request_key,
+                    "run",
+                    &AuthCtx::system(),
+                )
+                .await
+                .unwrap();
+            assert!(target.creates());
+            assert_eq!(freshness, InvocationFreshnessDisposition::MayExist);
+            assert!(targets.insert(target.agent_id));
+        }
+    }
+
+    #[test]
     async fn ephemeral_session_entry_is_stable_and_lookup_is_observation_only() {
         let harness = RestHarness::new(AgentMode::Ephemeral);
         let idempotency_key = IdempotencyKey::new("session-tool-call".to_string());
@@ -8191,7 +9029,7 @@ mod tests {
             method_name: Some("run".to_string()),
             request_key: Some(request_key.into()),
             idempotency_key: Some(idempotency_key.clone().into()),
-            principal: Some(Default::default()),
+            caller: Some(Default::default()),
             environment_id: Some(harness.environment_id.into()),
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
             freshness_disposition:
@@ -8563,6 +9401,63 @@ mod tests {
         );
     }
 
+    #[test]
+    async fn unknown_agent_ids_require_environment_access_before_tag_resolution() {
+        use golem_common::model::card::owner::EnvironmentOwnerPattern;
+        use golem_common::model::card::{EnvironmentResourcePattern, EnvironmentVerb};
+
+        let harness = RestHarness::new(AgentMode::Durable);
+        let environment_permission = PermissionTarget::Environment(ClassPermissionTarget {
+            owner: EnvironmentOwnerPattern::AnyEnvironments,
+            verb: Some(EnvironmentVerb::View),
+            resource: EnvironmentResourcePattern::Any,
+        });
+        let agent_permission = PermissionTarget::Agent(ClassPermissionTarget {
+            owner: AgentOwnerPattern::AnyAgents,
+            verb: None,
+            resource: AgentResourcePattern::Any,
+        });
+        let authorized =
+            auth_ctx_with_permissions(vec![environment_permission.clone(), agent_permission]);
+        let environment_only = auth_ctx_with_permissions(vec![environment_permission]);
+        for tag in [42, 43, 98765, 0] {
+            let agent = harness.owned(&AgentId::from_parts(tag, 123));
+            for (auth, allowed) in [
+                (authorized.clone(), true),
+                (scoped_invocation_auth(), false),
+                (environment_only.clone(), tag != 42),
+                (auth_ctx_with_permissions(vec![]), false),
+            ] {
+                let read = harness
+                    .worker_service
+                    .get_metadata(&agent, None, auth.clone())
+                    .await;
+                let delete = harness.worker_service.delete(&agent, None, auth).await;
+                for error in [read.unwrap_err(), delete.unwrap_err()] {
+                    if allowed {
+                        assert!(
+                            matches!(error, WorkerServiceError::AgentNotFound(_)),
+                            "tag={tag}: {error:?}"
+                        );
+                    } else {
+                        assert!(
+                            matches!(error, WorkerServiceError::AgentAccessDenied(_)),
+                            "tag={tag}: {error:?}"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(
+            harness
+                .worker_client
+                .deleted_agent_ids
+                .lock()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     /// #3133's answer survives the routing layer, which is the whole point of
     /// settling existence with a read.
     ///
@@ -8653,12 +9548,14 @@ mod tests {
         let definition = Tool {
             version: "1.0.0".into(),
             requires_filesystem: false,
+            http_mount: None,
             schema: SchemaGraph::empty(),
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: "weather".into(),
                     aliases: vec![],
                     doc: Doc::default(),
+                    http: None,
                     globals: Globals::default(),
                     subcommands: vec![],
                     body: None,
@@ -8881,7 +9778,8 @@ mod tests {
     #[test]
     async fn native_tool_fresh_owner_uses_reserved_identity_and_native_wire_shape() {
         let harness = RestHarness::new(AgentMode::Durable);
-        let request = harness.tool_request();
+        let mut request = harness.tool_request();
+        request.command_path = vec!["now".to_string()];
         let key = RestHarness::tool_key();
         harness
             .worker_client
@@ -8945,6 +9843,7 @@ mod tests {
         assert!(tool.fresh_owner);
         assert!(!tool.stdin && !tool.stdout);
         assert_eq!(tool.tool_name, "weather");
+        assert_eq!(tool.command_path, ["current"]);
         assert!(matches!(
             response.result,
             Some(NativeToolResult::Success(_))
@@ -9114,5 +10013,71 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    fn invocation_summary_proto(
+        invocation_id: golem_common::model::InvocationId,
+        state: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationLifecycleState,
+        kind: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationKind,
+        operation: Option<String>,
+    ) -> golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary {
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary {
+            invocation_id: Some(invocation_id.0.into()),
+            state: state as i32,
+            kind: kind as i32,
+            operation,
+            changed_at: Some(::prost_types::Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// A completed method result whose operation is not known cannot be decoded, so the read
+    /// answers the summary with no result instead of failing.
+    #[test]
+    async fn a_completed_invocation_with_an_unknown_operation_keeps_its_summary() {
+        use golem_api_grpc::proto::golem::workerexecutor::v1::{
+            InvocationKind as ProtoKind, InvocationLifecycleState as ProtoState,
+        };
+        let harness = RestHarness::new(AgentMode::Durable);
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        let invocation_id = golem_common::model::InvocationId(Uuid::new_v4());
+        let owned = golem_common::model::OwnedInvocationId::new(
+            harness.some_agent_id().agent_id,
+            invocation_id,
+        );
+        *harness.worker_client.invocation_summary.lock().unwrap() = Some(invocation_summary_proto(
+            invocation_id,
+            ProtoState::Completed,
+            ProtoKind::Unspecified,
+            None,
+        ));
+        harness
+            .worker_client
+            .set_invocation_output(AgentInvocationOutput {
+                result: golem_common::model::AgentInvocationResult::AgentMethod {
+                    output: SchemaValue::Tuple { elements: vec![] },
+                },
+                consumed_fuel: None,
+                invocation_status: None,
+                component_revision: Some(harness.component_revision),
+                agent_id: None,
+                idempotency_key: None,
+                oplog_index: None,
+                agent_fingerprint: None,
+            });
+
+        let got = harness
+            .worker_service
+            .get_invocation(harness.environment_id, &owned, AuthCtx::system())
+            .await;
+        let got = got.unwrap_or_else(|error| {
+            panic!("get of a completed invocation with unknown operation failed: {error}")
+        });
+        assert!(got.result.is_none());
     }
 }

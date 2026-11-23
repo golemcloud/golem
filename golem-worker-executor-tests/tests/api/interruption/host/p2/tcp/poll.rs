@@ -6,6 +6,7 @@ use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::resource_limits::ResourceUsageFlusher;
 use golem_worker_executor::services::{HasOplog, HasOplogService, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -51,7 +52,7 @@ pending_case!(
 
 #[test]
 #[timeout("2m")]
-async fn repeated_monthly_stop_preserves_reconstructed_connect_and_input_poll(
+async fn repeated_monthly_stop_preserves_replayed_connect_and_repaired_input_poll(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -154,7 +155,7 @@ async fn pending_block(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
         golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
         invocation_create_intent(
             &executor,
@@ -439,23 +440,39 @@ async fn pending_block(
                 .await?
                 .await?;
             executor.resume(&owned, false).await?;
+            let mut losses = 1;
             if repeat_stop {
+                // The repaired poll of the lost connection is ready at once, the read reports
+                // the loss, and the fixture reconnects. The input poll of the new connection is
+                // pending when the second stop comes.
                 let (mut replay_peer, _) =
-                    tokio::time::timeout(Duration::from_secs(10), listener.accept()).await??;
+                    tokio::time::timeout(Duration::from_secs(10), listener.accept())
+                        .await
+                        .context("fixture reconnect after the visible loss")??;
                 connections += 1;
                 let replay_revision = registry.current_limits().monthly_policy_revision;
                 let mut replay_signal = worker.raw_interrupt_for_test();
                 let connect_start = poll_starts(&stopped)[0];
-                let ready_start = stopped.iter().find_map(|entry| match &entry.entry {
-                    PublicOplogEntry::Start(start)
-                        if start.function_name == "io::poll::pollable::ready" => Some(entry.oplog_index),
-                    _ => None,
-                }).context("recorded-true connect ready Start")?;
-                ensure!(terminal_count(&stopped, ready_start) == 1);
+                let second_poll = tokio::time::timeout(Duration::from_secs(10), async {
+                    loop {
+                        executor.commit_oplog(&id).await?;
+                        let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
+                        let polls = poll_starts(&entries);
+                        if polls.len() == 4 && terminal_count(&entries, polls[3]) == 0 {
+                            return Ok::<_, anyhow::Error>(polls[3]);
+                        }
+                        ensure!(!invocation.is_finished(), "guest returned before the second input poll");
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .context("input poll of the reconnected connection")??;
                 let reconstructed = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
                 ensure!(terminal_count(&reconstructed, connect_start) == 1);
-                ensure!(terminal_count(&reconstructed, ready_start) == 1);
-                ensure!(terminal_count(&reconstructed, poll_start) == 0);
+                ensure!(
+                    terminal_count(&reconstructed, poll_start) == 1,
+                    "replay repairs the original input poll"
+                );
                 ensure!(!invocation.is_finished());
                 let mut exhausted = grant.clone();
                 exhausted.available_memory_gb_seconds = 0;
@@ -479,10 +496,11 @@ async fn pending_block(
                 let retained_last = *retained_raw.last_key_value().unwrap().0;
                 ensure!(replay_raw.range(..=retained_last).eq(retained_raw.iter()), "the full first stopped prefix must survive the repeated stop");
                 retained_raw = replay_raw;
-                ensure!(poll_starts(&replay_stopped) == poll_starts(&stopped));
+                let polls = poll_starts(&replay_stopped);
+                ensure!(polls.len() == 4 && polls[..2] == poll_starts(&stopped)[..]);
                 ensure!(terminal_count(&replay_stopped, connect_start) == 1);
-                ensure!(terminal_count(&replay_stopped, ready_start) == 1);
-                ensure!(terminal_count(&replay_stopped, poll_start) == 0);
+                ensure!(terminal_count(&replay_stopped, poll_start) == 1);
+                ensure!(terminal_count(&replay_stopped, second_poll) == 0);
                 ensure!(count_agent_invocation_pair_since(&replay_stopped, OplogIndex::INITIAL) == (2, 1));
                 let raw = worker.oplog().read_exact(
                     OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64(),
@@ -494,33 +512,37 @@ async fn pending_block(
                     &registry.applied_updates(), Resource::Memory, true,
                     replay_revision, grant.period,
                 )?;
-                info!(%poll_start, connections,
-                    "Repeated monthly stop retired native input after connect reconstruction; original terminals and retained input Start preserved");
+                info!(%poll_start, %second_poll, connections,
+                    "Repeated monthly stop retired the reconnected input; original terminals preserved");
                 registry.set_policy(grant);
                 applied_refresh(&limits, &registry, context.account_id).await?.await?;
                 executor.resume(&owned, false).await?;
+                losses += 1;
             }
+            // The repaired input poll is ready, the read reports the lost connection, and the
+            // fixture reconnects.
             let (mut resumed_peer, _) =
                 tokio::time::timeout(Duration::from_secs(10), listener.accept())
                     .await
-                    .context("P2 reconnect during reconstruction")??;
+                    .context("fixture reconnect after the visible loss")??;
             connections += 1;
             resumed_peer.write_all(b"x").await?;
             let resumed = tokio::time::timeout(Duration::from_secs(10), &mut invocation)
                 .await
                 .context("retained invocation continuation")???
-                .into_typed::<Result<bool, String>>()?;
+                .into_typed::<Result<(u32, Vec<u8>), String>>()?;
             ensure!(
-                resumed == Ok(true),
+                resumed == Ok((losses, b"x".to_vec())),
                 "reconstructed P2 block returned {resumed:?}"
             );
             let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             let recovered_raw = read_stored().await?;
             let retained_last = *retained_raw.last_key_value().unwrap().0;
             ensure!(recovered_raw.range(..=retained_last).eq(retained_raw.iter()), "the full stopped prefix must survive ordinary P2 reconstruction");
+            let polls = poll_starts(&recovered);
             ensure!(
-                poll_starts(&recovered) == poll_starts(&stopped),
-                "repair must retain the original Start"
+                polls.len() == 2 + 2 * losses as usize && polls[..2] == poll_starts(&stopped)[..],
+                "repair must retain the original Start; each reconnect adds a connect and an input poll"
             );
             ensure!(terminal_count(&recovered, poll_start) == 1);
             ensure!(recovered.iter().all(|e| !matches!(
@@ -536,8 +558,8 @@ async fn pending_block(
                     data_value!(port),
                 )
                 .await?
-                .into_typed::<Result<bool, String>>()?;
-            ensure!(cached == Ok(true));
+                .into_typed::<Result<(u32, Vec<u8>), String>>()?;
+            ensure!(cached == Ok((losses, b"x".to_vec())));
             ensure!(
                 count_agent_invocation_pair_since(
                     &executor.get_oplog(&owned, OplogIndex::INITIAL).await?,
@@ -565,11 +587,11 @@ async fn pending_block(
                 tokio::try_join!(fresh, fresh_peer)
             })
             .await??;
-            ensure!(fresh.into_typed::<Result<bool, String>>()? == Ok(true));
+            ensure!(fresh.into_typed::<Result<(u32, Vec<u8>), String>>()? == Ok((0, b"y".to_vec())));
             connections += 1;
             info!(
                 ?resource, %poll_start, connections,
-                "Original poll repaired; cached lookup did not connect; fresh invocation succeeded"
+                "Original poll repaired; loss visible; fixture reconnected; cached lookup did not connect; fresh invocation succeeded"
             );
         }
         Ok::<_, anyhow::Error>(())

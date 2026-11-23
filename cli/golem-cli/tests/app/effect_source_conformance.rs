@@ -506,7 +506,7 @@ async fn effect_imported_mcp_client_projects_contract_and_runs_middleware() {
     );
     assert_eq!(
         *middleware_effects.lock().unwrap(),
-        vec!["/middleware/catalog-lookup/golem-user"; 4]
+        vec!["/middleware/catalog-lookup/account"; 4]
     );
     upstream.abort();
     middleware_server.abort();
@@ -517,7 +517,7 @@ fn write_middleware(ctx: &TestContext, effect_port: u16) {
         ctx.cwd_path_join("middleware/src/counter_agent.rs"),
         formatdoc! {r#"
             use futures_concurrency::prelude::*;
-            use golem_rust::tool::{{InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool, ToolInvokeError, UnderlyingTool}};
+            use golem_rust::tool::{{InputStream, InvocationContext, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool, ToolInvokeError, UnderlyingTool}};
             use golem_rust::{{TypedSchemaValue, universal_tool_middleware}};
 
             #[universal_tool_middleware(name = "effect-mcp-audit")]
@@ -529,20 +529,15 @@ fn write_middleware(ctx: &TestContext, effect_port: u16) {
                 stdin: Option<InputStream>,
                 stdout: Option<OutputStream>,
                 stderr: Option<OutputStream>,
-                principal: Principal,
+                ctx: InvocationContext,
                 underlying: UnderlyingTool,
             ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {{
-                record_effect(&format!("/middleware/{{tool_name}}/{{}}", principal_class(&principal))).await;
+                record_effect(&format!("/middleware/{{tool_name}}/{{}}", principal_class(ctx.caller().immediate()))).await;
                 underlying.invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr).await
             }}
 
             fn principal_class(principal: &Principal) -> &'static str {{
-                match principal {{
-                    Principal::Anonymous => "anonymous",
-                    Principal::Oidc(_) => "oidc",
-                    Principal::Agent(_) => "agent",
-                    Principal::GolemUser(_) => "golem-user",
-                }}
+                principal.kind().as_str()
             }}
 
             async fn record_effect(path: &str) {{
@@ -584,7 +579,7 @@ fn write_native_middleware(ctx: &TestContext) {
         indoc! {r#"
             use golem_rust::schema::{SchemaValue, TypedSchemaValue};
             use golem_rust::tool::{
-                InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool,
+                InputStream, InvocationResult, InvocationContext, OutputStream, RawCustomToolError, Tool,
                 ToolInvokeError, UnderlyingTool,
             };
             use golem_rust::universal_tool_middleware;
@@ -598,7 +593,7 @@ fn write_native_middleware(ctx: &TestContext) {
                 stdin: Option<InputStream>,
                 stdout: Option<OutputStream>,
                 stderr: Option<OutputStream>,
-                _principal: Principal,
+                _ctx: InvocationContext,
                 underlying: UnderlyingTool,
             ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
                 let input = if tool_name == "native-conformance"

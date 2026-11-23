@@ -621,6 +621,8 @@ async fn get_oplog(
             cursor,
             count,
             auth_ctx: Some(executor.auth_ctx().into()),
+            to_oplog_index: None,
+            scan_allowance: None,
         })
         .await?
         .into_inner()

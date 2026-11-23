@@ -94,7 +94,9 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         match self
                             .parent
                             .owner_retirement_requested
-                            .run_until_cancelled(self.parent.cancel_invocation(*idempotency_key))
+                            .run_until_cancelled(
+                                self.parent.discard_pending_duplicate(*idempotency_key),
+                            )
                             .await
                         {
                             Some(Ok(())) => CommandOutcome::Continue,
@@ -347,7 +349,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             let lowered = lower_invocation(
                 invocation_for_lowering,
                 &self.store.data().component_metadata().metadata,
-                self.parent.parsed_agent_id.as_ref(),
+                &self.parent.owner_context,
             )?;
 
             Ok::<_, WorkerExecutorError>((lowered, local_span_ids, inherited_span_ids))
@@ -532,6 +534,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     error: AgentError::InternalError(error.to_string()),
                     retry_from: OplogIndex::INITIAL,
                     semantic_trap_retry_override: None,
+                    provenance: crate::model::FailureProvenance::Host,
                 };
                 if let InvocationFailureDecision::Infrastructure(error) = self
                     .store

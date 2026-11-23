@@ -1,5 +1,6 @@
 use super::*;
 use golem_common::model::Timestamp;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 macro_rules! repeated_stop_case {
@@ -135,7 +136,7 @@ async fn repeated_stop(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
         golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
         invocation_create_intent(
             &executor,
@@ -173,7 +174,11 @@ async fn repeated_stop(
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 executor.commit_oplog(&id).await?;
-                if completed_setup(&executor.get_oplog(&owned, OplogIndex::INITIAL).await?).is_ok()
+                if input_setup(
+                    &executor.get_oplog(&owned, OplogIndex::INITIAL).await?,
+                    Operation::Read,
+                )
+                .is_ok()
                 {
                     break Ok::<_, anyhow::Error>(());
                 }
@@ -345,11 +350,14 @@ async fn repeated_stop(
             start_refresh(&limits, &registry, context.account_id, &mut refresh).await?;
             join_request(&mut refresh, "policy refresh").await?;
             executor.resume(&owned, false).await?;
+            // The pending read fails with the lost connection, and the fixture reconnects.
             let (mut peer, _) =
                 tokio::time::timeout(Duration::from_secs(10), listener.accept()).await??;
             peer.write_all(b"x").await?;
-            Operation::Read
-                .assert_result(join_request(&mut invocation, "invocation result").await??)?;
+            Operation::Read.assert_result(
+                join_request(&mut invocation, "invocation result").await??,
+                1,
+            )?;
             let history = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (2, 2));
             assert_settled_history(&history)?;
@@ -363,6 +371,7 @@ async fn repeated_stop(
                         data_value!(port),
                     )
                     .await?,
+                1,
             )?;
             ensure!(
                 tokio::time::timeout(Duration::from_millis(100), listener.accept())

@@ -33,10 +33,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
     async fn caller(&mut self) -> anyhow::Result<InvocationCaller> {
         DurabilityHost::observe_function_call(self, "golem_agent", "caller");
-        let principal = self.invocation_principal();
-        Ok(InvocationCaller {
-            original: principal.clone().into(),
-            immediate: principal.into(),
-        })
+        Ok(self.invocation_caller().into())
     }
 }

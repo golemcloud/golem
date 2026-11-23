@@ -20,6 +20,7 @@ use golem_common::model::agent::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::type_id::TypeIdKind;
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
+use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::service::type_id_resolution::{
     InvalidationGenerations, TypeIdResolutionCache,
 };
@@ -72,6 +73,27 @@ impl AgentTypeResolver {
             generations: Arc::default(),
             registry_service,
         }
+    }
+
+    pub async fn authorize_environment(
+        &self,
+        environment_id: EnvironmentId,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), RegistryServiceError> {
+        self.registry_service
+            .authorize_environment(environment_id, auth_ctx)
+            .await
+    }
+
+    /// Retained declarations for management, including past implementing components.
+    pub async fn retained(
+        &self,
+        environment_id: EnvironmentId,
+        name: &AgentTypeName,
+    ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError> {
+        self.registry_service
+            .resolve_agent_type_name(environment_id, name)
+            .await
     }
 
     /// The agent type of the environment's current deployment that has the name.

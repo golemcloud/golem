@@ -22,6 +22,7 @@
     .workspace{display:grid;grid-template-columns:320px minmax(0,1fr);gap:24px;align-items:start}.run-panel{border:1px solid var(--line);background:var(--white);border-radius:var(--radius);overflow:hidden}.panel-head{padding:20px;border-bottom:1px solid var(--line)}.panel-head h2{font-size:18px}.filters{display:grid;gap:10px;margin-top:16px}.field-label{font-size:11px;font-weight:500;color:var(--muted);display:block;margin-bottom:4px}.filters input,.filters select{width:100%;padding:9px 10px;border:1px solid var(--border-strong);border-radius:6px;background:var(--paper);color:var(--ink);font-size:13px}.filters input::placeholder{color:var(--muted)}.history-caption{display:flex;justify-content:space-between;gap:12px;margin:15px 0 0;font-size:11px;color:var(--muted)}.run-list{max-height:820px;overflow:auto}.run-button{width:100%;text-align:left;border:0;border-bottom:1px solid var(--line);background:transparent;padding:17px 20px;color:var(--ink);position:relative}.run-button:last-child{border-bottom:0}.run-button:hover{background:var(--hover)}.run-button[aria-current="true"]{background:var(--accent-bg);box-shadow:inset 3px 0 var(--accent)}.run-row{display:flex;justify-content:space-between;align-items:center;gap:10px}.run-context{font-size:12px;font-weight:600;margin-top:10px}.run-meta{display:flex;flex-wrap:wrap;gap:5px 10px;margin-top:5px;font-size:11px;color:var(--muted)}.run-branch{overflow-wrap:anywhere;font-size:12px;margin-top:8px}
     .empty{padding:32px 24px;text-align:center;color:var(--muted)}.empty strong{display:block;color:var(--ink);font-size:16px;font-weight:600;margin-bottom:7px}.detail{min-width:0}.detail-card{background:var(--white);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}.detail-heading{padding:24px;border-bottom:1px solid var(--line)}.detail-top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:18px}.detail-title{margin-top:9px;overflow-wrap:anywhere}.detail-links{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin-top:12px}.metadata{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:22px 0 0}.metadata dt{font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}.metadata dd{margin:0;font-size:12px;overflow-wrap:anywhere}.section{padding:24px;border-bottom:1px solid var(--line)}.section:last-child{border-bottom:0}.section-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px}.section-head .eyebrow{font-size:9px}
     .metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.metric{padding:14px;background:var(--card);border:1px solid var(--line);border-radius:8px}.metric-value{font-size:27px;font-weight:600;letter-spacing:-1px;line-height:1.25;font-variant-numeric:tabular-nums}.metric-label{font-size:11px;color:var(--muted);margin-top:5px}.metric.failed .metric-value{color:var(--red)}.metric.recovered .metric-value{color:var(--teal)}.test-note{font-size:12px;color:var(--muted);margin-top:12px}.job{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:13px 0;border-bottom:1px solid var(--line)}.job:first-child{padding-top:0}.job:last-child{border-bottom:0;padding-bottom:0}.job-name{font-size:13px;font-weight:600;overflow-wrap:anywhere}.steps{font-size:12px;color:var(--red);margin:6px 0 0;padding-left:18px}
+    .failure-evidence>summary{cursor:pointer;font-size:16px;font-weight:600}.failure-evidence>summary:hover{color:var(--accent)}.failure-evidence>summary h3{display:inline}.evidence-body{padding-top:16px}
     .analysis{background:linear-gradient(135deg,rgba(245,176,62,.045),transparent 70%),var(--white)}.analysis-summary{font-size:15px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}.analysis-label{display:inline-flex;border:1px solid var(--accent-border);color:var(--accent);background:var(--accent-bg);border-radius:4px;font-family:var(--font-mono);font-size:9px;padding:3px 6px;letter-spacing:.08em;white-space:nowrap}.baseline{padding:12px 14px;border-left:2px solid var(--accent);background:var(--accent-bg);margin:16px 0;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}.suspect{padding:14px 0;border-top:1px solid var(--line)}.suspect-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.confidence{font-family:var(--font-mono);font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}.suspect p{font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}.limits{margin-top:16px;font-size:12px;color:var(--muted)}.limits ul{padding-left:18px;margin:7px 0 0}.limits li{white-space:pre-wrap;overflow-wrap:anywhere}
     .commit-list{padding:0;margin:16px 0 0;list-style:none}.commit-list li{padding:12px 0;border-top:1px solid var(--line)}.commit-list a{font-size:13px;font-weight:600;overflow-wrap:anywhere}.commit-list .mono{display:block;color:var(--muted);margin-top:5px;font-size:11px}.commit-range{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0}
     .test-details{border:1px solid var(--line);border-radius:8px;margin-top:10px;overflow:hidden}.test-details summary{cursor:pointer;padding:14px;position:relative;overflow-wrap:anywhere;font-size:13px;font-weight:600}.test-details summary:hover{background:var(--hover)}.test-suite{display:block;margin:4px 0 0 17px;font-size:11px;font-weight:400;color:var(--muted)}.test-body{padding:0 14px 14px}.test-message{font:11px/1.7 var(--font-mono);background:#0d0d12;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:16px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto;margin:8px 0}.attempts{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:10px 0;font-size:11px}.report-name{font-size:11px;color:var(--muted);overflow-wrap:anywhere}.recovered-group{margin-top:24px}.footer{display:flex;justify-content:space-between;gap:14px;border-top:1px solid var(--line);margin-top:32px;padding-top:20px;color:var(--muted);font-size:11px}.loading{padding:70px 24px;text-align:center}.loading .eyebrow{margin-bottom:10px}.loading h2{margin-bottom:10px}.selection-note{margin-top:12px;font-size:12px;color:var(--muted)}
@@ -47,6 +48,7 @@
     <div class="page-heading"><div><div class="eyebrow">The state of the build</div><h1>Main validation</h1><p class="subtle">A shared view of progress, failures, and what changed.</p></div><div class="refresh-area"><button class="refresh" id="refresh" type="button">↻ Refresh</button><div class="feed-status" id="feed-status" role="status" aria-live="polite">Connecting to the observer…</div></div></div>
     <div id="preview" class="notice preview" hidden>Preview fixtures · not live CI</div>
     <div id="notice" class="notice" role="status" hidden></div>
+    <p id="evidence-health" class="small subtle"></p>
     <section class="live-section" aria-labelledby="live-heading"><div class="section-label"><h2 id="live-heading" class="eyebrow">Current activity</h2><span class="rule"></span><span class="small subtle" id="active-count"></span></div><div id="live-runs" class="live-grid"><div class="live-card subtle">Waiting for observer data…</div></div></section>
     <div class="workspace">
       <aside class="run-panel" aria-labelledby="history-heading"><div class="panel-head"><h2 id="history-heading">Run history</h2><div class="filters"><label><span class="field-label">Context</span><select id="context"><option value="">All contexts</option><option>Main validation</option><option>Main validation (acceptance)</option><option value="__unknown">Unspecified context</option></select></label><label><span class="field-label">Search runs</span><input id="search" type="search" placeholder="Branch, SHA, run…" autocomplete="off"></label></div><div class="history-caption"><span>Finished runs · newest first</span><span id="history-count">—</span></div></div><nav id="run-list" class="run-list" aria-label="Finished validation runs"><div class="empty">Loading run history…</div></nav></aside>
@@ -162,7 +164,7 @@
       label.append(svg,document.createTextNode(str(status).replace(/^./,c=>c.toUpperCase()))); return label;
     }
     function taskName(task) {
-      const names = {wit:'Generate WIT','main-validation-builtins':'Prepare built-in artifacts','main-validation-general-native':'Build native test binaries','unit-tests-and-checks':'Unit tests and checks','build-cli-test-bins':'Build CLI test binaries','main-validation-executor-native':'Build executor test binaries','main-validation-fixtures':'Build test components','main-validation-service-native':'Build service test binaries','validate-sdk-scala':'Validate Scala SDK','validate-sdk-ts':'Validate TypeScript SDK','validate-sdk-effect':'Validate Effect SDK','validate-sdk-moonbit':'Validate MoonBit SDK'};
+      const names = {wit:'Generate WIT','main-validation-builtins':'Prepare built-in artifacts','main-validation-general-native':'Build native test binaries','unit-tests-and-checks':'Unit tests and checks','main-validation-unit-tests':'Unit tests','main-validation-js-guests':'Test JS guests','build-cli-test-bins':'Build CLI test binaries','main-validation-executor-native':'Build executor test binaries','main-validation-fixtures':'Build test components','main-validation-service-native':'Build service test binaries','prepare-sdk-scala':'Prepare Scala SDK','prepare-sdk-ts':'Prepare TypeScript SDK','prepare-sdk-effect':'Prepare Effect SDK','prepare-sdk-moonbit':'Prepare MoonBit SDK','validate-sdk-scala':'Validate Scala SDK','validate-sdk-ts':'Validate TypeScript SDK','validate-sdk-effect':'Validate Effect SDK','validate-sdk-moonbit':'Validate MoonBit SDK'};
       return names[task.name] || (task.lane === 'service' ? `Service group ${task.name}` : task.lane === 'worker' ? `Worker ${task.name}` : task.name);
     }
     function taskDescription(task) {
@@ -172,13 +174,19 @@
           'main-validation-builtins':'Fetch built-in artifacts and validate their WebAssembly components.',
           'main-validation-general-native':'Compile workspace binaries and tests, and record the binaries available to later test runs.',
           'unit-tests-and-checks':'Run workspace unit tests and check generated APIs, documentation, WIT and shared contracts for drift.',
+          'main-validation-unit-tests':'Run workspace unit tests with the prepared native executables; source drift checks run in the final phase.',
+          'main-validation-js-guests':'Bundle fresh TypeScript and Effect guests and test them with the in-process guest runtime.',
           'build-cli-test-bins':'Build the Golem and CLI executables used by CLI integration tests.',
+          'prepare-sdk-scala':'Generate the Scala guest and publish local SDK packages for downstream tests.',
+          'prepare-sdk-ts':'Build the TypeScript SDK and agent template for downstream tests.',
+          'prepare-sdk-effect':'Build the Effect SDK and agent template for downstream tests.',
+          'prepare-sdk-moonbit':'Prepare MoonBit dependencies and generate SDK bindings for downstream tests.',
           'validate-sdk-scala':'Check generated bindings, run Scala SDK tests, compile the sbt plugin and publish packages locally.',
           'validate-sdk-ts':'Lint, format-check, build and test the TypeScript SDK, agent template and package contracts.',
           'validate-sdk-effect':'Check types, lint, format, tests, templates, declarations and package contracts for the Effect SDK.',
           'validate-sdk-moonbit':'Check generated MoonBit bindings and packages, then test the SDK and its tools.',
           'main-validation-fixtures':'Build and check normal and benchmark test components, including streaming and agent-update fixtures.',
-          'main-validation-executor-native':'Compile executor test binaries in a separate target directory so service builds cannot replace them.'
+          'main-validation-executor-native':'Compile executor test binaries, then freeze independent copies so service builds cannot replace running executables.'
         },
         'service-build': {
           'main-validation-service-native':'Compile service and CLI integration-test binaries, and record their executable paths for both test lanes.'
@@ -220,6 +228,10 @@
           core:'Test core application workflows and Git-based deployment differences.'
         },
         exclusive: {
+          'validate-sdk-scala':'Check generated bindings, run Scala SDK tests, compile the sbt plugin and test build plugins.',
+          'validate-sdk-ts':'Check TypeScript SDK lint, formatting, tests, declarations and packed package contracts without blocking independent checks.',
+          'validate-sdk-effect':'Check Effect SDK types, lint, formatting, tests, declarations and package contracts without blocking independent checks.',
+          'validate-sdk-moonbit':'Check generated MoonBit bindings and packages, then test the SDK and its tools.',
           'dev-tools-tests':'Run unit tests for the development-tools workspace.',
           'check-shared-crates-versioning':'Check shared crate version stamping and SDK version boundaries.',
           'check-configs':'Generate service configurations and check that committed files match.',
@@ -335,14 +347,51 @@
       box.append(el('p','small subtle','Full logs are retained in GitHub Actions artifacts, subject to repository access. Open the run on GitHub to download them. Raw logs are not published here.'));
       card.append(box);
     }
+    function renderFailureEvidence(run, card) {
+      const evidence = run.evidence || {}, tasks = [...list(evidence.tasks)];
+      for (const task of list(run.progress?.tasks).filter(t=>t.status === 'failed')) {
+        if (!tasks.some(t=>t.id === task.id)) tasks.push(task);
+      }
+      if (!tasks.length && !list(evidence.versions).length && !list(evidence.limits).length && run.conclusion !== 'failure') return;
+      const disclosure = el('details','section failure-evidence'); disclosure.id = 'failure-evidence'; disclosure.dataset.testKey = `${key(run)}:failure-evidence`;
+      const summary = el('summary'); summary.append(el('h3','','Failure evidence'));
+      const box = el('div','evidence-body'); disclosure.append(summary,box);
+      box.append(el('p','small subtle','Task exits and log findings are independent of Actions job conclusions and reported test totals. Log matches are evidence, not a confirmed cause.'));
+      if (!tasks.length && run.conclusion === 'failure') box.append(el('p','notice','Failed-task evidence is unavailable. Inspect the failed jobs and their retained logs; zero reported failures does not establish that no tests failed.'));
+      for (const task of tasks) {
+        const group = el('div','recovered-group');
+        group.append(el('h3','',`${task.id || task.name} · exit ${task.exit_code ?? 'unavailable'}`));
+        group.append(el('p','report-name',`Artifact: ${task.artifact || 'See GitHub run'} · Log: ${task.log || 'unavailable'}`));
+        if (task.log_state !== 'available') group.append(el('p','small subtle','Retained log diagnostics are unavailable or not yet collected.'));
+        const reports = list(task.reports), incomplete = !reports.length || reports.some(r=>r.state !== 'reported');
+        if (incomplete) group.append(el('p','notice',reports.length ? 'Incomplete test coverage: a linked CTRF report is empty, missing or unreadable. The totals below exclude unreported test results.' : 'No linked CTRF report was identified. This task may not produce CTRF; its test coverage cannot be determined.'));
+        for (const report of reports) group.append(el('p','report-name',`CTRF: ${report.file} · ${report.state}${report.tests == null ? '' : ` · ${numeric(report.tests)} reported tests`}`));
+        for (const [field,label] of [['first_error','First matching error in the task log'],['after_summary_error','Error after the failed-test summary (possible retry/reporting failure)']]) {
+          if (task[field]) group.append(el('p','small subtle',`${label} · line ${task[field].line ?? 'unavailable'}`),el('pre','test-message',task[field].message));
+        }
+        if (list(task.log_failures).length) {
+          const details = el('details','test-details'); details.dataset.testKey = `${key(run)}:log-failures:${task.id}`;
+          details.append(el('summary','',`${task.log_failures.length} distinct failed tests observed in the log`),el('pre','test-message',task.log_failures.join('\n')));
+          group.append(details,el('p','small subtle','Log-derived failures are not added to CTRF totals. Later retries may have recovered them; inspect the report for final outcomes.'));
+        }
+        box.append(group);
+      }
+      if (list(evidence.versions).length) {
+        box.append(el('h3','recovered-group','CLI build versions'));
+        for (const version of evidence.versions) box.append(el('p','mono',version.value),el('p','report-name',`${version.artifact}/${version.log} · line ${version.line ?? 'unavailable'}`));
+      } else if (tasks.length) box.append(el('p','small subtle','CLI build versions were not retained in the available evidence.'));
+      for (const limit of list(evidence.limits)) box.append(el('p','notice',limit));
+      box.append(el('p','small subtle','Full logs remain in GitHub Actions artifacts, subject to repository access. Only reviewed excerpts appear here.'));
+      card.append(disclosure);
+    }
     function renderTests(run, card) {
       const tests = run.tests || {}, totals = tests.totals || {}, available = Array.isArray(tests.reports) && tests.reports.length > 0;
-      const box = section('Test results');
+      const box = section('Reported tests'); box.id = 'reported-tests';
       if (!available) {
         box.append(el('p','subtle small','CTRF reports unavailable. Test totals cannot be determined for this run.'));
       } else {
         const grid = el('div','metric-grid');
-        for (const [label,value,cls] of [['Total tests',totals.tests,''],['Passed',totals.passed,''],['Failed',totals.failed,'failed'],['Recovered',list(tests.recovered).length,'recovered']]) {
+        for (const [label,value,cls] of [['Reported tests',totals.tests,''],['Reported passed',totals.passed,''],['Reported failed',totals.failed,'failed'],['Recovered',list(tests.recovered).length,'recovered']]) {
           const metric = el('div',`metric ${cls}`); metric.append(el('div','metric-value',numeric(value)),el('div','metric-label',label)); grid.append(metric);
         }
         box.append(grid,el('div','test-note',`${numeric(totals.skipped)} skipped · ${numeric(totals.pending)} pending · ${numeric(totals.other)} other · ${tests.reports.length} CTRF report${tests.reports.length === 1 ? '' : 's'}`));
@@ -419,7 +468,7 @@
       const card = el('article','detail-card'), heading = el('header','detail-heading'), top = el('div','detail-top'), title = el('div');
       title.append(el('div','eyebrow',contextName(run)),el('h2','detail-title',runName(run))); top.append(title,runBadge(run)); heading.append(top);
       const links = el('div','detail-links'); links.append(githubLink('View on GitHub ↗',run.url)); const permalink = el('a','','Permalink'); permalink.href = `#${key(run)}`; links.append(permalink); heading.append(links);
-      const meta = el('dl','metadata'); addMetadata(meta,'Branch',run.branch); addMetadata(meta,'Workflow SHA',run.workflow_sha,true); addMetadata(meta,'Event',run.event); addMetadata(meta,'Created',formatted(run.created_at)); addMetadata(meta,'Updated',formatted(run.updated_at)); addMetadata(meta,'Source',run.source || 'Not provided',true); heading.append(meta);
+      const meta = el('dl','metadata'); addMetadata(meta,'Branch',run.branch); addMetadata(meta,'Workflow SHA',run.workflow_sha,true); addMetadata(meta,'Event',run.event); addMetadata(meta,'Created',formatted(run.created_at)); addMetadata(meta,'CI run updated',formatted(run.updated_at)); addMetadata(meta,'Source',run.source || 'Not provided',true); addMetadata(meta,'CI progress',formatted(run.progress?.updated_at)); addMetadata(meta,'Analysis published',formatted(run.analysis?.published_at)); heading.append(meta);
       heading.append(el('p','selection-note',run.selected === true ? 'Selected for validation.' : run.selected === false ? 'Not selected for validation.' : 'Validation selection is not available.')); card.append(heading);
       const jobs = section('Jobs'); jobs.firstChild.append(el('span','small subtle',`${list(run.jobs).length} reported`));
       if (!list(run.jobs).length) jobs.append(el('p','small subtle','Job information is not available yet.'));
@@ -429,7 +478,7 @@
         if (list(job.failed_steps).length) { const steps = el('ul','steps'); job.failed_steps.forEach(step=>steps.append(el('li','',step))); info.append(steps); }
         row.append(info,badge(job.conclusion || 'running',job.conclusion || (job.completed_at ? 'Unknown' : job.started_at ? 'In progress' : 'Pending'))); jobs.append(row);
       }
-      renderProgress(run,card); card.append(jobs); renderTests(run,card); renderChanges(run,card); renderAnalysis(run,card); root.replaceChildren(card);
+      renderProgress(run,card); card.append(jobs); renderTests(run,card); renderChanges(run,card); renderAnalysis(run,card); renderFailureEvidence(run,card); root.replaceChildren(card);
       let testIndex = 0;
       for (const details of root.querySelectorAll('details')) {
         details.dataset.testKey ||= `${key(run)}:test:${testIndex++}`;
@@ -442,9 +491,12 @@
       $('preview').hidden = !state.data?.demo;
       const updated = date(state.data?.updated_at), stale = updated && Date.now()-updated.getTime() > 45*60000;
       const problems = [];
+      const progressDates = list(state.data?.runs).map(r=>date(r.progress?.updated_at)).filter(Boolean);
+      const lastProgress = progressDates.length ? new Date(Math.max(...progressDates.map(d=>d.getTime()))).toISOString() : null;
+      $('evidence-health').textContent = `Last CI progress: ${formatted(lastProgress)} · Last observer refresh: ${formatted(state.data?.updated_at)} · Webhook delivery health: not reported`;
       if (state.error) problems.push(state.error + (state.data ? ' Showing the last successfully loaded results.' : ' No results have been loaded yet.'));
       if (state.data && !updated) problems.push('The observer has not provided a data timestamp. Freshness cannot be verified.');
-      else if (stale) problems.push(`Observer data is older than 45 minutes (updated ${formatted(state.data.updated_at)}). Current activity may have changed.`);
+      else if (stale) problems.push(`The last observer refresh was over 45 minutes ago (${formatted(state.data.updated_at)}). CI progress has its own clock; this does not establish a webhook delivery failure.`);
       $('notice').hidden = !problems.length; $('notice').textContent = problems.join(' ');
       $('feed-status').textContent = state.busy ? 'Refreshing…' : state.data ? `${state.data.demo ? 'Preview' : stale || !updated || state.error ? 'Attention' : 'Observer connected'} · updated ${updated ? ago(state.data.updated_at) : 'time unavailable'}` : 'Observer unavailable · retrying every 30s';
       $('refresh').disabled = state.busy;

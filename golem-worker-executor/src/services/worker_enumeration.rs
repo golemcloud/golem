@@ -144,7 +144,7 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
             };
             if metadata.environment_id == *environment_id
                 && metadata.agent_id.type_id() == Some(type_id)
-                && (metadata.last_known_status.status == AgentStatus::Running)
+                && (metadata.last_known_status.reported_status() == AgentStatus::Running)
                 && filter.clone().is_none_or(|f| f.matches(&metadata))
             {
                 workers.push(metadata);
@@ -262,7 +262,13 @@ impl DefaultWorkerEnumerationService {
                         // so it is listed as failed.
                         Err(error @ WorkerExecutorError::OplogFailed { .. }) => {
                             warn!(agent_id = %owned_agent_id, error = %error, "Listing an agent with an unreadable oplog as failed");
-                            let mut status = cached_status.unwrap_or_default();
+                            // The initial metadata carries the never-live mark from `Create`.
+                            let mut status = cached_status.unwrap_or_else(|| {
+                                worker_metadata
+                                    .initial_worker_metadata
+                                    .last_known_status
+                                    .clone()
+                            });
                             status.status = AgentStatus::Failed;
                             status
                         }
@@ -278,8 +284,15 @@ impl DefaultWorkerEnumerationService {
                         ..worker_metadata.initial_worker_metadata
                     }
                 } else {
+                    let last_known_status =
+                        worker_metadata.last_known_status.unwrap_or_else(|| {
+                            worker_metadata
+                                .initial_worker_metadata
+                                .last_known_status
+                                .clone()
+                        });
                     AgentMetadata {
-                        last_known_status: worker_metadata.last_known_status.unwrap_or_default(),
+                        last_known_status,
                         ..worker_metadata.initial_worker_metadata
                     }
                 };

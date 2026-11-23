@@ -345,6 +345,43 @@ pub enum SerializableSocketError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SerializableSocketErrorCode(SocketErrorCode);
 
+/// The error of a P2 TCP stream operation. A trap is never recorded.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableTcpStreamError {
+    Closed,
+    LastOperationFailed(SerializableTcpStreamFailure),
+}
+
+/// The failure of a P2 TCP stream operation, kept so that replay gives the guest the same error,
+/// with the same `network-error-code`.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub struct SerializableTcpStreamFailure {
+    /// The errno of an I/O error that the OS reported.
+    pub os_error: Option<i32>,
+    /// The socket error code of an I/O error without an errno, or the socket error code that a
+    /// native P2 TCP stream failed with; `None` if the error is neither.
+    pub code: Option<SerializableSocketErrorCode>,
+    pub message: String,
+}
+
 #[derive(
     Debug,
     Clone,
@@ -774,6 +811,25 @@ pub struct SerializableP3IpSocketAddress {
 pub struct SerializableP3UdpDatagram {
     pub data: Vec<u8>,
     pub remote_address: SerializableP3IpSocketAddress,
+}
+
+/// How a P3 UDP call changed the local endpoint of its socket.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3UdpEndpoint {
+    /// The local address of the socket changed to this address: an implicit bind, or the
+    /// interface address that a connect selected for a wildcard bind.
+    Bound(SerializableP3IpSocketAddress),
+    /// The socket could not get its recorded local address back after recovery.
+    Lost,
 }
 
 #[derive(

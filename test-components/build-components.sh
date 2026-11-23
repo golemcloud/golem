@@ -192,12 +192,13 @@ should_clean() {
 
 restore_fixture() {
   [ -n "${GOLEM_FIXTURE_CACHE:-}" ] && [ "$clean_only" = false ] && [ "$check_only" = false ] &&
-    python3 "${REPO_ROOT}/.github/main-validation/fixture-cache.py" restore "$1" "$2"
+    bun "${REPO_ROOT}/.github/main-validation/fixture-cache.ts" restore "$1" "$2"
 }
 
 stage_fixture() {
   if [ -n "${GOLEM_FIXTURE_CACHE:-}" ] && [ "$clean_only" = false ] && [ "$check_only" = false ]; then
-    python3 "${REPO_ROOT}/.github/main-validation/fixture-cache.py" stage "$1" "$2"
+    bun "${REPO_ROOT}/.github/main-validation/fixture-cache.ts" stage "$1" "$2" ||
+      echo "Fixture cache stage unavailable: $1 ($2); continuing without reuse" >&2
   fi
 }
 
@@ -286,6 +287,22 @@ build_rust_apps() {
     fi
 
     popd || exit
+  done
+}
+
+build_retention_fixtures() {
+  if [ "$clean_only" = true ] || [ "$check_only" = true ]; then
+    return 0
+  fi
+  # Named, unstripped components for the reflection retention test in golem-size-analysis.
+  echo "Building retention fixtures..."
+  local manifest="${SCRIPT_DIR}/size-analysis/fixtures/Cargo.toml"
+  cargo build --locked --manifest-path "$manifest" --target wasm32-wasip2 --release \
+    -p retention-empty -p retention-non-reflective -p retention-reflection
+  local release_dir
+  release_dir="$(resolve_target_dir "${SCRIPT_DIR}/size-analysis/fixtures")/wasm32-wasip2/release"
+  for fixture in retention_empty retention_non_reflective retention_reflection; do
+    cp "${release_dir}/${fixture}.wasm" "${SCRIPT_DIR}/${fixture}.wasm"
   done
 }
 
@@ -436,8 +453,12 @@ if [[ "$group" =~ ^rust-([0-9]+)$ ]]; then
   get_chunk chunk_apps rust_test_apps "$chunk_idx" "$RUST_CHUNKS"
   echo "Rust chunk $chunk_idx/$RUST_CHUNKS: ${chunk_apps[*]}"
   build_rust_apps "${chunk_apps[@]}"
+  if [ "$chunk_idx" -eq 1 ]; then
+    build_retention_fixtures
+  fi
 elif [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
   build_rust_apps "${rust_test_apps[@]}"
+  build_retention_fixtures
 fi
 
 if [[ "$group" =~ ^ts-([0-9]+)$ ]]; then

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::GolemSubject;
-use crate::base_model::AgentFingerprint;
 use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentTypeName;
 use crate::base_model::caller::{
@@ -21,6 +20,7 @@ use crate::base_model::caller::{
 };
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::tool::ToolName;
+use crate::base_model::{AgentFingerprint, AgentId};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::str::FromStr;
@@ -42,6 +42,7 @@ fn agent(fingerprint: &str) -> AgentPrincipal {
     AgentPrincipal {
         issuer: ISSUER.to_string(),
         agent_id: uuid(AGENT_ID),
+        address: AgentId(uuid(AGENT_ID)),
         fingerprint: AgentFingerprint(uuid(fingerprint)),
         agent_type: AgentTypeName("Analyst".to_string()),
         environment_id: EnvironmentId(uuid(ENVIRONMENT)),

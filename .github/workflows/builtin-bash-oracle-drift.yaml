@@ -1,20 +1,8 @@
 name: Built-in Bash Oracle Drift
 
-# A separate workflow, not a job folded into builtin-bash.yaml: `stale` re-runs the ENTIRE oracle
-# corpus (both tiers) against live Docker containers, which is too slow and too noisy (a
-# non-deterministic case can flip on its own, per-commit-independent of anything this PR touched)
-# to run on every push/PR the way the other builtin-bash.yaml jobs do. It needs to run only when
-# something that could actually change the oracle's answers changes: the oracle Dockerfile itself,
-# a recorded golden, or conformance.py's own comparison logic. GitHub's `on.push.paths` /
-# `on.pull_request.paths` filters already do exactly that at the workflow level -- no need for
-# dorny/paths-filter, which exists to gate individual JOBS sharing one workflow's trigger, not to
-# scope an entire workflow's trigger by path (the native filter already does that). Folding this
-# into builtin-bash.yaml instead would mean either giving that shared workflow a `schedule:`
-# trigger (which fires ALL of its jobs, not just this one, since job-level schedule filtering
-# isn't a thing) or bolting per-job `if:` conditions onto its four existing jobs to suppress them
-# on a schedule/dispatch meant only for this one -- both riskier to those jobs than a workflow of
-# its own. A weekly `schedule:` plus `workflow_dispatch:` cover the "oracle changed on its own,
-# nothing in the repo did" case that a paths filter can never catch.
+# Oracle regeneration runs the entire corpus against live Docker containers.
+# Path filters cover changes to its inputs and comparison logic; the weekly
+# schedule and manual dispatch also detect drift in the external oracle.
 
 on:
   push:
@@ -25,7 +13,15 @@ on:
       - ".github/workflows/builtin-bash-oracle-drift.yaml"
       - "builtin-tools/bash/conformance/oracle.Dockerfile"
       - "builtin-tools/bash/conformance/goldens/**"
-      - "builtin-tools/bash/conformance/conformance.py"
+      - "builtin-tools/bash/conformance/*.ts"
+      - "builtin-tools/bash/conformance/compat/*.ts"
+      - "builtin-tools/bash/conformance/tsconfig.json"
+      - "builtin-tools/bash/conformance/.oxlintrc.json"
+      - "builtin-tools/bash/conformance/dprint.json"
+      - "builtin-tools/bash/conformance/cases/**"
+      - "builtin-tools/bash/conformance/features.json"
+      - "builtin-tools/bash/conformance/package.json"
+      - "builtin-tools/bash/conformance/bun.lock"
   pull_request:
     branches:
       - "[0-9]+.[0-9]+.x"
@@ -33,7 +29,15 @@ on:
       - ".github/workflows/builtin-bash-oracle-drift.yaml"
       - "builtin-tools/bash/conformance/oracle.Dockerfile"
       - "builtin-tools/bash/conformance/goldens/**"
-      - "builtin-tools/bash/conformance/conformance.py"
+      - "builtin-tools/bash/conformance/*.ts"
+      - "builtin-tools/bash/conformance/compat/*.ts"
+      - "builtin-tools/bash/conformance/tsconfig.json"
+      - "builtin-tools/bash/conformance/.oxlintrc.json"
+      - "builtin-tools/bash/conformance/dprint.json"
+      - "builtin-tools/bash/conformance/cases/**"
+      - "builtin-tools/bash/conformance/features.json"
+      - "builtin-tools/bash/conformance/package.json"
+      - "builtin-tools/bash/conformance/bun.lock"
   schedule:
     # Mondays 06:00 UTC -- catches the oracle image's own upstream drifting (Alpine's index
     # publishing a newer package than the goldens were recorded with, say) with nothing in this repo
@@ -58,7 +62,9 @@ jobs:
         with:
           fetch-depth: 1
 
-      # `stale` is pure Python + Docker (it re-runs the oracle and compares with the recorded
+      - uses: oven-sh/setup-bun@v2
+
+      # `stale` uses Bun + Docker (it re-runs the oracle and compares with the recorded
       # goldens; it never builds or runs the wasm shell), so no wasm target and no Rust cache --
       # just enough of a toolchain for `cargo make` itself to run.
       - uses: ./.github/actions/setup-rust

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::caller::Caller;
 use uuid::Uuid;
 
 use golem_common::model::InvocationId;
@@ -41,6 +42,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .active_agents()
             .get_or_add_oplog_processor(deps, owned_agent_id, component_id, component_revision)
             .await?;
+        // The batch runs as the processor agent itself, in both roles.
+        let mut invocation = invocation;
+        if let AgentInvocation::ProcessOplogEntries { caller, .. } = &mut invocation {
+            *caller = Caller::entry(worker.self_principal(deps.config().resolved_golem_issuer()));
+        }
         Self::start_if_needed(worker.clone()).await?;
         worker.invoke(invocation).await?;
         Ok(())
@@ -82,15 +88,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let no_cache = !ro.cacheable || is_no_cache(&ro.cfg.cache_policy);
             if !no_cache {
                 let cur_epoch = self.read_only_cache_epoch.load(Ordering::SeqCst);
-                let principal_ref = if ro.cfg.uses_principal {
-                    Some(&ro.principal)
-                } else {
-                    None
-                };
                 let key = read_only_cache::build_read_only_cache_key(
                     &ro.method_name,
                     &ro.input,
-                    principal_ref,
+                    &ro.caller,
                     ro.component_revision,
                     cur_epoch,
                 );
@@ -219,7 +220,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     /// Admits a native external-tool invocation for this exact owner.
     ///
-    /// The caller is trusted to have authenticated the supplied principal and context at its
+    /// The caller is trusted to have authenticated the supplied caller and context at its
     /// ingress boundary. This method preserves ordinary invocation queue, idempotency, scope-card,
     /// result, and cache-invalidation semantics; it does not establish a separate permission
     /// boundary.
@@ -231,7 +232,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         command_path: Vec<String>,
         input: TypedSchemaValue,
         invocation_context: InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         scope_card: Option<golem_common::model::card::ScopeCard>,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         if self.initial_worker_metadata.owner_kind == OwnerKind::OplogProcessor {
@@ -256,7 +257,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 false,
                 None,
                 invocation_context,
-                principal,
+                caller,
                 scope_card,
             )
             .await?;
@@ -273,7 +274,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         stderr: bool,
         expected_deployment_revision: Option<DeploymentRevision>,
         invocation_context: InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         scope_card: Option<golem_common::model::card::ScopeCard>,
     ) -> Result<AgentInvocation, WorkerExecutorError> {
         let accepted_index = self
@@ -292,6 +293,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         } else if let Some(index) = accepted_index {
             let OplogEntry::PendingAgentInvocation {
                 invocation_id: accepted_key,
+                operation,
                 payload,
                 ..
             } = self.oplog.read(index).await?
@@ -305,9 +307,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     "native session references a different invocation key",
                 ));
             }
-            let payload: AgentInvocationPayload = self
+            let payload = self
                 .oplog
-                .download_payload(payload)
+                .download_request(*operation, payload)
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
             let AgentInvocationPayload::ExternalTool { activation, .. } = payload else {
@@ -367,6 +369,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 expected_deployment_revision,
                 activation.registered_tool.deployment_revision,
             )?;
+            require_canonical_command_path(&activation, &tool_name, &command_path)?;
             if let Some(scope_card) = &scope_card {
                 crate::services::card::validate_scope_card(
                     self.card_service().as_ref(),
@@ -385,7 +388,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             stderr,
             activation,
             invocation_context,
-            principal,
+            caller,
             scope_card,
         };
         if already_accepted {
@@ -510,15 +513,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // Use the same key shape as the `invoke` cache HIT path so a hit
             // there and a coalesced miss here see the same entry.
             let cur_epoch = self.read_only_cache_epoch.load(Ordering::SeqCst);
-            let principal_ref = if ro.cfg.uses_principal {
-                Some(&ro.principal)
-            } else {
-                None
-            };
             let key = read_only_cache::build_read_only_cache_key(
                 &ro.method_name,
                 &ro.input,
-                principal_ref,
+                &ro.caller,
                 ro.component_revision,
                 cur_epoch,
             );
@@ -978,15 +976,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         match entry {
             OplogEntry::PendingAgentInvocation {
                 invocation_id: idempotency_key,
+                operation,
                 payload,
                 trace_id,
                 trace_states,
                 invocation_context,
                 ..
             } => {
+                let operation = *operation;
                 let agent_payload = self
                     .oplog
-                    .download_payload_classified(payload.clone())
+                    .download_request_classified(operation.clone(), payload.clone())
                     .await
                     .map_err(|error| match error {
                         OplogPayloadDownloadError::Backend(error) => {
@@ -1014,6 +1014,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     AgentInvocation::from_parts(idempotency_key, agent_payload, invocation_context);
                 Ok(HydratedInvocation {
                     invocation,
+                    operation,
                     payload,
                 })
             }
@@ -1053,31 +1054,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             into_pending_invocation_parts(invocation);
         let invocation_context = invocation_context
             .limit_depth(self.deps.config().limits.max_invocation_context_stack_depth);
-        let payload = match invocation_payload {
-            // A manual update invocation stays in the oplog whatever the payload limit, so every
-            // reader of the oplog tells it from other invocations without a download.
-            payload @ AgentInvocationPayload::ManualUpdate { .. } => {
-                OplogPayload::SerializedInline {
-                    bytes: golem_common::serialization::serialize(&payload).map_err(|e| {
-                        WorkerExecutorError::invalid_request(format!(
-                            "Failed to serialize invocation payload: {e}"
-                        ))
-                    })?,
-                    cached: Some(Arc::new(payload)),
-                }
-            }
-            payload => oplog.upload_payload_owned(payload).await.map_err(|e| {
+        let (operation, payload) = oplog
+            .upload_request(invocation_payload)
+            .await
+            .map_err(|e| {
                 WorkerExecutorError::invalid_request(format!(
                     "Failed to upload invocation payload: {e}"
                 ))
-            })?,
-        };
+            })?;
         let invocation_context_spans = invocation_context.to_oplog_data();
         Ok((
             semantic_key,
             OplogEntry::pending_agent_invocation(
                 not_before,
                 idempotency_key,
+                Box::new(operation),
                 payload,
                 invocation_context.trace_id,
                 invocation_context.trace_states,
@@ -1408,11 +1399,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Refuses an inspection that would be the first start of an ephemeral agent: it would run
     /// the constructor before a schedule whose commit the caller may still be repairing. A
     /// worker that a delete has claimed gives the deletion error, as starting it would.
-    pub(crate) async fn ensure_inspection_may_start(&self) -> Result<(), WorkerExecutorError> {
+    pub(crate) async fn ensure_inspection_may_start(
+        &self,
+        owner: Option<&NewOwner>,
+    ) -> Result<(), WorkerExecutorError> {
+        {
+            let instance = self.instance.lock().await;
+            instance.ensure_not_deleting()?;
+            self.ensure_owns_key(owner)?;
+        }
         if self.agent_mode() != AgentMode::Ephemeral {
             return Ok(());
         }
-        self.instance.lock().await.ensure_not_deleting()?;
         let status = self.state_actor.try_status().await?;
         if super::invocation_loop::ephemeral_inspection_may_start(
             &status,
@@ -1498,10 +1496,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         drop(instance_guard);
 
-        let mut wallet = receiver.await.unwrap()?;
-        let revoked_cards = self
-            .get_last_known_status()
+        // A stop answers or keeps a queued read. Its reply is dropped only when the invocation
+        // loop is dropped at executor shutdown, or unwinds from a panic, whose error a retry then
+        // gets. The caller retries the read on the agent's next owner.
+        let mut wallet = receiver
             .await
+            .map_err(|_| WorkerExecutorError::ShardingNotReady)??;
+        // The guard is dropped, so a deletion can stop the state actor before this read. A stopped
+        // actor that no deletion of this worker and no lost shard explains is retried in the same
+        // way: the executor is shutting down, or a deletion through a newer worker of the same
+        // oplog stopped it, and the retry then finds the agent missing.
+        let status = match self.try_get_last_known_status().await {
+            Err(WorkerExecutorError::Runtime { .. }) => Err(WorkerExecutorError::ShardingNotReady),
+            status => status,
+        }?;
+        let revoked_cards = status
             .pending_card_events
             .iter()
             .filter_map(|pending_event| match &pending_event.event {
@@ -1584,6 +1593,27 @@ pub(crate) fn require_expected_tool_deployment_revision(
         ))
     } else {
         Ok(())
+    }
+}
+
+/// The invocation ID is derived from the command path, so only the canonical path of a declared
+/// command is accepted: an alias would give the same command a second ID.
+pub(crate) fn require_canonical_command_path(
+    activation: &golem_common::model::tool::ToolActivationSnapshot,
+    tool_name: &ToolName,
+    command_path: &[String],
+) -> Result<(), WorkerExecutorError> {
+    if activation
+        .effective_definition()
+        .canonical_command_path(command_path)
+        .as_deref()
+        == Some(command_path)
+    {
+        Ok(())
+    } else {
+        Err(WorkerExecutorError::invalid_request(format!(
+            "command path {command_path:?} of tool '{tool_name}' does not name a declared command by its canonical names"
+        )))
     }
 }
 

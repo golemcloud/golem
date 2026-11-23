@@ -32,7 +32,11 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
    to other owners; see "Entry ownership". Operator-reverted entries are excluded). The axiom is about
    replaying the *same* execution contract; replaying old history against a changed component
    during an `Automatic` update may legitimately diverge, and that is reported as `FailedUpdate`,
-   not tolerated.
+   not tolerated. The error is `UnexpectedOplogEntry` with a `ReplayDivergence`: the oplog index
+   of the first divergence, the expected and the actual step, and the identity fields of a host
+   call that differ. Every producer names the entry it compared. `FailedUpdate` keeps the
+   divergence and a required `failure_class`, which `start_outcome` sets from the problem and the
+   `FailureProvenance` of the failure (see `worker/start_outcome/mod.rs::failure_class`).
 
 2. **The resident runtime is disposable.** The Wasmtime `Store`, the worker task, the executor
    process, sockets, channels and subscriptions can vanish while work is pending. Suspension,
@@ -96,8 +100,24 @@ cached effective values. A successful setter invalidates its option cache; the n
 and caches the native effective value, including OS rounding and buffer limits. Unset option getters
 still read the native socket asynchronously; their results are not recorded. Failed connects also reconstruct terminal socket errors. A bound-only TCP
 socket has no reserved native port after replay; a new connect or listen returns `connection-broken` rather
-than changing that endpoint silently. Drop removes the entry before its resource rep can be reused. P2 TCP still
-reconnects as described below. Replayed websocket handles use their connect-time
+than changing that endpoint silently. Drop removes the entry before its resource rep can be reused. P2 TCP
+uses the same table: `start-bind` (`WriteLocal`) records the selected local address, `start-connect`
+(`WriteLocal`) records its result, and every `finish-connect` result, `would-block` too, is a
+`WriteRemote` call with both endpoints. Replay binds and connects nothing natively. A replayed
+successful `finish-connect` pushes `LostTcpInputStream` and `LostTcpOutputStream` as children of
+the socket, in the native order, so the reps stay the same; their first operation fails with
+`connection-reset` (P2 has no `connection-broken`), the next ones report `closed`, and their
+pollables are ready at once. A `finish-connect` whose connect started before the reconstruction,
+incomplete or not yet finished, completes with `connection-reset`. The native socket of a
+replayed entry stays unbound and unconnected, so its pollable is ready at once, and the entry
+answers the address getters and the states the native socket no longer holds: `finish-bind` of a
+replayed pending bind succeeds once, a replayed bound socket refuses `start-connect` with
+`connection-reset` (its recorded endpoint is not a reserved native port), and a replayed pending
+bind or connect refuses it with `concurrency-conflict`. Because `start-connect` is a recorded write, the read-only
+guard refuses a P2 connect before a poll can drive the native connect. Each P2 TCP stream operation
+is a durable call (`durable_host/io/tcp_streams.rs`): reads record the bytes, writes only the result
+and the count, so replay neither reads nor sends, and an incomplete call completes with
+`connection-reset` on the stand-in. Replayed websocket handles use their connect-time
 reconstruction policy under a per-handle coordination gate, so concurrent calls cannot reconnect
 one handle twice or replace a terminal session-loss outcome (see
 "Concurrency and guest completion delivery"). Durable liveness also needs *rediscovery*: a timed
@@ -121,6 +141,8 @@ dead incarnation of each stale member before they remove the member. A removal t
 the member, and the next scan requests the delete again. A delete request that a full clean-up
 queue refuses is counted as a leaked clean-up: the scan still removes the member, and no later
 scan asks again.
+
+Scheduler storage (memory, SQLite and Postgres) acknowledges or renews a lease only when its owner token matches and its deadline is later than the caller-supplied `now`, compared at millisecond precision. Equality is expired. SQL mutations and the memory mutex enforce the owner and expiry checks atomically. A valid renewal cannot shorten the lease or revive an expired one. These are trusted as-of timestamps, not database execution-time checks: a pool wait or process pause after sampling time does not advance the check. The scheduler samples fresh time for each batch, acknowledgement and renewal; batch eligibility advances, but archive follow-ups retain the original tick time. A batch-wide heartbeat renews every claimed action, including work queued behind an agent or the concurrency limit, until its delivery and acknowledgement finish. Each action also renews before starting. A refused or failed renewal cancels only that action's delivery future; it does not cancel an acknowledgement already in progress or discard its storage error. Agent ordering and sibling-lane completion are unchanged. Renewal cannot guarantee survival through a storage stall or process pause longer than the lease. Expiry refusal leaves the action for redelivery and does not undo effects already performed, so scheduling remains at-least-once.
 
 Scheduled `WakeInvocation`, `Resume` and `CompletePromise` actions carry the target's fingerprint and
 use `WorkerActivator::enqueue_exact_existing`. It checks identity before cold hydration and
@@ -751,17 +773,12 @@ before peer readiness, then repair the original poll Start for durable agents. S
 and sync a real allocation and run in the privileged managed-XFS suite. These tests do not establish a
 bound for other host waits; preserve the permit-owned billing window.
 
-P2 TCP `start_connect` re-executes natively on reconstruction. A completed connect poll must drive
-the new native connect future before returning its recorded readiness, otherwise synchronous
-`finish_connect` can return `WouldBlock` and diverge. `TcpConnectReplay` in
-`durable_host/sockets/tcp.rs` classifies only socket pollables with an unfinished connect.
-`durable_host/io/poll.rs` revalidates their recorded-ready `poll` or `ready` result without changing
-the oplog. Only the native TCP readiness wait selects the existing typed interrupt signal, after
-completed replay has closed the durable handle. Replay resolution, the recorded terminal and
-file-readiness revalidation stay outside that race. `NativeIoWait` uses the same `InterruptSources`
-subscription as `DurableWorkerCtx::create_interrupt_signal`: it subscribes before checking invocation
-and tail-work deadlines and settled owner failure, then also observes entity cancellation. A deadline
-can leave `ExecutionStatus` Running, so its latch is required for a late subscriber.
+`NativeIoWait` uses the same `InterruptSources` subscription as
+`DurableWorkerCtx::create_interrupt_signal`: it subscribes before checking invocation and tail-work
+deadlines and settled owner failure, then also observes entity cancellation. A deadline can leave
+`ExecutionStatus` Running, so its latch is required for a late subscriber. Replay never drives a
+native P2 connect: a recorded-ready `poll` or `ready` returns its recorded result, and the socket
+of a replayed connect has no native connect future.
 `tests/api/interruption/host/p2/tcp/poll.rs` keeps the TCP peer silent after connect
 reconstruction, then applies a second monthly stop. It retains the original connect poll and ready
 terminals and incomplete input Start, checks observable cleanup and accounting,
@@ -771,13 +788,9 @@ does not establish an elapsed billing interval. The colocated production-window 
 `closed_owner_window_does_not_accrue_over_known_metering_intervals` advances the existing MeteringClock
 after physical permit release, retains allocated memory and the same owner/meter, and asserts no
 memory or mode-specific storage accrual and no filesystem resampling over known intervals.
-Peer withholding does not control TCP connect readiness, so
-this integrated case is not a connect-timeout witness. Failed native reconnect outcomes remain a raw-P2 replay
-limitation; readiness does not guarantee the original successful connection result.
 
-Successful pollable drops clear classification. Native socket deletion requires all pollable
-children to be dropped first, so socket cleanup need not scan unrelated subscriptions. This does
-not revalidate HTTP, UDP or TCP input pollables. Exported P2 `pollable.ready` remains a nonblocking
+Native socket deletion requires all pollable children to be dropped first. Replay does not
+revalidate HTTP, UDP or TCP pollables. Exported P2 `pollable.ready` remains a nonblocking
 live probe, as verified by `tests/api/p2_ready.rs`.
 
 ### Primary DB/KV completion before stop
@@ -961,71 +974,63 @@ exact monthly cause, physical release, unchanged prefix and ordinary same-key co
 For these separate claims and the test-only result-wait startup boundary, read
 [durable-source read proofs](reference/testing-patterns.md#durable-source-reads-without-a-runtime-observer).
 
-Raw P2 TCP `blocking_read` and `blocking_skip` in `durable_host/io/streams.rs` use `NativeIoWait`
-with the composed interruption sources around only the native input future. Successful `finish_connect` and
-`accept` classify the returned input stream; successful native stream drop removes that rep.
-File streams use the separate filesystem observation path above; unknown streams keep their existing behavior. Native stream cancellation,
-resource deletion and invocation-result commit remain outside the select.
+P2 TCP stream I/O is recorded in `durable_host/io/tcp_streams.rs`; `durable_host/io/streams.rs`
+routes a stream there when `finish-connect` or `accept` registered its rep. Each operation is one
+durable call with no request payload:
 
-Raw TCP and reconstructed connect keep their existing unbiased selects. Native-wait tests use
-real WASI pollables and streams with independently assembled
-production sources. They cover deadline/entity cancellation before subscription and during actual
-Pending, typed errors, native completion, and resource ownership. They do not establish whole-Worker
-deadline/entity behavior or successful network reconnection. Durable replay resolution stays
-outside the native interruption race. P2 HTTP is unsupported and has no stream retry adapter.
+| Operation | Function | Type | Recorded |
+| -- | -- | -- | -- |
+| `read`, `blocking-read` | `sockets::tcp::input_stream::{read, blocking_read}` | `ReadRemote` | the bytes |
+| `skip`, `blocking-skip` | `sockets::tcp::input_stream::{skip, blocking_skip}` | `ReadRemote` | the count |
+| `check-write` | `sockets::tcp::output_stream::check_write` | `ReadLocal` | the permit |
+| `write`, `write-zeroes`, `blocking-write-and-flush`, `blocking-write-zeroes-and-flush` | `sockets::tcp::output_stream::*` | `WriteRemote` | the count, never the bytes |
+| `flush`, `blocking-flush` | `sockets::tcp::output_stream::{flush, blocking_flush}` | `WriteRemote` | the result |
 
-These raw TCP calls have **no durable host Start or recorded read/skip result**. At a pending
-stop, the connect poll is already complete and the method remains unfinished. Reconstruction
-reconnects and re-executes input under the retained invocation key, not a repaired stream Start.
-Even completed historical raw input executes again when a fresh invocation reconstructs an
-unloaded Worker. Deterministic peer data is required to reproduce the recorded invocation result;
-this does not provide exactly-once TCP consumption.
+An error is recorded as `SerializableTcpStreamError` with its message and either the errno of an
+`std::io::Error` or a socket error code: that of an I/O error without an errno, the P2 `ErrorCode`
+that the native P2 TCP output stream of the Wasmtime fork fails with, or the
+`wasmtime_wasi::sockets::ErrorCode` that its input stream fails with. Replay and live calls return
+the recorded form, rebuilt as an `std::io::Error` of the matching kind, so the guest gets the same
+error, message and `network-error-code` (for example `connection-reset` after a real peer reset)
+live and on replay. Codes with no `std::io::ErrorKind` that Wasmtime maps back
+(`remote-unreachable`, `new-socket-limit`, `concurrency-conflict`, `datagram-too-large`) are rebuilt
+as a raw OS error with the errno that Wasmtime maps to that code. A trap is not recorded. A `write`
+or `write-zeroes` beyond the permit traps with `not permitted to write`; that trap is a permanent
+error, so the invocation fails without a retry that would reach the lost stand-in. A splice with a TCP stream on either side is made of the calls of its parts: the permit of
+the destination (`check_write`, or `write_ready` for `blocking-splice`), the read of at most that
+many bytes, and the write of what was read. `blocking-splice` writes with `blocking_write_and_flush`
+like Wasmtime, so its bytes are sent when it returns; `splice` writes with `write`. A non-TCP side
+goes through the durable host as a direct call on that stream would, so a TCP-to-file splice replays
+its file write from the recorded bytes.
+`blocking-write-and-flush` waits for write permits (the native stream's own implementation) and
+traps above 4096 bytes before its `Start`, like Wasmtime.
 
-`tests/api/interruption/host/p2/tcp/input/mod.rs` exercises each export with memory, prepaid compute and matching
-managed-XFS storage in both modes through a controlled TCP peer and execution APIs.
-Tests keep the peer silent through monthly stop, physical unload and permit release. Durable
-cases retain 2 Started/1 Finished, then reach 2/2 after reconnect and one-byte input. The separate
-completion tests let native input finish, hold the actual selected terminal append, then accept
-a monthly stop and join its establishment while the outcome append remains held. Releasing that
-append preserves the selected result; notification follows its normal commit receipt. The tests do
-not require commit before stop publication. They also reconstruct completed history and count the
-repeated native input before fresh work. Other TCP output and
-UDP waits are separate operations, not covered by these input tests.
+Replay returns the recorded result and touches no stream. Every connection of a replayed stream is
+lost, so its stream is a `LostTcpInputStream` or `LostTcpOutputStream`. An incomplete call runs its
+operation again only on such a stand-in, which fails with `connection-reset` and sends nothing; a
+native stream completes an incomplete call with `connection-reset` without any I/O. The first live
+operation on a stand-in fails with `connection-reset`; the client sees the loss and reconnects.
 
-Raw P2 TCP `output.blocking_splice(&input, 1)` is a distinct export whose native provider first
-checks output capacity, then waits for input and finally writes and flushes output. Successful
-TCP `finish_connect` and `accept` register input and output reps independently; successful stream
-drop removes only that stream's classification. When both reps are registered raw TCP streams,
-the native splice selects the existing composed `create_interrupt_signal()` through
-`interruptible_tcp_input`. Input and output need not share a socket. Filesystem readiness,
-unknown outputs, durable settlement and resource deletion stay outside
-this select. Raw read/skip use the same composed subscription.
+Blocking calls keep `NativeIoWait` with the composed interruption sources around only the native
+future. An interrupt leaves the `Start` incomplete (`abandon_for_trap`), and replay completes it
+with the lost connection. Native stream cancellation, resource deletion and invocation-result commit
+remain outside the select. Native-wait tests use real WASI pollables and streams with independently
+assembled production sources; they cover deadline/entity cancellation before subscription and
+during actual Pending, typed errors, native completion, and resource ownership.
 
-A registered TCP input can also feed a known filesystem output. That pairing uses the existing
-filesystem observation helper for output readiness and the native splice. Cancellation stops guest
-observation; any entered file operation keeps its filesystem owner and generation lease until
-ordinary drain completes. File completion keeps its existing ready-first behavior, while TCP/TCP
-selection remains unbiased. Unknown or unclassified pairs keep their existing paths.
+`tests/api/interruption/host/p2/tcp/` exercise read, skip, same-socket, cross-socket and TCP-to-file
+splice, single and multi input polls, with memory, prepaid compute and matching managed-XFS storage
+in both modes through controlled TCP peers. The peer stays silent through monthly stop, physical
+unload and permit release, and the input `Start` stays incomplete. Durable resume replays the
+connect without connecting, completes the pending input (or repairs the pending poll, whose lost
+inputs are ready at once) with `connection-reset`, and the `host-api-tests` fixture reconnects; its
+result reports the number of lost connections. The completion tests let the input finish, hold the
+selected terminal append through a monthly stop, then reconstruct completed history from the oplog
+with the historical peer silent and no connection. `tests/socket_replay.rs` checks that sent bytes
+reach the peer once across a restart with no bytes in the oplog, that a completed read replays with
+the peer gone, and that a write error replays with the same error and no second copy.
 
-The mixed-pair regression uses actual guest TCP and file streams with a silent peer, not a Worker
-gate. Both modes reproduced accepted Suspend with the socket, Store and permit still live before
-the missing classification was fixed. It retains exact stopped history and the complete committed
-prefix in the actual agent mode. Durable continuation and the fresh ephemeral probe must produce
-exactly the spliced byte in the file, with matching byte count and file size. The native splice
-itself still has no durable Start; surrounding filesystem calls keep their ordinary records. This
-does not add transactional byte effects or an external exactly-once guarantee.
-
-`tests/api/interruption/host/p2/tcp/input/mod.rs` and `api/interruption/host/p2/tcp/input/cross_socket/mod.rs`
-use real same-socket and cross-socket peers. The precise writable-output/blocked-input
-proof belongs to the actual native-body test below, not an inferred internal phase.
-Each now has memory, prepaid-compute and matching managed-XFS storage cases in both agent modes.
-They check socket closure and joined Store/permit/window cleanup before any input byte, durable
-same-key reconnection or ephemeral terminal/probe, and completion-first cached success. The
-cross-socket tests require both sockets to close and later count a byte consumed on A and emitted
-on B. Memory accounting uses a drained seed and isolated target account interval, not a per-worker
-billing key or an exact parked-duration charge. Storage cases use native managed-XFS measurement.
-
-TCP/TCP splice constructs the same `NativeIoWait` as raw read/skip. Colocated tests call the actual
+The colocated native-wait tests of a TCP/TCP splice call the actual
 WASI `HostOutputStream::blocking_splice` on separate input/output resources. Writable memory output
 and quiet native input establish actual Pending without a Worker gate.
 `native_splice_interrupts_actual_pending_without_output_effect` checks actual output capacity in
@@ -1038,10 +1043,9 @@ coverage or real socket teardown. Peer-backed matrices check socket closure,
 observable cleanup and same-key effects, not native Pending. Their immediate post-close flush is not an elapsed
 billing interval; the deterministic closed-owner-window test above proves that separate guarantee.
 
-Like raw read/skip, splice has no durable host Start or recorded byte result. Completed guest
-history can consume and emit TCP bytes again; only a same-key result-cache lookup stays offline.
 These tests do **not** prove output back-pressure, post-consumption flush cancellation,
-transactional byte effects, accepted/half-dropped socket combinations or external exactly-once.
+accepted/half-dropped socket combinations or external exactly-once: a write that was in flight at a
+crash may have reached the peer, and the guest sees only the loss.
 
 P3 HTTP monthly tests in `tests/api/interruption/host/p3/http/` withhold response headers or the
 body suffix at the peer. Recovery retains the original send, consume-body parent and chunk Starts.
@@ -1066,8 +1070,58 @@ A receive Start does not prove that a socket was created, bound or polled Pendin
 Port reuse requires an independently known endpoint; UDP has no EOF. Completion-first
 controls verify End and delivery, then preserve the selected invocation result through
 commit and notification. These tests do not establish exactly-once datagram consumption
-across the receive-before-End crash window. Connected UDP reconstruction and incomplete
-batched sends remain separate, unresolved contracts.
+across the receive-before-End crash window.
+
+P3 UDP keeps its endpoint in the socket's `SocketEntries` entry. Bind records the selected local
+address (`P3SocketsBind`, also for port 0) and keeps the bind request in the entry; connect, send
+and receive record every local-address change, such as an implicit bind or a wildcard bind that
+connect narrows to an interface address, or a loss as `SerializableP3UdpEndpoint` in their
+response. On Linux a connect that fails with `EINVAL` dissolves the old association before it tries
+again, so the connect response also records when a failed connect left the socket disconnected, and
+the entry then loses its remote address. Replay updates the entry and touches no native socket; the
+address getters are not recorded and use only the entry. `disconnect` (`WriteLocal`,
+`P3SocketsUdpDisconnect`) resets the local address to the bind request, or to the unspecified
+address with port 0 after an implicit bind, because the native socket releases an implicitly bound
+port, and records the native local address when it differs: the endpoint rebuild binds a fixed port
+that Linux then keeps on the disconnect. Recording it at the disconnect, not at the call that
+rebuilt the endpoint, keeps it when the guest dropped that call. At the first live operation,
+`ensure_native_endpoint` binds the native socket on the address that
+`SocketEntry::udp_rebuild_bind_address` selects and connects it again when the entry is connected,
+without sending a packet. A local address that names an interface, such as the one a connect
+selected, is bound as it is; an unspecified one is bound on the bind request's address with the
+recorded port. A local address with port 0, which only a disconnect leaves, is restored by
+`UdpSocket::restore_released_bind`: it binds the new native socket on that address and dissolves
+the association at once, so the socket keeps the IP address without a port, as the disconnect left
+the old one. A connect then keeps the same source address, receive waits and the next send selects
+a port. The socket address policy
+allows a fixed port only on a loopback address, so an unconnected wildcard or implicit endpoint
+with a fixed port cannot be rebuilt and is lost. When the rebuild fails, the entry becomes `Lost`
+and every later operation returns `connection-broken`; the rebuild is not checked against grants
+again, each datagram still is. Send records only the target and the result, never the datagram. An
+incomplete send completes with `connection-broken` and is not sent again; an incomplete receive
+re-executes after the rebuild.
+
+P2 UDP (`durable_host/sockets/udp.rs`) uses the same entry and the same lazy rebuild.
+`start-bind` (`WriteLocal`) records the selected local address, `stream` (`WriteRemote`) the
+result, `receive` (`ReadRemote`) the datagrams and their sources, `check-send` (`ReadLocal`) the
+permit, and `send` (`WriteRemote`) the destinations, the result and the count, never the bytes.
+The local address follows the P3 rules through the shared `SocketEntry` helpers: the entry keeps
+the bind request, `stream(none)` on a connected socket resets the local address to it as P3
+`disconnect` does, and `stream`, `send`, `receive` and `check-send` record every other change of
+the native local address (`udp_local_address_change`), such as the port that a rebuild on port 0
+selects. Its disconnect is a live `stream(none)` that records the native local address it leaves, as
+P3 `disconnect` does, so a rebuilt fixed port is recorded where it stays. A failed `stream` records `disconnected`, as P3 connect does, when
+it left the socket disconnected (Linux dissolves the old association on `EINVAL` before it tries
+again); the entry then loses its remote address, live and on replay.
+The guest's datagram streams are `DurableIncomingDatagramStream` and
+`DurableOutgoingDatagramStream`; a replayed `stream` pushes them without native streams, in the
+native order, so later resource reps do not change. At the first live operation the host binds the
+native socket on the bind request's address with the recorded port (`udp_rebuild_bind_address`,
+as P3) and calls native `stream` again with the recorded remote
+address when the guest holds streams. A loss is recorded as `lost: true` and reported as
+`connection-reset`, the code P2 TCP also uses for a lost connection (P2 has no
+`connection-broken`). An incomplete send completes with `connection-reset` and is never sent
+again.
 
 WebSocket initial `connect` in `durable_host/websocket/client.rs` opens its `WriteRemote`
 Start before acquiring the executor-wide connection-pool permit. The live pool acquisition
@@ -1358,7 +1412,9 @@ or join the reconciler.
 Tests: `tests/worker_initialization.rs` exercises shared failure, real actor completion, cancellation,
 existing-only acquisition, reciprocal cold topologies, and reconciler graph shutdown.
 
-Create admission is caller-specific even when construction is shared. After construction completes, `worker/acquisition.rs::ensure_created` checks exclusive followers, warm acquisitions and cold reloads against the original Create under the oplog lifecycle guard. Only the initiating caller whose attempt actually wrote Create gets the new-creation exemption; starting reconstruction does not qualify. That caller completes even if its shard left after Create committed; retirement then gives up the published worker. A caller's rejection never replaces shared construction success. Nonexclusive demand joins after owner-kind validation without taking the lifecycle guard, so maintenance does not block warm invocation acquisition. Exclusive Create without a matching supplied key returns `AgentAlreadyExists` (HTTP 409), even with identical overrides. With the same key, compare request kind, canonical key, principal, environment overrides by name and config overrides by path: equal identity retains the original fingerprint; changed identity returns `CreateIdempotencyKeyConflict` (HTTP 422). Normalize incoming config through each stored override's projected schema, not current deployment defaults. Tracing context is not retry identity. If deletion wins exclusive admission, return a retryable routing error rather than an unknown-agent result; the retry can create after deletion removes the cached generation. The worker-service generates one internal key per logical create outside its routing retry closure; transport and shard retries retain that key and fingerprint. This key is independent of the user's Idempotency-Key. The gRPC preflight is absent; constructor startup and waiting remain separate from admission. Tests: `pre_create_single_flight_admits_each_caller_against_the_winner`, `exclusive_retry_after_partial_construction_uses_the_persisted_identity`, and `create_config_admission.rs::identical_keyed_record_config_retry_is_admitted`.
+Create admission is caller-specific even when construction is shared. After construction completes, `worker/acquisition.rs::ensure_created` checks exclusive followers, warm acquisitions and cold reloads against the original Create under the oplog lifecycle guard. Only the initiating caller whose attempt actually wrote Create gets the new-creation exemption; starting reconstruction does not qualify. That caller completes even if its shard left after Create committed; retirement then gives up the published worker. A caller's rejection never replaces shared construction success. Nonexclusive demand joins after owner-kind validation without taking the lifecycle guard, so maintenance does not block warm invocation acquisition. Exclusive Create without a matching supplied key returns `AgentAlreadyExists` (HTTP 409), even with identical overrides. With the same key, compare request kind, canonical key, the full caller record, environment overrides by name and config overrides by path: equal identity retains the original fingerprint; changed identity returns `CreateIdempotencyKeyConflict` (HTTP 422). Normalize incoming config through each stored override's projected schema, not current deployment defaults. Tracing context is not retry identity. If deletion wins exclusive admission, return a retryable routing error rather than an unknown-agent result; the retry can create after deletion removes the cached generation. The worker-service generates one internal key per logical create outside its routing retry closure; transport and shard retries retain that key and fingerprint. This key is independent of the user's Idempotency-Key. The gRPC preflight is absent; constructor startup and waiting remain separate from admission. Tests: `pre_create_single_flight_admits_each_caller_against_the_winner`, `exclusive_retry_after_partial_construction_uses_the_persisted_identity`, and `create_config_admission.rs::identical_keyed_record_config_retry_is_admitted`.
+
+Constructor validation is independent of keyed addressing. `ParsedAgentKey::canonical_constructor` validates typed parameters against the implementing schema without a length limit; only constructing an `AgentKey` enforces the 512-byte canonical key limit. Unkeyed and ephemeral targets serialize and decode the constructor directly, including remote dispatch. An ephemeral RPC proxy has a domain-separated logical identity derived from its constructor; that identity never addresses an instance. Each invocation still derives its actual target from its invocation owner key.
 
 After admission, executor create and REST create await `Worker::await_initialization`, not
 `WorkerLoaded`. Subscribe before reading the authoritative constructor result index by its typed
@@ -1370,17 +1426,18 @@ synthetic warm-cache failures cannot establish a recorded constructor failure. A
 failure cannot replace constructor success. Forks resolve the retained source initialization key.
 Preparation remains suspended and neither starts nor waits for initialization.
 
-`Worker::resolve_old_invocation_result_index` falls back to scanning the worker's open oplog handle,
-bounded by the status oplog index. An ephemeral completion can precede its archive write, so
-storage-only reads can falsely report a gap. The handle includes entries handed to the asynchronous
-writer but not yet stored; result lookup does not need a storage barrier.
+Constructor verification can use the exact terminal position of an unprojected committed completion,
+even with payload caching disabled, or a successful hydrated completion. It validates the terminal
+entry and initialization payload through the open oplog handle, which includes entries handed to
+the asynchronous writer but not yet stored. It neither scans the oplog nor waits for an archive
+write. Synthetic cached failures still require a recorded terminal from the result index.
 Test: `oplog_unreadable::an_ephemeral_constructor_completes_while_its_archive_write_is_pending`
 holds that write until Create returns.
 
 The `Create` entry records the request that created the agent in `CreateParameters.create_request`,
 and `AgentMetadata.create_request` carries it after every load. `CreateRequest` holds the kind
 (`GetOrCreate`, `Exclusive`, `Phantom` or `Fork`), the creating request's idempotency key, its
-principal and its invocation context. Callers pass a `CreateIntent`. An explicit create
+caller and its invocation context. Callers pass a `CreateIntent`. An explicit create
 (`CreateIntent::Create`) records its key. An invocation that creates its target
 (`CreateIntent::Invocation`) records its key only when the key identifies the agent, that is, when
 the phantom ID is `ephemeral_invocation_phantom_id(key)`; a durable target created this way records
@@ -1388,20 +1445,32 @@ no key. An invocation session passes the owner key of its `request_key`, from wh
 an ephemeral target's phantom ID. The recorded `wasm-rpc` activation call sends the key derived
 from its own `Start`, so a repaired activation sends the same key. A re-activation of a recorded
 target sends no create request: it builds a `ReplayedDemand` with the recorded fingerprint. A fork
-target records `Fork`, no key and the forker's principal. A self fork also records the forking
+target records `Fork`, no key and the forking agent as its caller. A self fork also records the forking
 agent's current invocation context; a fork through the worker service records a fresh context.
 When a reload finds only `Create`, `prepare_worker_data` enqueues `AgentInitialization` with the
-recorded principal and context, not with the loading request's. The resident `unpublished_create`
+recorded caller and context, not with the loading request's. The resident `unpublished_create`
 flag only records that an attempt committed `Create` and the worker is not published yet; it
-carries no principal or context. Tests:
+carries no caller or context. Tests:
 `restart_initializes_a_partially_created_agent_as_its_recorded_creator` and
-`grpc_create_records_its_kind_key_and_principal` in `tests/worker_initialization.rs`, and
+`grpc_create_records_its_kind_key_and_caller` in `tests/worker_initialization.rs`, and
 `durable_rpc_activation_repeats_its_key_after_restart` in
 `tests/rpc/held_response_restart.rs`.
+
+`CreateParameters.never_live` is the never-live mark of a sandbox agent. Agent creation writes
+`false`, and nothing sets it yet. The status fold copies it into `AgentStatusRecord.never_live`
+and never changes it. `AgentStatusRecord::reported_status()` gives `Sandboxed` for a marked agent
+and the folded `status` otherwise; the folded `status` never holds `Sandboxed`, and control code
+decides by it, never by the reported status. Every outward view reads the reported status: the
+filter's `status` leaf, gRPC and REST metadata (with the folded status in `underlying_status`), the
+guest's metadata and enumeration (`AgentMetadataForGuests`), the running-agent fast path and the
+status metrics. Tests: `the_never_live_mark_survives_folds_and_reports_sandboxed_over_the_folded_status`
+in `worker/status/tests.rs` and `ordinary_agent_is_not_never_live_after_restart` in
+`tests/observability.rs`.
 
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
 interrupt, delete, resume, update, revert, plugin changes, file reads and listings, wallet
 reads, cancel and connect never create an absent agent.
+Management mutations carry the fingerprint of the metadata authorized by the worker service through every routing retry, even when the caller omitted `expectedFingerprint`. Delete compares it under the instance mutex before claiming deletion. Interrupt, resume, update, revert, plugin changes and public cancellation check the acquired worker under the same mutex, then operate only on that pinned worker. Fork carries the authorized source fingerprint into the source-oplog lifecycle guard. A retry cannot capture the fingerprint of a replacement at the same ID. Scheduled token cancellation and promise completion retain their separate incarnation-bound authority.
 `ActiveAgents::get_existing_with_fingerprint` is the one exact-incarnation guard: with an expected
 `AgentFingerprint` it answers `AgentNotFound` for an absent agent and for another incarnation,
 whether the worker was resident or loaded cold. A caller that joined another caller's load loads
@@ -1414,11 +1483,23 @@ task-scope bind answer with `Worker::pinned_deletion_refusal`: `AgentNotFound` o
 has completed `DurableStateRemoved`, because nothing committed to the generation can run after
 that, and the unpinned "Worker is being deleted" refusal before then, because the deletion can
 still fail and leave an invocation an earlier attempt with the same key committed. A failed
-deletion attempt and a lost-shard retirement keep their own errors. Admission reads a resident
-worker's status before the bind, with or without a fingerprint, without panicking on a stopped
-status actor (`Worker::try_get_last_known_status`, `try_lookup_invocation_result`): a failed
-deletion leaves its stopped generation cached, and such a read answers "Worker is being deleted",
-as reads do, until a retried delete claims it. Failures after the bind keep
+deletion attempt and a lost-shard retirement keep their own errors. A failed deletion leaves its
+stopped generation cached until a retried delete claims it, so the reads that can reach a resident
+worker without a bound task scope use the fallible status reads. They include admission before the
+bind, with or without a fingerprint; local RPC reads, including the pinned status and the wait for
+an invocation result; the gRPC interrupt, resume, update, plugin activation and deactivation, and
+cancel calls; the wallet read, after the invocation loop answers it, which answers an executor
+shutdown with the routing miss so that the worker service retries it; the wait for initialization
+after create; a scheduled invocation wake; and durable stream session reads. `Worker::try_get_last_known_status` answers a stopped status actor with the
+routing miss when the shard was lost, with "Worker is being deleted" when a deletion owns the
+generation, and otherwise with the actor's runtime error. `try_lookup_invocation_result` gives the
+routing miss too but leaves the deletion's refusal to its caller, because its callers can hold the
+instance lock. A wake refused this way is not acknowledged and runs again after its lease.
+Interrupt refuses a generation whose deletion failed before `DurableStateRemoved` with "Worker is
+being deleted" even while its status actor runs, as update and plugin changes do; a running
+deletion answers as a missing agent. Only the
+deletion's `OwnedWorkJoined` stage and executor shutdown stop the status actor of a generation that
+is still reachable; a lost-shard retirement does not. Failures after the bind keep
 their errors: a bound request holds a task token, so the deletion cannot pass `RuntimeStopped`
 while it runs. External-tool sessions bind the same way after each acquisition. A call on an
 existing owner must carry the owner's fingerprint and is pinned to it in every mode; a virtual
@@ -1932,7 +2013,8 @@ call counter, including permits owned by open transaction protocols.
 Authorization and protocol readiness precede live publication. Terminal refusal abandons replay
 for failure (`authoritative_replay_failure`), not publication over sibling history. Never rewind
 or discard another task's history. A typed-loss End belongs to the original Start: HTTP without
-resend returns `http-response-incomplete`, RDBMS `resource-lost`, and TCP `connection-broken`.
+resend returns `http-response-incomplete`, RDBMS `resource-lost`, and TCP `connection-broken`
+(P2 TCP `connection-reset`, because P2 has no `connection-broken` code).
 UDP `ReadRemote` instead re-executes receive after rebind.
 
 **A denied call records its denial.** When the host denies a live call before it runs, the call
@@ -2346,7 +2428,7 @@ A key that is already accepted with a different request is an `IdempotencyConfli
 `AgentInvocationPayload::same_caller_request`, including the attached scope card (`scope_card`). Streaming
 sessions compare their stream descriptor instead (`worker/streaming/mod.rs`). The stored request
 is read from one entry, never searched for: a pending invocation's `PendingAgentInvocation`, the
-running invocation's `AgentInvocationStarted` (`AgentStatusRecord::current_invocation_started_at`),
+running invocation's `AgentInvocationStarted` (`AgentStatusRecord::running`, a `RunningInvocation`),
 or the request position kept with every result (`InvocationResultPosition::request`, in the
 in-memory membership and in the persisted result index). The status fold sets it to the
 `AgentInvocationStarted` entry of a started invocation and to the `PendingAgentInvocation` entry of
@@ -2365,7 +2447,7 @@ Guests read their identity and caller through `golem:agent/invocation-context`
 invocation start recorded, so they are not durable calls. An entity Store answers for its
 enclosing invocation (`entity_context.rs::current_invocation_id`). Outside an invocation
 (initialization, snapshot save and load) `invocation-id()` is none. The export functions take no
-`principal` parameter. Agent events (`StdOut`, `StdErr`, `Log`) carry the invocation UUID of the
+`caller` parameter; the guest reads the caller from the host. Agent events (`StdOut`, `StdErr`, `Log`) carry the invocation UUID of the
 writing Store, and `InvocationStarted`/`InvocationFinished` carry the key's `to_uuid()`.
 
 ## Invocation attribution and per-invocation state
@@ -2404,7 +2486,7 @@ did not start a task group" (an armed key not consumed while the call runs). An 
 ends in its first poll, such as one Wasmtime refused to enter, ran no guest code and logs `debug!`.
 
 Per-invocation state lives in `InvocationExecutionState` entries of `Invocations`
-(`durable_host/execution_state.rs`): start index, invocation ID, principal, invocation context and
+(`durable_host/execution_state.rs`): start index, invocation ID, caller, invocation context and
 current span, read-only strictness, retry point, per-invocation call counters, a tail-work count,
 the guest-trap retry scopes, and the invocation's `InvocationAuthority`. The `AgentLevel` entry
 always exists. The loop runs one invocation at a time. `set_current_idempotency_key` calls
@@ -2469,6 +2551,52 @@ result and waits for the commit receipt before waiters are notified. Durable age
 handoff, without waiting for storage). Completion does not await the status fold; freshness-sensitive
 reads queued on the same state actor wait behind it. Actual traps and constructor errors go through
 `on_invocation_failure`; decoded outer method errors take the separate path below.
+
+### Cancelled invocations and the invocation listing
+
+A withdrawn pending or scheduled invocation ends with the typed outcome `cancelled`
+(`InvocationResult::Cancelled`, `WorkerExecutorError::InvocationCancelled`), not with a failure.
+`Worker::cancel_invocation` (`worker/lifecycle/mod.rs`) decides under the instance lock and answers
+a `CancelInvocationOutcome`: `Withdrawn`, `Running` (REST 409; a running invocation cannot be
+cancelled yet) or `NotPending` (finished or unknown). `withdraw_pending_invocation` commits
+`CancelPendingInvocation`, then publishes the completion, so callers that wait on the key wake with
+`cancelled`. A reused key, invoke-and-await, lookup mode (`InvocationStatus::Cancelled`) and RPC all
+answer the same outcome; RPC maps it to a permanent error with the detail `invocation-cancelled`,
+so a caller never retries a cancelled callee.
+
+Each result position (`InvocationResultPosition`) also records how the invocation ended
+(`InvocationEnd`), its operation (the method name or `tool:<tool>/<command path>`, at most
+`MAX_INVOCATION_OPERATION_BYTES`), its kind, and when it was accepted and last changed.
+`PendingInvocationRef` and `RunningInvocation` carry the same listing data, so listing reads no
+payload for them. The fold takes the operation from the one decode it already does; catch-up never
+decodes a payload and takes operations the status already knows
+(`fields.rs::known_request_operations`). An external payload leaves the operation `None`, and the
+listing reads it from the request entry.
+
+The persisted invocation-result index is a cache of the oplog. `remove_cached_status` and a cold
+status write clear it in one storage call (`clear_invocation_result_index`); missing metadata reads
+as `Incomplete`, never as `New`, so dedupe stays correct, and catch-up rebuilds the index from the
+oplog. A field that does not decode resets it.
+
+`Worker::list_invocations`, `get_invocation` and `lookup_invocations` (`worker/invocations.rs`)
+merge the recent results, the persisted index (or, while it is incomplete, a fold of the oplog),
+the pending invocations and the running one, and keep the entry with the latest change per key.
+They order by (last-change oplog index, ID), newest first: inside one agent the index is the
+recorded order of status changes, while displayed timestamps can go backwards across executor
+moves. A listing costs O(history). The state comes from the same rules as
+`lookup_result_from_cached_result`: `scheduled` until `not_before`, `pending`, `running`, `waiting`
+for the running invocation of a suspended agent, `retrying`, `interrupted`, `completed`
+(including a declared method error), `failed` and `cancelled`. Lookup derives the invocation ID of
+a raw key under the caller's scope for every operation the agent has run, so a key used on a
+method that a later revision removed is still found. These reads never start the agent; an
+ephemeral agent whose instance is gone is reconstructed for observation, and its older results are
+read from the oplog, since it has no persisted index. The executor RPCs `GetInvocation`,
+`ListInvocations` and `LookupInvocations` (`grpc/invocations.rs`) expose them; the list cursor is
+bound to the agent and its fingerprint.
+
+The agent lookup mode of an invocation session returns the stored output of a completed
+invocation (the method value or the tool result, with the component revision that produced it),
+not only its status. A lookup that names neither a method nor a tool accepts either result kind.
 
 ### Invocation-local method errors
 
@@ -2538,6 +2666,8 @@ the parent's token at the future's terminal observer. Tests: `tests/http.rs` can
 offline-replay controls, and `tests/tool_streaming/mod.rs` Git partial-download recovery.
 
 ## Durable RPC exactly-once
+
+`wasm-rpc.get-by-id` binds the existing agent's recorded component revision and schema together with its fingerprint. Live binding authorizes against that recorded owner; method validation and stream classification must not use the type's current implementer. The durable result records the schema, type ID, environment and fingerprint. Completed replay reconstructs that binding without current-deployment resolution. A missing or wrong-type ID returns not-found without creation.
 
 Concrete durable client creation calls `Rpc::create_and_initialize` and waits for the child's
 recorded constructor outcome. Explicit creation requires `Invoke` on `Any` for the concrete child;
@@ -3426,15 +3556,31 @@ linked one. Only lookups that replay returns again link: lookups in snapshotting
 physical calls of a custom durable invocation do not. A P2 lookup links when its call returns, a
 P3 lookup when its completion reaches the guest (its `CompletionDelivered` marker): the DNS call
 sets a deferred link that the delivery observer's `Delivered` branch adds, so a P3 completion that
-the guest discards, also after the host call returned it, links nothing. Replay fills the index again from the recorded lookups. A snapshot
-recovery skips the history before the snapshot, so `rebuild_resolved_names` scans it twice: once
-for the regions that no replay runs (deleted, jumped and failed update attempts), then for the
-completed lookups of the primary Store, which go into the bounded index at their link point. It
-leaves out entity bodies and observational calls, and keeps only open lookups and scopes. The
-links of a core initializer whose bootstrap range lies in the scanned history are already in the
-result; only an initializer after the snapshot, such as an update target's, adds newer links. The lookup itself is
-checked against `dns_target(name)`, which a grant with a port does not match, so a grant that names
-a port needs a portless grant for the lookup too.
+the guest discards, also after the host call returned it, links nothing. The oplog is never
+scanned for the links: the status fold keeps them in `AgentStatusRecord::resolved_names`
+(`worker/status/resolved_names.rs`), with the same bound and LRU order. It folds a lookup's
+`Start`, its `End` and its delivery marker by `Start` index, opens a `golem:network/dns` query only
+for A and AAAA records (an answer holds only the queried type), loads external lookup payloads
+before the fold as it does for `StreamSession` records (the revert fold too), and leaves out
+entity bodies, observational calls
+and history that no replay runs (`RegionFold::unreplayed`: deleted, jumped and failed update
+attempts; a `Jump`, `Revert` or `FailedUpdate` over folded history refolds the status from the
+start). The index uses `im` collections, so a status clone shares it. The status cache keeps the
+links in their own `resolved-names` field and the lookups and entity scopes that the fold still
+follows in `followed-lookups`; each is written only when it changes, so a call that links nothing
+does not rewrite the links. The primary Store starts with the folded links at construction and links only the lookups
+whose link point it records itself (a live `End`, or a `CompletionDelivered` marker that it
+appends): every replayed lookup, also one that a bootstrap cursor replays, is in the folded links
+already, and linking it again would refresh its LRU position. So every path that continues live,
+also an accessor or incomplete call that resolves against history, reads the links of the whole
+history, and replayed connects return the decision recorded in their `Start`. A snapshot-based
+update keeps the links of the history before its `PendingUpdate`, which the agent ran, and its
+target initializer's lookups link after them. A tool entity Store keeps its own index, starts
+empty, and links on replay too. The lookup itself is
+checked against `dns_target(name)`, a request-only `NetworkResourcePattern::Lookup` that a grant of
+the host matches whatever ports it names, so `db.internal:5432` allows the lookup and only port 5432
+for the connect. A grant of only `*` with ports, such as `*:443`, names no host and allows no
+lookup. A denial covers a lookup only when it covers every port that a connect can use (1 to 65535).
 
 **DNS record lookups.** `golem:network/dns` (`durable_host/sockets/dns.rs`) queries one record
 type of one name (A, AAAA, CNAME, MX, NS, PTR, SRV, TXT, CAA, SOA, NAPTR) with `hickory-resolver`
@@ -3447,7 +3593,7 @@ and has no cache, so every live guest query is one upstream query. With agent so
 lookup fails with `permanent-resolver-failure`. The A and AAAA records of an answer link to the
 queried name in `ResolvedNames` as a P3 address lookup does: when the answer reaches the guest. Live
 and on replay the lookup builds a hook from the answer that the delivery observer runs only as
-`Delivered`, and `rebuild_resolved_names` links the records at the call's `CompletionDelivered` marker, and a discarded or
+`Delivered`, the status fold links the records at the call's `CompletionDelivered` marker, and a discarded or
 undelivered answer links nothing. Tests: `tests/scope_cards/dns_records.rs`.
 
 Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic
@@ -3510,6 +3656,14 @@ is not — the properties replay relies on), `replay_state` unit tests
 `switch_to_live_wakes_parked_awaiter_as_incomplete`, `await_natural_tail_end_returns_once_tail_drains`.
 
 P3 TCP `send` and `receive` record their one-shot stream acquisition before creating the guest-facing handles. The acquisition's `CompletionDelivery` stays deferred while the host starts the send call or spawns the receive task. `CompletionDelivery::continue_with` suppresses the token if this setup returns a host error, including while constructing handles for an acquisition error; cancelling the setup still drops the armed token and records a discard. Only a successful final host return arms its terminal observer, including when acquisition failed. Replay restores the recorded taken flag before building the handles, then delivers at that same boundary. The built-in `node:net` regression `builtin_node_tcp_replays_after_restart` checks successful traffic with sockets enabled, denial with sockets disabled, and completed tool replay without reconnecting in both cases.
+
+P3 TCP `send` is a `DurableDemandStream`, like `receive`. The host owns the reader of the guest stream (`DurableTcpSendConsumer`): each non-empty guest write, up to 64 KiB, is one demand. The durable task records it as one `send-chunk` child whose response is the write's result and the byte count the native sink accepted, never the bytes, and replies only after the child `End`, so the guest observes exactly the recorded count. The `send` parent `Start` is committed before the first byte. The parent waits for the next write at a safe park point (`TailActivity::park`), so an open send with nothing in flight leaves the agent idle and a pooled connection does not hold its invocation. Only a parent that started live in this Store owns a native sink; on replay the recorded children answer the writes, and the first write without a recorded child, or a child left incomplete by a crash, completes with `connection-broken`, closes the guest stream, and is never written. Closing the guest writer shuts the native write side down and records the parent terminal last. Tests: `p3_tcp_completed_conversation_replays_without_contacting_the_peer`, `p3_tcp_send_kept_across_invocations_is_lost_after_replay`, `p3_tcp_send_open_at_a_crash_refuses_live_writes` in `socket_replay.rs`.
+
+The `send` and `receive` imports take the native stream (`TcpSendSink::take`, `TcpReceiveSource::take`) while they still hold the socket borrow, before they spawn the durable task: the guest may drop the socket as soon as the import returns, and the native stream owns the connection from then on. Only a live Store takes it, and the task discards it unless its parent starts live. Tests: `p3_tcp_send_survives_dropping_the_socket`, `p3_tcp_receive_survives_dropping_the_socket`.
+
+The send task writes each chunk to the native `TcpSendStream` itself (`poll_write`, exposed by the Wasmtime fork). One write takes a prefix of the chunk or nothing, so the child records exactly what the kernel took. Each demand carries a cancel signal: a guest `cancel-write`, or dropping the writer, stops a write that has not taken a byte, and its child records `Ok(0)`. The guest's write then reports `Cancelled`, released at the child's delivery marker like any other chunk, so a peer that stops reading cannot hold a cancel. A recorded zero count for a write the guest did not cancel is a determinism error. Test: `p3_tcp_send_cancels_a_write_the_peer_holds_back`.
+
+Every P3 TCP `send-chunk` and `receive-chunk` child records its guest delivery (`CompletionDelivered`, or `CompletionDiscarded` when the guest dropped the stream first), like the P3 HTTP body children: `DurableDemandStream` always uses deferred child delivery. Replay releases each chunk result at its recorded boundary, at most one per blocked wait, so the order of chunk completions against other guest-visible calls (a JS event loop's idle `wait-for`, tool output writes) is the recorded one. A discarded chunk ends its stream as if the guest had closed the writer or dropped the reader. Test: `builtin_node_tcp_send_parks_between_writes_and_replays`, whose Node body interleaves reads, writes and idle waits.
 
 For p3 HTTP sends, `TerminalConsumption::NotDelivered` is a positive guest
 cancellation/abandonment signal. Store teardown and observer supersession suppress it. The send's
@@ -3628,7 +3782,7 @@ mappings. The target's `Create` entry records the fork request, not the source's
 request. Entity-invocation requests do not record the internal calling principal: live execution
 and replay derive it from the current owner, including every middleware and leaf invocation.
 Request matching still checks entity, operation, call mode, input and descendant plan position.
-The separate execution `principal`, authority snapshot, guest inputs, recorded environment and
+The separate execution `caller`, authority snapshot, guest inputs, recorded environment and
 external effects remain unchanged. Inline request bytes are preserved; external payloads are copied
 from authoritative contents under the target without decoding or re-encoding them. Cached external
 values are not a substitute for copying durable bytes. Repeated forks derive the new owner without
@@ -3837,7 +3991,11 @@ incarnation; it cannot recreate a deleted processor through agent admission. Pro
 accept `ProcessOplogEntries`, not agent initialization, methods or external-tool invocations.
 They retain component-level config, environment defaults, files and permissions, and have no
 attached forwarding plugins. With both snapshot exports they use `oplog_processor_snapshotting`;
-otherwise they use `default_snapshotting`. Before sending a batch, the source commits its target,
+otherwise they use `default_snapshotting`. Snapshot lowering branches on the resolved owner:
+a processor passes an empty constructor record to load-snapshot, while an agent passes its
+recorded constructor parameters. A component agent missing those parameters fails owner
+resolution; an ephemeral external-tool owner cannot load a snapshot and has snapshotting disabled.
+Before sending a batch, the source commits its target,
 range and serialized delivery snapshot in `OplogProcessorCheckpoint`. The snapshot pins the
 installed plugin and source metadata, including the guest-visible status, revision, environment
 and configuration. Its status contains only the guest-visible status, revision and latest retry
@@ -3962,8 +4120,13 @@ A failed durable call has two recovery paths (`durable_host/durability.rs`):
 - **In-function retry** re-runs the effect inside the same host call under the same `Start`.
   `InFunctionRetryState::decide_retry_with_properties` allows it only when the function type is
   `is_eligible_for_internal_retry` (`ReadLocal`/`ReadRemote`/`WriteLocal`/`WriteRemote`), the resolved
-  `NamedRetryPolicy` still permits an attempt, and the delay is ≤ `max_in_function_retry_delay`.
-  Each attempt appends and commits an `OplogEntry::Error { retry_from, .. }` hint.
+  `NamedRetryPolicy` still permits an attempt, and the delay is ≤ `max_in_function_retry_delay`
+  or the call waits durably (an accessor call with a runtime activity on a durable agent outside
+  snapshotting mode, which waits on a runtime timer that the suspension coordinator treats as
+  passive). Each attempt appends and commits an
+  `OplogEntry::Error { retry_from, retry_at, retrying_start_index, .. }` hint; repair of a
+  `Start` left incomplete during the wait first waits the rest of the backoff until the
+  `retry_at` that names it, which its `End` or `Cancelled` ends.
   RDBMS transaction statements bypass this loop: transaction membership and statement retry
   refusal belong to the RDBMS protocol, independently of incomplete-repair authorization.
 - **Trap-based retry** is the fallback (`FallBackToTrap`/`Exhausted` →

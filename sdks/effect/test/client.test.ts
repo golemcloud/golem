@@ -11,7 +11,7 @@ import { defineConfig } from "../src/Config.js"
 import { AgentHostClient } from "../src/host/AgentHostClient.js"
 import { RpcHostError, type RpcConnection } from "../src/host/RpcClient.js"
 import { compileMethodSpec, invokeMethod, method } from "../src/Method.js"
-import { PrincipalSchema } from "../src/Principal.js"
+import { PrincipalRef, PrincipalRefSchema } from "../src/InvocationContext.js"
 import {
   Option as UnstructuredOption,
   UnstructuredBinary,
@@ -936,48 +936,46 @@ describe("Client 1.6 config and ephemeral receipts", () => {
     }),
   )
 
-  it.effect("omits host-injected principal fields from caller-owned identities and factories", () =>
+  it.effect("sends a PrincipalRef as an ordinary identity and method field", () =>
     Effect.gen(function* () {
-      const PrincipalTarget = defineAgent({
-        name: "PrincipalTarget",
-        id: { name: Schema.String, principal: PrincipalSchema },
+      const OwnerTarget = defineAgent({
+        name: "OwnerTarget",
+        id: { name: Schema.String, owner: PrincipalRefSchema },
         methods: {
-          value: method({ input: { principal: PrincipalSchema }, success: Schema.String }),
+          value: method({ input: { owner: PrincipalRefSchema }, success: Schema.String }),
           mixed: method({
-            input: { before: Schema.String, principal: PrincipalSchema, after: Schema.Number },
+            input: { before: Schema.String, owner: PrincipalRefSchema, after: Schema.Number },
             success: Schema.String,
           }),
         },
       })
+      const owner = new PrincipalRef("https://example.test", "alice")
       const runtime = makeRuntime({ response: yield* encode(Schema.String, "ok") })
       yield* Effect.gen(function* () {
-        const full = yield* Client.bind(agentIdFor("principal"), PrincipalTarget)
-        expect(yield* full.value({})).toBe("ok")
-        const input = { before: "first", after: 7 }
+        const full = yield* Client.bind(agentIdFor("principal"), OwnerTarget)
+        expect(yield* full.value({ owner })).toBe("ok")
+        const input = { before: "first", owner, after: 7 }
         expect(yield* full.mixed(input)).toBe("ok")
         yield* full.mixed.trigger(input)
         yield* full.mixed.schedule({ seconds: 1n, nanoseconds: 0 }, input)
-        yield* full.value.trigger({})
-        yield* full.value.schedule({ seconds: 1n, nanoseconds: 0 }, {})
-        const codec = yield* compileMethodSpec("mixed", PrincipalTarget.methods.mixed)
+        const codec = yield* compileMethodSpec("mixed", OwnerTarget.methods.mixed)
         expect(codec.inputSchema.val.map((field) => [field.name, field.source.tag])).toEqual([
           ["before", "user-supplied"],
-          ["principal", "auto-injected"],
+          ["owner", "user-supplied"],
           ["after", "user-supplied"],
         ])
-        for (const call of runtime.calls) {
-          expect(yield* codec.inputCodec.decode(call.input).pipe(Effect.option)).toEqual(
-            call.method === "mixed" ? Option.some(input) : Option.none(),
-          )
-          if (call.method === "value") expect(call.input.valueNodes).toHaveLength(1)
+        for (const call of runtime.calls.filter((call) => call.method === "mixed")) {
+          const decoded = yield* codec.inputCodec.decode(call.input)
+          expect(decoded.owner.equals(owner)).toBe(true)
+          expect(decoded.before).toBe("first")
         }
-        const factory = yield* PrincipalTarget.client.upsert({ name: "main" })
-        expect(yield* factory.value({})).toBe("ok")
+        const factory = yield* OwnerTarget.client.upsert({ name: "main", owner })
+        expect(yield* factory.value({ owner })).toBe("ok")
       }).pipe(Effect.scoped, Effect.provide(runtime.layer))
       expect(runtime.lifecycle.connectionOpen).toBe(2)
       const upserted = constructorOf(runtime.opens[1]?.target)!
-      expect(upserted.valueNodes.filter((node) => node.tag === "record-value")).toHaveLength(1)
-      expect(upserted.valueNodes).toHaveLength(2)
+      expect(upserted.valueNodes.filter((node) => node.tag === "record-value")).toHaveLength(2)
+      expect(upserted.valueNodes).toHaveLength(5)
     }),
   )
 

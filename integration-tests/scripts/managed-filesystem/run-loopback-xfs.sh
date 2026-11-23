@@ -325,7 +325,7 @@ filesystem_image_size=$(select_filesystem_image_size \
   "${filesystem_workload_benchmark}" \
   "${filesystem_native_workload_baseline}")
 
-for command in flock getent losetup mkfs.xfs mount python3 setpriv stat tee timeout truncate; do
+for command in bun flock getent losetup mkfs.xfs mount setpriv stat tee timeout truncate; do
   if ! command -v "${command}" >/dev/null 2>&1; then
     echo "missing required command: ${command}" >&2
     exit 1
@@ -555,8 +555,8 @@ build_test_binaries() {
 
   lib_test_binary=
   integration_test_binary=
-  if ! run_vm_cargo python3 \
-    "${repo_root}/integration-tests/scripts/managed-filesystem/select-cargo-test-executables.py" \
+  if ! run_vm_cargo bun \
+    "${repo_root}/.github/main-validation/select-test-executables.ts" \
     "${build_messages}" "${repo_root}" lib integration > "${selected_executables}"; then
     run_vm_cargo rm -f "${lib_decoy}" "${integration_decoy}"
     return 1
@@ -882,6 +882,11 @@ run_privileged_test \
   lib \
   "${lib_test_binary}" \
   services::agent_filesystem_snapshots::tests::managed_xfs_a_volume_below_the_pressure_target_admits_no_periodic_upload
+
+run_privileged_test \
+  lib \
+  "${lib_test_binary}" \
+  filesystem_pressure::tests::managed_xfs_reobserves_fresh_space_after_verified_deletion
 
 run_privileged_test \
   integration \

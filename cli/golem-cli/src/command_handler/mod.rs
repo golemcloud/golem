@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use self::invocation::InvocationCommandHandler;
 use self::resource_definition::ResourceDefinitionCommandHandler;
 use self::retry_policy::RetryPolicyCommandHandler;
 use self::secret::SecretCommandHandler;
@@ -81,6 +82,7 @@ mod card;
 mod component;
 mod environment;
 pub(crate) mod interactive;
+mod invocation;
 mod log;
 mod mcp;
 mod partial_match;
@@ -324,6 +326,24 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .cmd_build(component_name, build_args)
                         .await
                 }
+                GolemCliSubcommand::Install { file } => {
+                    crate::package::install(&ctx.global_flags, &file)
+                }
+                GolemCliSubcommand::Package {
+                    subcommand: crate::command::PackageSubcommand::Pack { output },
+                } => {
+                    let ctx = ctx.get_or_init().await?;
+                    let (digest, bytes) = ctx.component_handler().pack_application().await?;
+                    crate::package::write_package(&output, &bytes)?;
+                    ctx.log_handler()
+                        .log_output(crate::package::PackageDigest { digest })
+                }
+                GolemCliSubcommand::Publish { dry_run: _ } => {
+                    let ctx = ctx.get_or_init().await?;
+                    let (digest, _) = ctx.component_handler().pack_application().await?;
+                    ctx.log_handler()
+                        .log_output(crate::package::PackageDigest { digest })
+                }
                 GolemCliSubcommand::GenerateBridge {
                     language,
                     component_name,
@@ -548,6 +568,13 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .handle_command(subcommand)
                         .await
                 }
+                GolemCliSubcommand::Invocation { subcommand } => {
+                    ctx.get_or_init()
+                        .await?
+                        .invocation_handler()
+                        .handle_command(subcommand)
+                        .await
+                }
                 GolemCliSubcommand::RetryPolicy { subcommand } => {
                     ctx.get_or_init()
                         .await?
@@ -707,6 +734,7 @@ pub trait Handlers {
     fn account_usage_handler(&self) -> AccountUsageCommandHandler;
     fn secret_handler(&self) -> SecretCommandHandler;
     fn retry_policy_handler(&self) -> RetryPolicyCommandHandler;
+    fn invocation_handler(&self) -> InvocationCommandHandler;
     fn resource_definition_handler(&self) -> ResourceDefinitionCommandHandler;
     fn api_domain_handler(&self) -> ApiDomainCommandHandler;
     fn api_deployment_handler(&self) -> ApiDeploymentCommandHandler;
@@ -753,6 +781,10 @@ impl Handlers for Arc<Context> {
 
     fn retry_policy_handler(&self) -> RetryPolicyCommandHandler {
         RetryPolicyCommandHandler::new(self.clone())
+    }
+
+    fn invocation_handler(&self) -> InvocationCommandHandler {
+        InvocationCommandHandler::new(self.clone())
     }
 
     fn resource_definition_handler(&self) -> ResourceDefinitionCommandHandler {

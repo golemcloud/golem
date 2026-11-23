@@ -48,7 +48,7 @@ pub(crate) async fn invoke_tool_middleware(
     stderr: Option<crate::golem_agentic::golem::tool::streams::ToolOutputWriter>,
     wrapped: crate::tool_underlying_bindings::UnderlyingTool,
 ) -> Result<wire::InvocationResult, wire::ToolError> {
-    let principal = crate::agentic::immediate_caller();
+    let context = crate::agentic::InvocationContext::current();
     let invoker = get_tool_middleware_invoker_by_name(&middleware_name)
         .ok_or_else(|| wire::ToolError::InvalidToolName(middleware_name.clone()))?;
     let tool_metadata = decode_tool(tool_metadata)
@@ -69,7 +69,7 @@ pub(crate) async fn invoke_tool_middleware(
         stdin,
         stdout,
         stderr,
-        principal,
+        context,
         UnderlyingTool::from_raw(wrapped),
     )
     .await

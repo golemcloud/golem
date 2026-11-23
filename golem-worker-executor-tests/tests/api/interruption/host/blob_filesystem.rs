@@ -4,6 +4,7 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::{HasOplog, UsesAllDeps};
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     BlobStoreExistsGate, FailingBlobStoreService, start_with_resource_limits_and_overrides,
 };
@@ -110,7 +111,7 @@ async fn pending_stop(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
         golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
         invocation_create_intent(
             &executor,

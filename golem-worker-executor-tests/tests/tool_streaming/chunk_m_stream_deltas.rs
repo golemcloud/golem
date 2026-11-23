@@ -74,12 +74,13 @@ fn assert_every_start_settled(oplog: &[PublicOplogEntryWithIndex]) {
         }
         _ => None,
     }) {
-        assert!(
-            oplog.iter().any(|entry| {
+        assert_eq!(
+            oplog.iter().filter(|entry| {
                 matches!(&entry.entry, PublicOplogEntry::End(parameters) if parameters.start_index == start)
                     || matches!(&entry.entry, PublicOplogEntry::Cancelled(parameters) if parameters.start_index == start)
-            }),
-            "entity Start {start} has no End or Cancelled terminal"
+            }).count(),
+            1,
+            "entity Start {start} must have exactly one End or Cancelled terminal"
         );
     }
 }
@@ -271,6 +272,41 @@ async fn effect_stream_runtime_middleware_replay_and_cleanup(
         )
     }));
     assert_every_start_settled(&final_oplog);
+
+    let start = effect_leaves[0].oplog_index;
+    let terminal = final_oplog
+        .iter()
+        .find(
+            |entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start),
+        )
+        .expect("completed effect terminal");
+    let PublicOplogEntry::End(end) = &terminal.entry else {
+        unreachable!();
+    };
+    for extra_terminal in [
+        terminal.entry.clone(),
+        PublicOplogEntry::Cancelled(
+            golem_common::model::oplog::public_oplog_entry::CancelledParams {
+                timestamp: end.timestamp,
+                start_index: start,
+                partial: None,
+                span_finished: None,
+            },
+        ),
+    ] {
+        let mut invalid = final_oplog.clone();
+        invalid.push(PublicOplogEntryWithIndex {
+            oplog_index: final_oplog.last().unwrap().oplog_index.next(),
+            attribution: terminal.attribution.clone(),
+            entry: extra_terminal,
+        });
+        assert!(std::panic::catch_unwind(|| assert_every_start_settled(&invalid)).is_err());
+    }
+    let mut unsettled = final_oplog.clone();
+    unsettled.retain(
+        |entry| !matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start),
+    );
+    assert!(std::panic::catch_unwind(|| assert_every_start_settled(&unsettled)).is_err());
 
     executor.simulated_crash(&worker_id).await?;
     let replay_probe: ChunkMEffectRuntimeObservation = executor

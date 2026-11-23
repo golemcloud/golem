@@ -37,7 +37,7 @@ use crate::services::agent_filesystem_snapshots::{
 };
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
-use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogServiceOps, UnreadableOplog};
+use crate::services::oplog::{CommitLevel, Oplog, OplogOps, UnreadableOplog};
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
 use crate::services::shard::ShardService;
@@ -56,9 +56,7 @@ use crate::services::{
 use crate::services::{HasAgentFilesystemSnapshots, HasRdbmsService, HasWorkerForkService, rdbms};
 use crate::worker::start_outcome;
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
-use crate::worker::status::update_queue::{
-    ManualAdmission, UpdateQueue, UpdateStep, manual_update_target_revision_of,
-};
+use crate::worker::status::update_queue::{ManualAdmission, UpdateQueue, UpdateStep};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use futures::{FutureExt, StreamExt as _, TryStreamExt as _};
@@ -104,6 +102,7 @@ pub trait WorkerForkService: Send + Sync {
         oplog_index_cut_off: OplogIndex,
         auth_ctx: &AuthCtx,
         fork_request: CreateRequest,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>;
 
     // TODO: this should be restricted to targets within the same component
@@ -892,8 +891,8 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             // A manual update invocation has no idempotency key in the status; its failed update
             // from `ForkUpdates` cancels it.
             let manual_update = match &entry {
-                OplogEntry::PendingAgentInvocation { payload, .. } => {
-                    manual_update_target_revision_of(payload)
+                OplogEntry::PendingAgentInvocation { operation, .. } => {
+                    operation.manual_update_target()
                 }
                 _ => None,
             };
@@ -969,15 +968,10 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 if idempotency_key == candidate.source_invocation.idempotency_key {
                     continue;
                 }
-                if let OplogEntry::PendingAgentInvocation { payload, .. } =
+                if let OplogEntry::PendingAgentInvocation { operation, .. } =
                     read_source(pending_index).await?
-                    && matches!(
-                        self.oplog_service
-                            .download_payload(&owned_source_agent_id, agent_mode, payload)
-                            .await
-                            .map_err(WorkerExecutorError::runtime)?,
-                        golem_common::model::AgentInvocationPayload::AgentInitialization { .. }
-                    )
+                    && *operation
+                        == golem_common::model::InvocationRequestOperation::AgentInitialization
                 {
                     continue;
                 }
@@ -1073,6 +1067,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>)>,
         auth_ctx: &AuthCtx,
         fork_request: CreateRequest,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError> {
         self.validate_worker_forking(
             source.environment_id,
@@ -1087,6 +1082,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(source.agent_id))?
             .initial_worker_metadata;
+        if expected_fingerprint.is_some_and(|expected| expected != source_metadata.fingerprint) {
+            return Err(WorkerExecutorError::worker_not_found(source.agent_id));
+        }
         let hash =
             publication::request_hash(source, source_metadata.fingerprint, cut, None, guest_result)
                 .map_err(WorkerExecutorError::runtime)?;
@@ -1339,6 +1337,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         oplog_index_cut_off: OplogIndex,
         auth_ctx: &AuthCtx,
         fork_request: CreateRequest,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError> {
         self.perform_fork(
             fork_account_id,
@@ -1348,6 +1347,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             None,
             auth_ctx,
             fork_request,
+            expected_fingerprint,
         )
         .await
     }
@@ -1371,6 +1371,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             Some((copied_scope_start, invocation_id)),
             auth_ctx,
             fork_request,
+            None,
         )
         .await
     }
@@ -1387,9 +1388,8 @@ pub(crate) struct ForkUpdates {
 
 impl ForkUpdates {
     /// The entry that [`ForkUpdates::after_kept`] reads for `entry`: an update entry as it is,
-    /// and the admission of a manual update invocation, whose target `manual_update` gives, so the
-    /// fold does not decode the payload again. `None` for every other entry, which leaves the
-    /// updates unchanged.
+    /// and the admission of a manual update invocation, whose target `manual_update` gives.
+    /// `None` for every other entry, which leaves the updates unchanged.
     pub(crate) fn update_entry(
         entry: OplogEntry,
         manual_update: Option<ComponentRevision>,
@@ -1484,6 +1484,7 @@ impl ForkUpdates {
                         admission.target_revision,
                         admission.index,
                         CANCELLED_BY_FORK.into(),
+                        golem_common::model::oplog::UpdateFailureClass::Other,
                     )
                 })),
             self.baseline,
@@ -1517,12 +1518,12 @@ mod tests {
 
     use super::*;
     use golem_common::base_model::component::ComponentRevision;
-    use golem_common::model::AgentInvocationPayload;
-    use golem_common::model::agent::Principal;
+    use golem_common::model::caller::Caller;
     use golem_common::model::card::{CardId, InvocationWalletPin, WalletVersionToken};
     use golem_common::model::component::ComponentId;
     use golem_common::model::invocation_context::TraceId;
     use golem_common::model::oplog::{OplogPayload, UpdateDescription};
+    use golem_common::model::{InvocationRequestOperation, StoredAgentInvocationPayload};
     use golem_common::schema::SchemaValue;
     use std::collections::HashSet;
     use test_r::test;
@@ -1552,10 +1553,12 @@ mod tests {
         let entry = OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
             invocation_id: test_invocation_id("fork-wallet-pin".to_string()),
-            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+            operation: Box::new(InvocationRequestOperation::AgentMethod {
                 method_name: "test".to_string(),
+            }),
+            payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
                 input: SchemaValue::Record { fields: Vec::new() },
-                principal: Principal::anonymous(),
+                caller: Caller::anonymous(),
                 scope_card: None,
             })),
             trace_id: TraceId::generate(),
@@ -1583,7 +1586,7 @@ mod tests {
     #[test]
     fn fork_target_create_records_the_fork_request_not_the_source_request() {
         use golem_common::model::account::AccountId;
-        use golem_common::model::agent::{AgentMode, AgentPrincipal, OwnerKind};
+        use golem_common::model::agent::{AgentMode, OwnerKind};
         use golem_common::model::environment::EnvironmentId;
         use golem_common::model::invocation_context::InvocationContextStack;
         use golem_common::model::oplog::{CreateParameters, CreateRequestKind};
@@ -1593,15 +1596,13 @@ mod tests {
         let source_request = CreateRequest::new(
             CreateRequestKind::Exclusive,
             Some(IdempotencyKey::new("source-create".to_string())),
-            Principal::anonymous(),
+            Caller::anonymous(),
             &InvocationContextStack::fresh_rounded(),
         );
         let fork_request = CreateRequest::new(
             CreateRequestKind::Fork,
             None,
-            Principal::Agent(AgentPrincipal {
-                agent_id: agent_id("forker"),
-            }),
+            crate::test_callers::agent_caller(agent_id("forker")),
             &InvocationContextStack::fresh_rounded(),
         );
         let entry = OplogEntry::create(Box::new(CreateParameters {
@@ -1623,6 +1624,7 @@ mod tests {
             constructor_parameters: None,
             instance_id: Uuid::new_v4(),
             create_request: source_request,
+            never_live: false,
         }));
         let instance_id = Uuid::new_v4();
 
@@ -1723,9 +1725,10 @@ mod tests {
             timestamp: Timestamp::now_utc(),
             not_before: None,
             invocation_id: InvocationId(Uuid::new_v4()),
-            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
+            operation: Box::new(InvocationRequestOperation::ManualUpdate {
                 target_revision: revision(target),
-            })),
+            }),
+            payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate)),
             trace_id: TraceId::generate(),
             trace_states: Vec::new(),
             invocation_context: Vec::new(),
@@ -1793,7 +1796,15 @@ mod tests {
         let (cancelled, _) = fork_updates(
             &[
                 automatic_admission(2),
-                OplogEntry::failed_update(revision(2), None, None, Some(index(3)), None),
+                OplogEntry::failed_update(
+                    revision(2),
+                    None,
+                    None,
+                    Some(index(3)),
+                    None,
+                    golem_common::model::oplog::UpdateFailureClass::Other,
+                    None,
+                ),
             ],
             &[],
         );
@@ -1893,7 +1904,10 @@ mod tests {
             timestamp: Timestamp::now_utc(),
             not_before: None,
             invocation_id: InvocationId(Uuid::new_v4()),
-            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            operation: Box::new(InvocationRequestOperation::SaveSnapshot),
+            payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
+                caller: golem_common::model::caller::Caller::anonymous(),
+            })),
             trace_id: TraceId::generate(),
             trace_states: Vec::new(),
             invocation_context: Vec::new(),
@@ -1915,7 +1929,15 @@ mod tests {
             invocation,
             succeeded(3),
             manual_invocation(5),
-            OplogEntry::failed_update(revision(5), None, None, Some(index(9)), None),
+            OplogEntry::failed_update(
+                revision(5),
+                None,
+                None,
+                Some(index(9)),
+                None,
+                golem_common::model::oplog::UpdateFailureClass::Other,
+                None,
+            ),
             manual_pending_update(6, Some(FilesystemSnapshotName::update())),
             manual_invocation(7),
         ];
@@ -1926,8 +1948,8 @@ mod tests {
                 .fold(ForkUpdates::default(), |updates, (position, entry)| {
                     let at = position as u64 + 2;
                     let manual_update = match entry {
-                        OplogEntry::PendingAgentInvocation { payload, .. } => {
-                            manual_update_target_revision_of(payload)
+                        OplogEntry::PendingAgentInvocation { operation, .. } => {
+                            operation.manual_update_target()
                         }
                         _ => None,
                     };
@@ -1965,11 +1987,12 @@ mod tests {
             timestamp: Timestamp::now_utc(),
             not_before: None,
             invocation_id: InvocationId(Uuid::new_v4()),
+            operation: Box::new(InvocationRequestOperation::ManualUpdate {
+                target_revision: revision(4),
+            }),
             payload: OplogPayload::SerializedInline {
                 bytes: golem_common::serialization::serialize(
-                    &AgentInvocationPayload::ManualUpdate {
-                        target_revision: revision(4),
-                    },
+                    &StoredAgentInvocationPayload::ManualUpdate,
                 )
                 .unwrap(),
                 cached: None,

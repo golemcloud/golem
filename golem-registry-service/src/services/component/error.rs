@@ -41,6 +41,10 @@ pub enum ComponentError {
     ComponentVersionAlreadyExists(String),
     #[error(transparent)]
     ComponentProcessingError(#[from] ComponentProcessingError),
+    #[error("Package layer digest does not match the uploaded Wasm for component '{0}'")]
+    PackageLayerDigestMismatch(ComponentName),
+    #[error("Package metadata requires a Wasm upload for component '{0}'")]
+    PackageMetadataWithoutWasm(ComponentName),
     #[error("Malformed component archive: {message}")]
     MalformedComponentArchive { message: String },
     #[error(
@@ -84,6 +88,14 @@ pub enum ComponentError {
     AgentTypeForNameNotFound(String),
     #[error("Multiple agent types with the same name: {0}")]
     DuplicateAgentTypeName(AgentTypeName),
+    #[error(
+        "Method '{method}' of agent type '{agent_type}' has a name longer than {} bytes",
+        golem_common::model::MAX_INVOCATION_OPERATION_BYTES
+    )]
+    AgentMethodNameTooLong {
+        agent_type: AgentTypeName,
+        method: String,
+    },
     #[error(
         "Agent type '{0}' is referenced in provision config but not declared in the component's agent types"
     )]
@@ -205,6 +217,9 @@ impl SafeDisplay for ComponentError {
             Self::ComponentWithNameAlreadyExists(_) => self.to_string(),
             Self::ComponentVersionAlreadyExists(_) => self.to_string(),
             Self::ComponentProcessingError(inner) => inner.to_safe_string(),
+            Self::PackageLayerDigestMismatch(_) | Self::PackageMetadataWithoutWasm(_) => {
+                self.to_string()
+            }
             Self::MalformedComponentArchive { .. } => self.to_string(),
             Self::AgentFileNotFoundInArchive { .. } => self.to_string(),
             Self::InvalidFilePath(_) => self.to_string(),
@@ -223,6 +238,7 @@ impl SafeDisplay for ComponentError {
             Self::ComponentByNameNotFound(_) => self.to_string(),
             Self::AgentTypeForNameNotFound(_) => self.to_string(),
             Self::DuplicateAgentTypeName(_) => self.to_string(),
+            Self::AgentMethodNameTooLong { .. } => self.to_string(),
             Self::UndeclaredAgentTypeInProvisionConfig(_) => self.to_string(),
             Self::MissingAgentTypeProvisionConfig(_) => self.to_string(),
             Self::MissingToolName => self.to_string(),

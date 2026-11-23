@@ -1121,9 +1121,9 @@ mod tests {
     use golem_rust::bindings::golem::api::context::{Attribute, AttributeValue};
     use golem_rust::bindings::golem::api::oplog::{
         EnvironmentId, JumpParameters, LocalSpanData, OplogErrorKind, OplogPayload, OplogRegion,
-        RawCreateResourceParameters, RawErrorParameters, RawInvocationWalletPin,
-        RawSpanClosedParameters, ResourceTypeId, RevertParameters, SpanLink, Timestamp,
-        WalletVersionToken, WorkerError, WrappedFunctionType,
+        RawCreateResourceParameters, RawErrorParameters, RawInvocationRequestOperation,
+        RawInvocationWalletPin, RawSpanClosedParameters, ResourceTypeId, RevertParameters,
+        SpanLink, Timestamp, WalletVersionToken, WorkerError, WrappedFunctionType,
     };
     use golem_rust::schema::wit::wire::{AccountId, AgentId, Uuid};
     use golem_rust::wasip3::clocks::system_clock::Instant;
@@ -1320,6 +1320,7 @@ mod tests {
             initial_active_plugins: Vec::new(),
             local_agent_config: Vec::new(),
             instance_id: uuid(instance),
+            never_live: false,
         })
     }
 
@@ -1434,6 +1435,7 @@ mod tests {
         OplogEntry::AgentInvocationStarted(RawAgentInvocationStartedParameters {
             timestamp: instant(12, 0),
             invocation_id,
+            operation: RawInvocationRequestOperation::AgentMethod("run".to_string()),
             payload: OplogPayload::Inline(Vec::new()),
             trace_id: trace_id.to_string(),
             trace_states: Vec::new(),
@@ -2039,6 +2041,8 @@ mod tests {
                         error: WorkerError::Unknown("boom".to_string()),
                         retry_from: 0,
                         retry_policy_state: None,
+                        retry_at: None,
+                        retrying_start_index: None,
                     }),
                 ],
             );

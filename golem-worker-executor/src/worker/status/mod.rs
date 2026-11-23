@@ -15,10 +15,11 @@ use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     AgentFingerprint, AgentResourceDescription, AgentStatus, AgentStatusRecord, AssistedSelection,
     AuthoritativeSnapshot, AuthoritativeSnapshotKind, AutomaticSnapshot, DurableStreamSessionIndex,
-    ExportForkAdmissions, FailedUpdateRecord, InvocationResultMembership, InvocationResultPosition,
-    OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
-    PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
-    RetryConfig, RetryPolicyState, SnapshotFiles, SuccessfulUpdateRecord, UsableAutomaticSnapshot,
+    ExportForkAdmissions, FailedUpdateRecord, InvocationEnd, InvocationRequestRef,
+    InvocationResultMembership, InvocationResultPosition, OplogProcessorCheckpointState,
+    OwnedAgentId, PendingCardEventRef, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
+    ReceivedCardTransferIndex, ReceivedCardTransferState, RetryConfig, RetryPolicyState,
+    RunningInvocation, SnapshotFiles, SuccessfulUpdateRecord, Timestamp, UsableAutomaticSnapshot,
 };
 use golem_common::serialization::try_deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -32,7 +33,8 @@ pub(crate) mod update_queue;
 pub(crate) use regions::{
     RegionFold, deleted_regions, fold_regions_from, revert_validation_regions, skipped_regions,
 };
-use update_queue::{UpdateStep, manual_update_target_revision_of};
+use update_queue::UpdateStep;
+pub(crate) use update_queue::request_operation;
 
 #[cfg(test)]
 pub(crate) use entity_replay::calculate_entity_replay_progress;
@@ -59,6 +61,8 @@ pub(super) use reconstruction::calculate_status_with_reader;
 pub(super) use reconstruction::fold_committed_status;
 #[cfg(test)]
 use reconstruction::hydrate_initial_pending_evidence;
+pub(crate) use reconstruction::hydrate_lookup_payloads;
+pub(crate) use reconstruction::hydrate_stream_session_payloads;
 pub(crate) use reconstruction::skipped_regions_at;
 pub use reconstruction::try_fold_status_from;
 #[cfg(test)]
@@ -68,6 +72,7 @@ mod entity_replay;
 mod execution;
 mod fields;
 mod reconstruction;
+mod resolved_names;
 
 /// Why the status of an agent could not be folded from its oplog.
 #[derive(Clone, Debug)]
@@ -157,6 +162,7 @@ fn update_status_with_new_entries_internal(
         skipped,
         queue,
         steps,
+        unreplayed,
     } = fold_regions_from(&last_known, pending_updates, &new_entries);
 
     // If the last known status is from a deleted region based on the latest deleted region status,
@@ -177,6 +183,7 @@ fn update_status_with_new_entries_internal(
         FoldedRegions {
             deleted,
             skipped,
+            unreplayed,
             steps: &steps,
         },
         pending_updates,
@@ -233,6 +240,7 @@ fn baseline_is_invalidated(
 struct FoldedRegions<'a> {
     deleted: DeletedRegions,
     skipped: DeletedRegions,
+    unreplayed: DeletedRegions,
     steps: &'a BTreeMap<OplogIndex, UpdateStep>,
 }
 
@@ -252,17 +260,19 @@ fn update_status_with_precomputed_regions(
     let FoldedRegions {
         deleted,
         skipped,
+        unreplayed,
         steps,
     } = regions;
     let deleted_regions = &deleted;
     let skipped_regions = &skipped;
     let active_plugins = last_known.active_plugins.clone();
     let requests = InvocationRequests::of_status(&last_known);
-    let (status, last_error_kind, current_retry_state, overridden_retry_config) =
+    let (status, last_error_kind, current_retry_state, current_retry_at, overridden_retry_config) =
         calculate_latest_worker_status(
             last_known.status,
             last_known.last_error_kind,
             last_known.current_retry_state,
+            last_known.current_retry_at,
             last_known.overridden_retry_config,
             default_retry_policy,
             skipped_regions,
@@ -281,6 +291,12 @@ fn update_status_with_precomputed_regions(
     let entity_replay_progress = entity_replay::calculate_entity_replay_progress(
         last_known.entity_replay_progress,
         skipped_regions,
+        deleted_regions,
+        &new_entries,
+    )?;
+    let resolved_names = resolved_names::calculate_resolved_names(
+        last_known.resolved_names,
+        &unreplayed,
         deleted_regions,
         &new_entries,
     )?;
@@ -347,6 +363,13 @@ fn update_status_with_precomputed_regions(
         || new_entries
             .values()
             .any(|entry| matches!(entry, OplogEntry::Restart { .. }));
+    let never_live = new_entries
+        .values()
+        .find_map(|entry| match entry {
+            OplogEntry::Create { parameters, .. } => Some(parameters.never_live),
+            _ => None,
+        })
+        .unwrap_or(last_known.never_live);
     let UpdateFields {
         failed_updates,
         successful_updates,
@@ -421,13 +444,15 @@ fn update_status_with_precomputed_regions(
         received_card_transfers,
         source_card_transfers,
         entity_replay_progress,
+        resolved_names,
         durable_stream_sessions,
         export_fork_admissions,
         has_durable_stream_history,
         ephemeral_execution_begun,
+        never_live,
         pending_durable_stream_cancellations,
-        current_idempotency_key: requests.current,
-        current_invocation_started_at: requests.current_started_at,
+        running: requests.current,
+        withdrawn_again: requests.withdrawn_again,
         component_revision,
         component_size,
         owned_resources,
@@ -439,6 +464,7 @@ fn update_status_with_precomputed_regions(
         component_revision_for_replay,
         component_revision_start_index,
         current_retry_state,
+        current_retry_at,
         authoritative_snapshot,
         last_automatic_snapshot,
         previous_usable_automatic_snapshot,

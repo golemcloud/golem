@@ -65,7 +65,7 @@ impl TsWriter {
             if line.trim().is_empty() {
                 self.indented_write_line(" *");
             } else {
-                self.indented_write_line(format!(" * {}", line));
+                self.indented_write_line(format!(" * {}", line.replace("*/", "*&#47;")));
             }
         }
         self.indented_write_line(" */");
@@ -526,5 +526,21 @@ impl FunctionWriter for TsAnonymousFunctionWriter {
 
     fn unindent(&mut self) {
         TsAnonymousFunctionWriter::unindent(self);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TsWriter;
+    use test_r::test;
+
+    #[test]
+    fn documentation_cannot_end_the_generated_comment() {
+        let mut writer = TsWriter::new();
+        writer.write_doc("A literal */ in the description.\n\nThe next paragraph.");
+        assert_eq!(
+            writer.finish_string(),
+            "/**\n * A literal *&#47; in the description.\n *\n * The next paragraph.\n */\n"
+        );
     }
 }

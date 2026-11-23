@@ -3717,7 +3717,7 @@ async fn rust_ambient_native_client_executes_through_golem() {
         indoc! {r#"
             use golem_rust::schema::{SchemaValue, TypedSchemaValue};
             use golem_rust::tool::{
-                InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool,
+                InputStream, InvocationResult, InvocationContext, OutputStream, RawCustomToolError, Tool,
                 ToolInvokeError, UnderlyingTool,
             };
             use golem_rust::universal_tool_middleware;
@@ -3731,7 +3731,7 @@ async fn rust_ambient_native_client_executes_through_golem() {
                 stdin: Option<InputStream>,
                 stdout: Option<OutputStream>,
                 stderr: Option<OutputStream>,
-                _principal: Principal,
+                _ctx: InvocationContext,
                 underlying: UnderlyingTool,
             ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
                 let input = if tool_name == "native-conformance"
@@ -4757,7 +4757,10 @@ async fn test_moonbit_tool_guest_bridge_e2e() {
         String::from_utf8_lossy(&wit.stderr)
     );
     let wit = String::from_utf8_lossy(&wit.stdout);
-    assert!(wit.contains("golem:agent/host@2.0.0"), "{wit}");
+    assert!(
+        wit.contains("golem:agent/invocation-context@2.0.0"),
+        "{wit}"
+    );
     assert!(wit.contains("golem:tool/host@0.1.0"), "{wit}");
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
@@ -5699,10 +5702,9 @@ async fn test_naming_extremes() {
 }
 
 // Runs `agent list --mode <mode> --format json` against the live server and
-// returns the rendered agent-name strings from the response. The JSON view's
-// `agentName` is the rendered, language-specific agent id, e.g.
-// `DurableListAgent("…")`. Panics on non-zero exit or non-JSON output so test
-// failures point at the listing step that broke.
+// returns the agent type names from the response. Ephemeral agents have no key.
+// Panics on non-zero exit or non-JSON output so test failures point at the
+// listing step that broke.
 async fn list_agent_names(ctx: &TestContext, mode: &str) -> Vec<String> {
     let outputs = ctx
         .cli([
@@ -5726,7 +5728,15 @@ async fn list_agent_names(ctx: &TestContext, mode: &str) -> Vec<String> {
         .into_iter()
         .next()
         .unwrap_or_else(|| panic!("`agent list --mode {mode}` produced no JSON output"));
-    response.agents.into_iter().map(|a| a.agent_id).collect()
+    response
+        .agents
+        .into_iter()
+        .map(|a| {
+            a.agent_type
+                .expect("listed agent must have a type")
+                .to_string()
+        })
+        .collect()
 }
 
 // Scaffolds a fresh Rust app with two agent types: `DurableListAgent` (durable
@@ -5896,13 +5906,13 @@ async fn test_agent_list_mode_filter() {
     let count_durable = |names: &[String]| {
         names
             .iter()
-            .filter(|n| n.starts_with("DurableListAgent("))
+            .filter(|n| n.as_str() == "DurableListAgent")
             .count()
     };
     let count_ephemeral = |names: &[String]| {
         names
             .iter()
-            .filter(|n| n.starts_with("EphemeralListAgent("))
+            .filter(|n| n.as_str() == "EphemeralListAgent")
             .count()
     };
 
@@ -6197,7 +6207,7 @@ async fn assert_queued_manual_update_before_pending(ctx: &TestContext, agent: &s
         .expect("agent list must produce structured output")
         .agents
         .into_iter()
-        .find(|listed| listed.agent_id == agent)
+        .find(|listed| listed.agent_key == agent)
         .expect("queued agent must be listed");
     assert_eq!(listed_agent.updates.len(), 1);
     let pending = &listed_agent.updates[0];
@@ -6374,15 +6384,19 @@ async fn test_agent_update_await_correlates_exact_admitted_attempts() {
         .iter()
         .map(|agent| agent.agent_id.as_str())
         .collect::<std::collections::HashSet<_>>();
-    assert!(bulk_agent_ids.contains("UpdateAwaitAgent(\"bulk\")"));
-    assert!(bulk_agent_ids.contains("UpdateAwaitAgent(\"queued\")"));
-    assert!(!bulk_agent_ids.contains("UpdateAwaitAgent(\"automatic\")"));
+    let bulk_id = get_update_await_metadata(&ctx, r#"UpdateAwaitAgent("bulk")"#)
+        .await
+        .agent_id;
+    let queued_id = get_update_await_metadata(&ctx, queued_agent).await.agent_id;
+    let automatic_id = get_update_await_metadata(&ctx, automatic_agent)
+        .await
+        .agent_id;
+    assert!(bulk_agent_ids.contains(bulk_id.as_str()));
+    assert!(bulk_agent_ids.contains(queued_id.as_str()));
+    assert!(!bulk_agent_ids.contains(automatic_id.as_str()));
     assert_eq!(bulk_agent_ids.len(), 2);
     assert_eq!(bulk_result.errors.len(), 1);
-    assert_eq!(
-        bulk_result.errors[0].agent_id,
-        "UpdateAwaitAgent(\"queued\")"
-    );
+    assert_eq!(bulk_result.errors[0].agent_id, queued_id);
     assert!(
         bulk_result.errors[0]
             .error
@@ -6474,13 +6488,14 @@ struct UpdateAwaitAgentListView {
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UpdateAwaitListedAgent {
-    agent_id: String,
+    agent_key: String,
     updates: Vec<UpdateAwaitRecord>,
 }
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UpdateAwaitAgentMetadata {
+    agent_id: String,
     status: String,
     updates: Vec<UpdateAwaitRecord>,
 }
@@ -6516,19 +6531,11 @@ struct UpdateAwaitBulkError {
     error: String,
 }
 
-// JSON view of the `agent list` structured output. We only need the `agents`
-// array and the rendered `agentId` field; serde ignores the `outputType`
-// discriminator injected by the CLI's structured-output wrapper.
+// JSON view of the `agent list` structured output.
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentListResponseView {
-    agents: Vec<AgentListView>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AgentListView {
-    agent_id: String,
+    agents: Vec<golem_cli::model::agent::AgentMetadataView>,
 }
 
 // Use UPDATE_GOLDENFILES=1 or `cargo make cli-integration-tests-update-golden-files` to update files

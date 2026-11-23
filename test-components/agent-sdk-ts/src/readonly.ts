@@ -24,10 +24,10 @@
 // The `method({ readOnly })` surface expresses every
 // cache-policy variant: `readOnly: true` (the base default, `until-write`),
 // `readOnly: { cache: 'no-cache' }`, `readOnly: { cache: { ttlNanos } }`, and
-// per-principal caching inferred from a direct `s.principal()` input.
+// a method that receives the invocation context.
 
 import { z } from 'zod';
-import { defineAgent, method, http, s } from '@golemcloud/golem-ts-sdk';
+import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
 
 export const TsReadonlyAgent = defineAgent({
   name: 'TsReadonlyAgent',
@@ -50,9 +50,10 @@ export const TsReadonlyAgent = defineAgent({
       http: http.get('/count'),
     }),
 
-    // Principal-aware: the cache key includes the caller principal.
+    // Receives the invocation context but never uses the caller for its result.
+    // Every read-only result is cached per caller.
     getCountFor: method({
-      input: { caller: s.principal() },
+      input: {},
       returns: z.number(),
       readOnly: true,
       http: http.get('/count-for'),

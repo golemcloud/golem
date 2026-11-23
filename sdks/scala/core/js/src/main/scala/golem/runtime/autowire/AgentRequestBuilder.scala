@@ -41,15 +41,14 @@ import scala.scalajs.js.JSConverters._
  * applied, and the HTTP endpoint / mount / snapshotting / read-only conversions
  * target the `golem.host.js` facades.
  */
-private[autowire] object AgentRequestBuilder {
+private[golem] object AgentRequestBuilder {
 
   def fromWire(metadata: WireAgentMetadata, mode: String): JsAgentType = {
     def parameters(values: List[WireParameterMetadata]): JsInputSchema = JsInputSchema.parameters(values.map { p =>
       JsNamedField(
         p.name,
         p.source match {
-          case FieldSource.UserSupplied          => JsFieldSource.userSupplied
-          case FieldSource.AutoInjectedPrincipal => JsFieldSource.autoInjectedPrincipal
+          case FieldSource.UserSupplied => JsFieldSource.userSupplied
         },
         p.schema,
         SchemaWireInterop.metadataToJs(p.metadata)
@@ -148,8 +147,7 @@ private[autowire] object AgentRequestBuilder {
     AgentTypeEncoderV2.Param(
       name = p.name,
       source = p.source match {
-        case FieldSource.UserSupplied          => AgentTypeEncoderV2.FieldSource.UserSupplied
-        case FieldSource.AutoInjectedPrincipal => AgentTypeEncoderV2.FieldSource.AutoInjectedPrincipal
+        case FieldSource.UserSupplied => AgentTypeEncoderV2.FieldSource.UserSupplied
       },
       graph = p.graph,
       metadata = p.metadata
@@ -225,7 +223,7 @@ private[autowire] object AgentRequestBuilder {
     )
   }
 
-  private def encodeDurableStreams(options: DurableStreamRouteOptions): JsDurableStreamRouteOptions = {
+  private[golem] def encodeDurableStreams(options: DurableStreamRouteOptions): JsDurableStreamRouteOptions = {
     val slots = js.Array(options.slots.map { slot =>
       val source = slot.source match {
         case DurableStreamSlotSource.Input(name)  => JsDurableStreamSlotSource.input(name)
@@ -264,7 +262,7 @@ private[autowire] object AgentRequestBuilder {
       case CachePolicy.UntilWrite => JsCachePolicy.untilWrite
       case CachePolicy.Ttl(nanos) => JsCachePolicy.ttl(js.BigInt(nanos.toString))
     }
-    JsReadOnlyConfig(policy, config.usesPrincipal)
+    JsReadOnlyConfig(policy)
   }
 
   private def encodeSnapshotting(snapshotting: Snapshotting): JsSnapshotting = snapshotting match {
@@ -278,7 +276,7 @@ private[autowire] object AgentRequestBuilder {
       JsSnapshotting.enabled(jsConfig)
   }
 
-  private def encodeHttpMethod(method: HttpMethod): JsHttpMethod = method match {
+  private[golem] def encodeHttpMethod(method: HttpMethod): JsHttpMethod = method match {
     case HttpMethod.Get            => JsHttpMethod.get
     case HttpMethod.Post           => JsHttpMethod.post
     case HttpMethod.Put            => JsHttpMethod.put

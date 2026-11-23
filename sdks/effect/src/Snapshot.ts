@@ -352,7 +352,6 @@ export interface SnapshotRestorationContext<
   Config = unknown,
 > {
   readonly id: Id
-  readonly principal: AgentCommon.Principal
   /** The ID of the restored agent. */
   readonly agentId: AgentId
   readonly config: Config

@@ -37,6 +37,7 @@ use golem_common::model::AgentId;
 use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::oplog::DeniablePair;
 use golem_common::model::oplog::DurableFunctionType;
 use golem_common::model::oplog::HostRequestGolemApiOplogEnrich;
 use golem_common::model::oplog::HostRequestGolemApiOplogRead;
@@ -97,6 +98,56 @@ async fn oplog_entries_denied<Ctx: WorkerCtx>(
         return Ok(true);
     };
     Ok(ctx.authorize_live_permissions(&targets).await?.is_err())
+}
+
+/// The oplog indexes that enriching `entries` reads: the index of each entry, and the index of
+/// the divergence of each failed update, whose recorded `Start` gives the expected request.
+fn enrichment_read_indexes(entries: &[(u64, golem_api_1_x::oplog::OplogEntry)]) -> Vec<OplogIndex> {
+    entries
+        .iter()
+        .flat_map(|(index, entry)| {
+            let divergence = match entry {
+                golem_api_1_x::oplog::OplogEntry::FailedUpdate(params) => params
+                    .divergence
+                    .as_ref()
+                    .map(|divergence| divergence.oplog_index),
+                _ => None,
+            };
+            std::iter::once(*index)
+                .chain(divergence)
+                .map(OplogIndex::from_u64)
+        })
+        .collect()
+}
+
+/// Checks the grant for every oplog index that enriching `entries` reads. When the grant denies
+/// the read, rejects the handles in `entries` and returns the request to record with the denial,
+/// which holds only the entry indexes.
+async fn oplog_enrichment_denial<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    owned_agent_id: &OwnedAgentId,
+    entries: &mut Option<Vec<(u64, golem_api_1_x::oplog::OplogEntry)>>,
+    component_revision: u64,
+) -> Result<Option<(HostRequestGolemApiOplogEnrich, String)>, WorkerExecutorError> {
+    let read_indexes =
+        enrichment_read_indexes(entries.as_ref().expect("raw oplog entries must be present"));
+    let denied = oplog_entries_denied(ctx, owned_agent_id, &read_indexes).await?;
+    let Some(denial) = agent_operation_denial(denied) else {
+        return Ok(None);
+    };
+    let entries = entries.take().expect("raw oplog entries must be present");
+    let entry_indexes = entries
+        .iter()
+        .map(|(index, _)| (*index, Vec::new()))
+        .collect();
+    let _ = crate::model::public_oplog::wit::reject_quota_handles_in_oplog_entries(entries, ctx);
+    let request = HostRequestGolemApiOplogEnrich {
+        environment_id: owned_agent_id.environment_id,
+        agent_id: owned_agent_id.agent_id,
+        entries: entry_indexes,
+        component_revision,
+    };
+    Ok(Some((request, denial)))
 }
 
 /// A denied oplog read does not advance the resource: its response carries the position of the
@@ -653,31 +704,14 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
                         ));
                     let agent_id: AgentId = agent_id.into();
                     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-                    let entry_indexes = raw_entries
-                        .as_ref()
-                        .expect("raw oplog entries must be present")
-                        .iter()
-                        .map(|(index, _)| OplogIndex::from_u64(*index))
-                        .collect::<Vec<_>>();
-                    let denied =
-                        oplog_entries_denied(self, &owned_agent_id, &entry_indexes).await?;
-                    if let Some(denial) = agent_operation_denial(denied) {
-                        let _ =
-                            crate::model::public_oplog::wit::reject_quota_handles_in_oplog_entries(
-                                raw_entries
-                                    .take()
-                                    .expect("raw oplog entries must be present"),
-                                self,
-                            );
-                        let request = HostRequestGolemApiOplogEnrich {
-                            environment_id,
-                            agent_id,
-                            entries: entry_indexes
-                                .iter()
-                                .map(|index| (index.as_u64(), Vec::new()))
-                                .collect(),
-                            component_revision,
-                        };
+                    if let Some((request, denial)) = oplog_enrichment_denial(
+                        self,
+                        &owned_agent_id,
+                        &mut raw_entries,
+                        component_revision,
+                    )
+                    .await?
+                    {
                         break 'response begun.start_live_denied(self, request, denial).await?;
                     }
                     let (request_entries, prepared_entries) = prepare_oplog_enrichment_entries(
@@ -721,6 +755,20 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
                         ));
                     let agent_id: AgentId = agent_id.into();
                     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+                    // The recorded `Start` authorized the read set of the recorded request. The
+                    // repair reads the entries of the current arguments, which an updated guest
+                    // can change, so it authorizes their read set again.
+                    if let Some((request, denial)) = oplog_enrichment_denial(
+                        self,
+                        &owned_agent_id,
+                        &mut raw_entries,
+                        component_revision,
+                    )
+                    .await?
+                    {
+                        let response = GolemApiEnrichOplogEntries::denied(&request, &denial);
+                        break 'response handle.complete(self, response).await?;
+                    }
                     let (_, prepared_entries) = prepare_oplog_enrichment_entries(
                         self,
                         raw_entries
@@ -809,5 +857,39 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
             }
             Err(error) => Ok(Err(error)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::Timestamp;
+    use test_r::test;
+
+    fn failed_update(divergence_index: Option<u64>) -> golem_api_1_x::oplog::OplogEntry {
+        use golem_api_1_x::oplog;
+        golem_api_1_x::oplog::OplogEntry::FailedUpdate(oplog::FailedUpdateParameters {
+            timestamp: Timestamp::from(1_000).into(),
+            target_revision: 2,
+            details: None,
+            snapshot_assisted_details: None,
+            update_attempt_index: None,
+            failure_class: oplog::UpdateFailureClass::Divergence,
+            divergence: divergence_index.map(|oplog_index| oplog::ReplayDivergence {
+                oplog_index,
+                expected: oplog::ReplayStep::EndOfHistory,
+                actual: oplog::ReplayStep::InvocationEnd,
+                mismatched: vec![],
+            }),
+        })
+    }
+
+    /// The enrichment of a failed update reads the recorded `Start` at the index of its
+    /// divergence, which the guest supplies, so the oplog grant must cover that index too.
+    #[test]
+    fn enrichment_authorizes_the_divergence_index_of_a_failed_update() {
+        let indexes =
+            enrichment_read_indexes(&[(9, failed_update(Some(1))), (10, failed_update(None))]);
+        assert_eq!(indexes, [9, 1, 10].map(OplogIndex::from_u64).to_vec());
     }
 }

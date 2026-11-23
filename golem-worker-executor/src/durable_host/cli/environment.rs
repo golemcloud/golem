@@ -121,8 +121,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
                 other => {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        "cli::environment.get-environment Start with a request",
+                        start_index,
                         format!("{other:?}"),
+                        "cli::environment.get-environment Start with a request",
                     ));
                 }
             };
@@ -133,6 +134,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             })?;
             request.try_into().map_err(|error| {
                 WorkerExecutorError::unexpected_oplog_entry(
+                    start_index,
                     "cli::environment.get-environment request payload",
                     error,
                 )

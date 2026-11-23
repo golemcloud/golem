@@ -44,12 +44,14 @@ for name in "main-validation-linux-$id" "main-validation-apfs-$id"; do
   fi
 done
 
-python3 -I "$dir/ctrf-summary.py" "$out/artifacts" > "$out/ctrf.json"
+bun "$dir/ctrf-summary.ts" "$out/artifacts" > "$out/ctrf.json"
+bun "$dir/task-evidence.ts" "$out/artifacts" > "$out/task-evidence.json"
 
 jq -n \
   --slurpfile attempt "$out/attempt.json" \
   --slurpfile jobs "$out/jobs.json" \
   --slurpfile ctrf "$out/ctrf.json" \
+  --slurpfile evidence "$out/task-evidence.json" \
   --arg source "$source" --arg context "$context" --arg request "$request" '
   ($jobs[0] | map({key: .name, value: .}) | from_entries) as $j |
   {
@@ -61,6 +63,6 @@ jq -n \
     source: $source, context: $context, request: $request,
     jobs: [$jobs[0][] | {name, conclusion, started_at, completed_at,
       failed_steps: [.steps[]? | select(.conclusion == "failure") | .name]}],
-    tests: $ctrf[0]
+    tests: $ctrf[0], evidence: $evidence[0]
   }' > "$out/facts.json"
 cat "$out/facts.json"

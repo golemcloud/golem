@@ -195,3 +195,79 @@ fn entity_replay_growing_continuation_writes_only_changed_keys() {
         next
     );
 }
+
+#[test]
+fn resolved_names_persist_in_their_own_field_written_only_when_they_change() {
+    let status = AgentStatusRecord::default();
+    let mut core = status.clone();
+    let parts = split_status(&mut core);
+    let (sets, _) = compute_status_field_writes(None, &[], &core, &parts).unwrap();
+    let mut fields: HashMap<String, bytes::Bytes> =
+        sets.into_iter().map(|(k, v)| (k, v.into())).collect();
+
+    let mut next = status.clone();
+    next.resolved_names
+        .links
+        .insert("a.test", ["10.0.0.1".parse().unwrap()]);
+    next.resolved_names
+        .links
+        .insert("b.test", ["10.0.0.1".parse().unwrap()]);
+    let mut core = next.clone();
+    let parts = split_status(&mut core);
+    assert_eq!(core, status_core(&next));
+    let (sets, deletes) = compute_status_field_writes(Some(&status), &[], &core, &parts).unwrap();
+    assert!(deletes.is_empty());
+    assert_eq!(
+        sets.iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<HashSet<_>>(),
+        HashSet::from([STATUS_CORE_FIELD, STATUS_RESOLVED_NAMES_FIELD])
+    );
+    fields.extend(sets.into_iter().map(|(k, v)| (k, v.into())));
+    let reassembled = reassemble_cached_status(fields.clone()).unwrap();
+    assert_eq!(reassembled, next);
+    assert_eq!(
+        reassembled
+            .resolved_names
+            .links
+            .hostnames("10.0.0.1".parse().unwrap()),
+        vec!["b.test", "a.test"]
+    );
+
+    // An unchanged index is not written again.
+    let (sets, _) = compute_status_field_writes(Some(&next), &[], &core, &parts).unwrap();
+    assert!(sets.iter().all(|(name, _)| {
+        name != STATUS_RESOLVED_NAMES_FIELD && name != STATUS_FOLLOWED_LOOKUPS_FIELD
+    }));
+
+    // A call that links nothing changes only the followed lookups, so the links stay unwritten.
+    let mut following = next.clone();
+    following
+        .resolved_names
+        .following
+        .entity_scopes
+        .insert(OplogIndex::from_u64(7), ());
+    let mut following_core = following.clone();
+    let following_parts = split_status(&mut following_core);
+    let (sets, _) =
+        compute_status_field_writes(Some(&next), &[], &following_core, &following_parts).unwrap();
+    let written = sets
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect::<HashSet<_>>();
+    assert!(written.contains(STATUS_FOLLOWED_LOOKUPS_FIELD));
+    assert!(!written.contains(STATUS_RESOLVED_NAMES_FIELD));
+    let mut following_fields = fields.clone();
+    following_fields.extend(sets.into_iter().map(|(k, v)| (k, v.into())));
+    assert_eq!(
+        reassemble_cached_status(following_fields).unwrap(),
+        following
+    );
+
+    // A cached status without either field is a cache miss, so the status is folded again.
+    for field in [STATUS_RESOLVED_NAMES_FIELD, STATUS_FOLLOWED_LOOKUPS_FIELD] {
+        let mut missing = fields.clone();
+        missing.remove(field);
+        assert!(reassemble_cached_status(missing).is_none(), "{field}");
+    }
+}

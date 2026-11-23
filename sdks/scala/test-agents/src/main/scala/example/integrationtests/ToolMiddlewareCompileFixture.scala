@@ -16,7 +16,7 @@
 
 package example.integrationtests
 
-import golem.Principal
+import golem.InvocationContext
 import golem.runtime.annotations.{arg, error, toolDefinition, toolMiddleware, universalToolMiddleware}
 import golem.schema.TypedSchemaValue
 import golem.tool.{
@@ -45,7 +45,7 @@ trait MiddlewareFixtureTool {
   @arg("config", scope = "global")
   def middlewareFixture(config: String): Unit
 
-  def call(value: String, principal: Principal): Either[MiddlewareFixtureError, String]
+  def call(value: String, context: InvocationContext): Either[MiddlewareFixtureError, String]
 
   def nested(prefix: String): MiddlewareFixtureNested
 }
@@ -72,7 +72,7 @@ final class MiddlewareFixtureTransparent extends MiddlewareFixtureToolMiddleware
     underlying: MiddlewareFixtureToolUnderlying,
     config: String,
     value: String,
-    principal: Principal
+    context: InvocationContext
   ): Future[Either[ToolInvokeError[MiddlewareFixtureError], String]] =
     underlying.call(config, value).toMiddlewareResult
 
@@ -98,7 +98,7 @@ final class MiddlewareFixtureAdapter
     underlying: MiddlewareFixtureBackendUnderlying,
     config: String,
     value: String,
-    principal: Principal
+    context: InvocationContext
   ): Future[Either[ToolInvokeError[MiddlewareFixtureError], String]] =
     underlying
       .execute(value)

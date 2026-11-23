@@ -28,6 +28,22 @@ use toml_edit::{DocumentMut, value};
 inherit_test_dep!(Tracing);
 
 #[test]
+fn tracing_can_be_initialized_again(_tracing: &Tracing) {
+    Tracing::init();
+}
+
+#[test]
+async fn cli_binary_version_matches_metadata_cache_version(_tracing: &Tracing) {
+    let ctx = TestContext::new();
+    let output = ctx.cli(["--version"]).await;
+    assert!(output.success_or_dump());
+    assert_eq!(
+        output.stdout_text().trim(),
+        format!("golem {}", golem_cli::version())
+    );
+}
+
+#[test]
 #[timeout("2m")]
 async fn local_server_lease_renewals_without_otlp_do_not_warn(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
@@ -1540,11 +1556,13 @@ fn echo_tool() -> Tool {
     Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![golem_common::schema::tool::CommandNode {
                 name: "echo".to_string(),
                 aliases: vec![],
                 doc: doc("echo"),
+                http: None,
                 globals: Globals::default(),
                 subcommands: vec![],
                 body: Some(CommandBody {

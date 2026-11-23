@@ -52,6 +52,9 @@ use golem_common::schema::{
 use tempfile::TempDir;
 use test_r::{test, test_dep};
 
+#[path = "moonbit_recovery.rs"]
+mod recovery;
+
 /// Builds the structural multimodal schema type `list<variant<…> Role::Multimodal>`
 /// from `(case_name, payload)` modalities.
 fn multimodal(cases: Vec<(&str, SchemaType)>) -> SchemaType {
@@ -404,6 +407,7 @@ fn tool_node(name: &str) -> CommandNode {
         name: name.to_string(),
         aliases: vec![],
         doc: tool_doc(name),
+        http: None,
         globals: Globals::default(),
         subcommands: vec![],
         body: None,
@@ -561,6 +565,7 @@ fn schema_complete_tool() -> Tool {
     Tool {
         version: "1".into(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![
                 root,
@@ -3346,7 +3351,6 @@ test "agent failures surface stderr and still reject unknown members" {
 #[test]
 #[test_r::timeout("300s")]
 async fn accepted_streaming_invocation_recovers_with_takeover() {
-    use std::io::BufRead;
     let pkg = GeneratedPackage::new(agent(
         "RecoveryAgent",
         "rust",
@@ -3411,21 +3415,8 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
             STABLE,
         ),
     ] {
-        let mut server = std::process::Command::new("python3")
-            .arg("-u")
-            .arg(
-                workspace_root()
-                    .unwrap()
-                    .join("cli/golem-cli/tests/bridge_gen/moonbit_recovery.py"),
-            )
-            .arg(mode)
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        let mut port = String::new();
-        std::io::BufReader::new(server.stdout.take().unwrap())
-            .read_line(&mut port)
-            .unwrap();
+        eprintln!("MoonBit recovery mode: {mode}");
+        let server = recovery::RecoveryServer::start(mode);
         std::fs::write(
             pkg.module_dir().join("runtime/recovery_wbtest.mbt"),
             include_str!("moonbit_recovery.mbt")
@@ -3445,7 +3436,7 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
                         "let resolved = recovery_agent()"
                     },
                 )
-                .replace("__PORT__", port.trim())
+                .replace("__PORT__", &server.port.to_string())
                 .replace("__MODE__", mode)
                 .replace("__ERROR__", expected_error)
                 .replace("__RECONNECT__", reconnect)
@@ -3463,16 +3454,8 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
         .unwrap();
         // The runtime's own tests run with the other generated modules; each
         // mode runs only its recovery test against its peer.
-        let result =
-            std::panic::catch_unwind(|| pkg.test_native_paths(&["runtime/recovery_wbtest.mbt"]));
-        if result.is_err() {
-            let _ = server.kill();
-        }
-        let status = server.wait().unwrap();
-        if let Err(error) = result {
-            std::panic::resume_unwind(error);
-        }
-        assert!(status.success(), "WebSocket recovery assertions failed");
+        pkg.test_native_paths(&["runtime/recovery_wbtest.mbt"]);
+        server.finish();
     }
 }
 

@@ -607,6 +607,7 @@ impl<const CASE: u8> StreamingRecovery<CASE> {
             PublicInvocationSession::start(
                 &context.deps,
                 &iteration.user.token,
+                iteration.env,
                 &iteration.application,
                 &iteration.environment,
                 &warm,
@@ -628,6 +629,7 @@ impl<const CASE: u8> StreamingRecovery<CASE> {
                     let checkpoint = PublicInvocationSession::start(
                         &context.deps,
                         &iteration.user.token,
+                        iteration.env,
                         &iteration.application,
                         &iteration.environment,
                         &agent,
@@ -665,6 +667,7 @@ impl<const CASE: u8> StreamingRecovery<CASE> {
                     let report = PublicInvocationSession::start(
                         &context.deps,
                         &iteration.user.token,
+                        iteration.env,
                         &iteration.application,
                         &iteration.environment,
                         &agent,
@@ -737,6 +740,7 @@ impl<const CASE: u8> StreamingRecovery<CASE> {
                     let mut session = PublicInvocationSession::start(
                         &context.deps,
                         &iteration.user.token,
+                        iteration.env,
                         &iteration.application,
                         &iteration.environment,
                         &agent,

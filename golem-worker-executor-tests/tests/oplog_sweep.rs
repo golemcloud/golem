@@ -16,6 +16,7 @@
 //! unloaded-worker TTL.
 
 use crate::Tracing;
+use golem_worker_executor_test_utils::callers;
 
 use golem_api_grpc::proto::golem::worker::{
     AgentInvocationMode, AgentTarget, InvocationFreshnessDisposition, InvocationStart, agent_target,
@@ -178,7 +179,7 @@ async fn a_lookup_created_worker_expires_and_its_stranded_oplog_is_swept(
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
             context: None,
-            principal: None,
+            caller: Some(callers::anonymous().into()),
             freshness_disposition: InvocationFreshnessDisposition::MayExist as i32,
             config: Vec::new(),
             attempt_id: None,

@@ -21,6 +21,7 @@ use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::storage::scheduler::{
     ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError,
 };
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start_with_overrides,
@@ -431,11 +432,17 @@ impl SchedulerStorage for InsertGate {
         id: &ScheduleId,
         owner: Uuid,
         until: DateTime<Utc>,
+        now: DateTime<Utc>,
     ) -> Result<bool, SchedulerStorageError> {
-        self.inner.extend_lease(id, owner, until).await
+        self.inner.extend_lease(id, owner, until, now).await
     }
-    async fn ack(&self, id: &ScheduleId, owner: Uuid) -> Result<bool, SchedulerStorageError> {
-        self.inner.ack(id, owner).await
+    async fn ack(
+        &self,
+        id: &ScheduleId,
+        owner: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<bool, SchedulerStorageError> {
+        self.inner.ack(id, owner, now).await
     }
 }
 
@@ -508,7 +515,8 @@ async fn run_insert_race(
                 environment_id: Some(context.default_environment_id.into()),
                 force: Some(true),
                 auth_ctx: Some(executor.auth_ctx().into()),
-                principal: None,
+                caller: Some(callers::anonymous().into()),
+                expected_fingerprint: None,
             })
             .await?
             .into_inner();

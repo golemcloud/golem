@@ -16,8 +16,10 @@ use crate::Tracing;
 
 // P3-specific retry and streaming regression coverage retained from the
 // pre-split integration test module.
-use golem_common::model::RetryConfig;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::model::{
+    IdempotencyKey, NamedRetryPolicy, Predicate, PredicateValue, RetryConfig, RetryPolicy,
+};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
@@ -30,7 +32,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, test, timeout};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::spawn;
 use tracing::Instrument;
@@ -835,7 +837,7 @@ async fn http_zone1_inline_retry_on_transient_connection_failure(
 
 #[test]
 #[tracing::instrument]
-async fn http_zone1_falls_back_to_trap_when_delay_exceeds_threshold(
+async fn http_zone1_waits_out_backoff_above_threshold(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
@@ -883,12 +885,145 @@ async fn http_zone1_falls_back_to_trap_when_delay_exceeds_threshold(
         "200 response is test-header test-body"
     );
 
-    // Verify NO in-function retry error entries in oplog
-    let retry_count =
-        count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?;
+    // The send waits out the backoff on a runtime timer instead of trapping, so the retry is
+    // in-function even though its delay exceeds the threshold, and it records its deadline.
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let retries = oplog
+        .iter()
+        .filter_map(|e| match &e.entry {
+            PublicOplogEntry::Error(params) if params.error.contains("in-function retry") => {
+                Some(params)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(retries.len(), 1, "Expected 1 in-function retry error entry");
+    let retry_at = retries[0]
+        .retry_at
+        .expect("an in-function retry records its deadline");
+    assert!(
+        retry_at.to_millis() >= retries[0].timestamp.to_millis() + 100,
+        "the deadline is the backoff after the error"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn http_long_backoff_survives_restart_and_waits_only_until_its_deadline(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+
+    let backoff = Duration::from_secs(6);
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(move |config| {
+            config.retry = RetryConfig {
+                max_attempts: 5,
+                min_delay: backoff,
+                max_delay: backoff,
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+            config.max_in_function_retry_delay = Duration::from_millis(1);
+        })),
+        ..Default::default()
+    };
+
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+
+    let (port, connection_counter) = start_failing_http_server(1).await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+
+    let agent_id = agent_key!("HttpClient");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let key = IdempotencyKey::fresh();
+    executor
+        .invoke_agent_with_key(&component, &agent_id, &key, "run", data_value!())
+        .await?;
+
+    // The send failed once and now waits out its backoff in-function, with the deadline recorded.
+    let retry_at = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            if let Some(retry_at) = oplog.iter().find_map(|e| match &e.entry {
+                PublicOplogEntry::Error(params) => params.retry_at,
+                _ => None,
+            }) {
+                return anyhow::Ok(retry_at);
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    assert_eq!(connection_counter.load(Ordering::SeqCst), 1);
+
+    // A real restart in the middle of the wait.
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    let result = executor
+        .invoke_and_await_agent_with_key(&component, &agent_id, &key, "run", data_value!())
+        .await?;
     assert_eq!(
-        retry_count, 0,
-        "Expected 0 in-function retry error entries in oplog (should have fallen back to trap)"
+        result.into_typed::<String>()?,
+        "200 response is test-header test-body"
+    );
+
+    // One failed attempt and one retry reached the server: the repair neither skipped the wait
+    // nor retried more than once.
+    assert_eq!(connection_counter.load(Ordering::SeqCst), 2);
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let errors = oplog
+        .iter()
+        .filter_map(|e| match &e.entry {
+            PublicOplogEntry::Error(params) => Some(params),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        errors.len(),
+        1,
+        "one in-function retry, no trap and no second backoff: {errors:#?}"
+    );
+    assert_eq!(
+        errors[0].retrying_start_index,
+        Some(errors[0].retry_from),
+        "the deadline names the send that waits"
+    );
+    let send_end = oplog
+        .iter()
+        .filter_map(|e| match &e.entry {
+            PublicOplogEntry::End(end) if end.start_index == errors[0].retry_from => {
+                Some(end.timestamp)
+            }
+            _ => None,
+        })
+        .next()
+        .expect("the send that waited completes under its own Start");
+    assert!(
+        send_end.to_millis() >= retry_at.to_millis(),
+        "the repaired send must not run before its deadline ({send_end} < {retry_at})"
+    );
+    assert!(
+        send_end.to_millis() < retry_at.to_millis() + backoff.as_millis() as u64,
+        "the repair waits only until the recorded deadline, not a whole new backoff \
+         ({send_end} vs {retry_at})"
     );
 
     Ok(())
@@ -956,6 +1091,198 @@ async fn async_rpc_inline_retry_on_transient_remote_error(
     assert!(
         retry_count > 0,
         "Expected at least 1 in-function retry error entry in oplog, got {retry_count}"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn async_rpc_waits_out_backoff_above_threshold(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.max_in_function_retry_delay = Duration::from_millis(1);
+        })),
+        // A policy scoped to agent RPC by its `verb`: the long wait in `get` must resolve the
+        // same policy, with the same retry properties, as the background RPC task.
+        retry_policies: Some(vec![NamedRetryPolicy {
+            name: "rpc-long-backoff".to_string(),
+            priority: 100,
+            predicate: Predicate::PropEq {
+                property: "verb".to_string(),
+                value: PredicateValue::Text("invoke-and-await".to_string()),
+            },
+            policy: RetryPolicy::CountBox {
+                max_retries: 5,
+                inner: Box::new(RetryPolicy::Periodic(Duration::from_secs(2))),
+            },
+        }]),
+        wrap_rpc: Some(Arc::new(|inner| Arc::new(FailingRpc::new(inner, 1)))),
+        ..Default::default()
+    };
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+
+    let agent_id = agent_key!("RpcCaller", "async-rpc-long-backoff");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    // The first `inc_by` fails before reaching its target; `get` waits out the 2s backoff
+    // instead of recording the transient failure as the call's result, then sends it again.
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "test1", data_value!())
+        .await?
+        .into_return_value()
+        .expect("Expected a return value");
+
+    // Every target counter saw each increment exactly once.
+    let SchemaValue::List { elements } = result else {
+        panic!("Expected a list result, got {result:?}");
+    };
+    let values = elements
+        .iter()
+        .map(|element| match element {
+            SchemaValue::Tuple { elements } => elements[1].clone(),
+            other => panic!("Expected a tuple, got {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        values,
+        vec![
+            SchemaValue::U64(3),
+            SchemaValue::U64(3),
+            SchemaValue::U64(3)
+        ]
+    );
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let retries = oplog
+        .iter()
+        .filter_map(|e| match &e.entry {
+            PublicOplogEntry::Error(params) => Some(params),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        retries.len(),
+        1,
+        "one in-function retry and no trap: {retries:#?}"
+    );
+    assert!(retries[0].error.contains("in-function retry"));
+    let retry_at = retries[0]
+        .retry_at
+        .expect("an in-function retry records its deadline");
+    assert!(retry_at.to_millis() >= retries[0].timestamp.to_millis() + 2_000);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn async_rpc_long_backoff_suspends_the_idle_agent_and_wakes_at_its_deadline(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+
+    let backoff = Duration::from_secs(5);
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(move |config| {
+            config.retry = RetryConfig {
+                max_attempts: 5,
+                min_delay: backoff,
+                max_delay: backoff,
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+            config.max_in_function_retry_delay = Duration::from_millis(1);
+            config.suspend.suspend_after = Duration::from_secs(1);
+            config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+        })),
+        wrap_rpc: Some(Arc::new(|inner| Arc::new(FailingRpc::new(inner, 1)))),
+        ..Default::default()
+    };
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+
+    let agent_id = agent_key!("RpcCaller", "async-rpc-long-backoff-suspends");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "test1", data_value!())
+        .await?
+        .into_return_value()
+        .expect("Expected a return value");
+    let SchemaValue::List { elements } = result else {
+        panic!("Expected a list result, got {result:?}");
+    };
+    assert!(
+        elements.iter().all(|element| matches!(
+            element,
+            SchemaValue::Tuple { elements } if elements[1] == SchemaValue::U64(3)
+        )),
+        "every target counter saw each increment exactly once: {elements:?}"
+    );
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let (error_index, retry_at) = oplog
+        .iter()
+        .find_map(|e| match &e.entry {
+            PublicOplogEntry::Error(params) => Some((e.oplog_index, params.retry_at?)),
+            _ => None,
+        })
+        .expect("an in-function retry with its deadline");
+    // The backoff timer is a passive wait, so the agent with nothing else to do suspended
+    // during it instead of staying resident or trapping.
+    assert!(
+        oplog
+            .iter()
+            .any(|e| e.oplog_index > error_index && matches!(e.entry, PublicOplogEntry::Suspend(_))),
+        "the idle agent suspends during the backoff"
+    );
+    let finished = oplog
+        .iter()
+        .rev()
+        .find_map(|e| match &e.entry {
+            PublicOplogEntry::AgentInvocationFinished(params) => Some(params.timestamp),
+            _ => None,
+        })
+        .expect("test1 finished");
+    assert!(
+        finished.to_millis() >= retry_at.to_millis(),
+        "the woken agent retries at its deadline, not earlier ({finished} < {retry_at})"
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|e| matches!(e.entry, PublicOplogEntry::Error(_)))
+            .count(),
+        1,
+        "no trap and no second retry"
     );
 
     Ok(())

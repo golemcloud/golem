@@ -201,6 +201,7 @@ impl CardTransferData {
     }
 
     pub(super) fn from_request(
+        start_index: OplogIndex,
         request: HostRequestPermissionCardTransfer,
     ) -> Result<Self, WorkerExecutorError> {
         let source_card: StoredCard = deserialize(&request.source_card).map_err(|error| {
@@ -229,6 +230,7 @@ impl CardTransferData {
                 if source_card != installed_card || installed_card_provenance.is_some() =>
             {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    start_index,
                     "a concrete source card transferred without modification",
                     format!(
                         "source card {} and installed card {} differ",
@@ -240,12 +242,14 @@ impl CardTransferData {
             StoredCard::Polymorphic(_) => {
                 let StoredCard::Concrete(installed_child) = &installed_card else {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        start_index,
                         "a concrete child for a polymorphic source transfer",
                         "a polymorphic installed card",
                     ));
                 };
                 if installed_child.parent_ids != [source_card.card_id()] {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        start_index,
                         "an installed child parented directly to its polymorphic source",
                         format!(
                             "installed card {} has parents {:?}",
@@ -255,6 +259,7 @@ impl CardTransferData {
                 }
                 if installed_card_provenance.is_none() {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        start_index,
                         "runtime provenance for an installed polymorphic child",
                         "missing provenance",
                     ));
@@ -318,8 +323,12 @@ pub(super) fn installed_card_matches_request(
     }
 }
 
-pub(super) fn transfer_progress_mismatch(message: impl std::fmt::Display) -> WorkerExecutorError {
+pub(super) fn transfer_progress_mismatch(
+    index: OplogIndex,
+    message: impl std::fmt::Display,
+) -> WorkerExecutorError {
     WorkerExecutorError::unexpected_oplog_entry(
+        index,
         "durable permission-card transfer state matching its persisted request",
         message.to_string(),
     )
@@ -329,23 +338,26 @@ pub(super) fn transfer_progress_mismatch(message: impl std::fmt::Display) -> Wor
 fn source_transfer_records(
     status: &AgentStatusRecord,
     transfer_id: Uuid,
+    index: OplogIndex,
 ) -> Result<Option<&SourceCardTransferRecords>, WorkerExecutorError> {
     match status.source_card_transfers.get(&transfer_id) {
         None => Ok(None),
         Some(SourceCardTransferState::Recorded(records)) => Ok(Some(records)),
-        Some(SourceCardTransferState::Conflict) => Err(transfer_progress_mismatch(format!(
-            "transfer {transfer_id} has conflicting durable records of the same kind"
-        ))),
+        Some(SourceCardTransferState::Conflict) => Err(transfer_progress_mismatch(
+            index,
+            format!("transfer {transfer_id} has conflicting durable records of the same kind"),
+        )),
     }
 }
 
 pub(super) async fn source_transfer_progress<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     transfer: &CardTransferData,
+    start_index: OplogIndex,
 ) -> Result<SourceTransferProgress, WorkerExecutorError> {
     let status = ctx.public_state.worker().get_repaired_status().await?;
     let mut progress = SourceTransferProgress::default();
-    let Some(records) = source_transfer_records(&status, transfer.transfer_id)? else {
+    let Some(records) = source_transfer_records(&status, transfer.transfer_id, start_index)? else {
         return Ok(progress);
     };
     let source_card_id = transfer.source_card.card_id();
@@ -362,20 +374,26 @@ pub(super) async fn source_transfer_progress<Ctx: WorkerCtx>(
             )
             || transfer.installed_card_provenance.is_none()
         {
-            return Err(transfer_progress_mismatch(format!(
-                "derived card {} conflicts with transfer {}",
-                card.card_id(),
-                transfer.transfer_id
-            )));
+            return Err(transfer_progress_mismatch(
+                start_index,
+                format!(
+                    "derived card {} conflicts with transfer {}",
+                    card.card_id(),
+                    transfer.transfer_id
+                ),
+            ));
         }
         progress.derived_card = Some(card.clone());
     }
     if let Some(queued) = &records.queued {
         let Some(queued_card) = queued.card.as_ref() else {
-            return Err(transfer_progress_mismatch(format!(
-                "queued transfer {} is missing its installed card payload",
-                transfer.transfer_id
-            )));
+            return Err(transfer_progress_mismatch(
+                start_index,
+                format!(
+                    "queued transfer {} is missing its installed card payload",
+                    transfer.transfer_id
+                ),
+            ));
         };
         if queued.card_id != source_card_id
             || !installed_card_matches_request(
@@ -385,10 +403,13 @@ pub(super) async fn source_transfer_progress<Ctx: WorkerCtx>(
             )
             || queued.target_holder != target_holder
         {
-            return Err(transfer_progress_mismatch(format!(
-                "queued transfer {} has a conflicting payload or target",
-                transfer.transfer_id
-            )));
+            return Err(transfer_progress_mismatch(
+                start_index,
+                format!(
+                    "queued transfer {} has a conflicting payload or target",
+                    transfer.transfer_id
+                ),
+            ));
         }
         progress.queued = true;
         progress.queued_card = Some(queued_card.clone());
@@ -398,10 +419,13 @@ pub(super) async fn source_transfer_progress<Ctx: WorkerCtx>(
             || started.source_holder != source_holder
             || started.target_holder != target_holder
         {
-            return Err(transfer_progress_mismatch(format!(
-                "source transfer intent {} conflicts with its persisted request",
-                transfer.transfer_id
-            )));
+            return Err(transfer_progress_mismatch(
+                start_index,
+                format!(
+                    "source transfer intent {} conflicts with its persisted request",
+                    transfer.transfer_id
+                ),
+            ));
         }
         progress.started = true;
     }
@@ -410,34 +434,46 @@ pub(super) async fn source_transfer_progress<Ctx: WorkerCtx>(
             || confirmed.installed_card_id != installed_card_id
             || confirmed.target_holder != target_holder
         {
-            return Err(transfer_progress_mismatch(format!(
-                "source transfer receipt {} conflicts with its persisted request",
-                transfer.transfer_id
-            )));
+            return Err(transfer_progress_mismatch(
+                start_index,
+                format!(
+                    "source transfer receipt {} conflicts with its persisted request",
+                    transfer.transfer_id
+                ),
+            ));
         }
         progress.confirmed = true;
     }
 
     if progress.started && !progress.queued {
-        return Err(transfer_progress_mismatch(format!(
-            "source transfer intent {} has no preceding queued payload",
-            transfer.transfer_id
-        )));
+        return Err(transfer_progress_mismatch(
+            start_index,
+            format!(
+                "source transfer intent {} has no preceding queued payload",
+                transfer.transfer_id
+            ),
+        ));
     }
     if progress.confirmed && !progress.started {
-        return Err(transfer_progress_mismatch(format!(
-            "source transfer receipt {} has no source intent",
-            transfer.transfer_id
-        )));
+        return Err(transfer_progress_mismatch(
+            start_index,
+            format!(
+                "source transfer receipt {} has no source intent",
+                transfer.transfer_id
+            ),
+        ));
     }
     if transfer.installed_card_provenance.is_some()
         && (progress.queued || progress.started || progress.confirmed)
         && progress.derived_card.is_none()
     {
-        return Err(transfer_progress_mismatch(format!(
-            "polymorphic transfer {} has no preceding CardDerived audit event",
-            transfer.transfer_id
-        )));
+        return Err(transfer_progress_mismatch(
+            start_index,
+            format!(
+                "polymorphic transfer {} has no preceding CardDerived audit event",
+                transfer.transfer_id
+            ),
+        ));
     }
 
     Ok(progress)
@@ -456,15 +492,17 @@ pub(super) async fn load_card_transfer_request<Ctx: WorkerCtx>(
         } => (function_name, request),
         other => {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
-                "permission-card transfer Start with a request",
+                start_index,
                 format!("{other:?}"),
+                "permission-card transfer Start with a request",
             ));
         }
     };
     if function_name != GolemPermissionsInstallTransfer::HOST_FUNCTION_NAME {
         return Err(WorkerExecutorError::unexpected_oplog_entry(
-            GolemPermissionsInstallTransfer::FQFN,
+            start_index,
             function_name.to_string(),
+            GolemPermissionsInstallTransfer::FQFN,
         ));
     }
     let request: HostRequest =
@@ -479,6 +517,7 @@ pub(super) async fn load_card_transfer_request<Ctx: WorkerCtx>(
             })?;
     request.try_into().map_err(|error| {
         WorkerExecutorError::unexpected_oplog_entry(
+            start_index,
             "permission-card transfer request payload",
             error,
         )
@@ -603,9 +642,10 @@ pub(super) async fn ensure_source_card_transfer_started<Ctx: WorkerCtx>(
 pub(super) async fn execute_source_card_transfer<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     transfer: &CardTransferData,
+    start_index: OplogIndex,
 ) -> anyhow::Result<Result<(), PermissionCardDeriveError>> {
     ctx.process_pending_replay_events().await?;
-    let progress = source_transfer_progress(ctx, transfer).await?;
+    let progress = source_transfer_progress(ctx, transfer, start_index).await?;
     if progress.confirmed {
         return Ok(Ok(()));
     }
@@ -708,6 +748,7 @@ fn pending_source_transfer_progress(
     transfer: &QueuedCardEventTransfer,
     installed_card: &StoredCard,
     target_agent_id: &AgentId,
+    index: OplogIndex,
 ) -> Result<PendingSourceTransferProgress, WorkerExecutorError> {
     let source_holder = CardHolder::Agent(AgentCardHolder {
         environment_id: source.environment_id,
@@ -717,26 +758,35 @@ fn pending_source_transfer_progress(
         environment_id: source.environment_id,
         agent_id: *target_agent_id,
     });
-    let Some(records) = source_transfer_records(status, transfer.transfer_id)? else {
-        return Err(transfer_progress_mismatch(format!(
-            "pending transfer {} has no durable queued retry payload",
-            transfer.transfer_id
-        )));
+    let Some(records) = source_transfer_records(status, transfer.transfer_id, index)? else {
+        return Err(transfer_progress_mismatch(
+            index,
+            format!(
+                "pending transfer {} has no durable queued retry payload",
+                transfer.transfer_id
+            ),
+        ));
     };
     let Some(queued) = &records.queued else {
-        return Err(transfer_progress_mismatch(format!(
-            "pending transfer {} has no durable queued retry payload",
-            transfer.transfer_id
-        )));
+        return Err(transfer_progress_mismatch(
+            index,
+            format!(
+                "pending transfer {} has no durable queued retry payload",
+                transfer.transfer_id
+            ),
+        ));
     };
     if queued.card_id != transfer.card_id
         || queued.card.as_ref() != Some(installed_card)
         || queued.target_holder != target_holder
     {
-        return Err(transfer_progress_mismatch(format!(
-            "queued transfer {} has a conflicting retry payload",
-            transfer.transfer_id
-        )));
+        return Err(transfer_progress_mismatch(
+            index,
+            format!(
+                "queued transfer {} has a conflicting retry payload",
+                transfer.transfer_id
+            ),
+        ));
     }
 
     let mut progress = PendingSourceTransferProgress::default();
@@ -745,10 +795,13 @@ fn pending_source_transfer_progress(
             || started.source_holder != source_holder
             || started.target_holder != target_holder
         {
-            return Err(transfer_progress_mismatch(format!(
-                "source transfer intent {} conflicts with its queued retry payload",
-                transfer.transfer_id
-            )));
+            return Err(transfer_progress_mismatch(
+                index,
+                format!(
+                    "source transfer intent {} conflicts with its queued retry payload",
+                    transfer.transfer_id
+                ),
+            ));
         }
         progress.started = true;
     }
@@ -757,30 +810,38 @@ fn pending_source_transfer_progress(
             || confirmed.installed_card_id != installed_card.card_id()
             || confirmed.target_holder != target_holder
         {
-            return Err(transfer_progress_mismatch(format!(
-                "source transfer receipt {} conflicts with its queued retry payload",
-                transfer.transfer_id
-            )));
+            return Err(transfer_progress_mismatch(
+                index,
+                format!(
+                    "source transfer receipt {} conflicts with its queued retry payload",
+                    transfer.transfer_id
+                ),
+            ));
         }
         progress.confirmed = true;
     }
     if progress.confirmed && !progress.started {
-        return Err(transfer_progress_mismatch(format!(
-            "source transfer receipt {} has no source intent",
-            transfer.transfer_id
-        )));
+        return Err(transfer_progress_mismatch(
+            index,
+            format!(
+                "source transfer receipt {} has no source intent",
+                transfer.transfer_id
+            ),
+        ));
     }
 
     Ok(progress)
 }
 
 pub(super) fn pending_transfer_target_agent_id(
+    index: OplogIndex,
     transfer_id: Uuid,
     target_holder: &CardHolder,
 ) -> Result<&AgentId, WorkerExecutorError> {
     match target_holder {
         CardHolder::Agent(target_holder) => Ok(&target_holder.agent_id),
         CardHolder::Account(_) | CardHolder::Application(_) => Err(transfer_progress_mismatch(
+            index,
             format!("pending transfer {transfer_id} targets an unsupported non-agent holder"),
         )),
     }
@@ -802,6 +863,7 @@ impl PendingSourceCardTransferRetry {
             &self.transfer,
             &self.installed_card,
             &self.target_agent_id,
+            self.pending.oplog_index,
         )?
         .confirmed)
     }
@@ -814,19 +876,26 @@ pub(crate) fn prepare_pending_source_card_transfer_retry(
     transfer: &QueuedCardEventTransfer,
 ) -> Result<Option<PendingSourceCardTransferRetry>, WorkerExecutorError> {
     let installed_card = transfer.card.as_ref().ok_or_else(|| {
-        transfer_progress_mismatch(format!(
-            "pending transfer {} is missing its installed card payload",
-            transfer.transfer_id
-        ))
+        transfer_progress_mismatch(
+            pending.oplog_index,
+            format!(
+                "pending transfer {} is missing its installed card payload",
+                transfer.transfer_id
+            ),
+        )
     })?;
-    let target_agent_id =
-        pending_transfer_target_agent_id(transfer.transfer_id, &transfer.target_holder)?;
+    let target_agent_id = pending_transfer_target_agent_id(
+        pending.oplog_index,
+        transfer.transfer_id,
+        &transfer.target_holder,
+    )?;
     let progress = pending_source_transfer_progress(
         status,
         source,
         transfer,
         installed_card,
         target_agent_id,
+        pending.oplog_index,
     )?;
     if progress.confirmed {
         return Ok(None);
@@ -834,23 +903,32 @@ pub(crate) fn prepare_pending_source_card_transfer_retry(
 
     if transfer.card_id == installed_card.card_id() {
         if !matches!(installed_card, StoredCard::Concrete(_)) {
-            return Err(transfer_progress_mismatch(format!(
-                "concrete source transfer {} carries a polymorphic installed card",
-                transfer.transfer_id
-            )));
+            return Err(transfer_progress_mismatch(
+                pending.oplog_index,
+                format!(
+                    "concrete source transfer {} carries a polymorphic installed card",
+                    transfer.transfer_id
+                ),
+            ));
         }
     } else {
         let StoredCard::Concrete(installed_child) = installed_card else {
-            return Err(transfer_progress_mismatch(format!(
-                "polymorphic source transfer {} carries a polymorphic installed card",
-                transfer.transfer_id
-            )));
+            return Err(transfer_progress_mismatch(
+                pending.oplog_index,
+                format!(
+                    "polymorphic source transfer {} carries a polymorphic installed card",
+                    transfer.transfer_id
+                ),
+            ));
         };
         if installed_child.parent_ids != [transfer.card_id] {
-            return Err(transfer_progress_mismatch(format!(
-                "installed card {} is not parented directly to pending transfer source {}",
-                installed_child.card_id, transfer.card_id
-            )));
+            return Err(transfer_progress_mismatch(
+                pending.oplog_index,
+                format!(
+                    "installed card {} is not parented directly to pending transfer source {}",
+                    installed_child.card_id, transfer.card_id
+                ),
+            ));
         }
     }
 

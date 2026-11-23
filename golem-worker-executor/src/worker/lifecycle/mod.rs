@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::InvocationId;
+use golem_common::model::caller::{Caller, Principal};
 
 use super::invocation_loop::{EphemeralStart, ephemeral_start_decision};
 use super::{RetirementReason, Worker};
@@ -20,11 +21,13 @@ use crate::services::{HasAll, HasOplogService, HasWorkerService};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::AgentStatusRecord;
 use golem_common::model::agent::ScheduleId;
-use golem_common::model::agent::{AgentMode, ParsedAgentKey, Principal};
+use golem_common::model::agent::{AgentMode, ParsedAgentKey};
 use golem_common::model::agent::{ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::oplog::{OplogEntry, OplogErrorKind, OplogIndex};
-use golem_common::model::{AgentId, AgentStatus, OwnedAgentId, PendingUpdateKind, Timestamp};
+use golem_common::model::{
+    AgentFingerprint, AgentId, AgentStatus, OwnedAgentId, PendingUpdateKind, Timestamp,
+};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use tracing::{debug, info, warn};
 
@@ -63,7 +66,8 @@ fn interrupt_decision(status: &AgentStatus, recover_immediately: bool) -> Interr
         AgentStatus::Exited
         | AgentStatus::Idle
         | AgentStatus::Failed
-        | AgentStatus::Interrupted => InterruptDecision::Ignore,
+        | AgentStatus::Interrupted
+        | AgentStatus::Sandboxed => InterruptDecision::Ignore,
         AgentStatus::Running | AgentStatus::Suspended | AgentStatus::Retrying
             if recover_immediately =>
         {
@@ -86,6 +90,7 @@ fn resume_decision(
         }
         AgentStatus::Failed => ResumeDecision::PreviousFailed,
         AgentStatus::Exited => ResumeDecision::PreviousExited,
+        AgentStatus::Sandboxed => ResumeDecision::Reject,
         AgentStatus::Suspended
         | AgentStatus::Interrupted
         | AgentStatus::Idle
@@ -98,7 +103,7 @@ fn resume_decision(
 fn update_decision(status: &AgentStatus, mode: UpdateMode, disable_wakeup: bool) -> UpdateDecision {
     match mode {
         UpdateMode::Automatic => match status {
-            AgentStatus::Exited => UpdateDecision::Ignore,
+            AgentStatus::Exited | AgentStatus::Sandboxed => UpdateDecision::Ignore,
             AgentStatus::Interrupted
             | AgentStatus::Suspended
             | AgentStatus::Retrying
@@ -134,36 +139,50 @@ pub(super) fn has_duplicate_pending_update(
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    pub(crate) async fn ensure_management_fingerprint(
+        &self,
+        expected_fingerprint: Option<AgentFingerprint>,
+    ) -> Result<(), WorkerExecutorError> {
+        let _instance = self.instance.lock().await;
+        if expected_fingerprint
+            .is_some_and(|expected| expected != self.get_initial_worker_metadata().fingerprint)
+        {
+            return Err(WorkerExecutorError::worker_not_found(
+                self.owned_agent_id.agent_id(),
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) async fn get_existing_suspended<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-        principal: Principal,
+        caller: Caller,
     ) -> Result<std::sync::Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         deps.active_agents()
-            .get_existing(deps, owned_agent_id, principal)
+            .get_existing(deps, owned_agent_id, caller)
             .await
     }
 
     pub async fn delete<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-        principal: Principal,
+        expected_fingerprint: AgentFingerprint,
+        caller: Caller,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let mut worker =
-            Self::get_existing_suspended(deps, owned_agent_id, principal.clone()).await?;
+        let mut worker = Self::get_existing_suspended(deps, owned_agent_id, caller.clone()).await?;
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
         loop {
-            if let Some(outcome) = worker.start_deletion().await? {
+            if let Some(outcome) = worker.start_deletion(expected_fingerprint).await? {
                 return outcome.handle().wait().await;
             }
-            worker = match Self::get_existing_suspended(deps, owned_agent_id, principal.clone())
-                .await
+            worker = match Self::get_existing_suspended(deps, owned_agent_id, caller.clone()).await
             {
                 Ok(worker) if worker.get_initial_worker_metadata().fingerprint == fingerprint => {
                     worker
@@ -178,17 +197,36 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         recover_immediately: bool,
-        principal: Principal,
+        caller: Caller,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = match Self::get_existing_suspended(deps, owned_agent_id, principal).await {
+        let worker = match Self::get_existing_suspended(deps, owned_agent_id, caller).await {
             Ok(worker) => worker,
             Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(()),
             Err(error) => return Err(error),
         };
-        let metadata = worker.get_latest_worker_metadata().await;
+        worker
+            .ensure_management_fingerprint(expected_fingerprint)
+            .await?;
+        // A running deletion that already stopped the state actor answers as a missing agent.
+        let metadata = match worker.try_get_latest_worker_metadata().await {
+            Err(_) if worker.answers_as_deleted().await => return Ok(()),
+            metadata => metadata?,
+        };
+        // A deletion that failed before it removed the durable state keeps the agent, and is
+        // refused. A running deletion, or one past that stage, answers as a missing agent below;
+        // a lost shard keeps the routing miss that the read above or the retirement below gives.
+        if !worker.retired_for_lost_shard()
+            && worker.deletion_owns_retirement().await
+            && !worker.answers_as_deleted().await
+        {
+            return Err(WorkerExecutorError::invalid_request(
+                "Worker is being deleted",
+            ));
+        }
 
         let decision = interrupt_decision(&metadata.last_known_status.status, recover_immediately);
         if decision == InterruptDecision::Ignore {
@@ -199,6 +237,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 AgentStatus::Interrupted => {
                     warn!("Attempted interrupting worker which is already interrupted")
                 }
+                AgentStatus::Sandboxed => warn!("Attempted interrupting a sandboxed worker"),
                 _ => unreachable!(),
             }
             return Ok(());
@@ -234,14 +273,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         force: bool,
-        principal: Principal,
+        caller: Caller,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id, caller).await?;
+        worker
+            .ensure_management_fingerprint(expected_fingerprint)
+            .await?;
         worker.ensure_component_agent_ingress("resume")?;
-        let metadata = worker.get_latest_worker_metadata().await;
+        let metadata = worker.try_get_latest_worker_metadata().await?;
 
         match resume_decision(
             &metadata.last_known_status.status,
@@ -306,13 +349,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         mode: UpdateMode,
         target_revision: ComponentRevision,
         disable_wakeup: bool,
-        principal: Principal,
+        caller: Caller,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<OplogIndex, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
-        let metadata = worker.get_latest_worker_metadata().await;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id, caller).await?;
+        worker
+            .ensure_management_fingerprint(expected_fingerprint)
+            .await?;
+        let metadata = worker.try_get_latest_worker_metadata().await?;
         if metadata.owner_kind == OwnerKind::EphemeralExternalTool {
             return Err(WorkerExecutorError::invalid_request(
                 "update is not supported for an external tool owner",
@@ -446,12 +493,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: &OwnedAgentId,
         target: RevertWorkerTarget,
         resolved_revert: Option<ResolvedRevert>,
-        principal: Principal,
+        caller: Caller,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id, caller).await?;
+        worker
+            .ensure_management_fingerprint(expected_fingerprint)
+            .await?;
         worker.ensure_component_agent_ingress("revert")?;
         worker.revert_internal(target, resolved_revert).await
     }
@@ -511,39 +562,61 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         plugin_priority: PluginPriority,
-        principal: Principal,
+        caller: Caller,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        Self::set_plugin_activation(deps, owned_agent_id, plugin_priority, principal, true).await
+        Self::set_plugin_activation(
+            deps,
+            owned_agent_id,
+            plugin_priority,
+            caller,
+            true,
+            expected_fingerprint,
+        )
+        .await
     }
 
     pub async fn deactivate_plugin<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         plugin_priority: PluginPriority,
-        principal: Principal,
+        caller: Caller,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        Self::set_plugin_activation(deps, owned_agent_id, plugin_priority, principal, false).await
+        Self::set_plugin_activation(
+            deps,
+            owned_agent_id,
+            plugin_priority,
+            caller,
+            false,
+            expected_fingerprint,
+        )
+        .await
     }
 
     async fn set_plugin_activation<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         plugin_priority: PluginPriority,
-        principal: Principal,
+        caller: Caller,
         activate: bool,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id, caller).await?;
+        worker
+            .ensure_management_fingerprint(expected_fingerprint)
+            .await?;
         worker.ensure_component_agent_ingress("plugin change")?;
-        let metadata = worker.get_latest_worker_metadata().await;
+        let metadata = worker.try_get_latest_worker_metadata().await?;
         if worker.deletion_owns_retirement().await {
             return Err(WorkerExecutorError::invalid_request(
                 "Worker is being deleted",
@@ -600,7 +673,7 @@ mod tests {
     };
     use test_r::test;
 
-    const STATUSES: [AgentStatus; 7] = [
+    const STATUSES: [AgentStatus; 8] = [
         AgentStatus::Running,
         AgentStatus::Idle,
         AgentStatus::Suspended,
@@ -608,6 +681,7 @@ mod tests {
         AgentStatus::Retrying,
         AgentStatus::Failed,
         AgentStatus::Exited,
+        AgentStatus::Sandboxed,
     ];
 
     #[test]
@@ -652,6 +726,7 @@ mod tests {
             InterruptDecision::Interrupt,
             InterruptDecision::Ignore,
             InterruptDecision::Ignore,
+            InterruptDecision::Ignore,
         ];
         let expected_recovering = [
             InterruptDecision::Restart,
@@ -659,6 +734,7 @@ mod tests {
             InterruptDecision::Restart,
             InterruptDecision::Ignore,
             InterruptDecision::Restart,
+            InterruptDecision::Ignore,
             InterruptDecision::Ignore,
             InterruptDecision::Ignore,
         ];
@@ -681,6 +757,7 @@ mod tests {
             ResumeDecision::Start,
             ResumeDecision::PreviousFailed,
             ResumeDecision::PreviousExited,
+            ResumeDecision::Reject,
         ];
         let expected_forced = [
             ResumeDecision::ForceStart,
@@ -690,6 +767,7 @@ mod tests {
             ResumeDecision::Start,
             ResumeDecision::PreviousFailed,
             ResumeDecision::PreviousExited,
+            ResumeDecision::Reject,
         ];
 
         for ((status, expected), expected_forced) in
@@ -715,6 +793,7 @@ mod tests {
             UpdateDecision::QueueAndStart,
             UpdateDecision::QueueAndStart,
             UpdateDecision::Ignore,
+            UpdateDecision::Ignore,
         ];
         let automatic_without_wakeup = [
             UpdateDecision::QueueAndRestart,
@@ -723,6 +802,7 @@ mod tests {
             UpdateDecision::Queue,
             UpdateDecision::Queue,
             UpdateDecision::Queue,
+            UpdateDecision::Ignore,
             UpdateDecision::Ignore,
         ];
 
@@ -1069,19 +1149,27 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(false);
         }
         let invocation = self.hydrate_pending_invocation(pending).await?.invocation;
-        if !matches!(invocation.principal(), Some(Principal::Agent(principal)) if &principal.agent_id == owner)
-        {
+        if !matches!(
+            invocation.caller().map(|caller| &caller.immediate),
+            Some(Principal::Agent(agent)) if &agent.address == owner
+        ) {
             return Ok(false);
         }
-        self.withdraw_pending_invocation(&instance_guard, &status, idempotency_key)
+        let withdrawn = self
+            .withdraw_pending_invocation(&instance_guard, &status, idempotency_key)
             .await?;
+        drop(instance_guard);
+        self.publish_cancelled(&withdrawn).await;
         Ok(true)
     }
 
+    /// Cancels an invocation that has not started. The decision is taken under the instance
+    /// lock, so a start that wins the race is reported as `Running`, never as a cancel. Waiters
+    /// of a withdrawn invocation are woken with `InvocationCancelled`.
     pub async fn cancel_invocation(
         &self,
         idempotency_key: InvocationId,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<CancelInvocationOutcome, WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
         if instance_guard.ensure_not_deleting().is_err() {
@@ -1096,25 +1184,73 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .iter()
             .any(|pending| pending.has_idempotency_key(&idempotency_key))
         {
-            return Ok(());
+            return Ok(
+                if status.current_idempotency_key() == Some(&idempotency_key) {
+                    CancelInvocationOutcome::Running
+                } else {
+                    CancelInvocationOutcome::NotPending
+                },
+            );
         }
 
-        self.withdraw_pending_invocation(&instance_guard, &status, idempotency_key)
+        let withdrawn = self
+            .withdraw_pending_invocation(&instance_guard, &status, idempotency_key)
             .await?;
 
         drop(instance_guard);
+        self.publish_cancelled(&withdrawn).await;
+        Ok(CancelInvocationOutcome::Withdrawn)
+    }
+
+    /// Removes a queued entry whose invocation already has a result, without reporting a cancel:
+    /// its waiters keep the existing result.
+    pub(in crate::worker) async fn discard_pending_duplicate(
+        &self,
+        idempotency_key: InvocationId,
+    ) -> Result<(), WorkerExecutorError> {
+        let instance_guard = self.lock_non_stopping_worker().await;
+        if instance_guard.ensure_not_deleting().is_err() {
+            return Err(WorkerExecutorError::invalid_request(
+                "Cannot cancel invocation on a deleting worker",
+            ));
+        };
+        let status = self.get_repaired_status().await?;
+        if status
+            .pending_invocations
+            .iter()
+            .any(|pending| pending.has_idempotency_key(&idempotency_key))
+        {
+            self.withdraw_pending_invocation(&instance_guard, &status, idempotency_key)
+                .await?;
+        }
         Ok(())
     }
 
+    /// Wakes the waiters of withdrawn invocations. A warm fail-fast result cached for a queued
+    /// invocation is dropped first, so the committed cancellation is what later lookups read.
+    async fn publish_cancelled(&self, withdrawn: &[InvocationId]) {
+        {
+            let mut hydrated = self.hydrated_invocation_results.write().await;
+            for key in withdrawn {
+                hydrated.remove(key);
+            }
+        }
+        for key in withdrawn {
+            self.publish_completion(key, Err(WorkerExecutorError::InvocationCancelled));
+        }
+    }
+
     /// Withdraws validated pending work while its instance is locked against starting. A scheduled
-    /// method on a never-started ephemeral target also owns the constructor reservation.
+    /// method on a never-started ephemeral target also owns the constructor reservation. Returns
+    /// the withdrawn keys, after their cancellation is committed.
     async fn withdraw_pending_invocation(
         &self,
         instance_guard: &tokio::sync::MutexGuard<'_, WorkerLifecycle>,
         status: &AgentStatusRecord,
         idempotency_key: InvocationId,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<Vec<InvocationId>, WorkerExecutorError> {
         let initialization_key = self.initialization_idempotency_key();
+        let mut withdrawn = Vec::new();
         if self.agent_mode() == AgentMode::Ephemeral
             && !status.ephemeral_execution_begun
             && status.pending_invocations.iter().any(|pending| {
@@ -1127,6 +1263,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             self.add_to_oplog(OplogEntry::cancel_pending_invocation(initialization_key))
                 .await?;
+            withdrawn.push(initialization_key);
         }
         self.add_and_commit_oplog_internal(
             instance_guard,
@@ -1134,7 +1271,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Some(WorkerCommand::WorkAvailable),
         )
         .await?;
-        Ok(())
+        withdrawn.push(idempotency_key);
+        Ok(withdrawn)
     }
     pub(in crate::worker) async fn revert_to_last_oplog_index(
         self: &Arc<Self>,
@@ -1317,6 +1455,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 invocation_results: self.config().invocation_results.membership(),
                 ..Default::default()
             };
+            // The entries come from storage, where an external payload keeps no decoded value.
+            crate::worker::status::hydrate_stream_session_payloads(
+                self,
+                &self.owned_agent_id,
+                self.agent_mode(),
+                &last_known_status.deleted_regions,
+                &mut prospective_entries,
+            )
+            .await?;
+            crate::worker::status::hydrate_lookup_payloads(
+                self,
+                &self.owned_agent_id,
+                self.agent_mode(),
+                &retained_status,
+                &last_known_status.deleted_regions,
+                &mut prospective_entries,
+            )
+            .await?;
             let retained_status = update_status_with_new_entries(
                 self.agent_mode(),
                 retained_status,
@@ -1342,6 +1498,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // Revert changes observable state, invalidate cached results.
             self.bump_read_only_cache_epoch();
 
+            let mut cancelled_by_cut = Vec::new();
             if last_known_status.has_durable_stream_history {
                 let identity = (
                     &self.owned_agent_id,
@@ -1364,6 +1521,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }
                     _ => WorkerExecutorError::runtime(error.to_string()),
                 })?;
+                let mut cut_cancelled = Vec::new();
                 let mut entries = vec![
                     DurableStreamOplogRecord::InlineEntry(OplogEntry::revert(
                         dropped_region.clone(),
@@ -1394,12 +1552,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         entries.push(DurableStreamOplogRecord::InlineEntry(
                             OplogEntry::cancel_pending_invocation(*key),
                         ));
+                        cut_cancelled.push(*key);
                     }
                 }
                 self.oplog
                     .add_durable_stream_batch(Box::new(move |_| entries))
                     .await
                     .map_err(|error| self.retire_if_fenced(error))?;
+                cancelled_by_cut = cut_cancelled;
             } else {
                 // Through the fence-aware helper: a revert is a write like any other, and if the
                 // shard has a new owner this must surface rather than be discarded.
@@ -1413,6 +1573,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await?;
             self.hydrated_invocation_results.write().await.clear();
             self.current_component.store(Arc::new(restored_component));
+            self.publish_cancelled(&cancelled_by_cut).await;
             Ok(reverted)
         }
     }
@@ -1533,3 +1694,14 @@ pub mod deletion;
 pub mod retirement;
 pub mod state;
 pub mod stop;
+
+/// What `Worker::cancel_invocation` decided under the instance lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelInvocationOutcome {
+    /// The pending or scheduled invocation was withdrawn; its outcome is `cancelled`.
+    Withdrawn,
+    /// The invocation is running; cancelling it is not supported yet.
+    Running,
+    /// The invocation is neither pending nor running: it is finished or unknown.
+    NotPending,
+}

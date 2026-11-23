@@ -200,8 +200,8 @@ type AgentDependency interface{ dependencyName() string }
 // Context is passed to every method handler. State is the agent instance's
 // private state, as returned by the agent's init function.
 type Context[S any] struct {
-	State     *S
-	principal Principal
+	State  *S
+	caller func() Caller
 }
 
 // AgentID returns the ID of the running agent. It is read from the host on
@@ -211,10 +211,9 @@ type Context[S any] struct {
 // without that grant AgentID returns the zero AgentID.
 func (c *Context[S]) AgentID() AgentID { return selfAgentID() }
 
-// Principal returns the principal the agent was initialized with. The
-// principal of the current invocation is a [Principal] field of the method's
-// input struct.
-func (c *Context[S]) Principal() Principal { return c.principal }
+// Caller says who caused the running invocation. The host is asked on the first
+// call, and the answer is kept for the rest of the invocation.
+func (c *Context[S]) Caller() Caller { return callerOf(c.caller) }
 
 // InitContext is the execution scope passed to a [DefineConfiguredAgent]
 // constructor. It carries the constructor parameters ([InitContext.ID]) and reads
@@ -223,12 +222,12 @@ func (c *Context[S]) Principal() Principal { return c.principal }
 // method. Agents declared with the plain [DefineAgent] receive their id directly
 // and never see this type.
 type InitContext[Id any, S any, Cfg any] struct {
-	id        Id
-	principal Principal
+	id     Id
+	caller func() Caller
 }
 
-// Principal returns the principal initializing the agent.
-func (c *InitContext[Id, S, Cfg]) Principal() Principal { return c.principal }
+// Caller says who caused the invocation that initializes the agent.
+func (c *InitContext[Id, S, Cfg]) Caller() Caller { return callerOf(c.caller) }
 
 // ID returns the constructor parameters the agent instance was created with.
 func (c *InitContext[Id, S, Cfg]) ID() Id { return c.id }

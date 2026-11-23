@@ -8,6 +8,7 @@ use golem_common::model::oplog::{
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::{HasOplog, HasWebSocketConnectionPool, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
@@ -246,7 +247,7 @@ async fn pending_timed_receive(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
         golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
         invocation_create_intent(
             &executor,
@@ -673,7 +674,7 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
         golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
         golem_worker_executor::worker::CreateIntent::Invocation {
             owner: golem_worker_executor::worker::NewOwner::keyed(component.id, name.clone()),

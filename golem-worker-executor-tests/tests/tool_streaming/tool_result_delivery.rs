@@ -298,9 +298,7 @@ async fn raw_tool_return_boundary(
                     },
                 ),
                 InvocationContextStack::fresh(),
-                Principal::GolemUser(GolemUserPrincipal {
-                    account_id: context.account_id,
-                }),
+                golem_worker_executor_test_utils::callers::account(context.account_id),
                 None,
             ),
         );
@@ -879,6 +877,7 @@ async fn output_producer_trap_and_deadline_fail_the_invocation(
                     )
                     .into(),
                 ),
+                caller: Some(golem_worker_executor_test_utils::callers::anonymous().into()),
                 ..Default::default()
             })),
         };

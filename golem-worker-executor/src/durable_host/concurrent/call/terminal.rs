@@ -143,7 +143,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
-        self.complete_access_with_delivered(store, get_ctx, response, Box::new(|| {}))
+        self.complete_access_with_delivered(store, get_ctx, response, Box::new(|_| {}))
             .await
     }
 
@@ -770,6 +770,9 @@ pub(super) fn response_has_bounded_encoding_stack<Resp: 'static>() -> bool {
         TypeId::of::<HostResponseP3MonotonicClockUnit>(),
         TypeId::of::<HostResponseStreamCheckWrite>(),
         TypeId::of::<HostResponseStreamSkip>(),
+        TypeId::of::<HostResponseSocketsTcpStreamRead>(),
+        TypeId::of::<HostResponseSocketsTcpStreamCount>(),
+        TypeId::of::<HostResponseSocketsTcpStreamFlush>(),
         TypeId::of::<HostResponseQuotaTokenAcquired>(),
         TypeId::of::<HostResponseQuotaCommitResult>(),
         TypeId::of::<HostResponsePermissionCardDerived>(),
@@ -782,6 +785,7 @@ pub(super) fn response_has_bounded_encoding_stack<Resp: 'static>() -> bool {
         TypeId::of::<HostResponseP3BlobstoreIncomingValueStream>(),
         TypeId::of::<HostResponseP3HttpClientConsumeBodyChunk>(),
         TypeId::of::<HostResponseP3SocketsTcpReceiveChunk>(),
+        TypeId::of::<HostResponseP3SocketsTcpSendChunk>(),
         TypeId::of::<HostResponseGolemApiCard>(),
         TypeId::of::<HostResponseGolemApiOplogEntries>(),
         TypeId::of::<HostResponseToolAttachmentCreated>(),

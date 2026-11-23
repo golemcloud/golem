@@ -1,20 +1,24 @@
 use super::*;
 
+type LatestWorkerStatus = (
+    AgentStatus,
+    Option<OplogErrorKind>,
+    HashMap<OplogIndex, RetryPolicyState>,
+    HashMap<OplogIndex, Timestamp>,
+    Option<RetryConfig>,
+);
+
 pub(super) fn calculate_latest_worker_status(
     mut current_status: AgentStatus,
     mut last_error_kind: Option<OplogErrorKind>,
     mut current_retry_state: HashMap<OplogIndex, RetryPolicyState>,
+    mut current_retry_at: HashMap<OplogIndex, Timestamp>,
     current_retry_policy: Option<RetryConfig>,
     default_retry_policy: &RetryConfig,
     skipped_regions: &DeletedRegions,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> (
-    AgentStatus,
-    Option<OplogErrorKind>,
-    HashMap<OplogIndex, RetryPolicyState>,
-    Option<RetryConfig>,
-) {
+) -> LatestWorkerStatus {
     for (idx, entry) in entries {
         // Errors are counted in skipped regions too (but not in deleted ones), so retained
         // retry state survives a Jump.
@@ -27,6 +31,24 @@ pub(super) fn calculate_latest_worker_status(
             } = entry
         {
             current_retry_state.insert(*retry_from, state.clone());
+        }
+        // The backoff deadline of each host call that waits, keyed by its `Start`: the latest
+        // retry of the call sets it and the call's terminal ends it, so it never delays the repair
+        // of another call, even one sharing the retry point.
+        if !deleted_regions.is_in_deleted_region(*idx) {
+            match entry {
+                OplogEntry::Error {
+                    retry_at: Some(retry_at),
+                    retrying_start_index: Some(start_index),
+                    ..
+                } => {
+                    current_retry_at.insert(*start_index, *retry_at);
+                }
+                OplogEntry::End { start_index, .. } | OplogEntry::Cancelled { start_index, .. } => {
+                    current_retry_at.remove(start_index);
+                }
+                _ => {}
+            }
         }
 
         // Skipping entries in skipped regions, as they are skipped during replay too
@@ -46,11 +68,15 @@ pub(super) fn calculate_latest_worker_status(
         {
             last_error_kind = Some(*kind);
             if *kind == OplogErrorKind::Invocation
-                && matches!(error, AgentError::PermissionDenied(_))
+                && matches!(
+                    error,
+                    AgentError::InvalidRequest(_) | AgentError::PermissionDenied(_)
+                )
             {
                 current_status = AgentStatus::Idle;
                 last_error_kind = None;
                 current_retry_state.clear();
+                current_retry_at.clear();
             } else {
                 let count = current_retry_state
                     .get(retry_from)
@@ -95,6 +121,7 @@ pub(super) fn calculate_latest_worker_status(
                 if !unresolved_recovery {
                     last_error_kind = None;
                     current_retry_state.clear();
+                    current_retry_at.clear();
                 }
             }
             OplogEntry::AgentInvocationFinished { .. }
@@ -103,6 +130,7 @@ pub(super) fn calculate_latest_worker_status(
                 if !unresolved_recovery {
                     last_error_kind = None;
                     current_retry_state.clear();
+                    current_retry_at.clear();
                 }
             }
             OplogEntry::Suspend { .. } => {
@@ -218,6 +246,7 @@ pub(super) fn calculate_latest_worker_status(
         current_status,
         last_error_kind,
         current_retry_state,
+        current_retry_at,
         current_retry_policy,
     )
 }

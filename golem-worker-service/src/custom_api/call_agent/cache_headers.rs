@@ -14,56 +14,30 @@
 //
 //! HTTP cache-header helpers used when binding read-only `AgentMethod` HTTP routes.
 //!
-//! The worker-service emits `Cache-Control`, `ETag`, and (when the read-only
-//! method depends on the caller's principal) `Vary: Authorization` for every
-//! cacheable HTTP method (`GET` / `HEAD`) that resolves to an `AgentMethod`
-//! whose `read-only` config is `Some(_)`.
+//! The worker-service emits ETags for eligible read-only GET/HEAD responses.
+//! Cache-Control and credential-related Vary headers use the shared response
+//! cache policy, independently of the executor's principal-aware cache key.
 //!
 //! Conversely, for `If-None-Match` revalidation requests, the worker-service
 //! can produce a `304 Not Modified` response without invoking the executor
-//! when the supplied `ETag` matches the agent's current oplog index.
+//! when the supplied `ETag` matches the agent's current oplog index and the
+//! caller of the request. The `ETag` holds a digest of the caller, so one
+//! caller's validator never revalidates another caller's request, even when a
+//! private response tells the browser to revalidate every time.
 //!
 //! See [#3392](https://github.com/golemcloud/golem/issues/3392) and
 //! [`read-only-agent-methods.md`](../../../../read-only-agent-methods.md) for
 //! the full design.
 
 use golem_common::model::agent::{CachePolicy, ReadOnlyConfig};
+use golem_common::model::caller::Caller;
 use golem_common::model::{AgentFingerprint, OplogIndex, OwnedAgentId};
-use http::header;
-
-/// `Cache-Control` visibility for a read-only method.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CacheVisibility {
-    /// Caches may be shared across users (e.g. a CDN). Set when the method
-    /// does **not** depend on the caller's principal.
-    Public,
-    /// Only per-user caches (e.g. a browser cache) may store this response.
-    /// Set when the method depends on the caller's principal.
-    Private,
-}
-
-impl CacheVisibility {
-    pub fn for_read_only(read_only: &ReadOnlyConfig) -> Self {
-        if read_only.uses_principal {
-            Self::Private
-        } else {
-            Self::Public
-        }
-    }
-
-    pub fn as_token(self) -> &'static str {
-        match self {
-            Self::Public => "public",
-            Self::Private => "private",
-        }
-    }
-}
 
 /// Build the value for the `ETag` response header for a read-only invocation.
 ///
-/// The format is `"<environment-id>/<agent-id>/<fingerprint>:<oplog-index>"`, with
-/// surrounding quotes so the value is syntactically a strong validator. Every part is a
-/// UUID, so it never contains commas, quotes, or other characters that would confuse HTTP
+/// The format is `"<environment-id>/<agent-id>/<fingerprint>/<caller>:<oplog-index>"`, with
+/// surrounding quotes so the value is syntactically a strong validator. Its parts contain
+/// no commas, quotes, or other characters that would confuse HTTP
 /// parsers or the `If-None-Match` splitter.
 ///
 /// Including the per-instance agent fingerprint guards against the (rare)
@@ -71,25 +45,51 @@ impl CacheVisibility {
 /// `AgentId` that happens to reach the same oplog index: without the
 /// fingerprint, a previously-cached client-side ETag would incorrectly match
 /// the new instance.
+///
+/// `<caller>` is [`caller_etag_tag`]: every caller gets its own representation
+/// of a read-only result (the executor caches it per caller), and RFC 9110
+/// 8.8.3 requires a strong validator to differ between representations. A
+/// cache may send the validator of a stored response that `Vary` does not
+/// select for the request, so without it a `304` to one caller would let the
+/// cache reuse another caller's body.
 pub fn build_etag_value(
     agent_id: &OwnedAgentId,
     fingerprint: AgentFingerprint,
+    caller: &Caller,
     oplog_index: OplogIndex,
 ) -> String {
     format!(
         "\"{}:{}\"",
-        agent_id_etag_token(agent_id, fingerprint),
+        agent_id_etag_token(agent_id, fingerprint, caller),
         u64::from(oplog_index)
     )
 }
 
 /// Same format as [`build_etag_value`] but without the surrounding quotes,
 /// used for parsing/comparison.
-pub fn agent_id_etag_token(agent_id: &OwnedAgentId, fingerprint: AgentFingerprint) -> String {
+pub fn agent_id_etag_token(
+    agent_id: &OwnedAgentId,
+    fingerprint: AgentFingerprint,
+    caller: &Caller,
+) -> String {
     format!(
-        "{}/{}/{}",
-        agent_id.environment_id, agent_id.agent_id, fingerprint,
+        "{}/{}/{}/{}",
+        agent_id.environment_id,
+        agent_id.agent_id,
+        fingerprint,
+        caller_etag_tag(caller),
     )
+}
+
+/// The caller part of an `ETag`: the first 16 bytes of [`Caller::digest`] in
+/// lowercase hex. It is the digest that the executor's read-only cache keys
+/// results on, so a validator and a cached result always belong to the same
+/// caller.
+pub fn caller_etag_tag(caller: &Caller) -> String {
+    caller.digest()[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// Returns true when the read-only method's cache policy allows HTTP
@@ -100,35 +100,8 @@ pub fn supports_http_revalidation(read_only: &ReadOnlyConfig) -> bool {
     !matches!(read_only.cache_policy, CachePolicy::NoCache(_))
 }
 
-/// Build the `Cache-Control` header value for the given read-only config.
-///
-/// Mapping:
-/// - [`CachePolicy::NoCache`] → `no-store`
-/// - [`CachePolicy::UntilWrite`] → `<vis>, no-cache`
-/// - [`CachePolicy::Ttl(d)`] → `<vis>, max-age=<floor(d, 1s)>`
-///
-/// Sub-second TTL values floor to `max-age=0`, which causes downstream caches
-/// to revalidate via `ETag` on every request. The deploy-time validator emits
-/// a warning in that case so the agent author can pick a different TTL.
-pub fn build_cache_control_value(read_only: &ReadOnlyConfig) -> String {
-    let visibility = CacheVisibility::for_read_only(read_only);
-    match &read_only.cache_policy {
-        CachePolicy::NoCache(_) => "no-store".to_string(),
-        CachePolicy::UntilWrite(_) => format!("{}, no-cache", visibility.as_token()),
-        CachePolicy::Ttl(ttl) => {
-            let seconds = ttl_seconds_floor(ttl.duration_nanos);
-            format!("{}, max-age={}", visibility.as_token(), seconds)
-        }
-    }
-}
-
-/// Floor the TTL value (in nanoseconds) to whole seconds.
-pub fn ttl_seconds_floor(duration_nanos: u64) -> u64 {
-    duration_nanos / 1_000_000_000
-}
-
 /// Parse a header value containing one or more `If-None-Match` ETag tokens,
-/// returning the parsed (component-id, agent-name, oplog-index) tuples.
+/// returning the parsed (agent-token, oplog-index) tuples.
 ///
 /// Unknown / malformed entries are silently skipped. The `*` wildcard does
 /// not match agent-specific revalidation and is also ignored.
@@ -159,17 +132,18 @@ pub fn parse_if_none_match_entries(header_value: &str) -> Vec<(String, u64)> {
 }
 
 /// Returns true if any entry from `parse_if_none_match_entries` matches the
-/// given agent id, agent fingerprint, and oplog index. Both halves of the
+/// given agent id, agent fingerprint, caller and oplog index. Every part of the
 /// validator must match: a client-side ETag that was minted for a previous
-/// instance of the same `AgentId` (different fingerprint) will not match the
-/// current instance, even if the oplog index happens to coincide.
+/// instance of the same `AgentId` (different fingerprint), or for another
+/// caller, does not match, even if the oplog index happens to coincide.
 pub fn if_none_match_hits(
     entries: &[(String, u64)],
     agent_id: &OwnedAgentId,
     fingerprint: AgentFingerprint,
+    caller: &Caller,
     current_oplog: OplogIndex,
 ) -> bool {
-    let expected_token = agent_id_etag_token(agent_id, fingerprint);
+    let expected_token = agent_id_etag_token(agent_id, fingerprint, caller);
     let expected_idx = u64::from(current_oplog);
     entries
         .iter()
@@ -181,40 +155,7 @@ pub mod headers {
     use http::HeaderName;
 
     pub const ETAG: HeaderName = http::header::ETAG;
-    pub const CACHE_CONTROL: HeaderName = http::header::CACHE_CONTROL;
     pub const IF_NONE_MATCH: HeaderName = http::header::IF_NONE_MATCH;
-}
-
-/// Append `header_name` to the `Vary` value already present in `existing`
-/// (if any), preserving duplicates / casing of previous entries. Returns the
-/// new combined value. Match is case-insensitive, so an existing
-/// `Vary: authorization` is preserved as-is when adding `Authorization`.
-pub fn merge_vary_with_header(existing: Option<&str>, header_name: &str) -> String {
-    let mut tokens: Vec<String> = match existing {
-        Some(value) => value
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect(),
-        None => Vec::new(),
-    };
-    if !tokens.iter().any(|t| t.eq_ignore_ascii_case(header_name)) {
-        tokens.push(header_name.to_string());
-    }
-    tokens.join(", ")
-}
-
-/// Insert a `Vary: <header_name>` header into a header map, merging with any
-/// existing `Vary` value. Call repeatedly to add multiple varying headers.
-pub fn add_vary_header(headers: &mut http::HeaderMap, header_name: &str) {
-    let existing = headers
-        .get(&header::VARY)
-        .and_then(|value| value.to_str().ok());
-    let new_value = merge_vary_with_header(existing, header_name);
-    headers.insert(
-        header::VARY,
-        http::HeaderValue::from_str(&new_value).unwrap(),
-    );
 }
 
 #[cfg(test)]
@@ -241,14 +182,6 @@ mod tests {
     fn public_no_cache() -> ReadOnlyConfig {
         ReadOnlyConfig {
             cache_policy: CachePolicy::UntilWrite(Empty {}),
-            uses_principal: false,
-        }
-    }
-
-    fn private_no_cache() -> ReadOnlyConfig {
-        ReadOnlyConfig {
-            cache_policy: CachePolicy::UntilWrite(Empty {}),
-            uses_principal: true,
         }
     }
 
@@ -257,66 +190,67 @@ mod tests {
             cache_policy: CachePolicy::Ttl(CachePolicyTtl {
                 duration_nanos: nanos,
             }),
-            uses_principal: false,
         }
     }
 
     fn no_store_public() -> ReadOnlyConfig {
         ReadOnlyConfig {
             cache_policy: CachePolicy::NoCache(Empty {}),
-            uses_principal: false,
         }
-    }
-
-    #[test]
-    fn cache_control_no_store_for_no_cache_policy() {
-        assert_eq!(build_cache_control_value(&no_store_public()), "no-store");
-    }
-
-    #[test]
-    fn cache_control_until_write_public_when_principal_unaware() {
-        assert_eq!(
-            build_cache_control_value(&public_no_cache()),
-            "public, no-cache"
-        );
-    }
-
-    #[test]
-    fn cache_control_until_write_private_when_principal_aware() {
-        assert_eq!(
-            build_cache_control_value(&private_no_cache()),
-            "private, no-cache"
-        );
-    }
-
-    #[test]
-    fn cache_control_ttl_floors_to_seconds() {
-        assert_eq!(
-            build_cache_control_value(&ttl_public(2_500_000_000)),
-            "public, max-age=2"
-        );
-    }
-
-    #[test]
-    fn cache_control_sub_second_ttl_renders_as_max_age_zero() {
-        assert_eq!(
-            build_cache_control_value(&ttl_public(500_000_000)),
-            "public, max-age=0"
-        );
     }
 
     #[test]
     fn etag_value_contains_environment_agent_id_and_fingerprint() {
         let agent_id = agent_id_for_test();
         let fingerprint = fingerprint_for_test();
-        let etag = build_etag_value(&agent_id, fingerprint, OplogIndex::from_u64(42));
+        let etag = build_etag_value(
+            &agent_id,
+            fingerprint,
+            &Caller::anonymous(),
+            OplogIndex::from_u64(42),
+        );
         assert_eq!(
             etag,
             format!(
-                "\"00000000-0000-0000-0000-000000000001/{}/{fingerprint}:42\"",
-                agent_id.agent_id
+                "\"00000000-0000-0000-0000-000000000001/{}/{fingerprint}/{}:42\"",
+                agent_id.agent_id,
+                caller_etag_tag(&Caller::anonymous()),
             )
         );
+    }
+
+    #[test]
+    fn if_none_match_misses_when_caller_differs() {
+        let agent_id = agent_id_for_test();
+        let fingerprint = fingerprint_for_test();
+        let oplog = OplogIndex::from_u64(10);
+        let account = Caller::entry(golem_common::model::caller::Principal::Account(
+            golem_common::model::caller::AccountPrincipal {
+                issuer: "https://golem.example".to_string(),
+                account_id: golem_common::model::account::AccountId::new(),
+                authentication: golem_common::model::caller::AccountAuthentication::ApiToken,
+            },
+        ));
+        let entries = parse_if_none_match_entries(&build_etag_value(
+            &agent_id,
+            fingerprint,
+            &Caller::anonymous(),
+            oplog,
+        ));
+        assert!(!if_none_match_hits(
+            &entries,
+            &agent_id,
+            fingerprint,
+            &account,
+            oplog
+        ));
+        assert!(if_none_match_hits(
+            &entries,
+            &agent_id,
+            fingerprint,
+            &Caller::anonymous(),
+            oplog
+        ));
     }
 
     #[test]
@@ -371,12 +305,14 @@ mod tests {
         let entries = parse_if_none_match_entries(&build_etag_value(
             &agent_id,
             fingerprint,
+            &Caller::anonymous(),
             OplogIndex::from_u64(10),
         ));
         assert!(if_none_match_hits(
             &entries,
             &agent_id,
             fingerprint,
+            &Caller::anonymous(),
             OplogIndex::from_u64(10)
         ));
     }
@@ -388,12 +324,14 @@ mod tests {
         let entries = parse_if_none_match_entries(&build_etag_value(
             &agent_id,
             fingerprint,
+            &Caller::anonymous(),
             OplogIndex::from_u64(10),
         ));
         assert!(!if_none_match_hits(
             &entries,
             &agent_id,
             fingerprint,
+            &Caller::anonymous(),
             OplogIndex::from_u64(11)
         ));
     }
@@ -409,40 +347,16 @@ mod tests {
         let new_fingerprint = AgentFingerprint(uuid!("00000000-0000-0000-0000-000000000bbb"));
         let oplog = OplogIndex::from_u64(10);
 
-        let stale_etag = build_etag_value(&agent_id, old_fingerprint, oplog);
+        let stale_etag = build_etag_value(&agent_id, old_fingerprint, &Caller::anonymous(), oplog);
         let entries = parse_if_none_match_entries(&stale_etag);
 
         assert!(!if_none_match_hits(
             &entries,
             &agent_id,
             new_fingerprint,
+            &Caller::anonymous(),
             oplog
         ));
-    }
-
-    #[test]
-    fn merge_vary_appends_header_when_missing() {
-        let merged = merge_vary_with_header(Some("Accept-Encoding"), "Authorization");
-        assert_eq!(merged, "Accept-Encoding, Authorization");
-    }
-
-    #[test]
-    fn merge_vary_keeps_header_unique_case_insensitive() {
-        let merged =
-            merge_vary_with_header(Some("Accept-Encoding, authorization"), "Authorization");
-        assert_eq!(merged, "Accept-Encoding, authorization");
-    }
-
-    #[test]
-    fn merge_vary_creates_value_when_absent() {
-        let merged = merge_vary_with_header(None, "Authorization");
-        assert_eq!(merged, "Authorization");
-    }
-
-    #[test]
-    fn merge_vary_supports_custom_header_names() {
-        let merged = merge_vary_with_header(None, "X-Tenant");
-        assert_eq!(merged, "X-Tenant");
     }
 
     #[test]
@@ -471,21 +385,6 @@ mod tests {
     // is consumed by.
     // ----------------------------------------------------------------
 
-    /// H1: `GET` on a read-only method emits both `ETag` and `Cache-Control`.
-    #[test]
-    fn h1_get_returns_etag_and_cache_control_for_until_write() {
-        let read_only = public_no_cache();
-        let agent_id = agent_id_for_test();
-        let fingerprint = fingerprint_for_test();
-
-        let etag = build_etag_value(&agent_id, fingerprint, OplogIndex::from_u64(42));
-        let cache_control = build_cache_control_value(&read_only);
-
-        assert!(etag.starts_with('"') && etag.ends_with('"'));
-        assert_eq!(cache_control, "public, no-cache");
-        assert!(supports_http_revalidation(&read_only));
-    }
-
     /// H2: an `If-None-Match` whose ETag matches the agent's current oplog
     /// index revalidates with `304 Not Modified` and does not invoke the
     /// executor.
@@ -494,7 +393,7 @@ mod tests {
         let agent_id = agent_id_for_test();
         let fingerprint = fingerprint_for_test();
         let current = OplogIndex::from_u64(99);
-        let etag = build_etag_value(&agent_id, fingerprint, current);
+        let etag = build_etag_value(&agent_id, fingerprint, &Caller::anonymous(), current);
 
         let entries = parse_if_none_match_entries(&etag);
 
@@ -502,6 +401,7 @@ mod tests {
             &entries,
             &agent_id,
             fingerprint,
+            &Caller::anonymous(),
             current
         ));
     }
@@ -518,7 +418,8 @@ mod tests {
         let before_write = OplogIndex::from_u64(10);
         let after_write = OplogIndex::from_u64(11);
 
-        let stale_etag = build_etag_value(&agent_id, fingerprint, before_write);
+        let stale_etag =
+            build_etag_value(&agent_id, fingerprint, &Caller::anonymous(), before_write);
         let entries = parse_if_none_match_entries(&stale_etag);
 
         // Old ETag must not match the post-write oplog index.
@@ -526,53 +427,9 @@ mod tests {
             &entries,
             &agent_id,
             fingerprint,
+            &Caller::anonymous(),
             after_write
         ));
-    }
-
-    /// H4: a read-only method whose `uses_principal == false` is cacheable by
-    /// shared caches (CDNs) — emit `Cache-Control: public, ...`.
-    #[test]
-    fn h4_principal_unaware_uses_public_cache_directive() {
-        let read_only = public_no_cache();
-        let cache_control = build_cache_control_value(&read_only);
-
-        assert!(cache_control.starts_with("public,"));
-        assert_eq!(
-            CacheVisibility::for_read_only(&read_only),
-            CacheVisibility::Public
-        );
-    }
-
-    /// H4 (counterpart): a read-only method whose `uses_principal == true`
-    /// must mark its response `private`, so a shared cache cannot serve one
-    /// user's representation for another.
-    #[test]
-    fn h4_principal_aware_uses_private_cache_directive() {
-        let read_only = private_no_cache();
-        let cache_control = build_cache_control_value(&read_only);
-
-        assert!(cache_control.starts_with("private,"));
-        assert_eq!(
-            CacheVisibility::for_read_only(&read_only),
-            CacheVisibility::Private
-        );
-    }
-
-    /// H5: a `CachePolicy::Ttl(d)` method's `Cache-Control` ends in
-    /// `max-age=<floor(d, 1s)>`.
-    #[test]
-    fn h5_ttl_method_returns_max_age_floored_to_seconds() {
-        // 2.5s -> floors to max-age=2
-        assert_eq!(
-            build_cache_control_value(&ttl_public(2_500_000_000)),
-            "public, max-age=2"
-        );
-        // exactly 1s -> max-age=1
-        assert_eq!(
-            build_cache_control_value(&ttl_public(1_000_000_000)),
-            "public, max-age=1"
-        );
     }
 
     /// `CachePolicy::NoCache` must not emit `ETag` and must not be
@@ -582,7 +439,6 @@ mod tests {
     #[test]
     fn no_cache_policy_opts_out_of_http_revalidation() {
         let read_only = no_store_public();
-        assert_eq!(build_cache_control_value(&read_only), "no-store");
         assert!(!supports_http_revalidation(&read_only));
     }
 }

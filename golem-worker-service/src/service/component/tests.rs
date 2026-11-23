@@ -28,11 +28,88 @@ use test_r::test;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
+/// A tool deployment of `component` that registers `definition` as `tool_name` and binds it to
+/// each of `owners`.
+pub(crate) fn tool_deployment_state(
+    component: &Component,
+    tool_name: &str,
+    definition: golem_common::schema::tool::Tool,
+    owners: impl IntoIterator<Item = golem_common::model::tool::ToolBindingOwner>,
+) -> golem_common::model::tool::ToolDeploymentState {
+    use golem_common::model::deployment::DeploymentRevision;
+    use golem_common::model::tool::{
+        CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolDeploymentState, ToolName,
+        ToolProvisionConfig, ToolRegistration, ToolSource,
+    };
+    let tool_name = ToolName::try_from(tool_name).unwrap();
+    let registration = ToolRegistration {
+        deployment_revision: DeploymentRevision::INITIAL,
+        release_id: None,
+        definition: definition.clone(),
+        provision: ToolProvisionConfig::default(),
+        component_bindings: std::collections::BTreeMap::new(),
+        source: ToolSource::Component {
+            component_id: component.id,
+            component_revision: component.revision,
+            component_name: component.component_name.clone(),
+        },
+        owner_account_id: component.account_id,
+        owner_account_email: component.account_email.clone(),
+        metadata_version: "0.1.0".into(),
+        metadata_digest: Default::default(),
+    };
+    let tool_bindings = owners
+        .into_iter()
+        .map(|owner| {
+            let binding = CompiledToolBinding {
+                deployment_revision: DeploymentRevision::INITIAL,
+                release_id: None,
+                owner: owner.clone(),
+                tool_name: tool_name.clone(),
+                version: definition.version.clone(),
+                metadata_version: registration.metadata_version.clone(),
+                metadata_digest: Default::default(),
+                account_id: component.account_id,
+                account_email: component.account_email.clone(),
+                parameters: golem_common::base_model::json::NormalizedJsonValue::new(
+                    serde_json::json!({}),
+                ),
+                config_keys_readable: Default::default(),
+                secret_keys_readable: SecretKeyScope::All,
+                secret_keys_revealable: SecretKeyScope::All,
+                filesystem_access: Default::default(),
+                source: registration.source.clone(),
+            };
+            (
+                owner,
+                std::collections::BTreeMap::from([(tool_name.clone(), binding)]),
+            )
+        })
+        .collect();
+    ToolDeploymentState {
+        deployment_revision: DeploymentRevision::INITIAL,
+        registered_tools: std::collections::BTreeMap::from([(
+            tool_name,
+            RegisteredTool {
+                type_id: golem_common::model::type_id::TypeId::try_from(1_u32).unwrap(),
+                registration,
+            },
+        )]),
+        tool_bindings,
+        mcp_imports: Vec::new(),
+        registered_tool_middlewares: std::collections::BTreeMap::new(),
+        tool_middleware_chains: std::collections::BTreeMap::new(),
+        tool_middleware_configuration: Default::default(),
+    }
+}
+
 pub(crate) struct TestRegistry {
     revisions: Vec<Component>,
     pub(crate) deployed: Mutex<Option<Component>>,
     pub(crate) deployed_agent_type: Mutex<Option<RegisteredAgentType>>,
     pub(crate) next_lookup: Mutex<Option<Arc<LookupGate>>>,
+    pub(crate) deployed_tools: Mutex<Option<golem_common::model::tool::ToolDeploymentState>>,
+    pub(crate) tool_state_reads: std::sync::atomic::AtomicUsize,
 }
 
 /// Holds the next deployed lookup after it read the registry state, until the test releases it.
@@ -65,6 +142,8 @@ impl TestRegistry {
             deployed: Mutex::new(deployed),
             deployed_agent_type: Mutex::new(None),
             next_lookup: Mutex::new(None),
+            deployed_tools: Mutex::new(None),
+            tool_state_reads: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 }
@@ -85,12 +164,22 @@ pub(crate) fn component() -> Component {
         metadata: ComponentMetadata::default(),
         created_at: chrono::Utc::now(),
         wasm_hash: golem_common::model::diff::Hash::empty(),
+        package_metadata: None,
         object_store_key: "test".into(),
     }
 }
 
 #[async_trait]
 impl RegistryService for TestRegistry {
+    async fn get_tool_deployment_state(
+        &self,
+        _: EnvironmentId,
+        _: ComponentId,
+        _: ComponentRevision,
+    ) -> Result<Option<golem_common::model::tool::ToolDeploymentState>, RegistryServiceError> {
+        self.tool_state_reads.fetch_add(1, Ordering::SeqCst);
+        Ok(self.deployed_tools.lock().unwrap().clone())
+    }
     async fn get_component_metadata(
         &self,
         id: ComponentId,
@@ -342,6 +431,66 @@ async fn current_metadata_is_independent_of_cached_revisions() {
 }
 
 #[test]
+async fn tool_deployment_state_is_cached_until_invalidation() {
+    let a = component();
+    let registry = Arc::new(TestRegistry::new(vec![a.clone()], Some(a.clone())));
+    let service = RemoteComponentService::new(registry.clone(), &ComponentServiceConfig::default());
+    let state = |tool: &str| {
+        tool_deployment_state(
+            &a,
+            tool,
+            golem_common::schema::tool::Tool {
+                version: "1.0.0".into(),
+                requires_filesystem: false,
+                http_mount: None,
+                schema: golem_common::schema::SchemaGraph::empty(),
+                commands: golem_common::schema::tool::CommandTree { nodes: vec![] },
+            },
+            Vec::new(),
+        )
+    };
+    let read = async |revision: ComponentRevision| {
+        service
+            .get_tool_deployment_state(a.environment_id, a.id, revision)
+            .await
+            .unwrap()
+            .map(|state| {
+                state
+                    .registered_tools
+                    .keys()
+                    .map(|t| t.to_string())
+                    .collect::<Vec<_>>()
+            })
+    };
+    let reads = || registry.tool_state_reads.load(Ordering::SeqCst);
+
+    *registry.deployed_tools.lock().unwrap() = Some(state("first"));
+    assert_eq!(read(a.revision).await, Some(vec!["first".to_string()]));
+    *registry.deployed_tools.lock().unwrap() = Some(state("second"));
+    assert_eq!(read(a.revision).await, Some(vec!["first".to_string()]));
+    assert_eq!(reads(), 1);
+
+    // Another revision of the same component is a separate entry.
+    let other_revision = ComponentRevision::new(7).unwrap();
+    assert_eq!(read(other_revision).await, Some(vec!["second".to_string()]));
+    assert_eq!(reads(), 2);
+
+    service.invalidate_current().await;
+    assert_eq!(read(a.revision).await, Some(vec!["second".to_string()]));
+    assert_eq!(reads(), 3);
+
+    // A target without an active tool deployment is cached and invalidated the same way.
+    *registry.deployed_tools.lock().unwrap() = None;
+    service.invalidate_current().await;
+    assert_eq!(read(a.revision).await, None);
+    *registry.deployed_tools.lock().unwrap() = Some(state("third"));
+    assert_eq!(read(a.revision).await, None);
+    assert_eq!(reads(), 4);
+    service.invalidate_current().await;
+    assert_eq!(read(a.revision).await, Some(vec!["third".to_string()]));
+}
+
+#[test]
 async fn invalidation_refreshes_deployments_rollbacks_and_removal() {
     let a = component();
     let mut b = a.clone();
@@ -427,6 +576,72 @@ async fn invalidation_fences_pending_successes_and_errors() {
             b.revision
         );
     }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn current_lookup_survives_a_burst_of_deployment_invalidations() {
+    let a = component();
+    let registry = Arc::new(TestRegistry::new(vec![a.clone()], Some(a.clone())));
+    let service = Arc::new(RemoteComponentService::new(
+        registry.clone(),
+        &ComponentServiceConfig::default(),
+    ));
+    let mut gate = LookupGate::new();
+    *registry.next_lookup.lock().unwrap() = Some(gate.clone());
+    let mut caller = tokio::spawn({
+        let service = service.clone();
+        async move { service.get_current_by_id(a.id).await }
+    });
+    for _ in 0..4 {
+        tokio::select! {
+            started = gate.started.acquire() => started.unwrap().forget(),
+            result = &mut caller => panic!("lookup stopped during deployment invalidation: {result:?}"),
+        }
+        service.invalidate_current().await;
+        let next = LookupGate::new();
+        *registry.next_lookup.lock().unwrap() = Some(next.clone());
+        gate.release.add_permits(1);
+        gate = next;
+    }
+    gate.started.acquire().await.unwrap().forget();
+    let mut latest = a.clone();
+    latest.revision = ComponentRevision::new(3).unwrap();
+    *registry.deployed.lock().unwrap() = Some(latest.clone());
+    service.invalidate_current().await;
+    gate.release.add_permits(1);
+    assert_eq!(caller.await.unwrap().unwrap().revision, latest.revision);
+}
+
+#[test]
+fn current_lookup_invalidation_retries_have_a_time_bound() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(async {
+            let a = component();
+            let registry = Arc::new(TestRegistry::new(vec![a.clone()], Some(a.clone())));
+            let gate = LookupGate::new();
+            *registry.next_lookup.lock().unwrap() = Some(gate.clone());
+            let service = Arc::new(RemoteComponentService::new(
+                registry,
+                &ComponentServiceConfig::default(),
+            ));
+            let caller = tokio::spawn({
+                let service = service.clone();
+                async move { service.get_current_by_id(a.id).await }
+            });
+            gate.started.acquire().await.unwrap().forget();
+            service.invalidate_current().await;
+            tokio::time::advance(Duration::from_secs(31)).await;
+            gate.release.add_permits(1);
+            assert!(matches!(
+                caller.await.unwrap(),
+                Err(ComponentServiceError::InternalError(_))
+            ));
+        });
 }
 
 #[test]

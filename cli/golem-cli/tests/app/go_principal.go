@@ -9,13 +9,13 @@ import (
 
 type LedgerID struct{ Name string }
 
-// WhoamiIn's Principal is the invocation's, filled by the host.
-type WhoamiIn struct{ Principal golem.Principal }
+// WhoamiIn has no fields: the caller reaches the handler through its context.
+type WhoamiIn struct{}
 
 var Ledger = golem.DefineAgent[LedgerID](golem.Spec{Name: "LedgerAgent"})
 
-// Whoami reports the invocation's principal and the agent's own, the one it
-// was initialized with.
+// Whoami reports the caller of the invocation: its immediate principal as
+// method=, its original principal as agent=.
 var Whoami = Ledger.Method[WhoamiIn, string]("whoami")
 
 type RelayID struct{ Name string }
@@ -31,10 +31,12 @@ func describe(p golem.Principal) string {
 	switch p := p.(type) {
 	case golem.AgentPrincipal:
 		return "agent:" + p.AgentID.String()
-	case golem.GolemUserPrincipal:
-		return "golem-user"
-	case golem.OidcPrincipal:
-		return "oidc:" + p.Sub
+	case golem.AccountPrincipal:
+		return "account"
+	case golem.UserPrincipal:
+		return "user:" + p.Pair.Subject
+	case golem.ToolPrincipal:
+		return "tool:" + p.ToolName
 	case golem.AnonymousPrincipal:
 		return "anonymous"
 	default:
@@ -48,8 +50,9 @@ type relayState struct{}
 
 func init() {
 	ledger := Ledger.Implement(func(LedgerID) *ledgerState { return &ledgerState{} })
-	ledger.Handle(Whoami, func(ctx *golem.Context[ledgerState], in WhoamiIn) string {
-		return fmt.Sprintf("method=%s agent=%s", describe(in.Principal), describe(ctx.Principal()))
+	ledger.Handle(Whoami, func(ctx *golem.Context[ledgerState], _ WhoamiIn) string {
+		caller := ctx.Caller()
+		return fmt.Sprintf("method=%s agent=%s", describe(caller.Immediate), describe(caller.Original))
 	})
 
 	relay := Relay.Implement(func(RelayID) *relayState { return &relayState{} })

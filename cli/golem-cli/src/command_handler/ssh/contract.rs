@@ -20,6 +20,7 @@ use super::syntax::{TokenKind, is_complete, scan};
 use crate::context::GlobalEnvironmentSelector;
 use golem_client::invocation_session::SessionTransportError;
 use golem_client::model::{NativeToolFailure, NativeToolResult, NativeToolSuccess};
+use golem_common::base_model::api;
 use golem_common::model::invocation_session_public::{
     PublicErrorCode, PublicInvocationResult, PublicTypedValue,
 };
@@ -684,18 +685,18 @@ pub enum CancelOutcome {
     Running { error: Option<String> },
 }
 
-/// Reads the answer to a cancel request: whether it cancelled, or the failed request's message.
-/// Golem cancels a call only while it is queued. For one that already has its result it
-/// answers that nothing was cancelled, and for a running one that the invocation was not
-/// found, which is an answer and not a failure.
-pub fn classify_cancel(answer: Result<bool, String>) -> CancelOutcome {
+/// Reads the answer to a cancel request: whether it cancelled, or the failed request's error code
+/// and message. Golem cancels a call only while it is queued. For one that already has its result
+/// it answers that nothing was cancelled, and for a running one that it cannot cancel it yet
+/// (`CANNOT_CANCEL_RUNNING_INVOCATION`), which is an answer and not a failure.
+pub fn classify_cancel(answer: Result<bool, (Option<String>, String)>) -> CancelOutcome {
     match answer {
         Ok(true) => CancelOutcome::Cancelled,
         Ok(false) => CancelOutcome::Finished,
-        Err(message) if message.contains("Invocation not found") => {
+        Err((Some(code), _)) if code == api::error_code::CANNOT_CANCEL_RUNNING_INVOCATION => {
             CancelOutcome::Running { error: None }
         }
-        Err(message) => CancelOutcome::Running {
+        Err((_, message)) => CancelOutcome::Running {
             error: Some(message),
         },
     }
@@ -733,6 +734,14 @@ pub fn time_limit(timeout: Option<u32>) -> String {
 pub fn failed_agent_notice(agent: &str) -> String {
     format!(
         "{} has failed and runs no commands until it is recovered or made again.",
+        shown(agent)
+    )
+}
+
+/// What to say when a session cannot start because the agent is a never-live sandbox.
+pub fn sandboxed_agent_notice(agent: &str) -> String {
+    format!(
+        "{} is a never-live sandbox. It only replays its history and runs no commands.",
         shown(agent)
     )
 }
@@ -832,7 +841,8 @@ mod tests {
         classify_cancel, classify_invoke_error, classify_live_error, decode_live_result,
         decode_result, decorated, dimmed, ended, exit_code, failed_agent_notice, global_args,
         help_text, input_mode, interrupted_message, local_command, lookup_command, prompt,
-        run_argv, run_can_be_stopped, runs_nothing, strip_cursor_reports, tools_listing,
+        run_argv, run_can_be_stopped, runs_nothing, sandboxed_agent_notice, strip_cursor_reports,
+        tools_listing,
     };
     use crate::context::GlobalEnvironmentSelector;
     use golem_client::invocation_session::SessionTransportError;
@@ -1636,11 +1646,23 @@ mod tests {
         // Golem answers "not cancelled" only for a call that already has its result.
         assert_eq!(classify_cancel(Ok(false)), CancelOutcome::Finished);
         assert_eq!(
-            classify_cancel(Err("Invalid request: Invocation not found".to_string())),
+            classify_cancel(Err((
+                Some("CANNOT_CANCEL_RUNNING_INVOCATION".to_string()),
+                "Cannot cancel a running invocation".to_string()
+            ))),
             CancelOutcome::Running { error: None }
         );
         assert_eq!(
-            classify_cancel(Err("connection refused".to_string())),
+            classify_cancel(Err((
+                Some("INVOCATION_NOT_FOUND".to_string()),
+                "Invocation not found".to_string()
+            ))),
+            CancelOutcome::Running {
+                error: Some("Invocation not found".to_string())
+            }
+        );
+        assert_eq!(
+            classify_cancel(Err((None, "connection refused".to_string()))),
             CancelOutcome::Running {
                 error: Some("connection refused".to_string())
             }
@@ -1760,6 +1782,14 @@ mod tests {
         assert_eq!(
             failed_agent_notice("A(\"a\")"),
             "A(\"a\") has failed and runs no commands until it is recovered or made again."
+        );
+    }
+
+    #[test]
+    fn a_sandboxed_agent_is_named_as_the_reason() {
+        assert_eq!(
+            sandboxed_agent_notice("A(\"a\")"),
+            "A(\"a\") is a never-live sandbox. It only replays its history and runs no commands."
         );
     }
 

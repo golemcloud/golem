@@ -29,6 +29,7 @@ inherit_test_dep!(Tracing);
 
 const APP_NAME: &str = "agent-keys";
 const COMPONENT_NAME: &str = "agent-keys:rust-main";
+const MOVED_COMPONENT_NAME: &str = "agent-keys:rust-moved";
 
 /// Deploys an app whose component has two durable agent types: `CounterAgent`, which reads a
 /// config value and an environment variable, and `OtherAgent`.
@@ -119,6 +120,7 @@ async fn deploy_app(ctx: &mut TestContext) {
             pub trait OtherAgent {
                 fn new(id: String) -> Self;
                 fn ping(&self) -> String;
+                async fn describe_counter(&self, id: String) -> String;
             }
 
             struct OtherImpl {
@@ -134,6 +136,12 @@ async fn deploy_app(ctx: &mut TestContext) {
                 fn ping(&self) -> String {
                     format!("other:{}", self.id)
                 }
+
+                async fn describe_counter(&self, id: String) -> String {
+                    let id = golem_rust::AgentId::new(id.parse().unwrap());
+                    CounterAgentClient::get_by_id(&id).expect("existing counter")
+                        .describe().await
+                }
             }
         "# },
     )
@@ -141,6 +149,52 @@ async fn deploy_app(ctx: &mut TestContext) {
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
+}
+
+fn move_types_to_second_component(ctx: &TestContext, source: &str) {
+    fs::create_dir_all(ctx.cwd_path_join("moved/src")).unwrap();
+    fs::copy(
+        ctx.cwd_path_join("src/lib.rs"),
+        ctx.cwd_path_join("moved/src/lib.rs"),
+    )
+    .unwrap();
+    fs::write_str(ctx.cwd_path_join("moved/src/counter_agent.rs"), source).unwrap();
+    let cargo = fs::read_to_string(ctx.cwd_path_join("Cargo.toml")).unwrap();
+    let mut moved_cargo = cargo.replace("agent_keys_rust_main", "agent_keys_rust_moved");
+    if !moved_cargo.contains("[workspace]") {
+        moved_cargo.push_str("\n[workspace]\n");
+    }
+    fs::write_str(ctx.cwd_path_join("moved/Cargo.toml"), moved_cargo).unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("src/counter_agent.rs"),
+        indoc! { r#"
+            use golem_rust::{agent_definition, agent_implementation};
+            #[agent_definition]
+            pub trait RemainingAgent {
+                fn new() -> Self;
+                fn ping(&self) -> String;
+            }
+            struct RemainingImpl;
+            #[agent_implementation]
+            impl RemainingAgent for RemainingImpl {
+                fn new() -> Self { Self }
+                fn ping(&self) -> String { "remaining".to_string() }
+            }
+        "# },
+    )
+    .unwrap();
+    let path = ctx.cwd_path_join("golem.yaml");
+    let manifest = fs::read_to_string(&path).unwrap();
+    fs::write_str(
+        &path,
+        manifest
+            .replace(
+                &format!("{COMPONENT_NAME}:\n    templates: rust"),
+                &format!("{COMPONENT_NAME}:\n    dir: .\n    templates: rust\n  {MOVED_COMPONENT_NAME}:\n    dir: moved\n    templates: rust"),
+            )
+            .replace("mark: ''", "mark: 'b-default'"),
+    )
+    .unwrap();
 }
 
 async fn cli_json<'a>(ctx: &TestContext, args: impl IntoIterator<Item = &'a str>) -> Output {
@@ -295,6 +349,204 @@ async fn keyed_create_conflicts_upsert_reaches_it_and_a_stale_fingerprint_is_rej
             &recreated_fingerprint,
         ],
         "0",
+    )
+    .await;
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn moved_types_keep_old_component_agents_reachable_and_out_of_a_new_component_redeploy() {
+    let mut ctx = TestContext::new();
+    deploy_app(&mut ctx).await;
+    let old_key = r#"CounterAgent("pinned-a")"#;
+    let old = document(
+        &cli_json(&ctx, [cmd::AGENT, cmd::CREATE, old_key, "--keyed"]).await,
+        "agent.create",
+    );
+    let (old_id, old_fingerprint) = reference(&old);
+    invoke_ok(&ctx, &[old_key, "increment"], "1").await;
+    let old_defaults = get_metadata(&ctx, &old_id).await["defaultConfig"].clone();
+
+    let source = fs::read_to_string(ctx.cwd_path_join("src/counter_agent.rs")).unwrap();
+    move_types_to_second_component(&ctx, &source);
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+    let new_key = r#"CounterAgent("pinned-b")"#;
+    let new = document(
+        &cli_json(&ctx, [cmd::AGENT, cmd::CREATE, new_key, "--keyed"]).await,
+        "agent.create",
+    );
+    let (new_id, _) = reference(&new);
+    let router = ctx.env_mut()["GOLEM_BUILTIN_LOCAL_URL"].clone();
+    let proxy = super::oplog_export::RecordingProxy::start(router).await;
+    ctx.add_env_var("GOLEM_BUILTIN_LOCAL_URL", proxy.url.clone());
+    let listed = document(
+        &cli_json(&ctx, [cmd::AGENT, cmd::LIST, "CounterAgent"]).await,
+        "agent.list",
+    );
+    let requests = proxy.take();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| {
+                request.starts_with("GET ")
+                    && request.split('?').next().unwrap().ends_with("/deployments")
+            })
+            .count(),
+        1,
+        "a list operation must reuse its deployment history: {requests:?}"
+    );
+    ctx.add_env_var("GOLEM_BUILTIN_LOCAL_URL", proxy.bypass()[0].1);
+    let agents = listed["agents"].as_array().unwrap();
+    for (id, owner) in [(&old_id, COMPONENT_NAME), (&new_id, MOVED_COMPONENT_NAME)] {
+        let row = agents
+            .iter()
+            .find(|row| row["agentId"] == id.as_str())
+            .unwrap();
+        assert_eq!(row["componentName"], owner);
+    }
+    for (component, expected) in [(COMPONENT_NAME, &old_id), (MOVED_COMPONENT_NAME, &new_id)] {
+        let listed = document(
+            &cli_json(
+                &ctx,
+                [cmd::AGENT, cmd::LIST, flag::COMPONENT_NAME, component],
+            )
+            .await,
+            "agent.list",
+        );
+        let agents = listed["agents"].as_array().unwrap();
+        assert_eq!(agents.len(), 1, "{listed}");
+        assert_eq!(agents[0]["agentId"], expected.as_str());
+    }
+    assert_eq!(
+        get_metadata(&ctx, &old_id).await["fingerprint"],
+        old_fingerprint
+    );
+    assert_eq!(
+        get_metadata(&ctx, &old_id).await["defaultConfig"],
+        old_defaults
+    );
+    assert_ne!(
+        get_metadata(&ctx, &new_id).await["defaultConfig"],
+        old_defaults
+    );
+    let redeployed = document(
+        &cli_json(&ctx, ["redeploy-agents", MOVED_COMPONENT_NAME]).await,
+        "agent.redeploy",
+    );
+    assert_eq!(redeployed["errors"], json!([]), "{redeployed}");
+    let agents = redeployed["agents"].as_array().unwrap();
+    assert_eq!(agents.len(), 1, "{redeployed}");
+    assert_eq!(agents[0]["agentId"], new_id);
+    assert_eq!(
+        get_metadata(&ctx, &old_id).await["fingerprint"],
+        old_fingerprint
+    );
+    invoke_ok(&ctx, &[&old_id, "value"], "1").await;
+    invoke_ok(&ctx, &[&new_id, "value"], "0").await;
+
+    // Keep the list snapshot while the keyed UUID is recreated on its new component.
+    ctx.add_env_var("GOLEM_BUILTIN_LOCAL_URL", proxy.url.clone());
+    let (held, release) = proxy.hold_response(|request| {
+        request.starts_with("POST ")
+            && request.contains("/agents/find")
+            && !request.contains("component_name=")
+    });
+    let listing = cli_json(&ctx, [cmd::AGENT, cmd::LIST, "CounterAgent"]);
+    let recreate = async {
+        tokio::time::timeout(std::time::Duration::from_secs(60), held)
+            .await
+            .expect("the list response was not held")
+            .unwrap();
+        let deleted = ctx
+            .cli_with_env([flag::YES, cmd::AGENT, "delete", &old_id], &proxy.bypass())
+            .await;
+        assert!(deleted.success_or_dump());
+        let replacement = ctx
+            .cli_with_env(
+                [
+                    flag::YES,
+                    flag::FORMAT,
+                    "json",
+                    cmd::AGENT,
+                    cmd::CREATE,
+                    old_key,
+                    "--keyed",
+                ],
+                &proxy.bypass(),
+            )
+            .await;
+        let (replacement_id, replacement_fingerprint) =
+            reference(&document(&replacement, "agent.create"));
+        assert_eq!(replacement_id, old_id);
+        assert_ne!(replacement_fingerprint, old_fingerprint);
+        release.send(()).unwrap();
+    };
+    let (output, ()) = tokio::join!(listing, recreate);
+    let listed = document(&output, "agent.list");
+    let stale = listed["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["agentId"] == old_id)
+        .unwrap();
+    assert_eq!(stale["fingerprint"], old_fingerprint);
+    assert_eq!(stale["componentName"], "", "{stale}");
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn get_by_id_keeps_the_recorded_schema_live_and_after_reconstruction() {
+    let mut ctx = TestContext::new();
+    deploy_app(&mut ctx).await;
+    let target = document(
+        &cli_json(
+            &ctx,
+            [
+                cmd::AGENT,
+                cmd::CREATE,
+                r#"CounterAgent("schema-a")"#,
+                "--keyed",
+            ],
+        )
+        .await,
+        "agent.create",
+    );
+    let (target_id, _) = reference(&target);
+    let caller = document(
+        &cli_json(
+            &ctx,
+            [
+                cmd::AGENT,
+                cmd::CREATE,
+                r#"OtherAgent("caller-a")"#,
+                "--keyed",
+            ],
+        )
+        .await,
+        "agent.create",
+    );
+    let (caller_id, _) = reference(&caller);
+
+    let source = fs::read_to_string(ctx.cwd_path_join("src/counter_agent.rs")).unwrap();
+    move_types_to_second_component(&ctx, &source.replace("describe", "describe_b"));
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+
+    let argument = serde_json::to_string(&target_id).unwrap();
+    invoke_ok(
+        &ctx,
+        &[&caller_id, "describe_counter", &argument],
+        "schema-a||",
+    )
+    .await;
+    assert!(
+        ctx.cli([cmd::AGENT, "simulate-crash", &caller_id])
+            .await
+            .success_or_dump()
+    );
+    invoke_ok(
+        &ctx,
+        &[&caller_id, "describe_counter", &argument],
+        "schema-a||",
     )
     .await;
 }

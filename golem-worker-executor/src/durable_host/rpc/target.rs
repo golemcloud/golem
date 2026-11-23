@@ -49,6 +49,7 @@ use golem_common::model::OwnedInvocationId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::InvocationFreshnessDisposition;
+use golem_common::model::caller::Caller;
 use golem_common::model::card::owner::AgentOwnerLeafPattern;
 use golem_common::model::card::owner::AgentOwnerPattern;
 use golem_common::model::card::{AgentResourcePattern, AgentVerb};
@@ -254,6 +255,7 @@ pub(super) async fn prepare_rpc_invocation_identity<Ctx: WorkerCtx>(
         let result = loop {
             let rpc = ctx.rpc();
             let interrupt = ctx.create_interrupt_signal().map(Error::from);
+            let caller = Caller::entry(ctx.self_principal());
             let demand = rpc.create_demand(
                 dispatch_target(remote_agent_id, ephemeral.as_ref()),
                 method_name,
@@ -261,6 +263,7 @@ pub(super) async fn prepare_rpc_invocation_identity<Ctx: WorkerCtx>(
                 ctx.agent_id(),
                 &env,
                 ctx.clone_as_inherited_stack(&span_id),
+                &caller,
                 config.clone(),
                 &auth_ctx,
                 Some(child_key.clone()),
@@ -298,27 +301,10 @@ pub(super) async fn prepare_rpc_invocation_identity<Ctx: WorkerCtx>(
     )))
 }
 
-/// What a client binds to when its connection call runs live.
-pub enum RpcBinding {
-    /// The agent of the target, created when it is missing (`upsert`).
-    Upsert(Box<ResolvedTarget>),
-    /// Only an existing agent of the client's agent type (`get-by-id`).
-    Existing(OwnedAgentId),
-}
-
-impl RpcBinding {
-    pub(super) fn owned_agent_id(&self) -> &OwnedAgentId {
-        match self {
-            Self::Upsert(target) => &target.owned_agent_id,
-            Self::Existing(owned_agent_id) => owned_agent_id,
-        }
-    }
-}
-
 pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx, F>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     mut handle: DurableCallSession<F, NotCancellable>,
-    binding: RpcBinding,
+    binding: Box<ResolvedTarget>,
     env: &[(String, String)],
     config: Vec<AgentConfigEntryDto>,
     span: Arc<InvocationContextSpan>,
@@ -332,16 +318,16 @@ where
     F: golem_common::model::oplog::payload::HostPayloadPair<Resp = HostResponseGolemRpcCreate>,
 {
     let target_environment_id = ctx.owned_agent_id.environment_id;
-    let remote_agent_id = binding.owned_agent_id().clone();
+    let remote_agent_id = binding.owned_agent_id.clone();
     let rpc = ctx.rpc();
     let created_by = ctx.created_by();
     let agent_id = *ctx.agent_id();
+    let caller = Caller::entry(ctx.self_principal());
     let stack = ctx.clone_as_inherited_stack(span.span_id());
     let key = handle
         .idempotency_key_position(ctx)
         .derive(handle.start_index());
     let auth_ctx = handle.agent_auth_ctx().clone();
-    let worker_service = ctx.state.worker_service.clone();
     let result = {
         let creation = async {
             let mut owner = remote_owner.clone();
@@ -361,36 +347,19 @@ where
                     AgentResourcePattern::Any,
                 ))
                 .map_err(|error| WorkerExecutorError::permission_denied(error.to_string()))?;
-            match binding {
-                RpcBinding::Upsert(target) => {
-                    rpc.create_and_initialize(
-                        *target,
-                        false,
-                        created_by,
-                        &agent_id,
-                        env,
-                        stack,
-                        config.clone(),
-                        &auth_ctx,
-                        key,
-                    )
-                    .await
-                }
-                RpcBinding::Existing(owned_agent_id) => {
-                    let fingerprint = worker_service
-                        .get(&owned_agent_id)
-                        .await?
-                        .map(|metadata| metadata.initial_worker_metadata)
-                        .filter(|metadata| {
-                            metadata.agent_type_name.as_ref() == Some(&remote_agent_type.type_name)
-                        })
-                        .map(|metadata| metadata.fingerprint)
-                        .ok_or_else(|| {
-                            WorkerExecutorError::worker_not_found(owned_agent_id.agent_id())
-                        })?;
-                    Ok(Box::new(ReplayedDemand::new(fingerprint)) as Box<dyn RpcDemand>)
-                }
-            }
+            rpc.create_and_initialize(
+                *binding,
+                false,
+                created_by,
+                &agent_id,
+                env,
+                stack,
+                &caller,
+                config.clone(),
+                &auth_ctx,
+                key,
+            )
+            .await
         };
         let interrupt = ctx.create_interrupt_signal().map(Error::from);
         tokio::pin!(creation);
@@ -508,6 +477,7 @@ pub(super) async fn activate_rpc_target(
     method_name: &str,
     created_by: AccountId,
     agent_id: &AgentId,
+    caller: &Caller,
     env: &[(String, String)],
     stack: InvocationContextStack,
     config: Vec<AgentConfigEntryDto>,
@@ -526,6 +496,7 @@ pub(super) async fn activate_rpc_target(
             agent_id,
             env,
             stack,
+            caller,
             config,
             auth_ctx,
             idempotency_key,
@@ -573,6 +544,7 @@ pub(super) async fn ensure_rpc_target_activated<Ctx: WorkerCtx>(
     let demand = {
         let created_by = ctx.created_by();
         let agent_id = *ctx.agent_id();
+        let caller = Caller::entry(ctx.self_principal());
         let interrupt_signal = ctx.create_interrupt_signal().map(Error::from);
         let activation = activate_rpc_target(
             rpc.as_ref(),
@@ -580,6 +552,7 @@ pub(super) async fn ensure_rpc_target_activated<Ctx: WorkerCtx>(
             method_name,
             created_by,
             &agent_id,
+            &caller,
             &env,
             stack,
             config.clone(),
@@ -674,8 +647,9 @@ where
         start_rpc_binding_call::<_, F>(ctx, request, &expected, with_agent_authority).await?;
     if recorded.remote_agent_id != expected {
         return Err(handle.trap(WorkerExecutorError::unexpected_oplog_entry(
-            format!("RPC connection to {expected}"),
+            handle.start_index(),
             format!("RPC connection to {}", recorded.remote_agent_id),
+            format!("RPC connection to {expected}"),
         )));
     }
     Ok((handle, span))
@@ -758,6 +732,7 @@ where
             };
             let started = handle.recorded_span_started(ctx).await?.ok_or_else(|| {
                 WorkerExecutorError::unexpected_oplog_entry(
+                    handle.start_index(),
                     "RPC connection Start carrying span_started",
                     format!(
                         "RPC connection Start at {} without span metadata",

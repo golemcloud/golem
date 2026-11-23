@@ -16,7 +16,7 @@
 
 package golem.tool
 
-import golem.Principal
+import golem.InvocationContext
 import golem.schema.{FromSchema, IntoSchema, SchemaGraph, SchemaType, SchemaTypeBody, SchemaValue, TypedSchemaValue}
 import golem.schema.validation.{ValueValidation, WellFormedness}
 import golem.tool.wire.WitTool
@@ -58,7 +58,7 @@ object ToolMiddlewareParamDecoder {
     decode: CanonicalInputValue => Either[String, Any]
   ) extends ToolMiddlewareParamDecoder
 
-  case object PrincipalParam                                     extends ToolMiddlewareParamDecoder
+  case object InvocationContextParam                             extends ToolMiddlewareParamDecoder
   case object StdinParam                                         extends ToolMiddlewareParamDecoder
   final case class InstallationParameters(from: FromSchema[Any]) extends ToolMiddlewareParamDecoder
 }
@@ -193,8 +193,12 @@ final class ToolMiddlewareInvocationContext(
   val fields: List[CanonicalInputValue],
   val parameters: TypedSchemaValue,
   val stdin: Option[ToolMiddlewareInputHandle],
-  val principal: Principal
-)
+  val context: InvocationContext
+) {
+
+  /** Who caused the running invocation. */
+  def caller: golem.Caller = context.caller
+}
 
 object ToolMiddlewareInvokerRuntime {
   private implicit val ec: scala.concurrent.ExecutionContext =
@@ -209,7 +213,7 @@ object ToolMiddlewareInvokerRuntime {
     input: TypedSchemaValue,
     parameters: TypedSchemaValue,
     stdin: Option[ToolMiddlewareInputHandle],
-    principal: Principal,
+    context: InvocationContext,
     validateFinalOutput: ToolMiddlewareOutputHandle => Either[String, Unit] = _ => Right(())
   ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
     ToolMiddlewareOwnershipRuntime.withInvocationScopedUnderlying(wrapped, stdin, validateFinalOutput) { underlying =>
@@ -248,7 +252,7 @@ object ToolMiddlewareInvokerRuntime {
                             .run(
                               instance,
                               underlying,
-                              new ToolMiddlewareInvocationContext(fields, parameters, stdin, principal)
+                              new ToolMiddlewareInvocationContext(fields, parameters, stdin, context)
                             )
                             .map(outcome =>
                               ToolMiddlewareOwnershipRuntime.validateFinal(underlying, outcome) { tracked =>
@@ -302,8 +306,8 @@ object ToolMiddlewareInvokerRuntime {
                 case Right(value)  => args += value
               }
           }
-        case ToolMiddlewareParamDecoder.PrincipalParam => args += ctx.principal
-        case ToolMiddlewareParamDecoder.StdinParam     =>
+        case ToolMiddlewareParamDecoder.InvocationContextParam => args += ctx.context
+        case ToolMiddlewareParamDecoder.StdinParam             =>
           ctx.stdin match {
             case Some(stream) => args += stream
             case None         =>
@@ -850,7 +854,7 @@ final case class UniversalToolMiddlewareInvocation[Parameters](
   commandPath: List[String],
   input: TypedSchemaValue,
   stdin: Option[ToolMiddlewareInputHandle],
-  principal: Principal
+  context: InvocationContext
 )
 
 trait UniversalToolMiddleware extends UniversalToolMiddleware.Internal {
@@ -901,7 +905,7 @@ object UniversalToolMiddlewareInvokerRuntime {
     commandPath: List[String],
     input: TypedSchemaValue,
     stdin: Option[ToolMiddlewareInputHandle],
-    principal: Principal,
+    context: InvocationContext,
     validateFinalOutput: ToolMiddlewareOutputHandle => Either[String, Unit] = _ => Right(())
   ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
     ToolMiddlewareOwnershipRuntime.withInvocationScopedUnderlying(wrapped, stdin, validateFinalOutput) { scoped =>
@@ -942,7 +946,7 @@ object UniversalToolMiddlewareInvokerRuntime {
                     commandPath,
                     input,
                     stdin,
-                    principal
+                    context
                   ),
                   underlying
                 )

@@ -143,6 +143,15 @@ pub enum ToolValidationError {
     /// A command-tree node is referenced as a subcommand by more than one
     /// parent (the command graph is a DAG, not a tree).
     DuplicateCommandParent { index: i32 },
+    /// An HTTP declaration is not valid for its command or input scope.
+    InvalidHttpDeclaration {
+        command: String,
+        input: Option<String>,
+        detail: String,
+    },
+    /// The [`tool_operation`](super::tool_operation) of a command is longer than
+    /// [`MAX_INVOCATION_OPERATION_BYTES`](super::MAX_INVOCATION_OPERATION_BYTES).
+    OperationTooLong { operation: String },
 }
 
 impl Display for ToolValidationError {
@@ -160,6 +169,13 @@ impl Display for ToolValidationError {
             }
             ToolValidationError::InvalidIdentifier { kind, value } => {
                 write!(f, "invalid {kind}: {value:?}")
+            }
+            ToolValidationError::OperationTooLong { operation } => {
+                write!(
+                    f,
+                    "the operation {operation:?} of a command is longer than {} bytes",
+                    super::MAX_INVOCATION_OPERATION_BYTES
+                )
             }
             ToolValidationError::DuplicateSubcommandName { parent, name } => {
                 write!(
@@ -256,6 +272,17 @@ impl Display for ToolValidationError {
             ToolValidationError::DuplicateCommandParent { index } => {
                 write!(f, "command node {index} has more than one parent")
             }
+            ToolValidationError::InvalidHttpDeclaration {
+                command,
+                input,
+                detail,
+            } => {
+                write!(f, "invalid HTTP declaration on command {command:?}")?;
+                if let Some(input) = input {
+                    write!(f, " for input {input:?}")?;
+                }
+                write!(f, ": {detail}")
+            }
         }
     }
 }
@@ -269,10 +296,50 @@ pub fn validate_tool(tool: &Tool) -> Result<(), Vec<ToolValidationError>> {
         ctx.errors.push(ToolValidationError::EmptyVersion);
     }
     ctx.run();
+    if super::canonical::check_command_tree_structure(tool).is_ok() {
+        if let Err(error) = tool.validate_http() {
+            ctx.errors.push(error);
+        }
+        check_operation_lengths(tool, &mut ctx.errors);
+    }
     if ctx.errors.is_empty() {
         Ok(())
     } else {
         Err(ctx.errors)
+    }
+}
+
+/// Rejects every command whose operation is longer than the limit. The tree must be
+/// structurally valid, so the walk ends.
+fn check_operation_lengths(tool: &Tool, errors: &mut Vec<ToolValidationError>) {
+    fn visit(
+        tool: &Tool,
+        tool_name: &str,
+        index: usize,
+        path: &mut Vec<String>,
+        errors: &mut Vec<ToolValidationError>,
+    ) {
+        let Some(node) = tool.commands.nodes.get(index) else {
+            return;
+        };
+        if node.body.is_some() {
+            let operation = super::tool_operation(&tool_name, path);
+            if operation.len() > super::MAX_INVOCATION_OPERATION_BYTES {
+                errors.push(ToolValidationError::OperationTooLong { operation });
+            }
+        }
+        for child in &node.subcommands {
+            if let Some(child) = child.as_usize()
+                && let Some(child_node) = tool.commands.nodes.get(child)
+            {
+                path.push(child_node.name.clone());
+                visit(tool, tool_name, child, path, errors);
+                path.pop();
+            }
+        }
+    }
+    if let Some(tool_name) = tool.name() {
+        visit(tool, tool_name, 0, &mut Vec::new(), errors);
     }
 }
 

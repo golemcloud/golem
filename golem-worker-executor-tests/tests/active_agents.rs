@@ -604,6 +604,7 @@ async fn shard_retirement_removes_old_owner_without_removing_its_replacement(
                     .clone()
                     .invoke(golem_common::model::AgentInvocation::SaveSnapshot {
                         idempotency_key: golem_common::model::InvocationId(uuid::Uuid::new_v4()),
+                        caller: golem_common::model::caller::Caller::anonymous(),
                     })
                     .await
                     .is_err()

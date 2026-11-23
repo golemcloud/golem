@@ -2,6 +2,7 @@
 package "golemcloud/golem_sdk/agents"
 
 import {
+  "golemcloud/golem_sdk/caller",
   "golemcloud/golem_sdk/interface/golem/agent/common",
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/schema",
@@ -11,11 +12,11 @@ import {
 }
 
 // Values
-pub async fn construct_and_set_instance(String, @types.SchemaValueTree, @common.Principal) -> Result[Unit, @common.AgentError]
+pub async fn construct_and_set_instance(String, @types.SchemaValueTree, @caller.InvocationContext) -> Result[Unit, @common.AgentError]
 
 pub async fn decode_invocation_input(@types.SchemaValueTree, Int32, String) -> Array[@schema_model.SchemaValue] raise @common.AgentError
 
-pub fn decode_multipart_snapshot(Bytes, String) -> Result[(@common.Principal, MultipartSnapshot), String]
+pub fn decode_multipart_snapshot(Bytes, String) -> Result[MultipartSnapshot, String]
 
 pub async fn[T : @schema.FromSchema] decode_output(@types.SchemaValueTree, String) -> T raise @common.AgentError
 
@@ -37,7 +38,7 @@ pub fn encode_invocation_input(Array[@schema_model.SchemaValue]) -> @types.Schem
 
 pub async fn encode_invocation_input_async(Array[@schema_model.SchemaValue]) -> @types.SchemaValueTree
 
-pub fn encode_multipart_snapshot(MultipartSnapshot, @common.Principal) -> Result[(Bytes, String), String]
+pub fn encode_multipart_snapshot(MultipartSnapshot) -> Result[(Bytes, String), String]
 
 pub async fn[T : @schema.IntoSchema] encode_output(T) -> @types.SchemaValueTree
 
@@ -55,15 +56,13 @@ pub fn get_registered_agent(String) -> RegisteredAgent?
 
 pub fn[T] panic_with_message(String, String) -> T
 
-pub fn principal_from_json(Json) -> @common.Principal raise JsonCodecError
-
-pub fn principal_to_json(@common.Principal) -> Json
-
 pub fn register_agent(RegisteredAgent) -> Unit
 
 pub async fn restore_and_set_instance(String, SnapshotData, SnapshotRestoreContext) -> Result[Unit, String]
 
 pub fn set_agent_instance(AgentInstance) -> Unit
+
+pub fn validate_legacy_principal_json(Json) -> Unit raise JsonCodecError
 
 // Errors
 pub suberror JsonCodecError {
@@ -88,7 +87,6 @@ pub(all) struct AgentConstructorDef {
 pub(all) struct AgentInstance {
   name : String
   agent_type : @common.AgentType
-  principal : @common.Principal
   interface : &RawAgent
   snapshottable : &Snapshottable?
   snapshot_format : SnapshotFormat?
@@ -134,7 +132,6 @@ pub(all) struct InputParam {
 
 pub(all) enum InputParamSource {
   UserSupplied(@schema_model.SchemaGraph)
-  AutoInjected(@common.AutoInjectedKind)
 }
 
 pub(all) struct MultipartSnapshot {
@@ -151,7 +148,7 @@ pub fn MultipartSnapshot::to_repr(Self) -> @debug.Repr
 pub(all) struct RegisteredAgent {
   name : String
   agent_type : @common.AgentType
-  construct : async (@types.SchemaValueTree, @common.Principal) -> Result[ConstructedAgent, @common.AgentError]
+  construct : async (@types.SchemaValueTree, @caller.InvocationContext) -> Result[ConstructedAgent, @common.AgentError]
   load_snapshot : (async (SnapshotData, SnapshotRestoreContext) -> Result[ConstructedAgent, String])?
 }
 
@@ -184,7 +181,6 @@ pub(all) struct SnapshotRestoreContext {
   agent_id : @schema.AgentId
   agent_type : String
   identity_fields : WireInput
-  principal : @common.Principal
 }
 pub fn[T : @schema.FromWire] SnapshotRestoreContext::identity(Self, Int32) -> T raise @common.AgentError
 
@@ -196,6 +192,27 @@ pub fn WireInput::abort(Self) -> Unit
 pub fn WireInput::finish(Self) -> Unit raise @common.AgentError
 
 // Type aliases
+pub using @caller {type AccountAuthentication}
+
+pub using @caller {type AccountPrincipal}
+
+pub using @caller {type AgentPrincipal}
+
+pub using @caller {type Caller}
+
+pub using @caller {type InvocationContext}
+
+pub using @caller {type Principal}
+
+pub using @caller {type PrincipalKind}
+
+pub using @caller {type PrincipalRef}
+
+pub using @caller {type TokenProvenance}
+
+pub using @caller {type ToolPrincipal}
+
+pub using @caller {type UserPrincipal}
 
 // Traits
 pub(open) trait MultipartSnapshottable {
@@ -203,7 +220,7 @@ pub(open) trait MultipartSnapshottable {
 }
 
 pub(open) trait RawAgent {
-  async fn invoke(Self, String, @types.SchemaValueTree, @common.Principal) -> Result[@types.SchemaValueTree?, @common.AgentError]
+  async fn invoke(Self, String, @types.SchemaValueTree, @caller.InvocationContext) -> Result[@types.SchemaValueTree?, @common.AgentError]
 }
 
 pub(open) trait Snapshottable {

@@ -28,7 +28,7 @@ impl From<AgentMetadata> for AgentMetadataForGuests {
             args: vec![],
             env: value.env,
             config: TypedAgentConfigEntry::to_flat_map(&value.config),
-            status: value.last_known_status.status,
+            status: value.last_known_status.reported_status(),
             component_revision: value.last_known_status.component_revision,
             retry_count: value
                 .last_known_status

@@ -24,6 +24,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         refresh_replay_target: bool,
     ) -> Result<Option<RetryDecision>, ReplayFailure> {
         let mut diverged = false;
+        let mut provenance = None;
         let result = async {
         let mut number_of_replayed_functions = 0;
 
@@ -93,9 +94,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         if agent_mode == AgentMode::Ephemeral
                             && !matches!(agent_invocation, AgentInvocation::AgentInitialization { .. })
                         {
-                            break Err(WorkerExecutorError::unexpected_oplog_entry(
-                                "AgentInitialization for ephemeral initialization replay",
-                                format!("{:?}", agent_invocation.kind()),
+                            break Err(WorkerExecutorError::unexpected_oplog_entry(oplog_index, format!("{:?}", agent_invocation.kind()), "AgentInitialization for ephemeral initialization replay",
                             ));
                         }
                         let scope_card = agent_invocation.scope_card().cloned();
@@ -103,7 +102,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         let payload_scope_card_id =
                             scope_card.as_ref().map(|card| card.scope_card_id);
                         if payload_scope_card_id != recorded_scope_card_id {
-                            break Err(WorkerExecutorError::unexpected_oplog_entry(
+                            break Err(WorkerExecutorError::unexpected_oplog_entry(oplog_index,
                                 "matching invocation scope-card payload and wallet pin",
                                 format!(
                                     "payload scope-card ID {payload_scope_card_id:?}, recorded scope-card ID {recorded_scope_card_id:?}"
@@ -149,7 +148,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             let lowered = lower_invocation(
                                 agent_invocation,
                                 &component_metadata,
-                                agent_id.as_ref(),
+                                store.as_context().data().durable_ctx().owner_context(),
                             )?;
                             Ok::<_, WorkerExecutorError>((worker, uses_streams, lowered))
                         }
@@ -213,7 +212,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             break Err(error);
                         }
                         let recorded_local_failure = store.as_context().data().durable_ctx()
-                            .state.replay_state.invocation_has_recorded_local_failure(oplog_index);
+                            .state.replay_state.recorded_local_failure_of_invocation(oplog_index);
                         let invoke_result = invoke_observed_and_traced(
                             lowered,
                             store,
@@ -295,11 +294,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 number_of_replayed_functions += 1;
                                 continue;
                             }
-                            Ok(ref result) if recorded_local_failure
+                            Ok(ref result) if recorded_local_failure.is_some()
                                 && (result.is_snapshot_replay_divergence()
                                     || matches!(result, InvokeResult::Exited { .. })) =>
                             {
                                 break Err(WorkerExecutorError::unexpected_oplog_entry(
+                                    recorded_local_failure.unwrap_or(oplog_index),
                                     "invocation-local method failure",
                                     format!("{result:?}"),
                                 ));
@@ -322,6 +322,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     Ok(result) => result.is_snapshot_replay_divergence(),
                                     Err(WorkerExecutorError::UnexpectedOplogEntry { .. }) => true,
                                     Err(_) => false,
+                                };
+                                // A divergence at a recorded entry keeps its structure, so that the
+                                // start records its index and steps on the failed update.
+                                let divergence_error = match &invoke_result {
+                                    Err(error @ WorkerExecutorError::UnexpectedOplogEntry { .. }) => {
+                                        Some(error.clone())
+                                    }
+                                    _ => None,
                                 };
                                 let trap_type = match invoke_result {
                                     Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
@@ -373,10 +381,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                             // out-of-memory under the memory admission, keeps its
                                             // retry: it says nothing about the replay.
                                             TrapType::Error { .. } if let Some(retry) = Self::speculative_retry(&trap_type) => Some(retry),
-                                            TrapType::Error { error, .. } => break Err(WorkerExecutorError::InvocationFailed {
-                                                error,
-                                                stderr: store.as_context().data().get_public_state().event_service().get_last_invocation_errors(),
-                                            }),
+                                            TrapType::Error { error, provenance: failed, .. } => {
+                                                provenance = Some(failed);
+                                                break Err(divergence_error.unwrap_or_else(|| WorkerExecutorError::InvocationFailed {
+                                                    error,
+                                                    stderr: store.as_context().data().get_public_state().event_service().get_last_invocation_errors(),
+                                                }))
+                                            }
                                             TrapType::Interrupt(kind) => {
                                                 // `on_invocation_failure` is skipped on this path,
                                                 // so a lost shard is recorded here: its `None`
@@ -385,7 +396,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                                 worker.retire_if_shard_lost(&WorkerExecutorError::Interrupted { kind });
                                                 Self::fixed_decision_for_trap_type(&TrapType::Interrupt(kind))
                                             }
-                                            TrapType::Exit => break Err(WorkerExecutorError::runtime("Process exited during a speculative replay")),
+                                            TrapType::Exit => {
+                                                provenance = Some(FailureProvenance::Lifecycle);
+                                                break Err(WorkerExecutorError::runtime("Process exited during a speculative replay"))
+                                            }
                                         }
                                     }
                                     Some(trap_type) => {
@@ -441,11 +455,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                                     // as it is not an error.
                                                 }
                                                 TrapType::Exit => {
+                                                    provenance = Some(FailureProvenance::Lifecycle);
                                                     break Err(
                                                         WorkerExecutorError::PreviousInvocationExited,
                                                     );
                                                 }
-                                                TrapType::Error { error, .. } => {
+                                                TrapType::Error { error, provenance: failed, .. } => {
+                                                    provenance = Some(failed);
                                                     let stderr = store
                                                         .as_context()
                                                         .data()
@@ -509,7 +525,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 store, error, true,
             )));
         }
-        result.map_err(|error| ReplayFailure { error, diverged })
+        result.map_err(|error| ReplayFailure {
+            error,
+            diverged,
+            provenance,
+        })
     }
 
     /// Begins the bootstrap phase of the primary Store, before its core initializer runs.
@@ -631,12 +651,6 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             ));
                         }
 
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .durable_ctx_mut()
-                            .rebuild_resolved_names(hydrated.reference.oplog_index)
-                            .await?;
                         Self::finalize_pending_snapshot_update(instance, store).await
                     }
                     UpdateDescription::Automatic { .. }
@@ -686,9 +700,11 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                 AttemptFailure::Replay(ReplayFailure {
                                                     error,
                                                     diverged,
+                                                    provenance,
                                                 }) => start_outcome::RawStartError::Replay {
                                                     error,
                                                     diverged: *diverged,
+                                                    provenance: *provenance,
                                                 },
                                             };
                                             store
@@ -819,8 +835,8 @@ impl AttemptFailure {
     fn into_error(self) -> WorkerExecutorError {
         match self {
             Self::Load(
-                SnapshotRecoveryResult::Failed(error)
-                | SnapshotRecoveryResult::Unavailable(error)
+                SnapshotRecoveryResult::Failed(error, _)
+                | SnapshotRecoveryResult::Unavailable(error, _)
                 | SnapshotRecoveryResult::Lost(error),
             )
             | Self::Replay(ReplayFailure { error, .. }) => error,

@@ -23,10 +23,12 @@ mod snapshots;
 use attribution::PublicOplogAttributionResolver;
 #[cfg(test)]
 use conversion::host_response_to_public_value;
+pub(crate) use conversion::with_expected_request;
 use invocation::{agent_invocation_result_to_public, agent_invocation_to_public};
 pub use reading::{
-    check_oplog_cursor_query, find_component_revision_at, get_public_oplog_chunk,
-    get_public_oplog_entry, get_public_oplog_page, oplog_page_cursor, oplog_page_start,
+    PublicOplogRangePage, check_oplog_cursor_query, find_component_revision_at,
+    get_public_oplog_chunk, get_public_oplog_entry, get_public_oplog_page,
+    get_public_oplog_range_page, oplog_page_cursor, oplog_page_start, oplog_range_allowance,
     search_public_oplog, search_public_oplog_page,
 };
 use snapshots::raw_snapshot_to_public;
@@ -87,12 +89,10 @@ use golem_common::model::oplog::{
     SnapshotBasedUpdateParameters, UpdateDescription,
 };
 use golem_common::model::oplog::{
-    SpanAttributes, SpanFinished, SpanKind, SpanOutcome, SpanStarted,
+    OplogPayload, ReplayDivergence, ReplayStep, SpanAttributes, SpanFinished, SpanKind,
+    SpanOutcome, SpanStarted,
 };
-use golem_common::model::{
-    AgentInvocation, AgentInvocationPayload, AgentInvocationResult, OwnedAgentId,
-};
-use golem_common::schema::agent::FieldSource;
+use golem_common::model::{AgentInvocation, AgentInvocationResult, OwnedAgentId};
 use golem_common::schema::graph::reachable_defs;
 use golem_common::schema::{
     InputSchema, IntoTypedSchemaValue, NamedFieldType, OutputSchema, SchemaGraph, SchemaType,

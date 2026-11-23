@@ -393,9 +393,9 @@ private[golem] object ToolImplementationRuntime {
   def registerWire(handle: WireToolImplementation): Unit =
     ToolRegistry.registerWire(
       handle,
-      (path, input, stdin, stdout, stderr, principal) =>
+      (path, input, stdin, stdout, stderr, context) =>
         handle
-          .invoke(path, WireToolInput(input.value, stdin, stdout, stderr, principal))
+          .invoke(path, WireToolInput(input.value, stdin, stdout, stderr, context))
           .map { outcome =>
             try {
               val tool = ToolReflection.fromWire(handle.descriptor)
@@ -428,7 +428,7 @@ private[golem] object ToolImplementationRuntime {
     tool: ExtendedToolType,
     handle: ToolImplementationHandle
   ): ToolRegistry.ToolInvoker =
-    (commandPath, wireInput, stdin, stdout, stderr, principal) => {
+    (commandPath, wireInput, stdin, stdout, stderr, context) => {
       val decoded =
         try Right(SchemaWire.typedSchemaValueFromWit(wireInput))
         catch {
@@ -445,7 +445,7 @@ private[golem] object ToolImplementationRuntime {
               commandPath,
               input,
               stdin,
-              principal
+              context
             )
       }
       invoked.map(outcome => validateReturned(tool, commandPath, outcome))
@@ -510,7 +510,7 @@ private[golem] object ToolImplementationRuntime {
             commandPath: List[String],
             input: golem.schema.TypedSchemaValue,
             stdin: Option[ToolInputStream],
-            principal: golem.Principal
+            context: golem.InvocationContext
           ): Future[Either[ToolInvokeError[golem.schema.TypedSchemaValue], ToolInvokeResult]] =
             val forwardedStdin = stdin match {
               case Some(stream: JsToolInputStream) => Right(Some(stream: ToolInputStream))
@@ -526,7 +526,7 @@ private[golem] object ToolImplementationRuntime {
                   value,
                   stdout.collect { case stream: JsToolOutputStream => stream: ToolOutputStream },
                   stderr.collect { case stream: JsToolOutputStream => stream: ToolOutputStream },
-                  principal
+                  context
                 ).map {
                   case Right(result) =>
                     Right(

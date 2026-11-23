@@ -13,9 +13,8 @@
 // limitations under the License.
 
 use super::{
-    AccessClaimOptions, CallReplayOutcome, Cancellable, CompletionDelivery,
-    DeferredCallReplayOutcome, DurableCallSession, InvocationIdSource, NotCancellable,
-    ScopeReplayRecovery,
+    AccessClaimOptions, Cancellable, CompletionDelivery, DeferredCallReplayOutcome,
+    DurableCallSession, InvocationIdSource, NotCancellable, ScopeReplayRecovery,
 };
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::durability::{
@@ -55,14 +54,6 @@ pub(crate) enum DurableDemandItem<Pair: HostPayloadPair> {
     },
 }
 
-/// Whether this adapter's oplog protocol records the guest-delivery disposition of each child.
-/// TCP child sequences are markerless; P3 HTTP records markers and needs replay-discard parking.
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum DemandDeliveryMode {
-    Markerless,
-    Deferred,
-}
-
 /// Durable parent/child protocol shared by byte streams whose source advances only on guest
 /// demand. It owns the parent call, creates exactly one durable child per requested item, and
 /// exposes the parent terminal only as a consuming operation so no children can be started after
@@ -79,7 +70,6 @@ where
     parent: DurableCallSession<Parent, Cancellable>,
     demands: mpsc::Receiver<Demand>,
     observational_owner: Option<OplogIndex>,
-    delivery_mode: DemandDeliveryMode,
     /// The parent scope re-executes its effect call-locally, so a child recorded without a
     /// terminal is completed live under its recorded `Start` instead of failing replay.
     children_repair_incomplete: bool,
@@ -96,7 +86,6 @@ where
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         demands: mpsc::Receiver<Demand>,
         claim_options: AccessClaimOptions,
-        delivery_mode: DemandDeliveryMode,
         request: Parent::Req,
     ) -> anyhow::Result<Self>
     where
@@ -139,7 +128,6 @@ where
             parent,
             demands,
             observational_owner,
-            delivery_mode,
             children_repair_incomplete,
             _child: std::marker::PhantomData,
         })
@@ -210,26 +198,11 @@ where
         let item = if child.is_live() {
             Ok(DurableDemandItem::Live(child))
         } else {
-            match self.delivery_mode {
-                DemandDeliveryMode::Markerless => {
-                    match child.replay_access(store, get_ctx).await? {
-                        CallReplayOutcome::Replayed(response) => Ok(DurableDemandItem::Replayed {
-                            response,
-                            delivery: CompletionDelivery::unarmed(),
-                        }),
-                        CallReplayOutcome::Incomplete(child) => self.incomplete_child(child),
-                    }
+            match child.replay_access_deferred(store, get_ctx).await? {
+                DeferredCallReplayOutcome::Replayed(response, delivery) => {
+                    Ok(DurableDemandItem::Replayed { response, delivery })
                 }
-                DemandDeliveryMode::Deferred => {
-                    match child.replay_access_deferred(store, get_ctx).await? {
-                        DeferredCallReplayOutcome::Replayed(response, delivery) => {
-                            Ok(DurableDemandItem::Replayed { response, delivery })
-                        }
-                        DeferredCallReplayOutcome::Incomplete(child) => {
-                            self.incomplete_child(child)
-                        }
-                    }
-                }
+                DeferredCallReplayOutcome::Incomplete(child) => self.incomplete_child(child),
             }
         }?;
         if matches!(&item, DurableDemandItem::Live(_))
@@ -260,6 +233,7 @@ where
         } else {
             child.abandon_for_trap();
             Err(WorkerExecutorError::unexpected_oplog_entry(
+                child.start_index(),
                 "completed demand-stream child",
                 format!(
                     "invariant: {} child at Start {} has no owner authorization for incomplete repair",
@@ -282,16 +256,10 @@ where
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
-        match self.delivery_mode {
-            DemandDeliveryMode::Markerless => child
-                .complete_access(store, get_ctx, response)
-                .await
-                .map(|_| CompletionDelivery::unarmed()),
-            DemandDeliveryMode::Deferred => child
-                .complete_access_deferred(store, get_ctx, response)
-                .await
-                .map(|(_, delivery)| delivery),
-        }
+        child
+            .complete_access_deferred(store, get_ctx, response)
+            .await
+            .map(|(_, delivery)| delivery)
     }
 
     pub(crate) async fn finish<T, D, Ctx>(
@@ -411,7 +379,6 @@ mod tests {
                 parent: live_unfinished_handle(parent_index, sink),
                 demands: receiver,
                 observational_owner: None,
-                delivery_mode: DemandDeliveryMode::Markerless,
                 children_repair_incomplete: false,
                 _child: std::marker::PhantomData,
             };

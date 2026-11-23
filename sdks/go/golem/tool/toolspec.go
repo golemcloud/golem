@@ -16,6 +16,7 @@ package tool
 
 import (
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"io"
 	"reflect"
@@ -251,6 +252,7 @@ type CommandSpec struct {
 
 // commandSettings is everything a spec declares about the command itself.
 type commandSettings struct {
+	http             *toolCommon.CommandHttp
 	doc              toolDoc
 	aliases          []string
 	annotations      *toolCommon.CommandAnnotations
@@ -362,6 +364,20 @@ func (s *CommandSpec) Stdin(p *io.Reader) *StdinArg {
 	}
 	s.state.stdin = &stdinBinding{path: path}
 	return &StdinArg{b: s.state.stdin}
+}
+
+// HTTP declares this command's endpoint or prefix without resolving its mode.
+func (s *CommandSpec) HTTP(endpoint golem.Endpoint) {
+	if s.settings.http != nil {
+		s.state.fail("a command declares HTTP more than once")
+		return
+	}
+	decl, err := endpoint.ToolDeclaration()
+	if err != nil {
+		s.state.fail("HTTP: %s", err)
+		return
+	}
+	s.settings.http = &decl
 }
 
 // Doc sets the command's one-line summary.

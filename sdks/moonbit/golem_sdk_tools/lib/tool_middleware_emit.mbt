@@ -222,7 +222,8 @@ fn emit_expected_underlying_method(
           ")))\n",
         )
       Stdin => stdin = "Some(" + surface.params[index].0 + ")"
-      Principal => abort("expected middleware surface contains principal")
+      InvocationContext =>
+        abort("expected middleware surface contains the invocation context")
     }
   }
   let decode_custom_error = if middleware_is_infallible(surface) {
@@ -333,9 +334,9 @@ fn emit_presented_parameter_bindings(
           name +
           " = match __golem_stdin {\n      Some(__golem_stdin) => __golem_stdin\n      None => return Err(@toolMiddleware.ToolInvokeError::InvalidInput(\"tool invocation did not contain declared stdin stream\"))\n    }\n",
         )
-      Principal =>
+      InvocationContext =>
         buf.write_string(
-          "    let " + name + " = __golem_invocation.principal()\n",
+          "    let " + name + " = __golem_invocation.invocation_context()\n",
         )
     }
   }

@@ -46,7 +46,7 @@ use golem_common::model::invocation_session_public::{
     PublicStreamOutcome,
 };
 use golem_common::schema::agent::{
-    AgentMethodSchema, AgentTypeSchema, FieldSource, OutputSchema, ParsedAgentKey,
+    AgentMethodSchema, AgentTypeSchema, OutputSchema, ParsedAgentKey,
 };
 use golem_common::schema::public_json::{
     PublicSchemaValueError, PublicStreamReference, PublicStreamReferencePolicy,
@@ -1403,7 +1403,6 @@ fn public_input_graph(
     let fields = input_schema
         .fields()
         .iter()
-        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
         .map(|field| NamedFieldType {
             name: field.name.clone(),
             body: field.schema.clone(),
@@ -1451,12 +1450,7 @@ fn prepare_method_parameters(
     source_language: &SourceLanguage,
     stdin_format: InvocationStdinFormat,
 ) -> anyhow::Result<(SchemaValue, Option<InputBinding>)> {
-    let fields = method
-        .input_schema
-        .fields()
-        .iter()
-        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
-        .collect::<Vec<_>>();
+    let fields = method.input_schema.fields().iter().collect::<Vec<_>>();
     if fields.len() != arguments.len() {
         bail!(
             "wrong number of parameters: expected {}, got {}",

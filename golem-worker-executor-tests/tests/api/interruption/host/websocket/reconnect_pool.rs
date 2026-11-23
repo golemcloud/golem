@@ -1,4 +1,5 @@
 use super::*;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 const CLOSE: &str = "golem:websocket/client::close";
@@ -254,7 +255,7 @@ async fn pending_reconnect(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
         golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
         golem_worker_executor::worker::CreateIntent::Invocation {
             owner: golem_worker_executor::worker::NewOwner::keyed(component.id, name.clone()),

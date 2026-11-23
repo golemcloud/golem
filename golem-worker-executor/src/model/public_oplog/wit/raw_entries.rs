@@ -75,6 +75,7 @@ before (value) {}
                 params.instance_id.high_bits,
                 params.instance_id.low_bits,
             ),
+            never_live: params.never_live,
         }),
     }) }
     Start { record (params) {
@@ -120,6 +121,7 @@ before (value) {}
                     Ok(M::AgentInvocationStarted {
                         timestamp: timestamp_from_datetime(params.timestamp),
                         invocation_id: uuid::Uuid::from(params.invocation_id).into(),
+                        operation: Box::new(params.operation.try_into()?),
                         payload: oplog_payload_from_wit(params.payload),
                         trace_id,
                         trace_states: params.trace_states,
@@ -159,6 +161,10 @@ before (value) {}
             let internal: golem_common::model::RetryPolicyState = s.into();
             internal
         }),
+        retry_at: params.retry_at.map(timestamp_from_datetime),
+        retrying_start_index: params
+            .retrying_start_index
+            .map(golem_common::model::OplogIndex::from_u64),
     } }
     RecoverySucceeded { record (ts) {
         timestamp: timestamp_from_datetime(ts.timestamp),
@@ -190,6 +196,7 @@ before (value) {}
                         timestamp: timestamp_from_datetime(params.timestamp),
                         not_before: params.not_before.map(timestamp_from_datetime),
                         invocation_id: uuid::Uuid::from(params.invocation_id).into(),
+                        operation: Box::new(params.operation.try_into()?),
                         payload: oplog_payload_from_wit(params.payload),
                         trace_id,
                         trace_states: params.trace_states,
@@ -261,6 +268,11 @@ before (value) {}
             .transpose()?,
         // The WIT record of a failed update has no snapshot fault.
         snapshot_fault: None,
+        failure_class: update_failure_class_from_wit(params.failure_class),
+        divergence: params
+            .divergence
+            .map(|divergence| replay_divergence_from_wit(divergence).map(Box::new))
+            .transpose()?,
     } }
     GrowMemory { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
@@ -544,6 +556,7 @@ before (value) {}
                         local_agent_config,
                         instance_id,
                         create_request: _,
+                        never_live,
                     } = *parameters;
                     Ok(Self::Create(oplog::RawCreateParameters {
                         timestamp: timestamp.into(),
@@ -589,6 +602,7 @@ before (value) {}
                             })
                             .collect::<Result<_, String>>()?,
                         instance_id: instance_id.into(),
+                        never_live,
                     }))
                 } }
     Start { record () => RawStartParameters {
@@ -619,6 +633,7 @@ before (value) {}
     AgentInvocationStarted { record () => RawAgentInvocationStartedParameters {
         timestamp: timestamp.into(),
         invocation_id: invocation_id.0.into(),
+        operation: (*operation).into(),
         payload: oplog_payload_to_wit(payload)?,
         trace_id: trace_id.to_string(),
         trace_states: trace_states,
@@ -647,6 +662,8 @@ before (value) {}
         error: error.into(),
         retry_from: retry_from.into(),
         retry_policy_state: retry_policy_state.map(|s| s.into()),
+        retry_at: retry_at.map(Into::into),
+        retrying_start_index: retrying_start_index.map(Into::into),
     } }
     RecoverySucceeded { override (M::RecoverySucceeded { timestamp }) => Ok(Self::RecoverySucceeded(timestamp.into())) }
     Jump { record (entity_parent_start_index) => JumpParameters {
@@ -662,6 +679,7 @@ before (value) {}
         timestamp: timestamp.into(),
         not_before: not_before.map(Into::into),
         invocation_id: invocation_id.0.into(),
+        operation: (*operation).into(),
         payload: oplog_payload_to_wit(payload)?,
         trace_id: trace_id.to_string(),
         trace_states: trace_states,
@@ -700,6 +718,10 @@ before (value) {}
                 snapshot_index: details.snapshot_index.into(),
             }
         }),
+        failure_class: update_failure_class_to_wit(failure_class),
+        divergence: divergence
+            .map(|divergence| replay_divergence_to_wit(*divergence))
+            .transpose()?,
     } }
     GrowMemory { record () => GrowMemoryParameters {
         timestamp: timestamp.into(),

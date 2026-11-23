@@ -43,121 +43,10 @@ fn managed_xfs_reuses_downloads_without_reusing_vm_state() {
 }
 
 #[test]
-fn main_validation_dashboard_validates_and_persists_public_observations() {
-    let output = Command::new("python3")
-        .args([
-            "-B",
-            ".github/main-validation/observer/dashboard/test_server.py",
-        ])
-        .current_dir(workspace_path())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn main_validation_retains_logs_and_reports_actual_task_lifetimes() {
-    let output = Command::new("python3")
-        .args([
-            "-B",
-            ".github/scripts/release-tooling-tests/tests/main_validation_progress.py",
-        ])
-        .current_dir(workspace_path())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn main_validation_freezes_executor_binaries_without_changing_the_selection() {
-    let output = Command::new("python3")
-        .args([
-            "-B",
-            ".github/scripts/release-tooling-tests/tests/main_validation_freeze.py",
-        ])
-        .current_dir(workspace_path())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn main_validation_slack_preserves_delivery_receipts_with_formatted_alerts() {
-    let output = Command::new("python3")
-        .args([
-            "-B",
-            ".github/scripts/release-tooling-tests/tests/main_validation_slack.py",
-        ])
-        .current_dir(workspace_path())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn main_validation_lists_all_commits_since_the_previous_selected_run() {
-    let output = Command::new("python3")
-        .args([
-            "-B",
-            ".github/scripts/release-tooling-tests/tests/main_validation_changes.py",
-        ])
-        .current_dir(workspace_path())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn main_validation_reuses_component_wasms_by_source_across_languages() {
-    let output = Command::new("python3")
-        .args([
-            "-B",
-            ".github/scripts/release-tooling-tests/tests/main_validation_fixtures.py",
-        ])
-        .current_dir(workspace_path())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn main_validation_keeps_failed_workload_results_separate_from_cache_delivery() {
-    let output = Command::new("python3")
-        .args([
-            "-B",
-            ".github/scripts/release-tooling-tests/tests/main_validation_cache_lifecycle.py",
-        ])
-        .current_dir(workspace_path())
+fn main_validation_typescript_fixtures() {
+    let output = Command::new("bun")
+        .args(["test", "--timeout", "180000", "."])
+        .current_dir(workspace_path().join(".github/main-validation"))
         .output()
         .unwrap();
     assert!(
@@ -228,55 +117,38 @@ for (const value of cases) {
 }
 
 #[test]
-fn cutover_keeps_maintenance_ci_without_main_pr_tests() {
+fn main_uses_main_validation_without_legacy_workflows() {
     let load = |name: &str| -> serde_yaml::Value {
         serde_yaml::from_str(
             &fs::read_to_string(workspace_path().join(".github/workflows").join(name)).unwrap(),
         )
         .unwrap()
     };
-    let ci = load("ci.yaml");
-    let bash = load("builtin-bash.yaml");
-    let steps = ci["jobs"]["unit-tests-and-checks"]["steps"]
-        .as_sequence()
-        .unwrap();
-    let python = steps
-        .iter()
-        .position(|step| step["uses"] == "actions/setup-python@v6")
-        .unwrap();
-    let release_tests = steps
-        .iter()
-        .position(|step| step["name"] == "Test release tooling")
-        .unwrap();
-    assert!(python < release_tests);
-    assert_eq!(steps[python]["with"]["python-version"], "3.14");
-    for workflow in [&ci, &bash] {
-        for event in ["push", "pull_request"] {
-            assert_eq!(
-                workflow["on"][event]["branches"],
-                serde_yaml::to_value(["[0-9]+.[0-9]+.x"]).unwrap()
-            );
-        }
-        assert!(workflow["on"].get("workflow_dispatch").is_some());
-    }
-    assert!(ci["on"].get("workflow_call").is_some());
-    for event in ["push", "pull_request"] {
-        assert_eq!(
-            ci["on"][event]["paths-ignore"],
-            serde_yaml::to_value([
-                "docs/**",
-                "golem-cloud-billing/**",
-                ".github/workflows/golem-cloud-billing.yaml"
-            ])
-            .unwrap()
+    for path in [
+        ".github/workflows/ci.yaml",
+        ".github/workflows/builtin-bash.yaml",
+        ".github/actions/publish-native-binaries/action.yml",
+        ".github/actions/restore-binaries/action.yml",
+        ".github/actions/restore-binary-publication/action.yml",
+        ".github/actions/restore-builtin-artifacts/action.yml",
+        ".github/actions/restore-cli-test-binary/action.yml",
+        ".github/actions/restore-test-components/action.yml",
+    ] {
+        assert!(
+            !workspace_path().join(path).exists(),
+            "{path} remains on main"
         );
     }
+    let validation = load("main-validation.yaml");
+    assert!(validation["on"].get("schedule").is_some());
+    assert!(validation["on"].get("workflow_dispatch").is_some());
+    assert!(validation["on"].get("push").is_none());
+    assert!(validation["on"].get("pull_request").is_none());
     assert!(
         !workspace_path()
             .join(".github/workflows/skill-harness-pr.yaml")
             .exists()
     );
-    assert!(ci["jobs"].get("skill-harness-unit-tests").is_some());
     for name in ["builtin-bash-oracle-drift.yaml", "golem-cloud-billing.yaml"] {
         let workflow = load(name);
         assert_eq!(
@@ -294,13 +166,10 @@ fn cutover_keeps_maintenance_ci_without_main_pr_tests() {
 }
 
 #[test]
-fn main_validation_cutover_executes_selection_and_exact_release_gate_shells() {
-    let output = Command::new("python3")
-        .args([
-            "-B",
-            ".github/scripts/release-tooling-tests/tests/main_validation_cutover.py",
-        ])
-        .current_dir(workspace_path())
+fn main_validation_typescript_checks() {
+    let output = Command::new("npm")
+        .args(["run", "check"])
+        .current_dir(workspace_path().join(".github/main-validation"))
         .output()
         .unwrap();
     assert!(

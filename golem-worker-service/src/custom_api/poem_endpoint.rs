@@ -54,7 +54,7 @@ impl CustomApiPoemEndpoint {
                 log_internal_errors(&failure.error);
                 let mut error = CustomApiEndpointError::from(failure.error);
                 record.fail((), &mut error);
-                let mut response = error_response(error, failure.cors_headers);
+                let mut response = error_response(error, failure.response_headers);
                 if is_head {
                     response.set_body(());
                 }
@@ -64,9 +64,9 @@ impl CustomApiPoemEndpoint {
     }
 }
 
-fn error_response(error: CustomApiEndpointError, cors_headers: http::HeaderMap) -> Response {
+fn error_response(error: CustomApiEndpointError, response_headers: http::HeaderMap) -> Response {
     let mut response = error.into_response();
-    response.headers_mut().extend(cors_headers);
+    response.headers_mut().extend(response_headers);
     response
 }
 
