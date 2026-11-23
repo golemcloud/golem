@@ -1902,11 +1902,19 @@ Path|Method|Protected
             "required": true
           },
           "phantomAgent": true,
-          "phantomIdBinding": {
+          "agentIdBinding": {
             "type": "Path",
-            "name": "string",
-            "optional": true
+            "name": "string"
           },
+          "createRoute": [
+            {
+              "type": "Segment",
+              "value": {
+                "type": "Literal",
+                "value": "string"
+              }
+            }
+          ],
           "corsOptions": {
             "allowedPatterns": [
               "string"
@@ -2444,11 +2452,19 @@ Path|Method|Protected
         "required": true
       },
       "phantomAgent": true,
-      "phantomIdBinding": {
+      "agentIdBinding": {
         "type": "Path",
-        "name": "string",
-        "optional": true
+        "name": "string"
       },
+      "createRoute": [
+        {
+          "type": "Segment",
+          "value": {
+            "type": "Literal",
+            "value": "string"
+          }
+        }
+      ],
       "corsOptions": {
         "allowedPatterns": [
           "string"

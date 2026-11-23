@@ -26,6 +26,49 @@ import type { StandardSchemaV1 } from '../src/schema/standardSchema';
 const get = (name: string) => AgentTypeRegistry.get(new AgentClassName(name));
 
 describe('agent HTTP routing (Phase 6)', () => {
+  it('reserves stream controls only for the effective durable streams transport', () => {
+    let sequence = 0;
+    for (const selector of ['offset', 'cursor', 'live', 'instance']) {
+      for (const shape of ['input', 'output', 'recordOutput', 'plain']) {
+        for (const mode of [undefined, 'durableStreams', 'plain', 'sse', 'webSocket'] as const) {
+          for (const options of [false, true]) {
+            const name = `streamControl${sequence++}`;
+            defineAgent({
+              name,
+              id: {},
+              http: http.mount('/controls', { agentId: http.agentId.query(selector) }),
+              methods: {
+                events: method({
+                  input: shape === 'input' ? { events: s.stream(z.string()) } : {},
+                  returns:
+                    shape === 'output'
+                      ? s.stream(z.string())
+                      : shape === 'recordOutput'
+                        ? z.object({ events: s.stream(z.string()) })
+                        : z.string(),
+                  http: http.post('/events', {
+                    mode,
+                    ...(options ? { durableStreams: { slots: [] } } : {}),
+                  }),
+                }),
+              },
+            });
+            const reserved =
+              selector !== 'instance' &&
+              (mode === 'durableStreams' || (mode === undefined && shape !== 'plain'));
+            expect(get(name) === undefined, `${selector}/${shape}/${mode}/${options}`).toBe(
+              reserved,
+            );
+            if (reserved)
+              expect(AgentTypeRegistry.getRegistrationError(name)?.join('\n')).toContain(
+                'durable-stream control',
+              );
+          }
+        }
+      }
+    }
+  });
+
   it('validates query wire shapes when concrete schema types are erased', () => {
     const cases = [
       [z.array(z.string().readonly()), true],
@@ -107,23 +150,29 @@ describe('agent HTTP routing (Phase 6)', () => {
     ).toBeUndefined();
   });
 
-  it('publishes required and optional path/query selectors without constructor bindings', () => {
+  it('publishes ID/create/file mounts without constructor URL bindings', () => {
     for (const source of ['path', 'query'] as const) {
-      for (const optional of [false, true]) {
-        const name = `selected_${source}_${optional}`;
+      for (const files of [false, true]) {
+        const name = `selected_${source}_${files}`;
         defineAgent({
           name,
           id: { customer: z.string() },
-          http: http.mount(source === 'path' ? '/c/{customer}/{instance}' : '/c/{customer}', {
-            phantomId: http.phantomId[source]('instance', { optional }),
-            phantomAgent: true,
+          http: http.mount(source === 'path' ? '/c/{instance}' : '/c', {
+            agentId: http.agentId[source]('instance'),
+            create: '/{agent-type}/create',
+            exposeFiles: files ? [{ route: '/a', path: '/a' }] : [],
           }),
           methods: { read: method({ input: {}, returns: z.string(), http: http.get('/read') }) },
         });
-        expect(get(name)?.httpMount?.phantomIdBinding).toEqual({
+        expect(get(name)?.httpMount?.agentIdBinding).toEqual({
           tag: source,
-          val: { name: 'instance', optional },
+          val: { name: 'instance' },
         });
+        expect(get(name)?.httpMount?.createRoute).toEqual([
+          http.agentType(),
+          http.literal('create'),
+        ]);
+        expect(get(name)?.httpMount?.filesystemBindings).toHaveLength(files ? 1 : 0);
       }
     }
   });
@@ -148,48 +197,85 @@ describe('agent HTTP routing (Phase 6)', () => {
       expect(get(name)).toBeUndefined();
       return AgentTypeRegistry.getRegistrationError(name)?.join('\n');
     };
-    for (const source of ['path', 'query'] as const) {
-      for (const optional of ['"false"', 'null', '0']) {
-        expect(
-          register(
-            http.mount(source === 'path' ? '/c/{instance}' : '/c', {
-              phantomId: http.phantomId[source]('instance', JSON.parse(`{"optional":${optional}}`)),
-            }),
-          ),
-        ).toMatch(/optionality must be a boolean/);
-      }
-    }
-    expect(register(http.mount('/c', { phantomId: http.phantomId.path('instance') }))).toMatch(
-      /exactly one/,
+    expect(register({ path: '/c', create: '/create' })).toMatch(/require.*ID/);
+    expect(
+      register({ path: '/c', agentId: http.agentId.query('instance'), create: '/{id}' }),
+    ).toMatch(/captures/);
+    expect(
+      register({
+        path: '/c',
+        agentId: http.agentId.query('instance'),
+        create: [http.pathVar('id')],
+      }),
+    ).toMatch(/captures/);
+    expect(
+      register({
+        path: '/c',
+        agentId: http.agentId.query('instance'),
+        create: [http.literal('..')],
+      }),
+    ).toMatch(/valid literal/);
+    expect(
+      register({ path: '/c/{instance}/{instance}', agentId: http.agentId.path('instance') }),
+    ).toMatch(/exactly one/);
+    expect(
+      register({ path: '/c/{instance}/{*instance}', agentId: http.agentId.path('instance') }),
+    ).toMatch(/constructor captures/);
+    expect(
+      register({ path: '/c', agentId: http.agentId.query('instance'), phantomAgent: true }),
+    ).toMatch(/phantomAgent/);
+    expect(
+      register({ path: '/c/{instance}/{value}', agentId: http.agentId.path('instance') }),
+    ).toMatch(/constructor captures/);
+    expect(register({ path: '/c', agentId: http.agentId.query('') })).toMatch(/nonempty/);
+    expect(register({ path: '/c', agentId: http.agentId.path('instance') })).toMatch(/exactly one/);
+    expect(
+      register({ path: '/c/{instance}/{other}', agentId: http.agentId.path('instance') }),
+    ).toMatch(/other/);
+    expect(register(http.mount('/c', { agentId: http.agentId.query('instance') }), true)).toMatch(
+      /durable/,
     );
     expect(
-      register(http.mount('/c/{instance}/{other}', { phantomId: http.phantomId.path('instance') })),
-    ).toMatch(/other/);
-    expect(
-      register(http.mount('/c', { phantomId: http.phantomId.query('instance') }), true),
-    ).toMatch(/durable/);
-    expect(
       register(
-        http.mount('/c', {
-          phantomId: http.phantomId.query('instance'),
-          exposeFiles: [{ route: '/a', path: '/a' }],
-        }),
+        http.mount('/c', { agentId: http.agentId.query('value') }),
+        false,
+        http.get('/read'),
       ),
-    ).toMatch(/file exposure/);
+    ).toMatch(/implicit query/);
     expect(
       register(
-        http.mount('/c', { phantomId: http.phantomId.query('instance') }),
+        http.mount('/c', { agentId: http.agentId.query('instance') }),
         false,
         http.post('/read?instance={value}'),
       ),
     ).toMatch(/conflicts/);
     expect(
       register(
-        http.mount('/c/{instance}', { phantomId: http.phantomId.path('instance') }),
+        http.mount('/c/{instance}', { agentId: http.agentId.path('instance') }),
         false,
         http.post('/{instance}'),
       ),
     ).toMatch(/conflicts/);
+  });
+
+  it('reserves only the query ID, preserving distinct implicit and explicitly bound inputs', () => {
+    for (const verb of [http.get, http.head, http.del]) {
+      const name = `queryId_${verb('/').method}`;
+      defineAgent({
+        name,
+        id: { customer: z.string() },
+        http: http.mount('/c', { agentId: http.agentId.query('instance') }),
+        methods: {
+          read: method({ input: { value: z.string() }, returns: z.string(), http: verb('/read') }),
+          renamed: method({
+            input: { instance: z.string() },
+            returns: z.string(),
+            http: verb('/renamed?other={instance}'),
+          }),
+        },
+      });
+      expect(get(name)?.methods).toHaveLength(2);
+    }
   });
 
   it('compiles full durable stream route options', () => {

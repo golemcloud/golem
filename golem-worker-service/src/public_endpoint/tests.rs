@@ -54,6 +54,7 @@ struct HttpApiDomains {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl HttpApiDefinitionsLookup for HttpApiDomains {
     async fn get(&self, domain: &Domain) -> Result<CompiledRoutes, ApiDefinitionLookupError> {
         self.lookups.lock().unwrap().push(domain.clone());

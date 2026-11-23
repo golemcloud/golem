@@ -969,7 +969,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let remote_result = {
                 let rpc = self.rpc();
                 let agent_id = *self.agent_id();
-                let caller = golem_common::model::caller::Caller::entry(self.self_principal());
+                let caller = self.outgoing_caller();
                 let created_by = self.created_by();
                 let stack = self.clone_as_inherited_stack(span.span_id());
                 let interrupt_signal = interrupt_signal.map(Error::from);

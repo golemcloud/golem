@@ -165,3 +165,58 @@ fn remote_agent_error_survives_wit_roundtrip() {
     let wit = crate::preview2::golem::agent::host::RpcError::from(error.clone());
     assert_eq!(RpcError::from(wit), error);
 }
+
+#[test]
+fn a_remote_schedule_names_the_scheduling_agent_as_parent_also_for_a_tool() {
+    use super::remote::scheduled_invocation_start;
+    use golem_common::model::caller::{Caller, Principal, ToolPrincipal};
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::model::tool::ToolName;
+    use golem_common::model::{
+        AgentFingerprint, AgentId, AgentInvocation, InvocationRequestKey, OwnedAgentId,
+    };
+    use golem_service_base::model::auth::AuthCtx;
+
+    let environment_id = EnvironmentId(uuid::Uuid::from_u128(0xe0));
+    let scheduler = AgentId::from_parts(7, 0xc0);
+    let target = OwnedAgentId::new(environment_id, &AgentId::from_parts(8, 0xc1));
+    let tool = Principal::Tool(ToolPrincipal {
+        issuer: crate::test_callers::TEST_ISSUER.to_string(),
+        environment_id,
+        tool_name: ToolName::try_from("report").unwrap(),
+    });
+    for (case, immediate) in [
+        ("the agent", crate::test_callers::agent_principal(scheduler)),
+        ("a tool that the agent hosts", tool),
+    ] {
+        let (start, _) = scheduled_invocation_start(
+            &target,
+            AgentFingerprint(uuid::Uuid::from_u128(0xf1)),
+            InvocationRequestKey::Unkeyed(uuid::Uuid::from_u128(0x5e)),
+            AgentInvocation::AgentMethod {
+                idempotency_key: golem_common::model::InvocationId::from(uuid::Uuid::from_u128(1)),
+                method_name: "increment".to_string(),
+                input: golem_common::schema::SchemaValue::Tuple {
+                    elements: Vec::new(),
+                },
+                invocation_context: InvocationContextStack::fresh(),
+                caller: Caller {
+                    original: crate::test_callers::user_principal(),
+                    immediate,
+                    tokens: Vec::new(),
+                },
+                scope_card: None,
+            },
+            chrono::Utc::now(),
+            &scheduler,
+            &AuthCtx::System,
+        )
+        .unwrap();
+        assert_eq!(
+            start.context.unwrap().parent,
+            Some(scheduler.into()),
+            "{case}"
+        );
+    }
+}

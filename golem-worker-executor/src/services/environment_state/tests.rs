@@ -184,6 +184,7 @@ fn binding(
         secret_keys_revealable: SecretKeyScope::All,
         filesystem_access: ToolFilesystemAccess::Unset,
         source: registered_tool.source.clone(),
+        shell: false,
     }
 }
 

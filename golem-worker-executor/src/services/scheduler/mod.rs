@@ -693,6 +693,7 @@ impl Drop for SchedulerServiceDefault {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerService for SchedulerServiceDefault {
     async fn schedule(&self, time: DateTime<Utc>, action: ScheduledAction) -> ScheduleId {
         self.schedule_with_id(ScheduleId::fresh(), time, action)

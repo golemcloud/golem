@@ -899,6 +899,7 @@ async fn scope_card_admission_negatively_caches_a_registry_missing_root() {
 struct FailingCardService;
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl CardService for FailingCardService {
     async fn record_revoked_cards(&self, _card_ids: &[CardId]) {}
 
@@ -925,6 +926,7 @@ async fn scope_card_admission_propagates_liveness_service_errors() {
 struct OmittingCardService;
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl CardService for OmittingCardService {
     async fn record_revoked_cards(&self, _card_ids: &[CardId]) {}
 

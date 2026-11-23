@@ -634,7 +634,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
     type ExtraDeps = Ctx::ExtraDeps;
 

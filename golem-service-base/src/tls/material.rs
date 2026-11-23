@@ -665,33 +665,38 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn a_kubernetes_style_symlink_swap_is_seen() {
+    mod unix {
+        use super::*;
         use std::os::unix::fs::symlink;
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        let ca = test_ca();
-        let put = |version: &str| {
-            let (cert, key) = signed_by(&ca, None);
-            let sub = root.join(version);
-            std::fs::create_dir_all(&sub).unwrap();
-            std::fs::write(sub.join("tls.crt"), &cert).unwrap();
-            std::fs::write(sub.join("tls.key"), key).unwrap();
-            std::fs::write(sub.join("ca.crt"), ca.pem()).unwrap();
-            cert
-        };
-        let first = put("..2026_a");
-        symlink("..2026_a", root.join("..data")).unwrap();
-        for name in ["tls.crt", "tls.key", "ca.crt"] {
-            symlink(format!("..data/{name}"), root.join(name)).unwrap();
+        use test_r::test;
+
+        #[test]
+        fn a_kubernetes_style_symlink_swap_is_seen() {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            let ca = test_ca();
+            let put = |version: &str| {
+                let (cert, key) = signed_by(&ca, None);
+                let sub = root.join(version);
+                std::fs::create_dir_all(&sub).unwrap();
+                std::fs::write(sub.join("tls.crt"), &cert).unwrap();
+                std::fs::write(sub.join("tls.key"), key).unwrap();
+                std::fs::write(sub.join("ca.crt"), ca.pem()).unwrap();
+                cert
+            };
+            let first = put("..2026_a");
+            symlink("..2026_a", root.join("..data")).unwrap();
+            for name in ["tls.crt", "tls.key", "ca.crt"] {
+                symlink(format!("..data/{name}"), root.join(name)).unwrap();
+            }
+            let m = TlsMaterial::load("t-symlink", file_sources(root)).unwrap();
+            assert_eq!(m.current().certificate.sha256, sha(&first));
+            let second = put("..2026_b");
+            symlink("..2026_b", root.join("..data_tmp")).unwrap();
+            std::fs::rename(root.join("..data_tmp"), root.join("..data")).unwrap();
+            assert!(matches!(m.reload_if_changed(), ReloadOutcome::Reloaded));
+            assert_eq!(m.current().certificate.sha256, sha(&second));
         }
-        let m = TlsMaterial::load("t-symlink", file_sources(root)).unwrap();
-        assert_eq!(m.current().certificate.sha256, sha(&first));
-        let second = put("..2026_b");
-        symlink("..2026_b", root.join("..data_tmp")).unwrap();
-        std::fs::rename(root.join("..data_tmp"), root.join("..data")).unwrap();
-        assert!(matches!(m.reload_if_changed(), ReloadOutcome::Reloaded));
-        assert_eq!(m.current().certificate.sha256, sha(&second));
     }
 
     #[test]

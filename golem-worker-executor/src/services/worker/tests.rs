@@ -286,6 +286,7 @@ fn non_agent_component(component_id: ComponentId, environment_id: EnvironmentId)
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentService for IndexTestComponentService {
     async fn get(
         &self,
@@ -2449,6 +2450,7 @@ impl OplogService for FakeOplogService {
 struct UnusedComponentService;
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentService for UnusedComponentService {
     async fn get(
         &self,

@@ -274,14 +274,21 @@ fn archive_stem() -> String {
 }
 
 fn go_binary_name() -> &'static str {
-    if cfg!(windows) { "go.exe" } else { "go" }
+    crate::process::GO
 }
 
 fn go_os() -> &'static str {
-    match std::env::consts::OS {
-        "macos" => "darwin",
-        os => os,
-    }
+    archive_platform::OS
+}
+
+#[cfg(target_os = "macos")]
+mod archive_platform {
+    pub(super) const OS: &str = "darwin";
+}
+
+#[cfg(not(target_os = "macos"))]
+mod archive_platform {
+    pub(super) const OS: &str = std::env::consts::OS;
 }
 
 fn go_arch() -> &'static str {

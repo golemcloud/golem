@@ -1422,30 +1422,42 @@ mod tests {
     }
 
     #[agent_definition(
-        mount = "/c/{customer}/{instance}",
-        phantom_id(path = "instance", optional = true)
+        mount = "/c/{instance}",
+        agent_id(path = "instance"),
+        create_route = "/c",
+        filesystem_bindings = [("/state", "/state")]
     )]
     trait SelectedPathAgent {
-        fn new(customer: String) -> Self;
+        fn new(instance: String) -> Self;
         #[endpoint(get = "/read")]
         fn read(&self) -> String;
     }
     struct SelectedPathAgentImpl(String);
     #[agent_implementation]
     impl SelectedPathAgent for SelectedPathAgentImpl {
-        fn new(customer: String) -> Self {
-            Self(customer)
+        fn new(instance: String) -> Self {
+            Self(instance)
         }
         fn read(&self) -> String {
             self.0.clone()
         }
     }
 
-    #[agent_definition(mount = "/c/{customer}", phantom_id(query = "instance"))]
+    #[agent_definition(mount = "/c", agent_id(query = "instance"), create_route = "/c/create", filesystem_bindings = [("/state", "/state")])]
     trait SelectedQueryAgent {
         fn new(customer: String) -> Self;
         #[endpoint(get = "/read")]
         fn read(&self) -> String;
+        #[endpoint(post = "/body")]
+        fn body(&self, instance: String) -> String;
+        #[endpoint(get = "/header", headers("X-Filter" = "instance"))]
+        fn header(&self, instance: String) -> String;
+        #[endpoint(get = "/path/{instance}")]
+        fn path(&self, instance: String) -> String;
+        #[endpoint(get = "/query?filter={instance}")]
+        fn query(&self, instance: String) -> String;
+        #[endpoint(get = "/stream")]
+        fn stream(&self, instance: golem_rust::agentic::AgentStream<String>);
     }
     struct SelectedQueryAgentImpl(String);
     #[agent_implementation]
@@ -1456,30 +1468,43 @@ mod tests {
         fn read(&self) -> String {
             self.0.clone()
         }
+        fn body(&self, instance: String) -> String {
+            instance
+        }
+        fn header(&self, instance: String) -> String {
+            instance
+        }
+        fn path(&self, instance: String) -> String {
+            instance
+        }
+        fn query(&self, instance: String) -> String {
+            instance
+        }
+        fn stream(&self, _instance: golem_rust::agentic::AgentStream<String>) {}
     }
 
     #[test]
-    fn phantom_http_metadata_from_public_macros() {
+    fn agent_id_http_metadata_from_public_macros() {
         use golem_rust::golem_agentic::golem::agent::common::{
-            PhantomIdBinding, PhantomIdBindingDetails,
+            AgentIdBinding, AgentIdBindingDetails, PathSegment,
         };
         SelectedPathAgentImpl::__register_agent_type();
         SelectedQueryAgentImpl::__register_agent_type();
         let agents = golem_rust::agentic::get_all_agent_types();
-        for (name, expected) in [
+        for (name, expected, create_segments) in [
             (
                 "SelectedPathAgent",
-                PhantomIdBinding::Path(PhantomIdBindingDetails {
+                AgentIdBinding::Path(AgentIdBindingDetails {
                     name: "instance".into(),
-                    optional: true,
                 }),
+                vec!["c"],
             ),
             (
                 "SelectedQueryAgent",
-                PhantomIdBinding::Query(PhantomIdBindingDetails {
+                AgentIdBinding::Query(AgentIdBindingDetails {
                     name: "instance".into(),
-                    optional: false,
                 }),
+                vec!["c", "create"],
             ),
         ] {
             let agent = agents.iter().find(|a| a.type_name == name).unwrap();
@@ -1487,22 +1512,100 @@ mod tests {
                 .http_mount
                 .as_ref()
                 .unwrap()
-                .phantom_id_binding
+                .agent_id_binding
                 .as_ref()
                 .unwrap();
             assert_eq!(
                 std::mem::discriminant(actual),
                 std::mem::discriminant(&expected)
             );
-            let (PhantomIdBinding::Path(actual) | PhantomIdBinding::Query(actual)) = actual;
-            let (PhantomIdBinding::Path(expected) | PhantomIdBinding::Query(expected)) = expected;
+            let (AgentIdBinding::Path(actual) | AgentIdBinding::Query(actual)) = actual;
+            let (AgentIdBinding::Path(expected) | AgentIdBinding::Query(expected)) = expected;
             assert_eq!(actual.name, expected.name);
-            assert_eq!(actual.optional, expected.optional);
+            let create_route = agent
+                .http_mount
+                .as_ref()
+                .unwrap()
+                .create_route
+                .as_ref()
+                .unwrap();
+            assert_eq!(create_route.len(), create_segments.len());
+            for (actual, expected) in create_route.iter().zip(create_segments) {
+                assert!(
+                    matches!(actual, PathSegment::Segment(golem_schema::http::wit::wire::PathSegment::Literal(value)) if value == expected)
+                );
+            }
+            assert_eq!(
+                agent.http_mount.as_ref().unwrap().filesystem_bindings.len(),
+                1
+            );
             let golem_rust::golem_agentic::golem::agent::common::InputSchema::Parameters(fields) =
                 &agent.constructor.input_schema;
             assert_eq!(
                 fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
-                vec!["customer"]
+                vec![if name == "SelectedPathAgent" {
+                    "instance"
+                } else {
+                    "customer"
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn query_id_rejects_only_actual_implicit_query_collision() {
+        use golem_rust::golem_agentic::golem::agent::common::HttpMethod;
+        use golem_schema::http::wit::wire as http;
+        SelectedQueryAgentImpl::__register_agent_type();
+        let mut agent = golem_rust::agentic::get_all_agent_types()
+            .into_iter()
+            .find(|agent| agent.type_name == "SelectedQueryAgent")
+            .unwrap();
+        assert!(golem_rust::agentic::validate_wire_agent_http(&agent).is_ok());
+        let extended =
+            golem_rust::agentic::ExtendedAgentType::from_agent_type(agent.clone()).unwrap();
+        let stream = extended
+            .methods
+            .iter()
+            .find(|method| method.name == "stream")
+            .unwrap();
+        assert!(
+            golem_rust::agentic::validate_http_endpoint(
+                "SelectedQueryAgent",
+                stream,
+                extended.http_mount.as_ref()
+            )
+            .is_ok()
+        );
+        let mut explicit = agent.clone();
+        explicit
+            .methods
+            .iter_mut()
+            .find(|method| method.name == "stream")
+            .unwrap()
+            .http_endpoint[0]
+            .query_vars
+            .push(http::QueryVariable {
+                query_param_name: "instance".into(),
+                variable_name: "instance".into(),
+            });
+        assert!(golem_rust::agentic::validate_wire_agent_http(&explicit).is_err());
+        for method in [
+            http::HttpMethod::Get,
+            http::HttpMethod::Head,
+            http::HttpMethod::Delete,
+        ] {
+            agent
+                .methods
+                .iter_mut()
+                .find(|method| method.name == "body")
+                .unwrap()
+                .http_endpoint[0]
+                .http_method = HttpMethod::Method(method);
+            assert!(
+                golem_rust::agentic::validate_wire_agent_http(&agent)
+                    .unwrap_err()
+                    .contains("conflicts")
             );
         }
     }

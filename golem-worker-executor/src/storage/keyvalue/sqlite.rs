@@ -138,6 +138,7 @@ impl SqliteKeyValueStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl KeyValueStorage for SqliteKeyValueStorage {
     async fn set(
         &self,

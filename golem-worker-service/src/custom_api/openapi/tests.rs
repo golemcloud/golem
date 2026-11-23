@@ -317,9 +317,7 @@ fn call_agent_route(
                 input_schema: InputSchema::Parameters(vec![]),
             },
             constructor_parameters: vec![],
-            phantom_selection: golem_service_base::custom_api::PhantomSelection::Policy {
-                phantom: false,
-            },
+            agent_selection: golem_service_base::custom_api::AgentSelection::Key,
             method_name: "test_method".to_string(),
             method_input,
             body,
@@ -425,8 +423,8 @@ fn test_durable_stream_policy(call: &CallAgentBehaviour) -> DurableStreamRoutePo
 }
 
 #[test]
-fn phantom_selector_openapi_documents_concrete_paths_and_query_requiredness() {
-    use golem_service_base::custom_api::PhantomSelection;
+fn id_selector_openapi_documents_concrete_paths_and_required_query() {
+    use golem_service_base::custom_api::AgentSelection;
     let mut routes = vec![];
     for absent in [false, true] {
         let mut path = vec![
@@ -468,10 +466,10 @@ fn phantom_selector_openapi_documents_concrete_paths_and_query_requiredness() {
         let RichRouteBehaviour::CallAgent(call) = &mut route.behavior else {
             unreachable!()
         };
-        call.phantom_selection = if absent {
-            PhantomSelection::Original
+        call.agent_selection = if absent {
+            AgentSelection::Key
         } else {
-            PhantomSelection::Path { index: 1.into() }
+            AgentSelection::Path { index: 1.into() }
         };
         routes.push(route);
     }
@@ -505,7 +503,7 @@ fn phantom_selector_openapi_documents_concrete_paths_and_query_requiredness() {
             }
         }
     }
-    for optional in [false, true] {
+    {
         let mut route = call_agent_route(
             Method::GET,
             vec![PathSegment::Literal {
@@ -519,9 +517,8 @@ fn phantom_selector_openapi_documents_concrete_paths_and_query_requiredness() {
         let RichRouteBehaviour::CallAgent(call) = &mut route.behavior else {
             unreachable!()
         };
-        call.phantom_selection = PhantomSelection::Query {
+        call.agent_selection = AgentSelection::Query {
             name: "instance".into(),
-            optional,
         };
         let spec = spec_for(vec![route]);
         let params = spec["paths"]["/query"]["get"]["parameters"]
@@ -530,8 +527,176 @@ fn phantom_selector_openapi_documents_concrete_paths_and_query_requiredness() {
         assert_eq!(params.len(), 1);
         assert_eq!(params[0]["name"], "instance");
         assert_eq!(params[0]["in"], "query");
-        assert_eq!(params[0]["required"], !optional);
+        assert_eq!(params[0]["required"], true);
         assert_eq!(params[0]["schema"]["format"], "uuid");
+    }
+}
+
+#[test]
+fn create_agent_openapi_projects_canonical_envelope_reference_and_location() {
+    use golem_common::schema::NamedField;
+    use golem_service_base::custom_api::{AgentSelection, CreateAgentBehaviour, MountAgent};
+    for query in [false, true] {
+        let path = vec![
+            PathSegment::Literal {
+                value: "decisions".into(),
+            },
+            PathSegment::Literal {
+                value: "create".into(),
+            },
+        ];
+        let mut route = call_agent_route(
+            Method::POST,
+            path,
+            RequestBodySchema::Unused,
+            vec![],
+            unit_response(),
+            None,
+        );
+        let RichRouteBehaviour::CallAgent(call) = &route.behavior else {
+            unreachable!()
+        };
+        let input_schema =
+            InputSchema::parameters([NamedField::user_supplied("decision", SchemaType::string())]);
+        route.behavior = RichRouteBehaviour::CreateAgent(CreateAgentBehaviour {
+            agent: MountAgent {
+                component_id: call.component_id,
+                component_revision: call.component_revision,
+                agent_type: call.agent_type.clone(),
+                constructor_input: CompiledInputSchema {
+                    graph: SchemaGraph::anonymous(record(vec![field("decision", str())])),
+                    input_schema,
+                },
+                constructor_parameters: vec![],
+                agent_selection: if query {
+                    AgentSelection::Query {
+                        name: "instance".into(),
+                    }
+                } else {
+                    AgentSelection::Path { index: 0.into() }
+                },
+            },
+            location: if query {
+                vec![PathSegment::Literal {
+                    value: "decisions".into(),
+                }]
+            } else {
+                vec![
+                    PathSegment::Literal {
+                        value: "decisions".into(),
+                    },
+                    PathSegment::Variable {
+                        display_name: "instance".into(),
+                    },
+                ]
+            },
+        });
+        let mut method = call_agent_route(
+            Method::POST,
+            vec![PathSegment::Literal {
+                value: "ordinary-create".into(),
+            }],
+            RequestBodySchema::Unused,
+            vec![],
+            unit_response(),
+            None,
+        );
+        let RichRouteBehaviour::CallAgent(call) = &mut method.behavior else {
+            unreachable!()
+        };
+        call.method_name = "create".into();
+        let spec = spec_for(vec![route, method]);
+        let operation = &spec["paths"]["/decisions/create"]["post"];
+        assert!(operation.get("operationId").is_none());
+        assert_eq!(
+            spec["paths"]["/ordinary-create"]["post"]["operationId"],
+            "TestAgent-create"
+        );
+        assert!(
+            operation["description"]
+                .as_str()
+                .unwrap()
+                .contains("keyed: true is rejected")
+        );
+        assert_eq!(operation["requestBody"]["required"], true);
+        let body = &operation["requestBody"]["content"]["application/json"]["schema"];
+        assert_eq!(body["properties"]["keyed"]["const"], false);
+        let constructor = &body["properties"]["parameters"]["x-golem-constructor-schema"];
+        assert_eq!(constructor["properties"]["decision"]["type"], "string");
+        let envelope = body;
+        assert!(envelope["properties"].get("parameters").is_some());
+        assert!(envelope["properties"].get("config").is_none());
+        assert!(envelope["properties"].get("env").is_none());
+        assert_eq!(envelope["additionalProperties"], false);
+        let mut schema = body.clone();
+        schema["components"] = spec["components"].clone();
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        let request = json!({
+            "parameters": { "kind": "record", "value": { "fields": [{ "kind": "string", "value": "ready" }] } }
+        });
+        assert!(
+            serde_json::from_value::<crate::api::agents::CreateAgentRequest>(request.clone())
+                .is_ok()
+        );
+        assert!(validator.is_valid(&request));
+        let mut explicit_unkeyed = request.clone();
+        explicit_unkeyed["keyed"] = json!(false);
+        assert!(validator.is_valid(&explicit_unkeyed));
+        for (field, value) in [
+            ("env", json!({"SETTING": "override"})),
+            ("env", json!({})),
+            ("env", Value::Null),
+            (
+                "config",
+                json!([{"path": ["setting"], "value": "override"}]),
+            ),
+            ("config", json!([])),
+            ("config", Value::Null),
+        ] {
+            let mut overrides = request.clone();
+            overrides[field] = value;
+            assert!(!validator.is_valid(&overrides), "{overrides}");
+            if !overrides[field].is_null() {
+                assert!(
+                    serde_json::from_value::<crate::api::agents::CreateAgentRequest>(overrides)
+                        .is_ok()
+                );
+            }
+        }
+        let mut malformed = request.clone();
+        malformed["parameters"] = json!({ "kind": "string", "value": "not a constructor record" });
+        assert!(!validator.is_valid(&malformed));
+        malformed["parameters"] = json!({ "kind": "record", "value": { "fields": [] } });
+        assert!(!validator.is_valid(&malformed));
+        let mut keyed = request;
+        keyed["keyed"] = json!(true);
+        assert!(!validator.is_valid(&keyed));
+        let responses = &operation["responses"];
+        assert!(responses.get("200").is_none());
+        assert_eq!(responses["201"]["headers"]["Location"]["required"], true);
+        assert_eq!(
+            responses["201"]["headers"]["Location"]["schema"]["format"],
+            "uri-reference"
+        );
+        assert_eq!(
+            responses["201"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/AgentReference"
+        );
+        let reference = &spec["components"]["schemas"]["AgentReference"];
+        assert!(reference["properties"].get("agentId").is_some());
+        assert!(reference["properties"].get("agentFingerprint").is_some());
+        assert!(operation["parameters"].as_array().unwrap().iter().any(
+            |parameter| parameter["name"] == "Idempotency-Key"
+                && parameter["in"] == "header"
+                && parameter["required"] == false
+        ));
+        assert!(
+            !operation["parameters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|parameter| parameter["in"] == "query" || parameter["in"] == "path")
+        );
     }
 }
 
@@ -1629,8 +1794,8 @@ fn durable_stream_method_bindings_are_operation_specific() {
 #[test]
 fn durable_stream_query_selector_is_identity_on_every_operation() {
     use golem_common::schema::NamedField;
-    use golem_service_base::custom_api::{AgentRouteMode, PhantomSelection};
-    for optional in [false, true] {
+    use golem_service_base::custom_api::{AgentRouteMode, AgentSelection};
+    {
         for body_bound in [false, true] {
             let mut bindings = vec![MethodParameter::Query {
                 query_parameter_name: "count".into(),
@@ -1658,9 +1823,8 @@ fn durable_stream_query_selector_is_identity_on_every_operation() {
                 unreachable!()
             };
             call.route_mode = AgentRouteMode::DurableStreams;
-            call.phantom_selection = PhantomSelection::Query {
+            call.agent_selection = AgentSelection::Query {
                 name: "instance".into(),
-                optional,
             };
             call.method_input.input_schema = InputSchema::parameters([
                 NamedField::user_supplied("count", SchemaType::u32()),
@@ -1679,7 +1843,7 @@ fn durable_stream_query_selector_is_identity_on_every_operation() {
                         .filter(|p| p["in"] == "query" && p["name"] == "instance")
                         .collect();
                     assert_eq!(selectors.len(), 1, "{path} {method}");
-                    assert_eq!(selectors[0]["required"], !optional, "{path} {method}");
+                    assert_eq!(selectors[0]["required"], true, "{path} {method}");
                     assert_eq!(selectors[0]["schema"]["format"], "uuid");
                     assert!(
                         !selectors[0]["description"]
@@ -2942,7 +3106,7 @@ fn optional_query_parameter_is_not_required() {
 fn query_schemas_preserve_constraints_and_describe_wire_collections() {
     use golem_common::schema::NamedField;
     use golem_common::schema::schema_type::{NumericBound, NumericRestrictions};
-    use golem_service_base::custom_api::{AgentRouteMode, PhantomSelection};
+    use golem_service_base::custom_api::{AgentRouteMode, AgentSelection};
 
     let bounded = SchemaType::U32 {
         restrictions: Some(NumericRestrictions {
@@ -3035,9 +3199,8 @@ fn query_schemas_preserve_constraints_and_describe_wire_collections() {
                         unreachable!()
                     };
                     call.route_mode = mode;
-                    call.phantom_selection = PhantomSelection::Query {
+                    call.agent_selection = AgentSelection::Query {
                         name: "instance".into(),
-                        optional: true,
                     };
                     let mut input = NamedField::user_supplied("source_name", original);
                     input.metadata.doc = Some("Search values".into());
@@ -3139,7 +3302,7 @@ fn query_schemas_preserve_constraints_and_describe_wire_collections() {
                     }
                     let selector = parameters.iter().find(|p| p["name"] == "instance").unwrap();
                     assert_eq!(selector["schema"]["format"], "uuid");
-                    assert_eq!(selector["required"], false);
+                    assert_eq!(selector["required"], true);
                     if mode == AgentRouteMode::Plain {
                         assert_eq!(
                             op["responses"]["200"]["content"]["application/json"]["schema"]["type"],

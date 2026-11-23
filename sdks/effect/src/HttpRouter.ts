@@ -100,6 +100,8 @@ export function define<F extends ConfigFields = never>(
   const mount = options.mount
   if (
     mount.phantomAgent ||
+    mount.agentIdBinding !== undefined ||
+    mount.createRoute !== undefined ||
     mount.webhookSuffix.length ||
     mount.exposeFiles?.length ||
     mount.pathPrefix.some((segment) => segment._tag !== "Literal")

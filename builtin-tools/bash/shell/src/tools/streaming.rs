@@ -27,6 +27,42 @@ use std::{
 type EventLog = Vec<(bool, Vec<u8>)>;
 type Events = Arc<Mutex<EventLog>>;
 
+// Brush's Stream trait has native descriptor methods only on Unix. Keep the shared methods
+// at each implementation while selecting the descriptor contract once for all three streams.
+#[cfg(unix)]
+mod stream_platform {
+    macro_rules! impl_stream {
+        ($stream:ty { $($methods:tt)* }) => {
+            impl brush_core::openfiles::Stream for $stream {
+                $($methods)*
+
+                fn try_clone_to_owned(&self) -> Result<std::os::fd::OwnedFd, brush_core::Error> {
+                    Err(brush_core::ErrorKind::CannotConvertToNativeFd.into())
+                }
+
+                fn try_borrow_as_fd(&self) -> Result<std::os::fd::BorrowedFd<'_>, brush_core::Error> {
+                    Err(brush_core::ErrorKind::CannotConvertToNativeFd.into())
+                }
+            }
+        };
+    }
+    pub(super) use impl_stream;
+}
+
+#[cfg(not(unix))]
+mod stream_platform {
+    macro_rules! impl_stream {
+        ($stream:ty { $($methods:tt)* }) => {
+            impl brush_core::openfiles::Stream for $stream {
+                $($methods)*
+            }
+        };
+    }
+    pub(super) use impl_stream;
+}
+
+use stream_platform::impl_stream;
+
 /// Keep utility exit codes distinct from the shell's synthetic SIGPIPE status. The
 /// command boundary supplies inherited ignored/default disposition for each poll.
 pub(crate) fn utility<SE: ShellExtensions>(
@@ -225,22 +261,14 @@ impl io::Write for Capture {
         Ok(())
     }
 }
-impl Stream for Capture {
+impl_stream! { Capture {
     fn clone_box(&self) -> Box<dyn Stream> {
         Box::new(self.clone())
     }
     fn target_id(&self) -> Option<usize> {
         self.merged.then(|| Arc::as_ptr(&self.events).addr())
     }
-    #[cfg(unix)]
-    fn try_clone_to_owned(&self) -> Result<std::os::fd::OwnedFd, Error> {
-        Err(brush_core::ErrorKind::CannotConvertToNativeFd.into())
-    }
-    #[cfg(unix)]
-    fn try_borrow_as_fd(&self) -> Result<std::os::fd::BorrowedFd<'_>, Error> {
-        Err(brush_core::ErrorKind::CannotConvertToNativeFd.into())
-    }
-}
+}}
 
 /// Preserve existing synchronous finite helper semantics and await its output destinations.
 pub(crate) fn finite_builtin<C: SimpleCommand + Send + Sync, SE: ShellExtensions>()
@@ -772,19 +800,11 @@ fn closed() -> OpenFile {
             Ok(())
         }
     }
-    impl Stream for Closed {
+    impl_stream! { Closed {
         fn clone_box(&self) -> Box<dyn Stream> {
             Box::new(Self)
         }
-        #[cfg(unix)]
-        fn try_clone_to_owned(&self) -> Result<std::os::fd::OwnedFd, Error> {
-            Err(brush_core::ErrorKind::CannotConvertToNativeFd.into())
-        }
-        #[cfg(unix)]
-        fn try_borrow_as_fd(&self) -> Result<std::os::fd::BorrowedFd<'_>, Error> {
-            Err(brush_core::ErrorKind::CannotConvertToNativeFd.into())
-        }
-    }
+    }}
     OpenFile::Stream(Box::new(Closed))
 }
 
@@ -2007,7 +2027,7 @@ pub(crate) fn chain(sources: Vec<(String, OpenFile)>) -> OpenFile {
             Ok(())
         }
     }
-    impl Stream for Chain {
+    impl_stream! { Chain {
         fn poll_read(
             &mut self,
             cx: &mut std::task::Context<'_>,
@@ -2031,15 +2051,7 @@ pub(crate) fn chain(sources: Vec<(String, OpenFile)>) -> OpenFile {
         fn clone_box(&self) -> Box<dyn Stream> {
             Box::new(self.clone())
         }
-        #[cfg(unix)]
-        fn try_clone_to_owned(&self) -> Result<std::os::fd::OwnedFd, Error> {
-            Err(brush_core::ErrorKind::CannotConvertToNativeFd.into())
-        }
-        #[cfg(unix)]
-        fn try_borrow_as_fd(&self) -> Result<std::os::fd::BorrowedFd<'_>, Error> {
-            Err(brush_core::ErrorKind::CannotConvertToNativeFd.into())
-        }
-    }
+    }}
     OpenFile::Stream(Box::new(Chain(sources.into())))
 }
 
