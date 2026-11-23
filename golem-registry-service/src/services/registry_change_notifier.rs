@@ -209,8 +209,14 @@ impl PostgresRegistryChangeNotifier {
 
 /// Broadcasts the outbox events after `last_processed_event_id` and advances it. Signals a
 /// resync first when the outbox has no event directly after the cursor although newer events
-/// exist. Gaps in the event id sequence also come from rolled back inserts, so this signal is
-/// conservative.
+/// exist.
+///
+/// Event writers take the shared transaction advisory lock before they insert, so events commit
+/// in event id order. A transaction that allocates an event id and then rolls back still leaves
+/// a gap in the sequence, which this check cannot tell apart from a lost event. The resync is
+/// therefore conservative: it can clear a cache that was still valid, trading reloads for
+/// recovery without a retention high-watermark. A loss that this check does not detect is
+/// bounded by the cache's maximum age.
 ///
 /// After a lost connection (`reconnected`), an outbox with no event after the cursor cannot
 /// show that nothing was missed: retention cleanup may have removed the events of the outage,
@@ -391,8 +397,10 @@ enum ReplayError {
     RepoError(String),
 }
 
-/// Maps a journal event to its invalidation stream event. Account tree events stay inside the
-/// registry, so they map to `None`.
+/// Maps a journal event to its invalidation stream event. `AccountChanged` currently has no
+/// invalidation stream payload: it invalidates only caches inside the registry, so it maps to
+/// `None`. This is the present boundary, not a rule against propagating account lifecycle
+/// changes to other services.
 fn to_registry_invalidation_event(
     event: &RegistryChangeEvent,
 ) -> Option<RegistryInvalidationEvent> {
