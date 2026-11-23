@@ -16,6 +16,9 @@
 //! starts on the data, the other agents run, and the chunk stays for an operator to inspect. An
 //! archive that does not read while the agent runs reaches its owner, also when the status rebuild
 //! that hits it follows a commit whose caller already took the acknowledgement.
+//!
+//! An archive that reads is all an agent needs: a keyed agent whose whole oplog is archived, and
+//! whose derived status caches archiving removed, resolves by key and by ID with its state.
 
 use crate::Tracing;
 
@@ -41,13 +44,15 @@ use golem_worker_executor::services::HasEvents;
 use golem_worker_executor::services::events::Event;
 use golem_worker_executor::services::golem_config::OplogConfig;
 use golem_worker_executor::services::oplog::CompressedOplogChunk;
+use golem_worker_executor::storage::keyvalue::sqlite::SqliteKeyValueStorage;
+use golem_worker_executor::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
 use golem_worker_executor::storage::scheduler::SchedulerStorage;
 use golem_worker_executor::storage::scheduler::sqlite::SqliteSchedulerStorage;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, agent_oplog_length, archived_oplog_chunks,
-    scheduler_sqlite_storage_config, start_with_oplog_config, start_with_overrides,
-    truncate_archived_oplog_chunk,
+    scheduler_sqlite_storage_config, sqlite_storage_config, start_with_oplog_config,
+    start_with_overrides, truncate_archived_oplog_chunk,
 };
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -117,6 +122,31 @@ async fn wait_until_archived(
         anyhow::ensure!(
             tokio::time::Instant::now() < deadline,
             "the oplog of {owned_agent_id} was not archived"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    Ok(())
+}
+
+/// Waits until scheduler storage holds no archive action, due or not, leased or not.
+async fn wait_until_archive_actions_finish(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+) -> anyhow::Result<()> {
+    let scheduler =
+        SqliteSchedulerStorage::configured(&scheduler_sqlite_storage_config(deps, context))
+            .await
+            .map_err(anyhow::Error::msg)?;
+    let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    while scheduler
+        .count_due(chrono::DateTime::<chrono::Utc>::MAX_UTC, &assignment)
+        .await?
+        > 0
+    {
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "archive actions did not finish"
         );
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
@@ -232,23 +262,7 @@ async fn an_undecodable_later_archive_chunk_fails_only_its_agent(
     }
     // The primary can empty before the final archive action invalidates the cache. Count
     // future-due and leased actions too, so none can erase the metadata warmed below.
-    let scheduler =
-        SqliteSchedulerStorage::configured(&scheduler_sqlite_storage_config(deps, &context))
-            .await
-            .map_err(anyhow::Error::msg)?;
-    let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-    while scheduler
-        .count_due(chrono::DateTime::<chrono::Utc>::MAX_UTC, &assignment)
-        .await?
-        > 0
-    {
-        anyhow::ensure!(
-            tokio::time::Instant::now() < deadline,
-            "archive actions did not finish"
-        );
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
+    wait_until_archive_actions_finish(deps, &context).await?;
     // Archival removes the status cache. Retire the shell and read metadata while the archive
     // still reads, so the next startup reaches replay instead of failing a cold status fold.
     assert!(executor.stop_worker_if_idle(&unreadable_owned).await?);
@@ -303,6 +317,144 @@ async fn an_undecodable_later_archive_chunk_fails_only_its_agent(
             .await?
             .starts_with(&corrupt)
     );
+    Ok(())
+}
+
+/// Keyed agents that are archived with their whole oplog, and whose derived status caches
+/// archiving removed, are reached again by key and by ID after a restart: the oplog alone
+/// resolves an agent, and the agent keeps its state and its incarnation.
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn archived_keyed_agents_resolve_by_key_and_by_id_from_their_oplog(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_oplog_config(deps, &context, Some(archiving_config())).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    // Different counts, so that a swapped or a fresh agent shows in the next result.
+    let keys = [
+        agent_key!("Counter", "archived-1"),
+        agent_key!("Counter", "archived-2"),
+        agent_key!("Counter", "archived-3"),
+    ];
+    let mut agents = Vec::new();
+    for (index, key) in keys.iter().enumerate() {
+        let agent_id = executor.start_agent(&component.id, key.clone()).await?;
+        for _ in 0..=index {
+            executor
+                .invoke_and_await_agent(&component, key, "increment", data_value!())
+                .await?;
+        }
+        let fingerprint = executor.agent_fingerprint(&agent_id.agent_id).await?;
+        agents.push((agent_id, fingerprint));
+    }
+
+    for (agent_id, _) in &agents {
+        wait_until_archived(deps, &context, agent_id).await?;
+    }
+    // Archiving removes the caches only when its last action moves the whole oplog to the last
+    // layer, so wait for every archive action, due or not.
+    wait_until_archive_actions_finish(deps, &context).await?;
+    // Nothing reads the agents from here on: a metadata read or an identity resolution would
+    // write the caches again.
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+
+    let kv = SqliteKeyValueStorage::configured(&sqlite_storage_config(deps, &context)).await?;
+    for (agent_id, fingerprint) in &agents {
+        for namespace in [
+            KeyValueStorageNamespace::AgentStatus {
+                owned_agent_id: agent_id.clone(),
+                fingerprint: *fingerprint,
+            },
+            KeyValueStorageNamespace::AgentStatusCheckpoint {
+                owned_agent_id: agent_id.clone(),
+                fingerprint: *fingerprint,
+            },
+            KeyValueStorageNamespace::AgentInvocationResultIndex {
+                owned_agent_id: agent_id.clone(),
+                fingerprint: *fingerprint,
+            },
+        ] {
+            let cached = kv.keys("test", "archive", namespace.clone()).await?;
+            assert!(
+                cached.is_empty(),
+                "{namespace:?} is still cached for an archived agent: {cached:?}"
+            );
+        }
+        // The agent-mode hint key of `DefaultWorkerService::agent_mode_key`.
+        let agent_mode_key = format!("worker:agent_mode:{}", agent_id.storage_key());
+        assert!(
+            !kv.exists(
+                "test",
+                "archive",
+                KeyValueStorageNamespace::Worker {
+                    owned_agent_id: agent_id.clone(),
+                },
+                &agent_mode_key,
+            )
+            .await?,
+            "the agent mode of {agent_id} is still cached"
+        );
+    }
+
+    let executor = start_with_oplog_config(deps, &context, Some(archiving_config())).await?;
+    let [first, second, _] = &agents[..] else {
+        unreachable!("three agents were started")
+    };
+
+    // By ID first, then by key.
+    assert_eq!(
+        executor
+            .invoke_and_await_agent_by_id(&component, &first.0, None, "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        2
+    );
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &keys[0], "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        3
+    );
+
+    // An upsert first, then by ID.
+    assert_eq!(
+        executor.start_agent(&component.id, keys[1].clone()).await?,
+        second.0
+    );
+    assert_eq!(
+        executor
+            .invoke_and_await_agent_by_id(&component, &second.0, None, "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        3
+    );
+
+    // By key only.
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &keys[2], "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        4
+    );
+
+    for (agent_id, fingerprint) in &agents {
+        assert_eq!(
+            executor.agent_fingerprint(&agent_id.agent_id).await?,
+            *fingerprint
+        );
+    }
     Ok(())
 }
 
