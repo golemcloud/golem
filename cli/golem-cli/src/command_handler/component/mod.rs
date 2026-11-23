@@ -381,7 +381,7 @@ impl ComponentCommandHandler {
             let agents = if app_ctx
                 .application()
                 .component(&component_name)
-                .wasm()
+                .agent_type_extraction_source_wasm()
                 .exists()
             {
                 let agent_types = extract_and_store_component_metadata(

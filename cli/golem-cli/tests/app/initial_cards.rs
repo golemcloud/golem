@@ -111,6 +111,41 @@ async fn manifest_trace_with_build_shows_the_component_initial_card_of_the_agent
         serde_json::json!({ "component": component_name }),
         "the trace does not name the component as the source of the card: {trace}"
     );
+
+    // The agent traces read the final wasm, not the raw compiler output.
+    let wasm_path = |property: &str| {
+        let path = ctx.cwd_path_join(
+            trace["properties"][property]["value"]
+                .as_str()
+                .unwrap_or_else(|| panic!("the trace has no {property}: {trace}")),
+        );
+        assert!(
+            path.exists(),
+            "the built {property} {path:?} does not exist"
+        );
+        path
+    };
+    let raw_wasm = wasm_path("componentWasm");
+    let final_wasm = wasm_path("outputWasm");
+    let moved = |path: &std::path::Path| path.with_extension("wasm.moved");
+
+    std::fs::rename(&raw_wasm, moved(&raw_wasm)).unwrap();
+    let trace = manifest_trace(&ctx, &component_name, false).await;
+    assert_eq!(
+        trace["agents"]["CounterAgent"]["initialCard"]["value"]["lowerBound"]["positive"],
+        serde_json::json!([FILESYSTEM_READ, AGENT_ID_READ]),
+        "the trace without the raw wasm does not show the agent card: {trace}"
+    );
+    std::fs::rename(moved(&raw_wasm), &raw_wasm).unwrap();
+
+    std::fs::rename(&final_wasm, moved(&final_wasm)).unwrap();
+    let trace = manifest_trace(&ctx, &component_name, false).await;
+    assert!(
+        trace["agents"]
+            .as_object()
+            .is_none_or(|agents| agents.is_empty()),
+        "the trace without the final wasm has agents: {trace}"
+    );
 }
 
 /// Returns the JSON manifest trace of the component.
