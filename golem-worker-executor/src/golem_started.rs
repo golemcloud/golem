@@ -87,8 +87,62 @@ pub(crate) fn agent_principal(
 
 #[cfg(test)]
 mod tests {
+    use super::GolemStartedWork;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::agent::AgentTypeName;
+    use golem_common::model::caller::{AccountAuthentication, AgentPrincipal, Kind, Principal};
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::golem_issuer::GolemIssuer;
+    use golem_common::model::{AgentFingerprint, AgentId};
     use std::path::{Path, PathBuf};
     use test_r::test;
+    use uuid::Uuid;
+
+    fn issuer() -> GolemIssuer {
+        "https://golem.test".parse().unwrap()
+    }
+
+    fn agent() -> Principal {
+        Principal::Agent(AgentPrincipal::of_agent(
+            issuer().to_string(),
+            AgentId::from_parts(7, 0xc0),
+            AgentFingerprint(Uuid::from_u128(0xf1)),
+            AgentTypeName("Counter".to_string()),
+            EnvironmentId(Uuid::from_u128(0xe0)),
+        ))
+    }
+
+    #[test]
+    fn a_self_invocation_has_the_agent_in_both_roles() {
+        let caller = GolemStartedWork::SelfInvocation { agent: agent() }.caller();
+        assert_eq!(caller.original.kind(), Kind::Agent);
+        assert!(caller.original.equals(&agent()));
+        assert!(caller.immediate.equals(&agent()));
+        assert!(caller.tokens.is_empty());
+    }
+
+    #[test]
+    fn an_oplog_processor_batch_has_the_installer_and_then_the_processed_agent() {
+        let installed_by = AccountId::new();
+        let caller = GolemStartedWork::OplogProcessorBatch {
+            issuer: issuer(),
+            installed_by,
+            processed_agent: agent(),
+        }
+        .caller();
+        // The original caller is the account pair that a request with the installer's token gets.
+        match &caller.original {
+            Principal::Account(account) => {
+                assert_eq!(account.issuer, issuer().to_string());
+                assert_eq!(account.account_id, installed_by);
+                assert_eq!(account.authentication, AccountAuthentication::ApiToken);
+            }
+            other => panic!("the original caller must be an account, got {other:?}"),
+        }
+        assert!(caller.immediate.equals(&agent()));
+        assert!(!caller.original.equals(&caller.immediate));
+        assert!(caller.tokens.is_empty());
+    }
 
     /// Production code that may build an anonymous caller, once per file, and why. Everything
     /// else gets its caller from the request, from the invocation that makes a call, or from
