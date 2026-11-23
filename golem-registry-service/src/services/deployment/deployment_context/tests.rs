@@ -20,8 +20,8 @@ use golem_common::model::tool::{
 };
 use golem_common::model::tool_middleware::ToolMiddlewareMergeMode;
 use golem_common::model::tool_release::{
-    ToolRelease, ToolReleaseById, ToolReleaseId, ToolReleaseLifecycle, ToolReleaseOrigin,
-    ToolReleaseReference,
+    SystemToolAvailability, ToolRelease, ToolReleaseById, ToolReleaseId, ToolReleaseLifecycle,
+    ToolReleaseOrigin, ToolReleaseReference,
 };
 use golem_common::schema::RegisteredAgentTypeSchema;
 use golem_common::schema::agent::{
@@ -2565,6 +2565,51 @@ fn compile_tools_registers_remote_source_with_consumer_provision_and_bindings() 
 }
 
 #[test]
+fn compile_tools_marks_only_the_builtin_bash_release_as_the_shell() {
+    let (agent_name, agent) = test_registered_agent_type("AgentA");
+    let context = DeploymentContext {
+        environment: test_environment(),
+        components: BTreeMap::new(),
+        http_api_deployments: BTreeMap::new(),
+        mcp_deployments: BTreeMap::new(),
+        registered_agent_types: HashMap::from([(agent_name, agent)]),
+    };
+    let release = |name: &str, origin: ToolReleaseOrigin| {
+        let mut remote = test_remote_tool(name, Some(ToolBindingInput::default()), BTreeMap::new());
+        let resolved = remote.1.as_mut().unwrap();
+        resolved.release.origin = origin;
+        if origin == ToolReleaseOrigin::ProtectedSystem {
+            resolved.release.system_availability = Some(SystemToolAvailability::Grantable);
+        }
+        remote
+    };
+    let shell_of = |remote: (RemoteToolDeployment, Option<ResolvedGrantedToolRelease>)| {
+        let mut errors = Vec::new();
+        let compiled = context.compile_tools_with_remote(
+            golem_common::model::deployment::DeploymentRevision::INITIAL,
+            &[remote],
+            &mut errors,
+            &mut Vec::new(),
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(compiled.agent_tool_bindings.len(), 1);
+        compiled.agent_tool_bindings[0].shell
+    };
+
+    assert!(shell_of(release(
+        "bash",
+        ToolReleaseOrigin::ProtectedSystem
+    )));
+    // A user's release that is also called `bash` is an ordinary tool.
+    assert!(!shell_of(release("bash", ToolReleaseOrigin::Ordinary)));
+    // Another built-in tool is not the shell.
+    assert!(!shell_of(release(
+        "python",
+        ToolReleaseOrigin::ProtectedSystem
+    )));
+}
+
+#[test]
 fn compile_tools_validates_remote_component_bindings_without_agent_bindings() {
     let mut remote = test_remote_tool("grep", None, BTreeMap::new());
     remote.0.component_bindings = invalid_component_bindings();
@@ -3480,6 +3525,7 @@ fn compile_tool_binding_merges_parameters_and_narrows_revealable_secrets() {
         "1.0.0",
         TOOL_METADATA_WIT_VERSION,
         Default::default(),
+        false,
         &mut warnings,
     )
     .unwrap();

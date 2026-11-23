@@ -25,6 +25,7 @@ pub mod error;
 pub(crate) mod native_wait;
 pub mod poll;
 pub mod streams;
+mod tcp_streams;
 
 #[derive(Clone)]
 pub struct ManagedStdIn;

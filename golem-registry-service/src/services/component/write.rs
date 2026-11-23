@@ -2239,6 +2239,16 @@ fn validate_component_metadata_invariants(
                 agent_type.type_name.clone(),
             ));
         }
+        if let Some(method) = agent_type
+            .methods
+            .iter()
+            .find(|method| method.name.len() > golem_common::model::MAX_INVOCATION_OPERATION_BYTES)
+        {
+            return Err(ComponentError::AgentMethodNameTooLong {
+                agent_type: agent_type.type_name.clone(),
+                method: method.name.clone(),
+            });
+        }
     }
 
     for agent_type_name in metadata.agent_type_provision_configs().keys() {

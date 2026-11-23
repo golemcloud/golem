@@ -504,7 +504,6 @@ fn a_serialized_caller_has_no_token_value_cookie_key_or_proof_field() {
         "authentication",
         "agentId",
         "address",
-        "componentId",
         "fingerprint",
         "agentType",
         "environmentId",

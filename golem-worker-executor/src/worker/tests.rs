@@ -1706,7 +1706,16 @@ fn start_attempt_exact_duplicate_matches_and_mismatch_does_not() {
 fn status_with_current_key(status: AgentStatus, key: &InvocationId) -> AgentStatusRecord {
     AgentStatusRecord {
         status,
-        current_idempotency_key: Some(*key),
+        running: Some(golem_common::model::RunningInvocation {
+            key: *key,
+            request: golem_common::model::InvocationRequestRef {
+                index: OplogIndex::INITIAL,
+                accepted_at: Timestamp::from(0),
+                operation: None,
+            },
+            last_change: OplogIndex::INITIAL,
+            last_change_at: Timestamp::from(0),
+        }),
         ..AgentStatusRecord::default()
     }
 }
@@ -1847,6 +1856,21 @@ fn reconstructed_permission_denial_keeps_its_executor_error_type() {
 }
 
 #[test]
+fn cancelled_result_is_a_typed_cancellation_and_not_an_invalid_request() {
+    let key = InvocationId(Uuid::new_v4());
+    let lookup = lookup_result_from_cached_result(
+        &AgentStatusRecord::default(),
+        &key,
+        InvocationResult::Cancelled,
+    );
+
+    assert!(matches!(
+        lookup,
+        LookupResult::Complete(Err(WorkerExecutorError::InvocationCancelled))
+    ));
+}
+
+#[test]
 fn invocation_rejection_fails_only_the_rejected_pending_key() {
     let rejected = InvocationId(Uuid::new_v4());
     let still_pending = InvocationId(Uuid::new_v4());
@@ -1857,6 +1881,7 @@ fn invocation_rejection_fails_only_the_rejected_pending_key() {
             oplog_index: OplogIndex::from_u64(2),
             idempotency_key: Some(still_pending),
             manual_update_target_revision: None,
+            operation: None,
         }],
         ..AgentStatusRecord::default()
     };
@@ -2396,6 +2421,7 @@ fn pending(key: &InvocationId, not_before: Option<Timestamp>) -> PendingInvocati
         oplog_index: OplogIndex::from_u64(2),
         idempotency_key: Some(*key),
         manual_update_target_revision: None,
+        operation: None,
     }
 }
 

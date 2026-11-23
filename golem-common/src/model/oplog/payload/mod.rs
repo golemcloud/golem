@@ -42,8 +42,8 @@ use crate::model::oplog::payload::types::{
     SerializableDnsRecord, SerializableDnsRecordType, SerializableFileTimes,
     SerializableP3FileSystemError, SerializableP3IpSocketAddress, SerializableP3SocketErrorCode,
     SerializableP3UdpDatagram, SerializableP3UdpEndpoint, SerializablePermissionCardLiveness,
-    SerializablePermissionError, SerializableSocketError, SerializableToolDiscoverySnapshot,
-    SerializableWebsocketError, SerializableWebsocketMessage,
+    SerializablePermissionError, SerializableSocketError, SerializableTcpStreamError,
+    SerializableToolDiscoverySnapshot, SerializableWebsocketError, SerializableWebsocketMessage,
     SerializableWebsocketReconstructionPolicy,
 };
 use crate::model::oplog::types::{
@@ -403,6 +403,12 @@ oplog_payload! {
         },
         P3SocketsBind {
             local_address: SerializableP3IpSocketAddress
+        },
+        SocketsTcpBind {
+            local_address: SerializableP3IpSocketAddress
+        },
+        SocketsTcpConnect {
+            remote_address: SerializableP3IpSocketAddress
         },
         SocketsUdpBind {
             local_address: SerializableP3IpSocketAddress
@@ -830,6 +836,27 @@ oplog_payload! {
         P3SocketsBind {
             result: Result<SerializableP3IpSocketAddress, SerializableP3SocketErrorCode>
         },
+        SocketsTcpBind {
+            result: Result<SerializableP3IpSocketAddress, SerializableSocketError>
+        },
+        SocketsTcpStartConnect {
+            result: Result<(), SerializableSocketError>
+        },
+        SocketsTcpFinishConnect {
+            /// The local and remote addresses of the connection.
+            result: Result<(SerializableP3IpSocketAddress, SerializableP3IpSocketAddress), SerializableSocketError>
+        },
+        /// The bytes that a P2 TCP input stream read.
+        SocketsTcpStreamRead {
+            result: Result<Vec<u8>, SerializableTcpStreamError>
+        },
+        /// A byte count of a P2 TCP stream: the bytes skipped or written, or the write permit.
+        SocketsTcpStreamCount {
+            result: Result<u64, SerializableTcpStreamError>
+        },
+        SocketsTcpStreamFlush {
+            result: Result<(), SerializableTcpStreamError>
+        },
         SocketsUdpBind {
             result: Result<SerializableP3IpSocketAddress, SerializableSocketError>
         },
@@ -1198,6 +1225,21 @@ pub mod host_functions {
         (FilesystemPermissionCheck => "filesystem::permissions", "check", FileSystemPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
         (SocketsTcpConnectPermissionCheck => "sockets::tcp::permissions", "check-connect", SocketsTcpConnectPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
         (SocketsUdpPermissionCheck => "sockets::udp::permissions", "check", SocketsUdpPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
+        (SocketsTcpStartBind => "sockets::tcp", "start_bind", SocketsTcpBind, SocketsTcpBind),
+        (SocketsTcpStartConnect => "sockets::tcp", "start_connect", SocketsTcpConnect, SocketsTcpStartConnect),
+        (SocketsTcpFinishConnect => "sockets::tcp", "finish_connect", NoInput, SocketsTcpFinishConnect),
+        (SocketsTcpInputStreamRead => "sockets::tcp::input_stream", "read", NoInput, SocketsTcpStreamRead),
+        (SocketsTcpInputStreamBlockingRead => "sockets::tcp::input_stream", "blocking_read", NoInput, SocketsTcpStreamRead),
+        (SocketsTcpInputStreamSkip => "sockets::tcp::input_stream", "skip", NoInput, SocketsTcpStreamCount),
+        (SocketsTcpInputStreamBlockingSkip => "sockets::tcp::input_stream", "blocking_skip", NoInput, SocketsTcpStreamCount),
+        (SocketsTcpOutputStreamCheckWrite => "sockets::tcp::output_stream", "check_write", NoInput, SocketsTcpStreamCount),
+        (SocketsTcpOutputStreamWriteReady => "sockets::tcp::output_stream", "write_ready", NoInput, SocketsTcpStreamCount),
+        (SocketsTcpOutputStreamWrite => "sockets::tcp::output_stream", "write", NoInput, SocketsTcpStreamCount),
+        (SocketsTcpOutputStreamBlockingWriteAndFlush => "sockets::tcp::output_stream", "blocking_write_and_flush", NoInput, SocketsTcpStreamCount),
+        (SocketsTcpOutputStreamWriteZeroes => "sockets::tcp::output_stream", "write_zeroes", NoInput, SocketsTcpStreamCount),
+        (SocketsTcpOutputStreamBlockingWriteZeroesAndFlush => "sockets::tcp::output_stream", "blocking_write_zeroes_and_flush", NoInput, SocketsTcpStreamCount),
+        (SocketsTcpOutputStreamFlush => "sockets::tcp::output_stream", "flush", NoInput, SocketsTcpStreamFlush),
+        (SocketsTcpOutputStreamBlockingFlush => "sockets::tcp::output_stream", "blocking_flush", NoInput, SocketsTcpStreamFlush),
         (SocketsUdpStartBind => "sockets::udp", "start_bind", SocketsUdpBind, SocketsUdpBind),
         (SocketsUdpStream => "sockets::udp", "stream", SocketsUdpStream, SocketsUdpStream),
         (SocketsUdpReceive => "sockets::udp", "receive", SocketsUdpReceive, SocketsUdpReceive),

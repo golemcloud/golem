@@ -555,9 +555,7 @@ async fn live_create<U: Send + 'static, Ctx: WorkerCtx>(
         )));
     }
     let interrupt = accessor.with(|mut access| access.get().create_interrupt_signal());
-    let rpc_caller = accessor.with(|mut access| {
-        golem_common::model::caller::Caller::entry(access.get().self_principal())
-    });
+    let rpc_caller = accessor.with(|mut access| access.get().outgoing_caller());
     let creation = rpc.create_and_initialize(
         target,
         true,

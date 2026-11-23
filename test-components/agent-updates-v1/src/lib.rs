@@ -49,7 +49,7 @@ impl CounterAgent for CounterImpl {
 #[agent_definition]
 pub trait Caller {
     fn new() -> Self;
-    async fn call(&self, name: String) -> u32;
+    async fn call(&self, agent_id: golem_rust::AgentId) -> u32;
 }
 
 struct CallerImpl {}
@@ -60,8 +60,8 @@ impl Caller for CallerImpl {
         Self {}
     }
 
-    async fn call(&self, name: String) -> u32 {
-        let mut client = CounterAgentClient::upsert(name);
+    async fn call(&self, agent_id: golem_rust::AgentId) -> u32 {
+        let mut client = CounterAgentClient::get_by_id(&agent_id).expect("counter must exist");
         client.increment().await
     }
 }

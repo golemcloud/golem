@@ -244,10 +244,7 @@ export interface EphemeralRemoteClientFactory<Id extends IdRecord, Methods exten
    * Create a logical client; each invocation runs on a new one-shot instance whose identity the
    * invocation returns. Host failures throw a {@link RemoteCallError}.
    */
-  upsert(
-    id: InferRecord<Id>,
-    options?: RemoteClientOptions,
-  ): RemoteClient<Methods, 'ephemeral'>;
+  upsert(id: InferRecord<Id>, options?: RemoteClientOptions): RemoteClient<Methods, 'ephemeral'>;
 }
 
 export type FullAgentClientFactory<
@@ -646,8 +643,7 @@ export function buildAgentClientSurface<
 
   const configDecls: ConfigDeclaration[] = compileConfig(def.config);
 
-  const encodeId = (id: InferRecord<Id>) =>
-    encodeRecord(idCodecs, id as Record<string, unknown>);
+  const encodeId = (id: InferRecord<Id>) => encodeRecord(idCodecs, id as Record<string, unknown>);
 
   const upsert = (id: InferRecord<Id>, options?: RemoteClientOptions) =>
     createRemoteClient<Methods, Mode>(

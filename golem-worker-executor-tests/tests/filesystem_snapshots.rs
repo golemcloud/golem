@@ -24,12 +24,9 @@ use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::agent::{RevertToOplogIndex, RevertWorkerTarget, UpdateRecord};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentRevision};
 use golem_common::model::oplog::{
-    MultipartPartData, OplogEntry, OplogPayload, PublicAgentInvocation, PublicOplogEntry,
-    PublicSnapshotData,
+    MultipartPartData, OplogEntry, PublicAgentInvocation, PublicOplogEntry, PublicSnapshotData,
 };
-use golem_common::model::{
-    AgentFingerprint, AgentId, AgentInvocationPayload, IdempotencyKey, OplogIndex, OwnedAgentId,
-};
+use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex, OwnedAgentId};
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
 use golem_common::{agent_key, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -969,7 +966,7 @@ async fn a_late_snapshot_publication_cannot_reach_a_recreated_incarnation(
                 .snapshots
                 .iter()
                 .flatten()
-                .any(|name| &**name == late)
+                .any(|name| **name == late)
         );
         assert!(!records.is_confirmed(&late));
         assert!(records.is_confirmed(&newer));
@@ -1490,7 +1487,7 @@ async fn a_start_on_another_executor_confirms_a_whole_snapshot_and_restores_it(
     .await
 }
 
-/// Changes the tree of `agent` with an upload that takes two seconds, stops the agent while the
+/// Changes the tree of `agent` with a held upload, stops the agent while the
 /// upload runs, and waits until the store holds the whole snapshot and the upload ended. Gives the
 /// tree before the stop and the name of the snapshot.
 async fn stop_during_an_upload(
@@ -1499,7 +1496,7 @@ async fn stop_during_an_upload(
     store: &TestFilesystemSnapshotStore,
     agent: &Agent,
 ) -> anyhow::Result<(Vec<String>, String)> {
-    store.set_save_delay(Duration::from_secs(2));
+    let held = store.hold_next_publication();
     agent
         .apply_all(
             executor,
@@ -1510,13 +1507,15 @@ async fn stop_during_an_upload(
         )
         .await?;
     let live = agent.describe(executor).await?;
-    let named = eventually(Duration::from_secs(30), || async {
-        let records = agent.records(executor).await?;
-        Ok(records.newest_name())
-    })
-    .await?;
+    let named = eventually(Duration::from_secs(30), || async { Ok(held.name()) }).await?;
     let (owned, fingerprint) = agent.incarnation(executor, context).await?;
     agent.stop(executor, context).await?;
+    held.release();
+    eventually(Duration::from_secs(30), || async {
+        Ok(store.publication_result(&named))
+    })
+    .await?
+    .map_err(anyhow::Error::msg)?;
     eventually(Duration::from_secs(30), || async {
         Ok(store
             .snapshot_names(&owned, fingerprint)
@@ -1525,9 +1524,6 @@ async fn stop_during_an_upload(
             .then_some(()))
     })
     .await?;
-    store.set_save_delay(Duration::ZERO);
-    // The upload asks for its confirmation right after the save; give it time to get its answer.
-    tokio::time::sleep(Duration::from_millis(500)).await;
     Ok((live, named))
 }
 
@@ -3666,20 +3662,10 @@ async fn a_terminal_interrupt_ends_a_manual_update_that_waits_for_an_upload(
 
 /// The target revision of a manual-update invocation entry.
 fn manual_update_target(entry: &OplogEntry) -> Option<ComponentRevision> {
-    let OplogEntry::PendingAgentInvocation { payload, .. } = entry else {
+    let OplogEntry::PendingAgentInvocation { operation, .. } = entry else {
         return None;
     };
-    let payload = match payload {
-        OplogPayload::Inline(payload) => (**payload).clone(),
-        OplogPayload::SerializedInline { bytes, .. } => {
-            golem_common::serialization::deserialize::<AgentInvocationPayload>(bytes).ok()?
-        }
-        OplogPayload::External { .. } => return None,
-    };
-    match payload {
-        AgentInvocationPayload::ManualUpdate { target_revision } => Some(target_revision),
-        _ => None,
-    }
+    operation.manual_update_target()
 }
 
 /// The incarnation of the shard manager that the test executors trust.

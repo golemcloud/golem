@@ -340,6 +340,7 @@ mod cards;
 mod durable_stream;
 mod events;
 mod filesystem;
+mod invocations;
 mod metadata;
 mod oplog;
 mod plugins;

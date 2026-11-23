@@ -31,10 +31,12 @@ func describe(p golem.Principal) string {
 	switch p := p.(type) {
 	case golem.AgentPrincipal:
 		return "agent:" + p.AgentID.String()
-	case golem.GolemUserPrincipal:
-		return "golem-user"
-	case golem.OidcPrincipal:
-		return "oidc:" + p.Sub
+	case golem.AccountPrincipal:
+		return "account"
+	case golem.UserPrincipal:
+		return "user:" + p.Pair.Subject
+	case golem.ToolPrincipal:
+		return "tool:" + p.ToolName
 	case golem.AnonymousPrincipal:
 		return "anonymous"
 	default:
