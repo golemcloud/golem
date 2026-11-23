@@ -9492,6 +9492,7 @@ components:
           type: string
           format: date-time
         claims:
+          type: object
           description: |-
             The verified claims, only when the reader asks for them (`include=claims`). The key is
             absent otherwise.

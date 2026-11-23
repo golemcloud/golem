@@ -21738,6 +21738,7 @@ components:
           description: |-
             The verified claims, only when the reader asks for them (`include=claims`). The key is
             absent otherwise.
+          type: object
       required:
       - pair
       - authenticatedAt

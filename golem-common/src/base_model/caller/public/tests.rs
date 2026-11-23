@@ -205,3 +205,15 @@ fn public_principal_display_never_shows_claims() {
         assert!(!text.contains("a@b.example"), "{text}");
     }
 }
+
+/// The REST contract says what the endpoints give: the claims are a JSON object.
+#[test]
+fn the_openapi_schema_of_the_claims_is_an_object() {
+    use poem_openapi::registry::MetaSchemaRef;
+    use poem_openapi::types::Type;
+
+    let MetaSchemaRef::Inline(schema) = PublicClaims::schema_ref() else {
+        panic!("the schema of the claims is inline");
+    };
+    assert_eq!(schema.ty, "object");
+}
