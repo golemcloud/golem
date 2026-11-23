@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use super::{QuotaAuthority, SandboxFilesystem};
+#[cfg(target_os = "linux")]
 use crate::filesystem::blocking::BlockingTask;
+#[cfg(target_os = "linux")]
 use crate::filesystem::errors::OperationContext;
 use crate::filesystem::sandbox::FilesystemStorageError;
 use crate::filesystem::volume::FilesystemAllocation;

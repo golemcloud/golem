@@ -72,7 +72,7 @@ impl MetadataFixture {
                     .map(|json| {
                         let json = serde_json::from_str(json)
                             .map_err(|error| format!("invalid code default: {error}"))?;
-                        golem_common::schema::render::from_untrusted_json_value(
+                        golem_schema::schema::render::from_untrusted_json_value(
                             &self.graph,
                             &declaration.value_type,
                             &json,
