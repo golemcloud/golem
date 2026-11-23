@@ -470,6 +470,10 @@ pub(crate) struct NativeSessionLog {
     /// The idempotency key of each session's start.
     pub(crate) keys: Vec<Arc<str>>,
     pub(crate) starts: Vec<golem_api_grpc::proto::golem::worker::InvocationStart>,
+    pub(crate) public_session_creation:
+        Option<golem_api_grpc::proto::golem::workerexecutor::v1::CreateStreamSessionSuccess>,
+    pub(crate) appends:
+        Vec<golem_api_grpc::proto::golem::workerexecutor::v1::AppendToStreamSlotRequest>,
     /// The rest of each held session's request stream, after its start.
     pub(crate) tails: VecDeque<crate::service::worker::InvocationRequestStream>,
     /// The release of each session held until released, oldest first.
@@ -485,7 +489,7 @@ struct RecordingWorkerClient {
     metadata: Arc<Mutex<HashMap<AgentId, AgentMetadataDto>>>,
     metadata_reads: Arc<Mutex<Vec<AgentId>>>,
     prepared_agent_ids: Arc<Mutex<Vec<AgentId>>>,
-    method_params: Arc<Mutex<Vec<Option<golem_schema::proto::golem::schema::SchemaValue>>>>,
+    method_params: Arc<Mutex<Vec<Option<golem_common::model::agent::AgentMethodInput>>>>,
     durable_stream_controls: Arc<Mutex<Vec<
         golem_api_grpc::proto::golem::workerexecutor::v1::DurableStreamAttachmentControlRequest,
     >>>,
@@ -496,7 +500,7 @@ struct RecordingWorkerClient {
         golem_api_grpc::proto::golem::workerexecutor::v1::fork_stream_slot_response::Result,
     >>>,
     durable_stream_reads: Arc<Mutex<VecDeque<
-        golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotSuccess,
+        Option<golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotSuccess>,
     >>>,
     contexts: Arc<Mutex<Vec<RecordedInvocationContext>>>,
     invocation_output: AgentInvocationOutput,
@@ -520,6 +524,7 @@ impl WorkerClient for RecordingWorkerClient {
         caller: golem_api_grpc::proto::golem::component::Caller,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+        _invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
         let agent_id = target.agent_id;
         let _ = (
@@ -548,6 +553,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: Option<InvocationContext>,
         caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
+        _: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
         self.creates.calls.lock().unwrap().push(CreateCall {
             target: target.clone(),
@@ -866,7 +872,7 @@ impl WorkerClient for RecordingWorkerClient {
         &self,
         target: &RoutedTarget,
         method_name: Option<String>,
-        method_params: Option<golem_schema::proto::golem::schema::SchemaValue>,
+        method_params: Option<golem_common::model::agent::AgentMethodInput>,
         _: i32,
         _: Option<::prost_types::Timestamp>,
         request_key: golem_common::model::InvocationRequestKey,
@@ -897,6 +903,33 @@ impl WorkerClient for RecordingWorkerClient {
         Ok(self.invocation_output.clone())
     }
 
+    async fn create_stream_session(
+        &self,
+        _: &AgentId,
+        request: golem_api_grpc::proto::golem::workerexecutor::v1::CreateStreamSessionRequest,
+    ) -> WorkerResult<golem_api_grpc::proto::golem::workerexecutor::v1::CreateStreamSessionSuccess>
+    {
+        let start = request.invocation.expect("session invocation");
+        assert!(start.captured_method_input.is_none());
+        let input = start.input.clone().expect("native input");
+        self.method_params.lock().unwrap().push(Some(
+            golem_common::model::agent::AgentMethodInput::Native(
+                golem_common::model::agent::NativeMethodInput::capture(input, vec![])
+                    .unwrap()
+                    .0,
+            ),
+        ));
+        let mut log = self.native_sessions.lock().unwrap();
+        log.keys.push(Arc::from(request.public_session_id));
+        log.starts.push(start);
+        if let Some(success) = &log.public_session_creation {
+            return Ok(success.clone());
+        }
+        Err(WorkerServiceError::Internal(
+            "durable stream sessions are not supported by this worker client".to_string(),
+        ))
+    }
+
     async fn invoke_agent_session(
         &self,
         _: &AgentId,
@@ -908,6 +941,11 @@ impl WorkerClient for RecordingWorkerClient {
                 Some(golem_api_grpc::proto::golem::worker::invocation_request::Request::Start(start)),
         }) = &start
         {
+            if let Some(input) = &start.captured_method_input {
+                self.method_params.lock().unwrap().push(Some(
+                    golem_common::serialization::deserialize(input).unwrap(),
+                ));
+            }
             self.native_sessions
                 .lock()
                 .unwrap()
@@ -984,6 +1022,21 @@ impl WorkerClient for RecordingWorkerClient {
             }))
     }
 
+    async fn append_to_stream_slot(
+        &self,
+        _: &AgentId,
+        request: golem_api_grpc::proto::golem::workerexecutor::v1::AppendToStreamSlotRequest,
+    ) -> WorkerResult<golem_api_grpc::proto::golem::workerexecutor::v1::AppendToStreamSlotResponse>
+    {
+        self.native_sessions.lock().unwrap().appends.push(request);
+        Ok(golem_api_grpc::proto::golem::workerexecutor::v1::AppendToStreamSlotResponse {
+            result: Some(golem_api_grpc::proto::golem::workerexecutor::v1::append_to_stream_slot_response::Result::Accepted(Default::default())),
+            stream_head_offset: Default::default(),
+            stream_closed: Some(false),
+            ..Default::default()
+        })
+    }
+
     async fn read_stream_slot(
         &self,
         _: &AgentId,
@@ -994,7 +1047,6 @@ impl WorkerClient for RecordingWorkerClient {
             .lock()
             .unwrap()
             .pop_front()
-            .map(Some)
             .ok_or_else(|| {
                 WorkerServiceError::Internal("no scripted durable stream read response".to_string())
             })
@@ -1042,7 +1094,7 @@ pub(crate) struct InvocationHarness {
     pub(crate) metadata_reads: Arc<Mutex<Vec<AgentId>>>,
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
     pub(crate) targets: Arc<Mutex<Vec<RoutedTarget>>>,
-    method_params: Arc<Mutex<Vec<Option<golem_schema::proto::golem::schema::SchemaValue>>>>,
+    method_params: Arc<Mutex<Vec<Option<golem_common::model::agent::AgentMethodInput>>>>,
     durable_stream_controls: Arc<Mutex<Vec<
         golem_api_grpc::proto::golem::workerexecutor::v1::DurableStreamAttachmentControlRequest,
     >>>,
@@ -1053,7 +1105,7 @@ pub(crate) struct InvocationHarness {
         golem_api_grpc::proto::golem::workerexecutor::v1::fork_stream_slot_response::Result,
     >>>,
     durable_stream_reads: Arc<Mutex<VecDeque<
-        golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotSuccess,
+        Option<golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotSuccess>,
     >>>,
     pub(crate) contexts: Arc<Mutex<Vec<RecordedInvocationContext>>>,
     pub(crate) native_sessions: Arc<Mutex<NativeSessionLog>>,
@@ -1219,6 +1271,8 @@ impl InvocationHarness {
             mode: NativeSessions::Refuse,
             keys: Vec::new(),
             starts: Vec::new(),
+            public_session_creation: None,
+            appends: Vec::new(),
             tails: VecDeque::new(),
             releases: VecDeque::new(),
             opened: tokio::sync::watch::Sender::new(0),
@@ -1431,14 +1485,24 @@ impl InvocationHarness {
         }
     }
 
-    /// The method parameters recorded for the first invocation, decoded back
-    /// from the gRPC carrier into the runtime `SchemaValue`.
+    pub(crate) fn recorded_method_inputs(
+        &self,
+    ) -> Vec<Option<golem_common::model::agent::AgentMethodInput>> {
+        self.method_params.lock().unwrap().clone()
+    }
+
+    /// The native method parameters recorded for the first invocation.
     pub(crate) fn recorded_method_params(&self) -> golem_common::schema::SchemaValue {
-        self.method_params.lock().unwrap()[0]
-            .clone()
-            .expect("method params were recorded")
-            .try_into()
-            .expect("method params decode back into SchemaValue")
+        let golem_common::model::agent::AgentMethodInput::Native(input) =
+            self.method_params.lock().unwrap()[0]
+                .clone()
+                .expect("method params were recorded")
+        else {
+            panic!("expected native MCP input")
+        };
+        input
+            .decode(|_, _| Err("unexpected MCP stream".into()))
+            .unwrap()
     }
 
     pub(crate) fn recorded_durable_stream_controls(
@@ -1464,6 +1528,16 @@ impl InvocationHarness {
                 success,
             ),
         );
+        self.durable_stream_reads
+            .lock()
+            .unwrap()
+            .extend(reads.into_iter().map(Some));
+    }
+
+    pub(crate) fn script_durable_stream_reads(
+        &self,
+        reads: Vec<Option<golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotSuccess>>,
+    ) {
         self.durable_stream_reads.lock().unwrap().extend(reads);
     }
 }

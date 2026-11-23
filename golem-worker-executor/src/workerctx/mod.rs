@@ -62,6 +62,7 @@ use golem_common::model::{
     AgentId, AgentInvocationOutput, AgentStatusRecord, InvocationId, OplogIndex, OwnedAgentId,
 };
 use golem_common::resource_runtime::ResourceStore;
+use golem_common::schema::SchemaValue;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::component::Component;
@@ -490,9 +491,12 @@ pub trait StatusManagement {
 pub trait InvocationHooks {
     /// Called when a worker is about to be invoked. Returns false if the pending invocation
     /// was removed before it could start; the caller must skip execution and result persistence.
+    /// `input` is the lowered initializer, method or tool input for execution. The hydrated
+    /// invocation retains the original persisted request independently of this value.
     fn on_agent_invocation_started(
         &mut self,
         invocation: crate::worker::HydratedInvocation,
+        input: Option<&SchemaValue>,
     ) -> impl Future<Output = Result<bool, WorkerExecutorError>> + Send;
 
     /// Clears invocation-scoped runtime state after the guest call returns or traps.

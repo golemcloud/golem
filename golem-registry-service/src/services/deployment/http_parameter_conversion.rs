@@ -1013,13 +1013,22 @@ mod test {
         .unwrap();
 
         assert!(let RequestBodySchema::JsonBody { .. } = body);
-        assert_eq!(params.len(), 2);
-
-        assert!(
-            params
-                .iter()
-                .all(|p| matches!(p, MethodParameter::JsonObjectBodyField { .. }))
+        assert_eq!(
+            params,
+            vec![
+                MethodParameter::JsonObjectBodyField {
+                    field_index: 0.into()
+                },
+                MethodParameter::JsonObjectBodyField {
+                    field_index: 1.into()
+                },
+            ]
         );
+        for parameter in params {
+            let encoded: golem_api_grpc::proto::golem::customapi::MethodParameter =
+                parameter.clone().into();
+            assert_eq!(MethodParameter::try_from(encoded).unwrap(), parameter);
+        }
     }
 
     #[test]

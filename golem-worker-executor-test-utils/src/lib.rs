@@ -4069,9 +4069,10 @@ impl InvocationHooks for TestWorkerCtx {
     async fn on_agent_invocation_started(
         &mut self,
         invocation: golem_worker_executor::worker::HydratedInvocation,
+        input: Option<&SchemaValue>,
     ) -> Result<bool, WorkerExecutorError> {
         self.durable_ctx
-            .on_agent_invocation_started(invocation)
+            .on_agent_invocation_started(invocation, input)
             .await
     }
 
@@ -9600,6 +9601,7 @@ impl Rpc for RecordingRpc {
         &self,
         target: ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -9615,6 +9617,7 @@ impl Rpc for RecordingRpc {
             .create_demand(
                 target,
                 method_name,
+                invocation,
                 self_created_by,
                 self_agent_id,
                 self_env,
@@ -9777,6 +9780,7 @@ impl Rpc for FailingRpc {
         &self,
         target: ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -9791,6 +9795,7 @@ impl Rpc for FailingRpc {
             .create_demand(
                 target,
                 method_name,
+                invocation,
                 self_created_by,
                 self_agent_id,
                 self_env,

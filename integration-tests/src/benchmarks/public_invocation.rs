@@ -141,6 +141,9 @@ impl SessionCheckpoint {
                     .context("missing request timing")?
                     .accepted = Some(now);
             }
+            PublicServerMessage::InvocationReady { mappings, .. } => {
+                self.install_mappings(mappings)?;
+            }
             PublicServerMessage::InvocationResult {
                 mappings, result, ..
             } => {
@@ -295,7 +298,7 @@ impl PublicInvocationSession {
             attempt_id: uuid::Uuid::new_v4(),
             config: Vec::new(),
             idempotency_key: key.value.clone(),
-            method_parameters,
+            method_parameters: method_parameters.try_into()?,
             selector: Box::new(InvocationSelector {
                 agent_type: agent.agent_type.to_string(),
                 application: application.to_string(),

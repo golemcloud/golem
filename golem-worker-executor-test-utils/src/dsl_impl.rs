@@ -336,7 +336,10 @@ impl TestWorkerExecutor {
                 .validate_response(&response)
                 .map_err(anyhow::Error::msg)?;
             match response.response {
-                Some(invocation_response::Response::Accepted(_)) => {}
+                Some(
+                    invocation_response::Response::Accepted(_)
+                    | invocation_response::Response::Ready(_),
+                ) => {}
                 Some(invocation_response::Response::Rejected(rejected)) => {
                     // Kept alongside the message: a rejection is refused before acceptance, and
                     // the reason says as what.
@@ -441,6 +444,8 @@ impl TestWorkerExecutor {
                 component_id: Some(component.id.into()),
                 method_name: Some(method_name.to_string()),
                 input: Some(proto_method_parameters),
+                captured_method_input: None,
+                allow_streams: false,
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 schedule_at: None,
                 idempotency_key: idempotency_key.cloned().map(Into::into),
@@ -821,6 +826,7 @@ impl TestDsl for TestWorkerExecutor {
                 invocation_context: None,
                 idempotency_key: None,
                 freshness_disposition: 0,
+                invocation: None,
             })
             .await?;
 
@@ -862,6 +868,8 @@ impl TestDsl for TestWorkerExecutor {
             component_id: Some(component.id.into()),
             method_name: Some(method_name.to_string()),
             input: Some(proto_method_parameters),
+            captured_method_input: None,
+            allow_streams: false,
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
             schedule_at: None,
             idempotency_key: Some(idempotency_key.clone().into()),
@@ -1614,6 +1622,7 @@ impl TestWorkerExecutor {
             invocation_context: None,
             idempotency_key: None,
             freshness_disposition: 0,
+            invocation: None,
         })
     }
 
@@ -1652,6 +1661,7 @@ impl TestWorkerExecutor {
                 invocation_context: None,
                 idempotency_key: None,
                 freshness_disposition: 0,
+                invocation: None,
             })
             .await?
             .into_inner();

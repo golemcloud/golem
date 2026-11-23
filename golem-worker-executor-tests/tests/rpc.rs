@@ -1747,6 +1747,8 @@ async fn output_consumer_cancel_after_result_remains_a_valid_terminal_session(
     let key = IdempotencyKey::fresh();
     let start = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
+            allow_streams: true,
+            captured_method_input: None,
             target: Some(crate::agent::id_target(&worker_agent_id)),
             constructor: None,
             component_id: None,
@@ -1929,6 +1931,8 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
         let (mut frames, mut responses, accepted) = open_raw_session(
             &executor,
             InvocationStart {
+                allow_streams: true,
+                captured_method_input: None,
                 target: Some(crate::agent::id_target(&worker)),
                 constructor: None,
                 component_id: None,
@@ -2369,6 +2373,8 @@ async fn durable_output_producer_suspends_after_result_and_autonomously_resumes(
     let start_key = IdempotencyKey::fresh();
     let start = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
+            allow_streams: true,
+            captured_method_input: None,
             target: Some(crate::agent::id_target(&agent_id)),
             constructor: None,
             component_id: None,
@@ -2411,7 +2417,8 @@ async fn durable_output_producer_suspends_after_result_and_autonomously_resumes(
                 .validate_response(&response)
                 .map_err(anyhow::Error::msg)?;
             match response.response {
-                Some(invocation_response::Response::Accepted(_)) => {}
+                Some(invocation_response::Response::Accepted(_))
+                | Some(invocation_response::Response::Ready(_)) => {}
                 Some(invocation_response::Response::Result(result)) => {
                     let value = match result.result {
                         Some(invocation_session_result::Result::MethodResult(value)) => value,
@@ -2625,6 +2632,8 @@ async fn output_prefix_survives_autonomous_suspension(
     let start_key = IdempotencyKey::fresh();
     let start = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
+            allow_streams: true,
+            captured_method_input: None,
             target: Some(crate::agent::id_target(&agent_id)),
             constructor: None,
             component_id: None,
@@ -2681,7 +2690,8 @@ async fn output_prefix_survives_autonomous_suspension(
                 .validate_response(&response)
                 .map_err(anyhow::Error::msg)?;
             match response.response {
-                Some(invocation_response::Response::Accepted(_)) => {}
+                Some(invocation_response::Response::Accepted(_))
+                | Some(invocation_response::Response::Ready(_)) => {}
                 Some(invocation_response::Response::Result(result)) => {
                     let Some(invocation_session_result::Result::MethodResult(value)) =
                         result.result
@@ -3134,6 +3144,8 @@ async fn interrupt_output_producer_after_result(
     let metadata = executor.get_worker_metadata(&agent_id).await?;
     let start = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
+            allow_streams: true,
+            captured_method_input: None,
             target: Some(crate::agent::id_target(&agent_id)),
             constructor: None,
             component_id: None,
@@ -3187,7 +3199,8 @@ async fn interrupt_output_producer_after_result(
                 .validate_response(&response)
                 .map_err(anyhow::Error::msg)?;
             let next_input = match response.response {
-                Some(invocation_response::Response::Accepted(value)) => {
+                Some(invocation_response::Response::Accepted(value))
+                | Some(invocation_response::Response::Ready(value)) => {
                     accepted = Some(value);
                     None
                 }
@@ -3450,6 +3463,8 @@ async fn stream_local_output_failure_does_not_fail_sibling_or_invocation(
     let start_key = IdempotencyKey::fresh();
     let start = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
+            allow_streams: true,
+            captured_method_input: None,
             target: Some(crate::agent::id_target(&worker_agent_id)),
             constructor: None,
             component_id: None,
@@ -3496,7 +3511,8 @@ async fn stream_local_output_failure_does_not_fail_sibling_or_invocation(
             .validate_response(&response)
             .map_err(anyhow::Error::msg)?;
         match response.response {
-            Some(invocation_response::Response::Accepted(_)) => {}
+            Some(invocation_response::Response::Accepted(_))
+            | Some(invocation_response::Response::Ready(_)) => {}
             Some(invocation_response::Response::Result(result)) => {
                 mapped_outputs = result.new_stream_mappings.len();
             }
@@ -4143,6 +4159,8 @@ async fn streaming_output_resume_restores_exact_cursors(
     let (_, input) = input.into_parts();
     let start_request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
+            allow_streams: true,
+            captured_method_input: None,
             target: Some(crate::agent::id_target(&worker_agent_id)),
             constructor: None,
             component_id: None,
@@ -4192,6 +4210,8 @@ async fn streaming_output_resume_restores_exact_cursors(
         Some(invocation_response::Response::Accepted(accepted)) => accepted,
         other => anyhow::bail!("expected durable output acceptance, got {other:?}"),
     };
+    let accepted =
+        await_session_readiness(&mut responses, Some(&mut first_state), accepted).await?;
     let mut observed_output_items = 0;
     let mut cursors = BTreeMap::new();
     let mut observed_values = BTreeMap::<u64, Vec<SchemaValue>>::new();
@@ -4862,6 +4882,8 @@ async fn active_ephemeral_streaming_input_interrupt_resume_same_key_does_not_res
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
     let start_request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
+            allow_streams: true,
+            captured_method_input: None,
             target: Some(crate::agent::id_target(&worker_agent_id)),
             constructor: None,
             component_id: None,
@@ -5042,7 +5064,8 @@ async fn read_nested_sibling_output(
             .validate_response(&response)
             .map_err(anyhow::Error::msg)?;
         match response.response {
-            Some(invocation_response::Response::Accepted(accepted)) => {
+            Some(invocation_response::Response::Accepted(accepted))
+            | Some(invocation_response::Response::Ready(accepted)) => {
                 acceptance = Some(accepted);
             }
             Some(invocation_response::Response::Result(result)) => {
@@ -5199,6 +5222,8 @@ async fn concurrent_nested_sibling_output_replays_after_executor_restart(
     let start_key = IdempotencyKey::fresh();
     let start_request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
+            allow_streams: true,
+            captured_method_input: None,
             target: Some(crate::agent::id_target(&worker_agent_id)),
             constructor: None,
             component_id: None,
@@ -5282,6 +5307,8 @@ async fn malformed_request_after_streaming_result_terminalizes_open_streams(
     let start_key = IdempotencyKey::fresh();
     let start = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
+            allow_streams: true,
+            captured_method_input: None,
             target: Some(crate::agent::id_target(&worker_agent_id)),
             constructor: None,
             component_id: None,
@@ -5331,6 +5358,7 @@ async fn malformed_request_after_streaming_result_terminalizes_open_streams(
                 assert!(!accepted, "invocation was accepted more than once");
                 accepted = true;
             }
+            Some(invocation_response::Response::Ready(_)) => {}
             Some(invocation_response::Response::Result(result)) => {
                 assert!(accepted, "streaming result preceded volatile acceptance");
                 result_received = true;
@@ -5406,6 +5434,8 @@ fn origin_observer_start(
     method: &str,
 ) -> InvocationStart {
     InvocationStart {
+        allow_streams: true,
+        captured_method_input: None,
         target: Some(crate::agent::id_target(target)),
         method_name: Some(method.to_string()),
         input: Some(golem_schema::proto::golem::schema::SchemaValue {
@@ -5450,6 +5480,29 @@ fn origin_observer_start(
     }
 }
 
+async fn await_session_readiness(
+    responses: &mut tonic::Streaming<InvocationResponse>,
+    mut state: Option<&mut InvocationSessionState>,
+    accepted: InvocationAccepted,
+) -> anyhow::Result<InvocationAccepted> {
+    if accepted.component_revision.is_some() {
+        return Ok(accepted);
+    }
+    let response = responses
+        .message()
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("queued session ended before readiness"))?;
+    if let Some(state) = state.as_mut() {
+        state
+            .validate_response(&response)
+            .map_err(anyhow::Error::msg)?;
+    }
+    match response.response {
+        Some(invocation_response::Response::Ready(ready)) => Ok(ready),
+        other => anyhow::bail!("expected execution readiness, got {other:?}"),
+    }
+}
+
 async fn open_raw_session(
     executor: &TestWorkerExecutor,
     start: InvocationStart,
@@ -5477,7 +5530,170 @@ async fn open_raw_session(
     let Some(invocation_response::Response::Accepted(accepted)) = first.response else {
         anyhow::bail!("expected acceptance, got {first:?}");
     };
+    let accepted = await_session_readiness(&mut responses, None, accepted).await?;
     Ok((requests, responses, accepted))
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn queued_stream_sessions_accept_before_preparation_and_deliver_selected_outcomes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let target = executor
+        .start_agent(
+            &component.id,
+            agent_key!("StreamingRpcTarget", "queued-ready"),
+        )
+        .await?;
+    let caller = crate::agent::keyed_agent_id(
+        component.environment_id,
+        &agent_key!("StreamingRpcCaller", "queued-ready"),
+    );
+    let fingerprint = executor.get_worker_metadata(&target).await?.fingerprint.0;
+    let start_request = |method| {
+        origin_observer_start(
+            &executor,
+            &component,
+            &target,
+            &caller,
+            fingerprint,
+            &IdempotencyKey::fresh(),
+            method,
+        )
+    };
+    let (gate_tx, mut gate_rx, gate) =
+        open_raw_session(&executor, start_request("consume")).await?;
+    let mut queued = Vec::new();
+    for method in ["consume", "missing_queued_method"] {
+        let request = InvocationRequest {
+            request: Some(invocation_request::Request::Start(start_request(method))),
+        };
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_trusted_request(&request)
+            .map_err(anyhow::Error::msg)?;
+        let (frames, receiver) = mpsc::channel(8);
+        frames.send(request).await?;
+        let mut responses = executor
+            .client
+            .clone()
+            .invoke_agent_session(ReceiverStream::new(receiver))
+            .await?
+            .into_inner();
+        let response = tokio::time::timeout(Duration::from_secs(10), responses.message())
+            .await??
+            .expect("queued acceptance before the gate releases");
+        state
+            .validate_response(&response)
+            .map_err(anyhow::Error::msg)?;
+        let Some(invocation_response::Response::Accepted(accepted)) = response.response else {
+            anyhow::bail!("expected queued acceptance: {response:?}");
+        };
+        assert!(accepted.component_revision.is_none());
+        assert!(accepted.stream_mappings.is_empty());
+        queued.push((frames, responses, state, accepted));
+    }
+    gate_tx
+        .send(InvocationRequest {
+            request: Some(invocation_request::Request::StreamEnd(StreamEnd {
+                transport_stream_id: 1,
+                producer_sequence: 0,
+                direction: StreamDirection::Input as i32,
+                authored_by: StreamTerminalAuthor::Guest as i32,
+                outcome: Some(StreamTerminal::Finished.try_into().unwrap()),
+                durable_stream_id: gate.stream_mappings[0].handle.as_ref().unwrap().stream_id,
+                epoch: gate.epoch,
+                ..Default::default()
+            })),
+        })
+        .await?;
+    while let Some(response) = gate_rx.message().await? {
+        if matches!(
+            response.response,
+            Some(invocation_response::Response::Finished(_))
+        ) {
+            break;
+        }
+    }
+    let (frames, mut responses, mut state, accepted) = queued.remove(0);
+    let ready = await_session_readiness(&mut responses, Some(&mut state), accepted).await?;
+    assert_eq!(ready.component_revision, Some(component.revision.get()));
+    let stream_id = ready.stream_mappings[0].handle.as_ref().unwrap().stream_id;
+    for frame in [
+        invocation_request::Request::InputItem(InputStreamItem {
+            transport_stream_id: 1,
+            sequence: 0,
+            durable_stream_id: stream_id,
+            epoch: ready.epoch,
+            payload: Some(input_stream_item::Payload::Value(
+                SchemaValue::U32(37)
+                    .try_into()
+                    .map_err(anyhow::Error::msg)?,
+            )),
+        }),
+        invocation_request::Request::StreamEnd(StreamEnd {
+            transport_stream_id: 1,
+            producer_sequence: 1,
+            direction: StreamDirection::Input as i32,
+            authored_by: StreamTerminalAuthor::Guest as i32,
+            outcome: Some(StreamTerminal::Finished.try_into().unwrap()),
+            durable_stream_id: stream_id,
+            epoch: ready.epoch,
+            ..Default::default()
+        }),
+    ] {
+        let request = InvocationRequest {
+            request: Some(frame),
+        };
+        state
+            .validate_trusted_request(&request)
+            .map_err(anyhow::Error::msg)?;
+        frames.send(request).await?;
+    }
+    let mut output = None;
+    while !state.is_complete() {
+        let response = responses
+            .message()
+            .await?
+            .expect("selected invocation completion");
+        state
+            .validate_response(&response)
+            .map_err(anyhow::Error::msg)?;
+        if let Some(invocation_response::Response::Result(result)) = response.response {
+            let Some(invocation_session_result::Result::MethodResult(value)) = result.result else {
+                anyhow::bail!("missing method result");
+            };
+            output = Some(SchemaValue::try_from(value).map_err(anyhow::Error::msg)?);
+        }
+    }
+    assert_eq!(
+        output,
+        Some(SchemaValue::List {
+            elements: vec![SchemaValue::U32(37)]
+        })
+    );
+    let (_frames, mut responses, mut state, _) = queued.remove(0);
+    let failure = responses
+        .message()
+        .await?
+        .expect("selected validation failure");
+    state
+        .validate_response(&failure)
+        .map_err(anyhow::Error::msg)?;
+    assert!(matches!(failure.response,
+        Some(invocation_response::Response::Finished(ref completion))
+            if matches!(completion.outcome, Some(invocation_session_completion::Outcome::Failure(_)))));
+    assert!(state.is_complete());
+    Ok(())
 }
 
 #[test]
@@ -5841,6 +6057,8 @@ async fn resident_ephemeral_streaming_input_resume_restores_lost_ack_high_water(
     };
     let start_request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
+            allow_streams: true,
+            captured_method_input: None,
             target: Some(crate::agent::id_target(&worker_agent_id)),
             constructor: None,
             component_id: None,
@@ -5890,6 +6108,8 @@ async fn resident_ephemeral_streaming_input_resume_restores_lost_ack_high_water(
         Some(invocation_response::Response::Accepted(accepted)) => accepted,
         other => anyhow::bail!("expected ephemeral input acceptance, got {other:?}"),
     };
+    let accepted =
+        await_session_readiness(&mut responses, Some(&mut first_state), accepted).await?;
     let mapping = accepted
         .stream_mappings
         .first()
@@ -6565,6 +6785,8 @@ async fn consumed_input_boundary(
     let start_key = IdempotencyKey::fresh();
     let start = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
+            allow_streams: true,
+            captured_method_input: None,
             target: Some(crate::agent::id_target(&id)),
             constructor: None,
             component_id: None,
@@ -6608,6 +6830,7 @@ async fn consumed_input_boundary(
     let Some(invocation_response::Response::Accepted(accepted)) = response.response else {
         anyhow::bail!("not accepted")
     };
+    let accepted = await_session_readiness(&mut responses, Some(&mut state), accepted).await?;
     assert_eq!(accepted.stream_mappings.len(), streams.len());
     let mut acknowledged = BTreeMap::new();
     for (index, values) in streams.iter().enumerate() {
@@ -7005,6 +7228,8 @@ async fn durable_streaming_input_recovers_after_executor_restart(
     let attempt_id = Some(uuid::Uuid::new_v4().into());
     let start_request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
+            allow_streams: true,
+            captured_method_input: None,
             target: Some(crate::agent::id_target(&worker_agent_id)),
             constructor: None,
             component_id: None,
@@ -7055,6 +7280,8 @@ async fn durable_streaming_input_recovers_after_executor_restart(
         Some(invocation_response::Response::Accepted(accepted)) => accepted,
         other => anyhow::bail!("expected durable acceptance, got {other:?}"),
     };
+    let first_accepted =
+        await_session_readiness(&mut responses, Some(&mut state), first_accepted).await?;
     let first_mapping = first_accepted
         .stream_mappings
         .first()
@@ -7374,6 +7601,8 @@ async fn resuming_a_finished_session_with_guest_cancelled_input_replays_completi
     let start_key = IdempotencyKey::fresh();
     let start_request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
+            allow_streams: true,
+            captured_method_input: None,
             target: Some(crate::agent::id_target(&worker_agent_id)),
             constructor: None,
             component_id: None,
@@ -7421,6 +7650,8 @@ async fn resuming_a_finished_session_with_guest_cancelled_input_replays_completi
         Some(invocation_response::Response::Accepted(accepted)) => accepted,
         other => anyhow::bail!("expected durable acceptance, got {other:?}"),
     };
+    let first_accepted =
+        await_session_readiness(&mut responses, Some(&mut state), first_accepted).await?;
     let first_mapping = first_accepted
         .stream_mappings
         .first()
@@ -8467,6 +8698,8 @@ async fn fork_completed_stream_reconstructs_state_without_repeating_output(
     let start_key = IdempotencyKey::fresh();
     let start = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
+            allow_streams: true,
+            captured_method_input: None,
             target: Some(crate::agent::id_target(&source_id)),
             constructor: None,
             component_id: None,
@@ -8653,6 +8886,8 @@ async fn reverted_retained_stream_start(
         .external_invocation_key(&worker_id.agent_id, &key, "consume")
         .await?;
     let start = InvocationStart {
+        allow_streams: true,
+        captured_method_input: None,
         target: Some(crate::agent::id_target(&worker_id)),
         constructor: None,
         component_id: None,
@@ -8693,6 +8928,7 @@ async fn reverted_retained_stream_start(
     let Some(invocation_response::Response::Accepted(accepted)) = accepted.response else {
         anyhow::bail!("expected acceptance: {accepted:?}");
     };
+    let accepted = await_session_readiness(&mut old_responses, None, accepted).await?;
     assert_eq!(accepted.epoch, 1);
     // Revert must retain the running invocation, not delete its start: processed invocations
     // are deliberately not put back on the pending queue by ordinary revert.
@@ -8969,6 +9205,8 @@ async fn revert_stream_acceptance_removes_pending_inputs_and_fences_old_connecti
     let start_key = IdempotencyKey::fresh();
     let request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
+            allow_streams: true,
+            captured_method_input: None,
             target: Some(crate::agent::id_target(&worker_id)),
             constructor: None,
             component_id: None,
@@ -9006,6 +9244,13 @@ async fn revert_stream_acceptance_removes_pending_inputs_and_fences_old_connecti
         let Some(invocation_response::Response::Accepted(accepted)) = response.response else {
             anyhow::bail!("expected acceptance: {response:?}");
         };
+        if queued {
+            assert!(accepted.component_revision.is_none());
+            assert!(accepted.stream_mappings.is_empty());
+            old_connections.push((frames, responses, None));
+            continue;
+        }
+        let accepted = await_session_readiness(&mut responses, None, accepted).await?;
         assert_eq!(accepted.epoch, 1);
         let stream = accepted.stream_mappings[0]
             .handle
@@ -9087,6 +9332,7 @@ async fn revert_stream_acceptance_removes_pending_inputs_and_fences_old_connecti
     let Some(invocation_response::Response::Accepted(accepted)) = response.response else {
         anyhow::bail!("expected reacceptance: {response:?}");
     };
+    let accepted = await_session_readiness(&mut responses, Some(&mut state), accepted).await?;
     assert_eq!(accepted.epoch, 2);
     let stream = accepted.stream_mappings[0]
         .handle
@@ -9239,6 +9485,8 @@ async fn open_invocation_session_with_key(
     let (frames, receiver) = mpsc::channel(8);
     let request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
+            allow_streams: true,
+            captured_method_input: None,
             target: Some(target),
             constructor,
             component_id: Some(component.id.into()),
@@ -9296,7 +9544,8 @@ async fn receive_invocation_session(
             .validate_response(&response)
             .map_err(anyhow::Error::msg)?;
         match response.response {
-            Some(invocation_response::Response::Accepted(_)) => {}
+            Some(invocation_response::Response::Accepted(_))
+            | Some(invocation_response::Response::Ready(_)) => {}
             Some(invocation_response::Response::Rejected(rejected)) => {
                 terminal = Some(Err(rejected.error));
             }
@@ -9370,6 +9619,8 @@ async fn typescript_streaming_guest_abi_e2e(
     let start_key = IdempotencyKey::fresh();
     let start = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
+            allow_streams: true,
+            captured_method_input: None,
             target: Some(crate::agent::id_target(&worker_agent_id)),
             constructor: None,
             component_id: None,
@@ -9416,6 +9667,7 @@ async fn typescript_streaming_guest_abi_e2e(
         Some(invocation_response::Response::Accepted(accepted)) => accepted,
         other => anyhow::bail!("expected TypeScript streaming acceptance, got {other:?}"),
     };
+    let accepted = await_session_readiness(&mut responses, Some(&mut state), accepted).await?;
     let [input_mapping] = accepted.stream_mappings.as_slice() else {
         anyhow::bail!(
             "expected one TypeScript input stream mapping, got {}",
@@ -9620,6 +9872,8 @@ async fn effect_concurrent_stream_with_pending_websocket_readers(
             let start_key = IdempotencyKey::fresh();
             let request = InvocationRequest {
                 request: Some(invocation_request::Request::Start(InvocationStart {
+                    allow_streams: true,
+                    captured_method_input: None,
                     target: Some(crate::agent::id_target(&worker_id)),
                     constructor: None,
                     component_id: None,
@@ -9668,6 +9922,8 @@ async fn effect_concurrent_stream_with_pending_websocket_readers(
                 else {
                     anyhow::bail!("expected acceptance, got {accepted:?}");
                 };
+                let accepted =
+                    await_session_readiness(&mut responses, Some(&mut state), accepted).await?;
                 let [mapping] = accepted.stream_mappings.as_slice() else {
                     anyhow::bail!("expected one input stream mapping");
                 };

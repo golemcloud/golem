@@ -207,15 +207,25 @@ impl StreamSession {
         let session = self.clone();
         self.producer
             .run_admitted(None, memory, true, move |_, admission| async move {
-                let _session_guard = session.session_lock.lock().await;
-                let session_for_write = session.clone();
-                admission
-                    .submit(move |_, context| async move {
-                        session_for_write
-                            .commit_resume_attempt_owned(&context, record)
-                            .await
-                    })
+                let guard = session.session_lock.clone().lock_owned().await;
+                session
+                    .commit_resume_attempt_locked(record, guard, &admission)
                     .await
+            })
+            .await
+    }
+
+    pub(crate) async fn commit_resume_attempt_locked(
+        &self,
+        record: StreamSessionResumeAttemptRecord,
+        guard: tokio::sync::OwnedMutexGuard<()>,
+        admission: &Arc<StreamWriteAdmission>,
+    ) -> Result<(), SessionError> {
+        let _session_guard = guard;
+        let session = self.clone();
+        admission
+            .submit(move |_, context| async move {
+                session.commit_resume_attempt_owned(&context, record).await
             })
             .await
     }

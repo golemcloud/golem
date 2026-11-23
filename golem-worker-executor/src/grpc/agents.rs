@@ -146,10 +146,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &invocation_context,
             caller,
             freshness_disposition,
-            CreateIntent::Create {
-                owner,
-                exclusive: !request.ignore_already_existing,
-                idempotency_key: request.idempotency_key.clone().map(Into::into),
+            if request.invocation.is_some() {
+                CreateIntent::Invocation {
+                    owner,
+                    idempotency_key: request.idempotency_key.map(Into::into),
+                    invocation: request.invocation,
+                }
+            } else {
+                CreateIntent::Create {
+                    owner,
+                    exclusive: !request.ignore_already_existing,
+                    idempotency_key: request.idempotency_key.clone().map(Into::into),
+                }
             },
         )
         .await?;
