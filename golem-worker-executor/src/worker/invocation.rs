@@ -1454,7 +1454,9 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
         }
-        PreparedCall::LoadSnapshot { snapshot, input, .. } => {
+        PreparedCall::LoadSnapshot {
+            snapshot, input, ..
+        } => {
             let guest = load_load_snapshot_guest(store, instance)?;
             let _usage = prepare_metered_guest_call(store, display_name, true).await?;
             let result = run_guest_call_settled(store, async |accessor| {

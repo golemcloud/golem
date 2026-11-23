@@ -2700,12 +2700,7 @@ async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
         .expect("creator must reach the initialization enqueue");
     creating.abort();
     assert!(creating.await.err().unwrap().is_cancelled());
-    let mut existing = Box::pin(Worker::interrupt(
-        &all,
-        &id,
-        false,
-        None,
-    ));
+    let mut existing = Box::pin(Worker::interrupt(&all, &id, false, None));
     let mut competing = Box::pin(acquire(&seed, &id));
     assert!(poll!(&mut existing).is_pending());
     assert!(poll!(&mut competing).is_pending());

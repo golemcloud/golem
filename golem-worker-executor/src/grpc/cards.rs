@@ -93,28 +93,24 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         // A transfer reaches only an existing agent: an ID that names no agent cannot be
         // created without its constructor.
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
-        let (worker, _response_lease) =
-            if owned_agent_id.agent_id.type_tag() == golem_common::model::RESERVED_TYPE_TAG {
-                Worker::get_exact_existing_suspended_for_response(
-                    self,
-                    &owned_agent_id,
-                    None,
-                )
-                .await?
-            } else {
-                let resolved = crate::worker::target::ResolvedTarget {
-                    owned_agent_id: owned_agent_id.clone(),
-                    new_owner: None,
-                    agent_mode: None,
-                };
-                self.get_or_create_pending_with_freshness(
-                    &request,
-                    &resolved,
-                    InvocationFreshnessDisposition::MayExist,
-                    None,
-                )
-                .await?
+        let (worker, _response_lease) = if owned_agent_id.agent_id.type_tag()
+            == golem_common::model::RESERVED_TYPE_TAG
+        {
+            Worker::get_exact_existing_suspended_for_response(self, &owned_agent_id, None).await?
+        } else {
+            let resolved = crate::worker::target::ResolvedTarget {
+                owned_agent_id: owned_agent_id.clone(),
+                new_owner: None,
+                agent_mode: None,
             };
+            self.get_or_create_pending_with_freshness(
+                &request,
+                &resolved,
+                InvocationFreshnessDisposition::MayExist,
+                None,
+            )
+            .await?
+        };
         worker
             .receive_card_transfer(transfer_id, source_card_id, card)
             .await
