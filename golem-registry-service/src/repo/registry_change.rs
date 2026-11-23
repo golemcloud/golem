@@ -67,6 +67,7 @@ pub enum RegistryEventType {
     ApplicationDeleted = 8,
     EnvironmentDeleted = 9,
     CardRevoked = 10,
+    AccountChanged = 11,
 }
 
 impl TryFrom<i16> for RegistryEventType {
@@ -85,6 +86,7 @@ impl TryFrom<i16> for RegistryEventType {
             8 => Ok(RegistryEventType::ApplicationDeleted),
             9 => Ok(RegistryEventType::EnvironmentDeleted),
             10 => Ok(RegistryEventType::CardRevoked),
+            11 => Ok(RegistryEventType::AccountChanged),
             other => Err(RepoError::InternalError(anyhow::anyhow!(
                 "Unknown registry event type: {other}"
             ))),
@@ -156,6 +158,12 @@ pub enum RegistryChangeEvent {
         event_id: ChangeEventId,
         card_ids: Vec<Uuid>,
     },
+    /// The account's tree node changed: its segment, display name or local lifecycle. Account
+    /// tree caches evict the node; the event is not forwarded to registry invalidation streams.
+    AccountChanged {
+        event_id: ChangeEventId,
+        account_id: Uuid,
+    },
 }
 
 impl RegistryChangeEvent {
@@ -172,6 +180,7 @@ impl RegistryChangeEvent {
             Self::ApplicationDeleted { event_id, .. } => *event_id,
             Self::EnvironmentDeleted { event_id, .. } => *event_id,
             Self::CardRevoked { event_id, .. } => *event_id,
+            Self::AccountChanged { event_id, .. } => *event_id,
         }
     }
 }
@@ -381,6 +390,17 @@ impl TryFrom<RegistryChangeEventRow> for RegistryChangeEvent {
                 Ok(RegistryChangeEvent::CardRevoked {
                     event_id: row.event_id,
                     card_ids: row.card_ids,
+                })
+            }
+            RegistryEventType::AccountChanged => {
+                let account_id = row.account_id.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "AccountChanged event missing account_id"
+                    ))
+                })?;
+                Ok(RegistryChangeEvent::AccountChanged {
+                    event_id: row.event_id,
+                    account_id,
                 })
             }
         }
@@ -649,6 +669,25 @@ impl NewRegistryChangeEvent {
             environment_ids: Vec::new(),
             env_name: None,
             card_ids,
+        }
+    }
+
+    pub fn account_changed(account_id: Uuid) -> Self {
+        Self {
+            event_type: RegistryEventType::AccountChanged,
+            environment_id: None,
+            deployment_revision_id: None,
+            current_deployment_revision_id: None,
+            account_id: Some(account_id),
+            grantee_account_id: None,
+            domains: Vec::new(),
+            resource_definition_id: None,
+            resource_name: None,
+            application_id: None,
+            app_name: None,
+            environment_ids: Vec::new(),
+            env_name: None,
+            card_ids: Vec::new(),
         }
     }
 }
@@ -1266,6 +1305,23 @@ mod tests {
                 app_name: Some(app_name.clone()),
                 environment_ids: Vec::new(),
                 env_name: Some(env_name.clone()),
+                card_ids: Vec::new(),
+            },
+            RegistryChangeEventRow {
+                event_id,
+                event_type: RegistryEventType::AccountChanged,
+                environment_id: None,
+                deployment_revision_id: None,
+                current_deployment_revision_id: None,
+                account_id: Some(account_id),
+                grantee_account_id: None,
+                domains: Vec::new(),
+                resource_definition_id: None,
+                resource_name: None,
+                application_id: None,
+                app_name: None,
+                environment_ids: Vec::new(),
+                env_name: None,
                 card_ids: Vec::new(),
             },
         ];
