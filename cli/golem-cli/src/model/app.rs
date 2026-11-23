@@ -867,6 +867,7 @@ pub struct Application {
     components:
         BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
     agents: BTreeMap<AgentTypeName, WithSource<app_raw::Agent>>,
+    pub(crate) package_agent_defaults: BTreeMap<AgentTypeName, WithSource<app_raw::Agent>>,
     tool_declarations: BTreeMap<ToolName, WithSource<app_raw::ToolDeclaration>>,
     // Kept apart from `tool_declarations`: a build does not see the default tools.
     default_tools: BTreeMap<ToolName, DefaultTool>,
@@ -1447,6 +1448,23 @@ impl Application {
                 )
             })?;
 
+        let base_id = if let Some(defaults) = self.package_agent_defaults.get(agent_type_name) {
+            let id = AgentLayerId::AgentPackage(agent_type_name.clone());
+            agent_layer_store
+                .add_layer(AgentLayer {
+                    id: id.clone(),
+                    parents: vec![base_component_id],
+                    source: defaults.source.clone(),
+                    properties: AgentLayerPropertiesKind::Common(Box::new(
+                        defaults.value.agent_layer_properties(),
+                    )),
+                })
+                .map_err(|err| anyhow!(err.to_string()))?;
+            id
+        } else {
+            base_component_id
+        };
+
         let target_id = if let Some(WithSource {
             value: agent,
             source,
@@ -1472,7 +1490,7 @@ impl Application {
                 &template_names,
             )?;
 
-            let mut latest_parent_id = base_component_id.clone();
+            let mut latest_parent_id = base_id;
             for template_name in template_names {
                 let template_layer_id =
                     ComponentLayerId::TemplateCustomPresets(template_name.clone());
@@ -1581,7 +1599,7 @@ impl Application {
 
             custom_id
         } else {
-            base_component_id
+            base_id
         };
 
         let resolved = AgentLayerProperties::from_store(
@@ -3425,6 +3443,7 @@ pub struct ResolvedToolProvision {
 #[serde(rename_all = "camelCase")]
 pub enum AgentLayerId {
     Component(ComponentName),
+    AgentPackage(AgentTypeName),
     AgentTemplate(AgentTypeName, String),
     AgentCommon(AgentTypeName),
     AgentEnvironmentPresets(AgentTypeName),
@@ -3436,6 +3455,9 @@ impl Display for AgentLayerId {
         match self {
             AgentLayerId::Component(component_name) => {
                 write!(f, "component:{component_name}")
+            }
+            AgentLayerId::AgentPackage(agent_type_name) => {
+                write!(f, "agent:{}:package", agent_type_name.0)
             }
             AgentLayerId::AgentTemplate(agent_type_name, template_name) => {
                 write!(f, "agent:{}:template:{}", agent_type_name.0, template_name)
@@ -4715,6 +4737,7 @@ mod app_builder {
                 all_sources: builder.all_sources,
                 components: builder.components,
                 agents: builder.agents,
+                package_agent_defaults: BTreeMap::new(),
                 tool_declarations: builder.tool_declarations,
                 default_tools: builder.default_tools,
                 tool_middleware_declarations: builder.tool_middleware_declarations,

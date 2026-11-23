@@ -840,7 +840,7 @@ impl ComponentCommandHandler {
         resolved_tool_grants: &ResolvedToolGrants,
         ambient_tools: &[golem_common::model::deployment::DeploymentPlanAmbientToolEntry],
     ) -> anyhow::Result<ResolvedManifestComponentsAndTools> {
-        let (component_names, declared_agents, has_remote_tools) = {
+        let (component_names, declared_agents, has_remote_tools, package_calls) = {
             let app_ctx = self.ctx.app_context_lock().await;
             let app = app_ctx.some_or_err()?;
             (
@@ -853,6 +853,7 @@ impl ComponentCommandHandler {
                     .remote_release_references()
                     .next()
                     .is_some(),
+                app.installed_package_calls.clone(),
             )
         };
 
@@ -879,6 +880,20 @@ impl ComponentCommandHandler {
                     .push(component_name.clone());
             }
         }
+
+        let mut missing_calls = Vec::new();
+        for (package, calls) in package_calls {
+            for agent in calls {
+                if !exported_agents.contains_key(&agent) {
+                    missing_calls.push(format!("{agent} (required by {package:?})"));
+                }
+            }
+        }
+        anyhow::ensure!(
+            missing_calls.is_empty(),
+            "Missing agent types required by installed packages: {}",
+            missing_calls.join(", ")
+        );
 
         let unknown_declared_agents = declared_agents
             .into_iter()
