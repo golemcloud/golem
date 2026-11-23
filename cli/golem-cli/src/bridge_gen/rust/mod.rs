@@ -809,15 +809,14 @@ impl RustBridgeGenerator {
                     let reference = crate::__golem_bridge_runtime::create_agent(
                         config,
                         #agent_type_name,
-                        constructor_parameters.clone(),
+                        constructor_parameters,
                         options.keyed,
                         agent_config,
                         options.env,
                     ).await?;
                     let agent_id = golem_common::model::AgentId(reference.agent_id);
                     Ok(Self {
-                        // Only the keyed agent stays reachable by its constructor parameters.
-                        constructor_parameters: options.keyed.then_some(constructor_parameters),
+                        constructor_parameters: None,
                         target: Some((agent_id, reference.agent_fingerprint)),
                         agent_id: std::sync::Arc::new(std::sync::OnceLock::from(agent_id)),
                     })
@@ -855,8 +854,7 @@ impl RustBridgeGenerator {
         });
         let client_fields = if durable {
             quote! {
-                /// The constructor parameters of a keyed agent, which a client of `upsert` and of a
-                /// keyed `create` has.
+                /// The constructor parameters used by a client of `upsert` to address the agent by key.
                 constructor_parameters: Option<crate::__golem_bridge_runtime::schema::SchemaValue>,
                 /// The ID and the fingerprint of the agent of a client of `create` or `get_by_id`;
                 /// its invocations name the agent by them.
@@ -962,11 +960,10 @@ impl RustBridgeGenerator {
                     CONFIG.get().expect("Configuration has not been set").server.token()
                 }
 
-                /// The constructor parameters that name a keyed agent. A client of `get_by_id` or of
-                /// an unkeyed `create` has none.
+                /// The constructor parameters that name a keyed agent.
                 fn keyed_parameters(&self) -> Result<&crate::__golem_bridge_runtime::schema::SchemaValue, crate::__golem_bridge_runtime::ClientError> {
                     self.constructor_parameters.as_ref().ok_or_else(|| crate::__golem_bridge_runtime::ClientError::InvocationFailed {
-                        message: format!("Streaming calls name their agent by its constructor parameters; the {} client of `get_by_id` or of an unkeyed `create` has none", #agent_type_name),
+                        message: format!("The {} client addresses an agent by ID and has no constructor parameters", #agent_type_name),
                     })
                 }
 
@@ -1902,6 +1899,29 @@ impl RustBridgeGenerator {
             },
         };
         let agent_type_name = self.agent_type.type_name.0.as_str();
+        let key_target = quote! {
+            golem_common::model::invocation_session_public::PublicAgentTarget::Key {
+                constructor_parameters: golem_client::invocation_session::encode_generated_streamless_value(
+                    &__constructor_graph,
+                    self.keyed_parameters()?,
+                ).map_err(|__error| crate::__golem_bridge_runtime::ClientError::InvocationFailed {
+                    message: format!("Failed to encode constructor parameters: {__error}"),
+                })?,
+            }
+        };
+        let target = if self.agent_type.mode == AgentMode::Durable {
+            quote! {
+                match &self.target {
+                    Some((agent_id, fingerprint)) => golem_common::model::invocation_session_public::PublicAgentTarget::Id {
+                        agent_id: *agent_id,
+                        expected_fingerprint: Some(golem_common::model::AgentFingerprint(*fingerprint)),
+                    },
+                    None => #key_target,
+                }
+            }
+        } else {
+            key_target
+        };
 
         Ok(quote! {
             pub async fn #name(
@@ -1922,13 +1942,7 @@ impl RustBridgeGenerator {
                     golem_client::invocation_session::GeneratedEncodeContext::new(__input_graph.clone());
                 let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue =
                     #method_parameters;
-                let constructor_parameters =
-                    golem_client::invocation_session::encode_generated_streamless_value(
-                        &__constructor_graph,
-                        self.keyed_parameters()?,
-                    ).map_err(|__error| crate::__golem_bridge_runtime::ClientError::InvocationFailed {
-                        message: format!("Failed to encode constructor parameters: {__error}"),
-                    })?;
+                let target = #target;
                 let config = CONFIG.get().expect("Configuration has not been set");
                 let request = golem_client::invocation_session::GeneratedInvocationRequest {
                     base_url: config.server.url(),
@@ -1936,7 +1950,7 @@ impl RustBridgeGenerator {
                     selector: golem_common::model::invocation_session_public::InvocationSelector {
                         agent_type: #agent_type_name.to_string(),
                         application: config.app_name.clone(),
-                        constructor_parameters,
+                        target,
                         environment: config.env_name.clone(),
                         method: #method_name.to_string(),
                     },
@@ -5233,6 +5247,8 @@ mod tests {
         assert!(rendered.contains("invoke_generated("));
         assert!(rendered.contains("register_input("));
         assert!(rendered.contains("register_output("));
+        assert!(rendered.contains("PublicAgentTarget::Key"));
+        assert!(!rendered.contains("Streaming calls name their agent"));
         assert!(!rendered.contains("pub async fn trigger_exchange("));
         assert!(!rendered.contains("pub async fn schedule_exchange("));
         assert!(rendered.contains("pub async fn trigger_status("));

@@ -78,8 +78,6 @@ final case class AgentInvocationResult(
  * A remote of `upsert` has the constructor `parameters` and no `target`; its
  * invocations name the keyed agent by them. A remote of `create` or `getById`
  * has a `target` and its invocations name the agent by its ID and fingerprint.
- * Only the keyed agent of a keyed create also keeps its `parameters`, which
- * streaming invocations need because they name the agent by its key.
  */
 final case class ResolvedAgent(
   configuration: Configuration,
@@ -90,12 +88,10 @@ final case class ResolvedAgent(
   private[runtime] val knownAgentId =
     new java.util.concurrent.atomic.AtomicReference[Option[AgentId]](target.map(_.agentId))
 
-  /** The constructor parameters that name the keyed agent of a streaming invocation. */
+  /** The constructor parameters that name an upsert remote's keyed agent. */
   private[runtime] def keyedParameters: SchemaValue =
     parameters.getOrElse(
-      throw BridgeException(
-        s"A streaming invocation names its $agentTypeName agent by its key: use a remote of upsert, or of a keyed create"
-      )
+      throw BridgeException(s"Missing constructor parameters for keyed $agentTypeName agent")
     )
 }
 
