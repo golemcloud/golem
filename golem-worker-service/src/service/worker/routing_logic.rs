@@ -379,6 +379,8 @@ impl From<WorkerExecutorError> for ResponseMapResult {
             WorkerExecutorError::AgentNotFound { .. }
             | WorkerExecutorError::AgentAlreadyExists { .. }
             | WorkerExecutorError::CreateIdempotencyKeyConflict { .. }
+            | WorkerExecutorError::InvocationCancelled
+            | WorkerExecutorError::CannotCancelRunningInvocation
             | WorkerExecutorError::ComponentNotFound { .. } => {
                 ResponseMapResult::Expected(error.into())
             }

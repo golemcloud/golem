@@ -21,10 +21,10 @@ use golem_client::api::{
     AgentTypesClientLive, ApiDeploymentClientLive, ApiDomainClientLive, ApiSecurityClientLive,
     ApplicationClientLive, CardClientLive, ComponentClientLive, DeploymentClientLive,
     EnvironmentClientLive, EnvironmentToolGrantsClientLive,
-    EnvironmentToolMiddlewareGrantsClientLive, LoginClientLive, McpDeploymentClientLive,
-    MeClientLive, PermissionSharesClientLive, PluginClientLive, ResourcesClientLive,
-    RetryPoliciesClientLive, TokenClientLive, ToolMiddlewareReleasesClientLive,
-    ToolReleasesClientLive, WorkerClientLive,
+    EnvironmentToolMiddlewareGrantsClientLive, InvocationClientLive, LoginClientLive,
+    McpDeploymentClientLive, MeClientLive, PermissionSharesClientLive, PluginClientLive,
+    ResourcesClientLive, RetryPoliciesClientLive, TokenClientLive,
+    ToolMiddlewareReleasesClientLive, ToolReleasesClientLive, WorkerClientLive,
 };
 use golem_client::{Context as ClientContext, Security};
 use golem_common::base_model::api;
@@ -419,6 +419,7 @@ pub struct GolemClients {
     pub token: TokenClientLive,
     pub worker: WorkerClientLive,
     pub worker_invoke: WorkerClientLive,
+    pub invocation: InvocationClientLive,
     /// The worker client of oplog range reads, without retries: an attempt that failed can have
     /// spent scan allowance on the server, so a retry with the same allowance could scan more
     /// than the read was granted.
@@ -577,6 +578,9 @@ impl GolemClients {
             },
             worker_invoke: WorkerClientLive {
                 context: worker_invoke_context(),
+            },
+            invocation: InvocationClientLive {
+                context: worker_context(),
             },
             worker_range_reads: WorkerClientLive {
                 context: ClientContext {
@@ -830,11 +834,13 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(requests.load(Ordering::SeqCst), 1);
-        let rendered = ServiceError {
-            service_name: "Me",
-            kind: ServiceErrorKind::MiddlewareError(error),
-        }
-        .to_string();
+        let rendered = strip_ansi_escapes::strip_str(
+            ServiceError {
+                service_name: "Me",
+                kind: ServiceErrorKind::MiddlewareError(error),
+            }
+            .to_string(),
+        );
         assert!(
             rendered.contains(
                 "The Golem server is still starting: provisioning built-in tools. Retry when the server is ready."

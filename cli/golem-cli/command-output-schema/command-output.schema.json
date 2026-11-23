@@ -55,7 +55,16 @@
       "$ref": "#/definitions/agent-type.list"
     },
     {
-      "$ref": "#/definitions/agent.cancel-invocation"
+      "$ref": "#/definitions/invocation.cancel"
+    },
+    {
+      "$ref": "#/definitions/invocation.get"
+    },
+    {
+      "$ref": "#/definitions/invocation.get-matches"
+    },
+    {
+      "$ref": "#/definitions/invocation.list"
     },
     {
       "$ref": "#/definitions/agent.create"
@@ -1826,31 +1835,71 @@
       },
       "additionalProperties": false
     },
-    "agent.cancel-invocation": {
+    "invocation.cancel": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem agent cancel-invocation`.",
+      "description": "The invocation after `golem invocation cancel`: its state is `cancelled` when the cancel took effect, or the state that kept it from being cancelled.",
       "x-golem-output-mode": "single",
-      "x-golem-command": "agent cancel-invocation",
-      "required": [
-        "$type",
-        "canceled",
-        "agentId",
-        "idempotencyKey"
-      ],
+      "x-golem-command": "invocation cancel",
+      "required": ["$type", "invocationId", "agentId", "environmentId", "state", "kind", "operation", "acceptedAt", "changedAt"],
       "properties": {
-        "$type": {
-          "const": "agent.cancel-invocation"
-        },
-        "canceled": {
-          "type": "boolean"
-        },
-        "agentId": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "idempotencyKey": {
-          "type": "string"
+        "$type": { "const": "invocation.cancel" },
+        "invocationId": { "type": "string" },
+        "agentId": { "$ref": "#/definitions/AgentId" },
+        "environmentId": { "type": "string" },
+        "state": { "$ref": "#/definitions/InvocationState" },
+        "kind": { "oneOf": [{ "$ref": "#/definitions/InvocationKind" }, { "type": "null" }] },
+        "operation": { "type": ["string", "null"] },
+        "acceptedAt": { "type": ["string", "null"] },
+        "changedAt": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "invocation.get": {
+      "type": "object",
+      "description": "An invocation and, once it is `completed` or `failed`, its result. Emitted by `golem invocation get`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "invocation get",
+      "required": ["$type", "summary", "result"],
+      "properties": {
+        "$type": { "const": "invocation.get" },
+        "summary": { "$ref": "#/definitions/InvocationSummary" },
+        "result": { "oneOf": [{ "$ref": "#/definitions/InvocationOutcome" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "invocation.get-matches": {
+      "type": "object",
+      "description": "Every invocation that `--agent` and `--idempotency-key` select when the key was used for more than one operation of the agent. Each invocation names its operation in `summary.operation`. Emitted by `golem invocation get` instead of `invocation.get` when the key selects more than one invocation.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "invocation get",
+      "required": ["$type", "invocations"],
+      "properties": {
+        "$type": { "const": "invocation.get-matches" },
+        "invocations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["summary", "result"],
+            "properties": {
+              "summary": { "$ref": "#/definitions/InvocationSummary" },
+              "result": { "oneOf": [{ "$ref": "#/definitions/InvocationOutcome" }, { "type": "null" }] }
+            },
+            "additionalProperties": false
+          }
         }
+      },
+      "additionalProperties": false
+    },
+    "invocation.list": {
+      "type": "object",
+      "description": "One page of the invocations of an agent, newest change first. `nextCursor` is present when more invocations may follow. Emitted by `golem invocation list`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "invocation list",
+      "required": ["$type", "invocations", "nextCursor"],
+      "properties": {
+        "$type": { "const": "invocation.list" },
+        "invocations": { "type": "array", "items": { "$ref": "#/definitions/InvocationSummary" } },
+        "nextCursor": { "type": ["string", "null"] }
       },
       "additionalProperties": false
     },
@@ -2511,13 +2560,17 @@
     },
     "ReportAgentRef": {
       "type": "object",
-      "description": "A reference to an agent: one token over the agent ID text.",
+      "description": "A reference to an agent, in clear: the agent ID, and the agent type name only on the own reference of the exported agent.",
       "required": [
-        "token"
+        "agentId"
       ],
       "properties": {
-        "token": {
-          "$ref": "#/definitions/ReportToken"
+        "agentId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "agentType": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -2779,14 +2832,18 @@
           "type": "object",
           "required": [
             "kind",
-            "token"
+            "agentId"
           ],
           "properties": {
             "kind": {
               "const": "agent"
             },
-            "token": {
-              "$ref": "#/definitions/ReportToken"
+            "agentId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "agentType": {
+              "type": "string"
             }
           },
           "additionalProperties": false
@@ -4637,14 +4694,26 @@
     },
     "package.digest": {
       "type": "object",
-      "description": "The SHA-256 digest of a Golem package's OCI manifest.",
+      "description": "The SHA-256 digest of a Golem package's OCI manifest and the publisher exports omitted from the package.",
       "x-golem-output-mode": "single",
       "x-golem-command": "package pack",
       "x-golem-commands": ["package pack", "publish"],
-      "required": ["$type", "digest"],
+      "required": ["$type", "digest", "omittedExports"],
       "properties": {
         "$type": { "const": "package.digest" },
-        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "omittedExports": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["kind", "name"],
+            "properties": {
+              "kind": { "enum": ["http-api", "mcp"] },
+              "name": { "type": "string", "description": "The resolved domain of the omitted export." }
+            },
+            "additionalProperties": false
+          }
+        }
       },
       "additionalProperties": false
     },
@@ -8971,6 +9040,89 @@
         }
       ]
     },
+    "InvocationSummary": {
+      "type": "object",
+      "required": ["invocationId", "agentId", "environmentId", "state", "kind", "operation", "acceptedAt", "changedAt"],
+      "properties": {
+        "invocationId": { "type": "string" },
+        "agentId": { "$ref": "#/definitions/AgentId" },
+        "environmentId": { "type": "string" },
+        "state": { "$ref": "#/definitions/InvocationState" },
+        "kind": { "oneOf": [{ "$ref": "#/definitions/InvocationKind" }, { "type": "null" }] },
+        "operation": { "type": ["string", "null"] },
+        "acceptedAt": { "type": ["string", "null"] },
+        "changedAt": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "InvocationState": {
+      "enum": ["scheduled", "pending", "running", "waiting", "retrying", "interrupted", "completed", "failed", "cancelled"]
+    },
+    "InvocationKind": {
+      "enum": ["method", "constructor", "tool"]
+    },
+    "InvocationOutcome": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "Method" },
+            "value": { "$ref": "#/definitions/ExternalTypedSchemaValue" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "result"],
+          "properties": {
+            "type": { "const": "Tool" },
+            "result": { "$ref": "#/definitions/NativeToolResult" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "error"],
+          "properties": {
+            "type": { "const": "Failure" },
+            "error": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "NativeToolResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "result"],
+          "properties": {
+            "type": { "const": "Success" },
+            "result": { "oneOf": [{ "$ref": "#/definitions/ExternalTypedSchemaValue" }, { "type": "null" }] }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "error"],
+          "properties": {
+            "type": { "const": "Failure" },
+            "error": { "$ref": "#/definitions/JsonValue" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ExternalTypedSchemaValue": {
+      "type": "object",
+      "required": ["graph", "value"],
+      "properties": {
+        "graph": { "$ref": "#/definitions/SchemaGraph" },
+        "value": {}
+      },
+      "additionalProperties": false
+    },
     "PublicTypedValue": {
       "type": "object",
       "required": ["graph", "value"],
@@ -11006,8 +11158,20 @@
       "rustType": "AgentTypeListView"
     },
     {
-      "type": "agent.cancel-invocation",
-      "rustType": "AgentCancelInvocationResult"
+      "type": "invocation.cancel",
+      "rustType": "InvocationCancelView"
+    },
+    {
+      "type": "invocation.get",
+      "rustType": "InvocationGetView"
+    },
+    {
+      "type": "invocation.get-matches",
+      "rustType": "InvocationGetMatchesView"
+    },
+    {
+      "type": "invocation.list",
+      "rustType": "InvocationListView"
     },
     {
       "type": "agent.create",

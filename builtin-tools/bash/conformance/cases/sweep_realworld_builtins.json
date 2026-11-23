@@ -1,0 +1,4820 @@
+{
+  "tier": "sweep",
+  "description": "Real-world usage: tldr-pages examples for Bash's builtins and compound commands.\n\nSource: tldr-pages (https://github.com/tldr-pages/tldr, CC BY 4.0), pages/common and pages/linux\nat commit 8cf22035e60b167ebf224c1c527b27e0b5dca24d; see ../NOTICE. Each example runs with its\nplaceholders bound, then over the values it meets in practice (empty, unset, spaces, globs,\nnumbers that are not numbers, missing files). Examples that need a terminal, a login shell,\nhistory, job control, other users, or print the whole environment are left out, as are the\nbuiltins the tool refuses (umask, ulimit, `enable -n`, `exec -a/-c/-l`, bg, fg, fc, coproc).",
+  "cases": [
+    {
+      "name": "real tldr [: equal to a string with a word",
+      "script": "variable='word'\n[ \"$variable\" = \"word\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: not equal to a string with a word",
+      "script": "variable='word'\n[ \"$variable\" != \"word\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: non-empty with a word",
+      "script": "variable='word'\n[ -n \"$variable\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: empty with a word",
+      "script": "variable='word'\n[ -z \"$variable\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: equal to a string or glob with a word",
+      "script": "variable='word'\n[[ $variable == \"word\" ]]; echo \"status=$?\"; [[ $variable == w* ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: non-empty with a word",
+      "script": "variable='word'\n[[ -n $variable ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: empty with a word",
+      "script": "variable='word'\n[[ -z $variable ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: regex with a word",
+      "script": "variable='word'\n[[ $variable =~ ^[a-z]+$ ]]; echo \"status=$? ${BASH_REMATCH[0]}\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: equal to a string with an empty string",
+      "script": "variable=''\n[ \"$variable\" = \"word\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: not equal to a string with an empty string",
+      "script": "variable=''\n[ \"$variable\" != \"word\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: non-empty with an empty string",
+      "script": "variable=''\n[ -n \"$variable\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: empty with an empty string",
+      "script": "variable=''\n[ -z \"$variable\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: equal to a string or glob with an empty string",
+      "script": "variable=''\n[[ $variable == \"word\" ]]; echo \"status=$?\"; [[ $variable == w* ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: non-empty with an empty string",
+      "script": "variable=''\n[[ -n $variable ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: empty with an empty string",
+      "script": "variable=''\n[[ -z $variable ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: regex with an empty string",
+      "script": "variable=''\n[[ $variable =~ ^[a-z]+$ ]]; echo \"status=$? ${BASH_REMATCH[0]}\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: equal to a string with spaces",
+      "script": "variable='a b'\n[ \"$variable\" = \"word\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: not equal to a string with spaces",
+      "script": "variable='a b'\n[ \"$variable\" != \"word\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: non-empty with spaces",
+      "script": "variable='a b'\n[ -n \"$variable\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: empty with spaces",
+      "script": "variable='a b'\n[ -z \"$variable\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: equal to a string or glob with spaces",
+      "script": "variable='a b'\n[[ $variable == \"word\" ]]; echo \"status=$?\"; [[ $variable == w* ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: non-empty with spaces",
+      "script": "variable='a b'\n[[ -n $variable ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: empty with spaces",
+      "script": "variable='a b'\n[[ -z $variable ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: regex with spaces",
+      "script": "variable='a b'\n[[ $variable =~ ^[a-z]+$ ]]; echo \"status=$? ${BASH_REMATCH[0]}\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: equal to a string with a glob",
+      "script": "variable='*'\n[ \"$variable\" = \"word\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: not equal to a string with a glob",
+      "script": "variable='*'\n[ \"$variable\" != \"word\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: non-empty with a glob",
+      "script": "variable='*'\n[ -n \"$variable\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: empty with a glob",
+      "script": "variable='*'\n[ -z \"$variable\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: equal to a string or glob with a glob",
+      "script": "variable='*'\n[[ $variable == \"word\" ]]; echo \"status=$?\"; [[ $variable == w* ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: non-empty with a glob",
+      "script": "variable='*'\n[[ -n $variable ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: empty with a glob",
+      "script": "variable='*'\n[[ -z $variable ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: regex with a glob",
+      "script": "variable='*'\n[[ $variable =~ ^[a-z]+$ ]]; echo \"status=$? ${BASH_REMATCH[0]}\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: equal to a string with a dash",
+      "script": "variable='-n'\n[ \"$variable\" = \"word\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: not equal to a string with a dash",
+      "script": "variable='-n'\n[ \"$variable\" != \"word\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: non-empty with a dash",
+      "script": "variable='-n'\n[ -n \"$variable\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: empty with a dash",
+      "script": "variable='-n'\n[ -z \"$variable\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: equal to a string or glob with a dash",
+      "script": "variable='-n'\n[[ $variable == \"word\" ]]; echo \"status=$?\"; [[ $variable == w* ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: non-empty with a dash",
+      "script": "variable='-n'\n[[ -n $variable ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: empty with a dash",
+      "script": "variable='-n'\n[[ -z $variable ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: regex with a dash",
+      "script": "variable='-n'\n[[ $variable =~ ^[a-z]+$ ]]; echo \"status=$? ${BASH_REMATCH[0]}\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: equal to a string with a number",
+      "script": "variable='10'\n[ \"$variable\" = \"word\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: not equal to a string with a number",
+      "script": "variable='10'\n[ \"$variable\" != \"word\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: non-empty with a number",
+      "script": "variable='10'\n[ -n \"$variable\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: empty with a number",
+      "script": "variable='10'\n[ -z \"$variable\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: equal to a string or glob with a number",
+      "script": "variable='10'\n[[ $variable == \"word\" ]]; echo \"status=$?\"; [[ $variable == w* ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: non-empty with a number",
+      "script": "variable='10'\n[[ -n $variable ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: empty with a number",
+      "script": "variable='10'\n[[ -z $variable ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: regex with a number",
+      "script": "variable='10'\n[[ $variable =~ ^[a-z]+$ ]]; echo \"status=$? ${BASH_REMATCH[0]}\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: equal to a string with the variable unset",
+      "script": "[ \"$variable\" = \"word\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: unquoted empty variable",
+      "script": "variable=\n[ -n $variable ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: unquoted variable with spaces",
+      "script": "variable=\"a b\"\n[ $variable = \"a b\" ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.[",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -eq with 5",
+      "script": "variable=5\n[ \"$variable\" -eq 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -eq with 5",
+      "script": "variable=5\n[[ $variable -eq 5 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -eq with 10",
+      "script": "variable=10\n[ \"$variable\" -eq 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -eq with 10",
+      "script": "variable=10\n[[ $variable -eq 5 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -eq with -3",
+      "script": "variable=-3\n[ \"$variable\" -eq 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -eq with -3",
+      "script": "variable=-3\n[[ $variable -eq 5 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -ne with 5",
+      "script": "variable=5\n[ \"$variable\" -ne 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -ne with 5",
+      "script": "variable=5\n[[ $variable -ne 5 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -ne with 10",
+      "script": "variable=10\n[ \"$variable\" -ne 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -ne with 10",
+      "script": "variable=10\n[[ $variable -ne 5 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -ne with -3",
+      "script": "variable=-3\n[ \"$variable\" -ne 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -ne with -3",
+      "script": "variable=-3\n[[ $variable -ne 5 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -gt with 5",
+      "script": "variable=5\n[ \"$variable\" -gt 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -gt with 5",
+      "script": "variable=5\n[[ $variable -gt 5 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -gt with 10",
+      "script": "variable=10\n[ \"$variable\" -gt 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -gt with 10",
+      "script": "variable=10\n[[ $variable -gt 5 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -gt with -3",
+      "script": "variable=-3\n[ \"$variable\" -gt 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -gt with -3",
+      "script": "variable=-3\n[[ $variable -gt 5 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -lt with 5",
+      "script": "variable=5\n[ \"$variable\" -lt 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -lt with 5",
+      "script": "variable=5\n[[ $variable -lt 5 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -lt with 10",
+      "script": "variable=10\n[ \"$variable\" -lt 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -lt with 10",
+      "script": "variable=10\n[[ $variable -lt 5 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -lt with -3",
+      "script": "variable=-3\n[ \"$variable\" -lt 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -lt with -3",
+      "script": "variable=-3\n[[ $variable -lt 5 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -ge with 5",
+      "script": "variable=5\n[ \"$variable\" -ge 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -ge with 5",
+      "script": "variable=5\n[[ $variable -ge 5 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -ge with 10",
+      "script": "variable=10\n[ \"$variable\" -ge 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -ge with 10",
+      "script": "variable=10\n[[ $variable -ge 5 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -ge with -3",
+      "script": "variable=-3\n[ \"$variable\" -ge 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -ge with -3",
+      "script": "variable=-3\n[[ $variable -ge 5 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -le with 5",
+      "script": "variable=5\n[ \"$variable\" -le 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -le with 5",
+      "script": "variable=5\n[[ $variable -le 5 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -le with 10",
+      "script": "variable=10\n[ \"$variable\" -le 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -le with 10",
+      "script": "variable=10\n[[ $variable -le 5 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -le with -3",
+      "script": "variable=-3\n[ \"$variable\" -le 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -le with -3",
+      "script": "variable=-3\n[[ $variable -le 5 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -eq with a non-integer 'abc'",
+      "script": "variable='abc'\n[ \"$variable\" -eq 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.[",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -eq with a non-integer 'abc'",
+      "script": "variable='abc'\n[[ $variable -eq 16 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -eq with a non-integer ''",
+      "script": "variable=''\n[ \"$variable\" -eq 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.[",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -eq with a non-integer ''",
+      "script": "variable=''\n[[ $variable -eq 16 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -eq with a non-integer '1.5'",
+      "script": "variable='1.5'\n[ \"$variable\" -eq 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.[",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -eq with a non-integer '1.5'",
+      "script": "variable='1.5'\n[[ $variable -eq 16 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -eq with a non-integer ' 7 '",
+      "script": "variable=' 7 '\n[ \"$variable\" -eq 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.[",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -eq with a non-integer ' 7 '",
+      "script": "variable=' 7 '\n[[ $variable -eq 16 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -eq with a non-integer '0x10'",
+      "script": "variable='0x10'\n[ \"$variable\" -eq 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.[",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -eq with a non-integer '0x10'",
+      "script": "variable='0x10'\n[[ $variable -eq 16 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: -eq with a non-integer '010'",
+      "script": "variable='010'\n[ \"$variable\" -eq 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.[",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: -eq with a non-integer '010'",
+      "script": "variable='010'\n[[ $variable -eq 16 ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: file tests on 'f'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir d && : >f && ln -s f l && ln -s nope dangling\nfor t in -f -d -e -L -r -w; do [ $t 'f' ] && printf '%s ' \"$t\"; done; echo",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: file tests on 'f'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir d && : >f && ln -s f l && ln -s nope dangling\n[[ -f 'f' ]] && echo f; [[ -d 'f' ]] && echo d; [[ -e 'f' ]] && echo e; echo end",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: file tests on 'd'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir d && : >f && ln -s f l && ln -s nope dangling\nfor t in -f -d -e -L -r -w; do [ $t 'd' ] && printf '%s ' \"$t\"; done; echo",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: file tests on 'd'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir d && : >f && ln -s f l && ln -s nope dangling\n[[ -f 'd' ]] && echo f; [[ -d 'd' ]] && echo d; [[ -e 'd' ]] && echo e; echo end",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: file tests on 'l'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir d && : >f && ln -s f l && ln -s nope dangling\nfor t in -f -d -e -L -r -w; do [ $t 'l' ] && printf '%s ' \"$t\"; done; echo",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: file tests on 'l'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir d && : >f && ln -s f l && ln -s nope dangling\n[[ -f 'l' ]] && echo f; [[ -d 'l' ]] && echo d; [[ -e 'l' ]] && echo e; echo end",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: file tests on 'dangling'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir d && : >f && ln -s f l && ln -s nope dangling\nfor t in -f -d -e -L -r -w; do [ $t 'dangling' ] && printf '%s ' \"$t\"; done; echo",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: file tests on 'dangling'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir d && : >f && ln -s f l && ln -s nope dangling\n[[ -f 'dangling' ]] && echo f; [[ -d 'dangling' ]] && echo d; [[ -e 'dangling' ]] && echo e; echo end",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: file tests on 'nope'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir d && : >f && ln -s f l && ln -s nope dangling\nfor t in -f -d -e -L -r -w; do [ $t 'nope' ] && printf '%s ' \"$t\"; done; echo",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: file tests on 'nope'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir d && : >f && ln -s f l && ln -s nope dangling\n[[ -f 'nope' ]] && echo f; [[ -d 'nope' ]] && echo d; [[ -e 'nope' ]] && echo e; echo end",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: file tests on '/dev/null'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir d && : >f && ln -s f l && ln -s nope dangling\nfor t in -f -d -e -L -r -w; do [ $t '/dev/null' ] && printf '%s ' \"$t\"; done; echo",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: file tests on '/dev/null'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir d && : >f && ln -s f l && ln -s nope dangling\n[[ -f '/dev/null' ]] && echo f; [[ -d '/dev/null' ]] && echo d; [[ -e '/dev/null' ]] && echo e; echo end",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: file tests on ''",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir d && : >f && ln -s f l && ln -s nope dangling\nfor t in -f -d -e -L -r -w; do [ $t '' ] && printf '%s ' \"$t\"; done; echo",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: file tests on ''",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir d && : >f && ln -s f l && ln -s nope dangling\n[[ -f '' ]] && echo f; [[ -d '' ]] && echo d; [[ -e '' ]] && echo e; echo end",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: missing closing bracket",
+      "script": "[ 1 = 1; echo \"status=$?\"",
+      "tags": [
+        "builtin.[",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: too many arguments",
+      "script": "[ a b c ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.[",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [: unknown binary operator",
+      "script": "[ a -foo b ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.[",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: combined conditions",
+      "script": "x=5\n[[ $x -gt 1 && ( $x -lt 3 || $x == 5 ) ]] && echo yes",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: string ordering",
+      "script": "[[ apple < banana ]] && echo lt; [[ b > a ]] && echo gt",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: regex with a capture group",
+      "script": "s=v1.22.3\n[[ $s =~ ^v([0-9]+)\\.([0-9]+) ]] && echo \"${BASH_REMATCH[1]} ${BASH_REMATCH[2]}\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: regex quoted literally",
+      "script": "s=\"a.b\"\n[[ $s =~ \"a.b\" ]] && echo lit; [[ axb =~ \"a.b\" ]] || echo no",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr [[: invalid regex",
+      "script": "[[ x =~ ( ]]; echo \"status=$?\"",
+      "tags": [
+        "compound.cond",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr alias: list all aliases",
+      "script": "shopt -s expand_aliases\nalias ll='ls -1'\nalias gs='echo status'\nalias",
+      "tags": [
+        "builtin.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr alias: list with none defined",
+      "script": "alias; echo \"status=$?\"",
+      "tags": [
+        "builtin.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr alias: create a generic alias",
+      "script": "shopt -s expand_aliases\nalias greet=\"echo hello\"\ngreet world",
+      "tags": [
+        "builtin.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr alias: create without expand_aliases",
+      "script": "alias greet=\"echo hello\"\ngreet world; echo \"status=$?\"",
+      "tags": [
+        "builtin.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr alias: view an alias",
+      "script": "shopt -s expand_aliases\nalias greet=\"echo hello\"\nalias greet",
+      "tags": [
+        "builtin.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr alias: view a missing alias",
+      "script": "alias nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.alias",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr alias: remove an aliased command",
+      "script": "shopt -s expand_aliases\nalias greet=\"echo hello\"\nunalias greet\nalias greet; echo \"status=$?\"",
+      "tags": [
+        "builtin.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr alias: turn rm into an interactive command",
+      "script": "shopt -s expand_aliases\nmkdir -p /tmp/w && cd /tmp/w\n: >f\nalias rm=\"rm --interactive\"\necho n | rm f; ls",
+      "tags": [
+        "builtin.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr alias: shortcut for ls --all",
+      "script": "shopt -s expand_aliases\nmkdir -p /tmp/w && cd /tmp/w\n: >.hidden\nalias la=\"ls --all\"\nla",
+      "tags": [
+        "builtin.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr alias: alias with a trailing space",
+      "script": "shopt -s expand_aliases\nalias run='echo ' word='expanded'\nrun word",
+      "tags": [
+        "builtin.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr alias: alias with quotes in its value",
+      "script": "shopt -s expand_aliases\nalias q=\"echo 'single' \\\"double\\\"\"\nalias q\nq",
+      "tags": [
+        "builtin.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr alias: alias defined on the same line",
+      "script": "shopt -s expand_aliases\nalias now='echo now'; now; echo \"status=$?\"",
+      "tags": [
+        "builtin.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr unalias: remove an alias",
+      "script": "shopt -s expand_aliases\nalias a1='echo 1'\nunalias a1\nalias",
+      "tags": [
+        "builtin.unalias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr unalias: remove all aliases",
+      "script": "shopt -s expand_aliases\nalias a1='echo 1' a2='echo 2'\nunalias -a\nalias; echo \"status=$?\"",
+      "tags": [
+        "builtin.unalias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr unalias: remove a missing alias",
+      "script": "unalias nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.unalias",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr break: out of a single loop",
+      "script": "while :; do echo once; break; done; echo after",
+      "tags": [
+        "builtin.break"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr break: out of nested loops",
+      "script": "while :; do while :; do echo inner; break 2; done; echo not-reached; done; echo after",
+      "tags": [
+        "builtin.break"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr break: out of a for loop by count",
+      "script": "for i in 1 2 3 4; do [ $i = 3 ] && break; echo $i; done",
+      "tags": [
+        "builtin.break"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr break: with a count larger than the nesting",
+      "script": "for i in 1 2; do break 5; done; echo \"status=$?\"",
+      "tags": [
+        "builtin.break"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr break: outside a loop",
+      "script": "break; echo \"status=$?\"",
+      "tags": [
+        "builtin.break"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr break: with a bad count",
+      "script": "for i in 1; do break 0; done; echo \"status=$?\"",
+      "tags": [
+        "builtin.break",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr continue: skip to the next iteration",
+      "script": "i=0; while [ $i -lt 3 ]; do i=$((i+1)); continue; echo \"This will never be reached\"; done; echo $i",
+      "tags": [
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr continue: from within a nested loop",
+      "script": "for i in {1..3}; do echo $i; while :; do continue 2; done; done",
+      "tags": [
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr continue: outside a loop",
+      "script": "continue; echo \"status=$?\"",
+      "tags": [
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr continue: in an until loop",
+      "script": "n=0; until [ $n -ge 4 ]; do n=$((n+1)); [ $((n % 2)) -eq 0 ] && continue; echo odd $n; done",
+      "tags": [
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr builtin: run a shell builtin",
+      "script": "builtin echo hello",
+      "tags": [
+        "builtin.builtin"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr builtin: bypass a function",
+      "script": "echo() { printf 'fn:%s\\n' \"$*\"; }\necho x\nbuiltin echo y",
+      "tags": [
+        "builtin.builtin"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr builtin: a non-builtin",
+      "script": "builtin nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.builtin",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr builtin: cd through builtin",
+      "script": "builtin cd /tmp && pwd",
+      "tags": [
+        "builtin.builtin"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr caller: line and file of the caller",
+      "script": "f() { caller; }\nf",
+      "tags": [
+        "builtin.caller"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr caller: line function and file",
+      "script": "g() { caller 0; }\nh() { g; }\nh",
+      "tags": [
+        "builtin.caller"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr caller: n frames back",
+      "script": "a() { caller 1; }\nb() { a; }\nc() { b; }\nc",
+      "tags": [
+        "builtin.caller"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr caller: frames beyond the stack",
+      "script": "a() { caller 5; echo \"status=$?\"; }\na",
+      "tags": [
+        "builtin.caller"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr caller: outside a function",
+      "script": "caller; echo \"status=$?\"",
+      "tags": [
+        "builtin.caller"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr command: run a command literally despite an alias",
+      "script": "shopt -s expand_aliases\nalias ls='echo aliased'\nmkdir -p /tmp/w && cd /tmp/w && : >f\nls\ncommand ls",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr command: run a command despite a function",
+      "script": "pwd() { echo function; }\npwd\ncd /tmp && command pwd",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr command: default path",
+      "script": "command -p echo hello",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr command: path of a builtin",
+      "script": "command -v echo",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr command: path of a function",
+      "script": "f() { :; }\ncommand -v f",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr command: path of an alias",
+      "script": "alias ll='ls -1'\ncommand -v ll",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr command: path of a keyword",
+      "script": "command -v if",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr command: path of a missing command",
+      "script": "command -v nosuchcmd; echo \"status=$?\"",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr command: verbose description",
+      "script": "f() { :; }\ncommand -V f | head -n 1; command -V echo",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr command: missing command",
+      "script": "command nosuchcmd; echo \"status=$?\"",
+      "tags": [
+        "builtin.command",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr compgen: match against a wordlist",
+      "script": "compgen -W \"apple orange banana\" a",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr compgen: match against a wordlist with no prefix",
+      "script": "compgen -W \"apple orange banana\"",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr compgen: match against a wordlist with no match",
+      "script": "compgen -W \"apple orange banana\" z; echo \"status=$?\"",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr compgen: wordlist with expansions",
+      "script": "fruit=kiwi\ncompgen -W \"$fruit key \\$HOME\" k",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr compgen: into a variable",
+      "script": "compgen -V COMPREPLY -W \"alpha beta album\" al; echo \"${COMPREPLY[@]}\"",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr compgen: list aliases",
+      "script": "alias zz1='echo 1' zz2='echo 2'\ncompgen -a",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr compgen: list functions",
+      "script": "zfa() { :; }\nzfb() { :; }\ncompgen -A function",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr compgen: list functions starting with a string",
+      "script": "zfa() { :; }\nzfb() { :; }\nother() { :; }\ncompgen -A function zf",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr compgen: keywords",
+      "script": "compgen -k",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr compgen: aliases starting with a string",
+      "script": "alias lsx='ls' lsy='ls' other='ls'\ncompgen -a ls",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr compgen: variables with a prefix",
+      "script": "ZZVAR_A=1 ZZVAR_B=2\ncompgen -v ZZVAR_",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr compgen: files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w && : >alpha && : >beta && mkdir adir\ncompgen -f a | sort",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr compgen: directories",
+      "script": "mkdir -p /tmp/w && cd /tmp/w && : >alpha && mkdir adir bdir\ncompgen -d | sort",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cd: go to a directory",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\ncd a/b && pwd",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cd: go to a missing directory",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\ncd nosuch; echo \"status=$?\"; pwd",
+      "tags": [
+        "builtin.cd",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cd: go to a file",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\n: >f && cd f; echo \"status=$?\"",
+      "tags": [
+        "builtin.cd",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cd: go to a directory with a space",
+      "script": "mkdir -p '/tmp/w/sp ace' && cd '/tmp/w/sp ace' && pwd",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cd: go up to the parent",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\ncd a/b && cd .. && pwd",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cd: go up beyond the root",
+      "script": "cd / && cd .. && pwd",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cd: go to the home directory",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\ncd; echo \"status=$?\"; pwd",
+      "tags": [
+        "builtin.cd",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cd: go to the home directory with HOME set",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\nHOME=/tmp/w/c\ncd && pwd",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cd: home directory of a user",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\ncd ~nosuchuser; echo \"status=$?\"",
+      "tags": [
+        "builtin.cd",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cd: the previous directory",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\ncd a && cd /tmp && cd - && pwd",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cd: the previous directory with none",
+      "script": "cd -; echo \"status=$?\"",
+      "tags": [
+        "builtin.cd",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cd: the root directory",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\ncd / && pwd",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cd: cdpath",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\nCDPATH=/tmp/w/a\ncd b && pwd",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cd: physical through a link",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\nln -s a/b lnk && cd -P lnk && pwd && cd /tmp/w && cd -L lnk && pwd",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cd: too many arguments",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\ncd a c; echo \"status=$?\"",
+      "tags": [
+        "builtin.cd",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cd: OLDPWD and PWD",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\ncd a && echo \"$OLDPWD -> $PWD\"",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr pwd: print the current directory",
+      "script": "cd /tmp && pwd",
+      "tags": [
+        "builtin.pwd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr pwd: physical",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\nln -s a/b lnk && cd lnk && pwd && pwd -P",
+      "tags": [
+        "builtin.pwd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr pwd: logical",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\nln -s a/b lnk && cd lnk && pwd -L",
+      "tags": [
+        "builtin.pwd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr pwd: after the directory is removed",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\ncd c && rmdir /tmp/w/c && pwd; echo \"status=$?\"",
+      "tags": [
+        "builtin.pwd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr dirs: the stack with spaces",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\npushd a >/dev/null && pushd /tmp/w/c >/dev/null && dirs",
+      "tags": [
+        "builtin.dirs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr dirs: one entry per line",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\npushd a >/dev/null && pushd /tmp/w/c >/dev/null && dirs -p",
+      "tags": [
+        "builtin.dirs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr dirs: numbered",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\npushd a >/dev/null && pushd /tmp/w/c >/dev/null && dirs -v",
+      "tags": [
+        "builtin.dirs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr dirs: without tilde",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\nHOME=/tmp/w\npushd a >/dev/null && dirs && dirs -l",
+      "tags": [
+        "builtin.dirs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr dirs: nth entry",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\npushd a >/dev/null && pushd /tmp/w/c >/dev/null && dirs +1",
+      "tags": [
+        "builtin.dirs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr dirs: nth entry from the last",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\npushd a >/dev/null && pushd /tmp/w/c >/dev/null && dirs -0",
+      "tags": [
+        "builtin.dirs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr dirs: entry out of range",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\ndirs +5; echo \"status=$?\"",
+      "tags": [
+        "builtin.dirs",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr dirs: clear the stack",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\npushd a >/dev/null && dirs -c && dirs",
+      "tags": [
+        "builtin.dirs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr pushd: switch and push",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\npushd a && pwd",
+      "tags": [
+        "builtin.pushd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr pushd: switch the top two",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\npushd a >/dev/null && pushd && pwd",
+      "tags": [
+        "builtin.pushd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr pushd: switch with an empty stack",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\npushd; echo \"status=$?\"",
+      "tags": [
+        "builtin.pushd",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr pushd: rotate the stack",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\npushd a >/dev/null; pushd /tmp/w/c >/dev/null; pushd /tmp/w/a/b >/dev/null; pushd +2; pwd",
+      "tags": [
+        "builtin.pushd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr pushd: rotate out of range",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\npushd a >/dev/null; pushd +4; echo \"status=$?\"",
+      "tags": [
+        "builtin.pushd",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr pushd: add without changing directory",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\npushd -n /tmp/w/c; pwd",
+      "tags": [
+        "builtin.pushd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr pushd: a missing directory",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\npushd nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.pushd",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr popd: remove the top and cd",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\npushd a >/dev/null && pushd /tmp/w/c >/dev/null && popd && pwd",
+      "tags": [
+        "builtin.popd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr popd: remove the nth from the left",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\npushd a >/dev/null; pushd /tmp/w/c >/dev/null; popd +1; pwd",
+      "tags": [
+        "builtin.popd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr popd: remove the nth from the right",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\npushd a >/dev/null; pushd /tmp/w/c >/dev/null; popd -0; pwd",
+      "tags": [
+        "builtin.popd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr popd: remove without changing directory",
+      "script": "mkdir -p /tmp/w/a/b /tmp/w/c 'tmp/w/sp ace' && cd /tmp/w\npushd a >/dev/null; pushd /tmp/w/c >/dev/null; popd -n; pwd",
+      "tags": [
+        "builtin.popd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr popd: empty stack",
+      "script": "popd; echo \"status=$?\"",
+      "tags": [
+        "builtin.popd",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr declare: string variable",
+      "script": "declare variable=\"value\"; declare -p variable",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr declare: integer variable",
+      "script": "declare -i variable=\"4 + 5\"; echo $variable; variable=abc; echo $variable; variable+=3; echo $variable",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr declare: integer variable with a bad expression",
+      "script": "declare -i variable=\"4 +\"; echo \"status=$?\"",
+      "tags": [
+        "builtin.declare",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr declare: array variable",
+      "script": "declare -a variable=(item_a item_b 'item c'); declare -p variable; echo ${#variable[@]}",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr declare: associative array",
+      "script": "declare -A variable=([key_a]=item_a [key_b]=item_b [key_c]=item_c); for k in \"${!variable[@]}\"; do echo \"$k=${variable[$k]}\"; done | sort",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr declare: associative array printed",
+      "script": "declare -A variable=([k]=v); declare -p variable",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr declare: readonly string",
+      "script": "declare -r variable=\"value\"; variable=other; echo \"status=$? $variable\"",
+      "tags": [
+        "builtin.declare",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr declare: global inside a function",
+      "script": "f() { declare -g variable=\"value\"; declare local_one=x; }; f; echo \"[$variable] [$local_one]\"",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr declare: print a function",
+      "script": "function_name() { echo hi; local x=1; }; declare -f function_name",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr declare: print a missing function",
+      "script": "declare -f nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr declare: print a variable",
+      "script": "variable_name='a \"b\" $c'; declare -p variable_name",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr declare: print a missing variable",
+      "script": "declare -p nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.declare",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr declare: lower and upper case attributes",
+      "script": "declare -l lo=MiXeD; declare -u up=MiXeD; echo $lo $up",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr declare: nameref",
+      "script": "target=1; declare -n ref=target; ref=2; echo $target",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr declare: export attribute",
+      "script": "declare -x EXPORTED=yes; bash -c 'echo $EXPORTED'",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr declare: function names only",
+      "script": "zz_a() { :; }; zz_b() { :; }; declare -F | grep zz_",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr typeset: same as declare",
+      "script": "typeset -i n=2*3; typeset -p n",
+      "tags": [
+        "builtin.typeset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr local: string variable",
+      "script": "f() { local variable=\"value\"; echo \"$variable\"; }; f; echo \"[${variable-unset}]\"",
+      "tags": [
+        "builtin.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr local: integer variable",
+      "script": "f() { local -i variable=\"2 * 3\"; echo $variable; }; f",
+      "tags": [
+        "builtin.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr local: array variable",
+      "script": "f() { local variable=(item_a item_b item_c); echo ${variable[1]} ${#variable[@]}; }; f",
+      "tags": [
+        "builtin.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr local: associative array",
+      "script": "f() { local -A variable=([key_a]=item_a [key_b]=item_b); echo ${variable[key_b]}; }; f",
+      "tags": [
+        "builtin.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr local: readonly variable",
+      "script": "f() { local -r variable=\"value\"; variable=x; echo \"status=$?\"; }; f",
+      "tags": [
+        "builtin.local",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr local: outside a function",
+      "script": "local variable=\"value\"; echo \"status=$?\"",
+      "tags": [
+        "builtin.local",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr local: shadows a global",
+      "script": "v=global; f() { local v=local; g; }; g() { echo $v; }; f; echo $v",
+      "tags": [
+        "builtin.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readonly: set a read-only variable",
+      "script": "readonly variable_name=value; echo $variable_name; variable_name=x; echo \"status=$?\"",
+      "tags": [
+        "builtin.readonly",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readonly: mark an existing variable",
+      "script": "existing_variable=1; readonly existing_variable; unset existing_variable; echo \"status=$? $existing_variable\"",
+      "tags": [
+        "builtin.readonly",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readonly: print read-only variables",
+      "script": "readonly zz_ro=1; readonly -p | grep zz_ro",
+      "tags": [
+        "builtin.readonly"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readonly: assignment in a subshell does not leak",
+      "script": "readonly r=1; (r=2) 2>/dev/null; echo \"status=$? $r\"",
+      "tags": [
+        "builtin.readonly"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr export: set an environment variable",
+      "script": "export VARIABLE=value; bash -c 'echo $VARIABLE'",
+      "tags": [
+        "builtin.export"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr export: append to PATH",
+      "script": "export PATH=$PATH:/tmp/w/bin; case $PATH in *:/tmp/w/bin) echo appended;; esac",
+      "tags": [
+        "builtin.export"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr export: unset an environment variable",
+      "script": "export VARIABLE=value; export -n VARIABLE; bash -c 'echo \"[${VARIABLE-unset}]\"'; echo $VARIABLE",
+      "tags": [
+        "builtin.export"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr export: export a function",
+      "script": "FUNCTION_NAME() { echo \"in child: $1\"; }; export -f FUNCTION_NAME; bash -c 'FUNCTION_NAME arg'",
+      "tags": [
+        "builtin.export"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr export: print exported variables",
+      "script": "export ZZ_EXP='a b'; export -p | grep ZZ_EXP",
+      "tags": [
+        "builtin.export"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr export: an invalid name",
+      "script": "export 1abc=x; echo \"status=$?\"",
+      "tags": [
+        "builtin.export",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr unset: remove a variable",
+      "script": "variable=1; unset variable; echo \"[${variable-unset}]\"",
+      "tags": [
+        "builtin.unset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr unset: remove a function of the same name",
+      "script": "f() { echo fn; }; unset f; f; echo \"status=$?\"",
+      "tags": [
+        "builtin.unset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr unset: remove variables",
+      "script": "v1=1 v2=2; unset -v v1 v2; echo \"[${v1-u}${v2-u}]\"",
+      "tags": [
+        "builtin.unset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr unset: remove functions",
+      "script": "f1() { :; }; f2() { :; }; unset -f f1 f2; declare -F f1; echo \"status=$?\"",
+      "tags": [
+        "builtin.unset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr unset: remove an array element",
+      "script": "a=(x y z); unset 'a[1]'; echo \"${a[@]} ${#a[@]} ${!a[@]}\"",
+      "tags": [
+        "builtin.unset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr unset: remove a readonly variable",
+      "script": "readonly r=1; unset r; echo \"status=$?\"",
+      "tags": [
+        "builtin.unset",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr echo: text message",
+      "script": "echo \"Hello World\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr echo: text message without quotes",
+      "script": "echo Hello    World",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr echo: message with a variable",
+      "script": "MYVAR=/tmp/w; echo \"My path is $MYVAR\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr echo: without a trailing newline",
+      "script": "echo -n \"Hello World\"; echo \"|\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr echo: append to a file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w && echo \"Hello World\" >> file.txt && echo \"Again\" >> file.txt && cat file.txt",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr echo: backslash escapes",
+      "script": "echo -e \"Column 1\\tColumn 2\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr echo: backslash escape \\n",
+      "script": "echo -e 'x\\ny' | od -c",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr echo: backslash escape \\a\\b",
+      "script": "echo -e 'x\\a\\by' | od -c",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr echo: backslash escape \\c stop",
+      "script": "echo -e 'x\\c stopy' | od -c",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr echo: backslash escape \\x41\\x4a",
+      "script": "echo -e 'x\\x41\\x4ay' | od -c",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr echo: backslash escape \\0101",
+      "script": "echo -e 'x\\0101y' | od -c",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr echo: backslash escape \\u00e9",
+      "script": "echo -e 'x\\u00e9y' | od -c",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr echo: backslash escape \\e[0m",
+      "script": "echo -e 'x\\e[0my' | od -c",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr echo: backslash escape \\\\",
+      "script": "echo -e 'x\\\\y' | od -c",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr echo: backslash escape \\q",
+      "script": "echo -e 'x\\qy' | od -c",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr echo: backslash escapes disabled",
+      "script": "echo -E 'a\\tb'",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr echo: exit status of the last command",
+      "script": "false; echo $?; true; echo $?",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr echo: pass text to another program",
+      "script": "echo \"Hello World\" | tr a-z A-Z",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr echo: options that are not options",
+      "script": "echo -x -n- --; echo -- -n",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr echo: xpg_echo",
+      "script": "shopt -s xpg_echo; echo 'a\\tb'",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr eval: call echo",
+      "script": "eval \"echo foo\"",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr eval: set a variable",
+      "script": "eval \"foo=bar\"; echo $foo",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr eval: indirect variable name",
+      "script": "name=target; eval \"$name=42\"; echo $target",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr eval: a syntax error",
+      "script": "eval \"if then\"; echo \"status=$?\"",
+      "tags": [
+        "builtin.eval",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr eval: concatenated arguments",
+      "script": "eval echo '$((1+2))' '\"a  b\"'",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr eval: exit status",
+      "script": "eval false; echo \"status=$?\"; eval; echo \"status=$?\"",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr exec: a command",
+      "script": "exec echo replaced; echo not-reached",
+      "tags": [
+        "builtin.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr exec: a command that fails",
+      "script": "exec false; echo not-reached",
+      "tags": [
+        "builtin.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr exec: a missing command",
+      "script": "exec nosuchcmd; echo not-reached",
+      "tags": [
+        "builtin.exec",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr exec: redirection only",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexec 3>out.txt\necho to-three >&3\nexec 3>&-\ncat out.txt",
+      "tags": [
+        "builtin.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr exec: in a subshell",
+      "script": "(exec echo in-subshell); echo after",
+      "tags": [
+        "builtin.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr exit: with the last status",
+      "script": "false; exit",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr exit: with the last status of a subshell",
+      "script": "(false; exit); echo \"status=$?\"",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr exit: with a specific status",
+      "script": "exit 42",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr exit: with a status above 255",
+      "script": "(exit 300); echo \"status=$?\"",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr exit: with a negative status",
+      "script": "(exit -1); echo \"status=$?\"",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr exit: with a non-numeric status",
+      "script": "(exit abc); echo \"status=$?\"",
+      "tags": [
+        "builtin.exit",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr exit: with too many arguments",
+      "script": "(exit 1 2); echo \"status=$?\"",
+      "tags": [
+        "builtin.exit",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr exit: runs the EXIT trap",
+      "script": "trap 'echo trapped' EXIT; exit 3",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr false: non-zero exit code",
+      "script": "false; echo \"status=$?\"",
+      "tags": [
+        "builtin.false"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr false: make a command always exit with 1",
+      "script": "echo ran && false; echo \"status=$?\"",
+      "tags": [
+        "builtin.false"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr false: ignores arguments",
+      "script": "false --help; echo \"status=$?\"",
+      "tags": [
+        "builtin.false"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr true: successful exit code",
+      "script": "true; echo \"status=$?\"",
+      "tags": [
+        "builtin.true"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr true: make a command always exit with 0",
+      "script": "ls /nonexistent 2>/dev/null || true; echo \"status=$?\"",
+      "tags": [
+        "builtin.true"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr true: under set -e",
+      "script": "set -e; false || true; echo survived",
+      "tags": [
+        "builtin.true"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr getopts: first set option",
+      "script": "set -- -x; getopts x opt; echo $opt",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr getopts: first set option when absent",
+      "script": "set -- file; getopts x opt; echo \"status=$? [$opt]\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr getopts: option in a string",
+      "script": "getopts x opt \"-x text\"; echo $opt; getopts x opt2 -x; echo $opt2",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr getopts: option with an argument",
+      "script": "set -- -x value; getopts x: opt; echo $opt $OPTARG",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr getopts: option with an attached argument",
+      "script": "set -- -xvalue; getopts x: opt; echo $opt $OPTARG",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr getopts: option missing its argument",
+      "script": "set -- -x; getopts x: opt; echo \"[$opt] [${OPTARG-unset}]\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr getopts: multiple options",
+      "script": "set -- -x -y -z; while getopts xyz opt; do case $opt in x) echo x is set;; y) echo y is set;; z) echo z is set;; esac; done",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr getopts: grouped options",
+      "script": "set -- -zyx rest; while getopts xyz opt; do echo $opt; done; shift $((OPTIND-1)); echo \"rest: $*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr getopts: unknown option",
+      "script": "set -- -q; while getopts xyz opt; do echo \"[$opt]\"; done",
+      "tags": [
+        "builtin.getopts",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr getopts: silent mode handling errors",
+      "script": "set -- -x; while getopts :x: opt; do case $opt in x) ;; :) echo \"Argument required\";; \\?) echo \"Invalid argument\";; esac; done",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr getopts: silent mode with an invalid option",
+      "script": "set -- -q; while getopts :x: opt; do case $opt in x) ;; :) echo \"Argument required\";; \\?) echo \"Invalid argument $OPTARG\";; esac; done",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr getopts: reset",
+      "script": "set -- -a; getopts a o; echo $o $OPTIND; OPTIND=1; set -- -b; getopts b o; echo $o $OPTIND",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr getopts: stops at a double dash",
+      "script": "set -- -a -- -b; while getopts ab o; do echo $o; done; echo $OPTIND",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr getopts: inside a function",
+      "script": "f() { local OPTIND o; while getopts n: o; do echo \"$o=$OPTARG\"; done; }; f -n 1; f -n 2",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr hash: view the table when empty",
+      "script": "hash; echo \"status=$?\"",
+      "tags": [
+        "builtin.hash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr hash: clear the table",
+      "script": "hash -r; echo \"status=$?\"",
+      "tags": [
+        "builtin.hash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr hash: delete a missing command",
+      "script": "hash -d nosuchcmd; echo \"status=$?\"",
+      "tags": [
+        "builtin.hash",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr hash: a missing command",
+      "script": "hash nosuchcmd; echo \"status=$?\"",
+      "tags": [
+        "builtin.hash",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr type: a builtin",
+      "script": "type echo",
+      "tags": [
+        "builtin.type"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr type: a keyword",
+      "script": "type if",
+      "tags": [
+        "builtin.type"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr type: a function",
+      "script": "f() { echo hi; }; type f",
+      "tags": [
+        "builtin.type"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr type: an alias",
+      "script": "alias ll='ls -1'; type ll",
+      "tags": [
+        "builtin.type"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr type: a missing command",
+      "script": "type nosuchcmd; echo \"status=$?\"",
+      "tags": [
+        "builtin.type",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr type: file name of a builtin",
+      "script": "type -p echo; echo \"status=$?\"",
+      "tags": [
+        "builtin.type"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr type: type name of each kind",
+      "script": "f() { :; }; alias al=x; type -t f al if echo nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.type"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jobs: status of all jobs",
+      "script": "sleep 0.3 & sleep 0.3 & jobs; wait",
+      "tags": [
+        "builtin.jobs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jobs: status of a particular job",
+      "script": "sleep 0.3 & sleep 0.3 & jobs %2; wait",
+      "tags": [
+        "builtin.jobs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jobs: status of a missing job",
+      "script": "jobs %3; echo \"status=$?\"",
+      "tags": [
+        "builtin.jobs",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jobs: no jobs",
+      "script": "jobs; echo \"status=$?\"",
+      "tags": [
+        "builtin.jobs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jobs: process ids",
+      "script": "sleep 0.3 & p=$!; [ \"$(jobs -p)\" = \"$p\" ] && echo matches; wait",
+      "tags": [
+        "builtin.jobs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jobs: long listing shape",
+      "script": "sleep 5 & jobs -l | sed 's/[0-9][0-9]*/N/g; s/  */ /g'; kill %1; wait 2>/dev/null",
+      "tags": [
+        "builtin.jobs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jobs: running only",
+      "script": "sleep 0.3 & jobs -r; wait",
+      "tags": [
+        "builtin.jobs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jobs: stopped only",
+      "script": "sleep 0.3 & jobs -s; echo \"status=$?\"; wait",
+      "tags": [
+        "builtin.jobs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jobs: changed status only",
+      "script": "sleep 0.3 & jobs -n >/dev/null; echo \"status=$?\"; wait",
+      "tags": [
+        "builtin.jobs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jobs: after completion",
+      "script": "(exit 3) & wait; jobs; echo \"status=$?\"",
+      "tags": [
+        "builtin.jobs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr kill: terminate with SIGTERM",
+      "script": "sleep 5 & p=$!; kill $p; wait $p; echo \"status=$?\"",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr kill: list signal names",
+      "script": "kill -l",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr kill: list the table",
+      "script": "kill -L | head -n 3",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr kill: name of a signal number",
+      "script": "kill -l 15; kill -l 9; kill -l 143",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr kill: number of a signal name",
+      "script": "kill -l TERM; kill -l SIGHUP",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr kill: signal -1",
+      "script": "sleep 5 & p=$!; kill -1 $p; echo \"kill=$?\"; wait $p 2>/tmp/err; echo \"status=$?\"; sed -E 's/:  *[0-9]+ /: PID /' /tmp/err",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr kill: signal -HUP",
+      "script": "sleep 5 & p=$!; kill -HUP $p; echo \"kill=$?\"; wait $p 2>/tmp/err; echo \"status=$?\"; sed -E 's/:  *[0-9]+ /: PID /' /tmp/err",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr kill: signal -9",
+      "script": "sleep 5 & p=$!; kill -9 $p; echo \"kill=$?\"; wait $p 2>/tmp/err; echo \"status=$?\"; sed -E 's/:  *[0-9]+ /: PID /' /tmp/err",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr kill: signal -KILL",
+      "script": "sleep 5 & p=$!; kill -KILL $p; echo \"kill=$?\"; wait $p 2>/tmp/err; echo \"status=$?\"; sed -E 's/:  *[0-9]+ /: PID /' /tmp/err",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr kill: signal -s TERM",
+      "script": "sleep 5 & p=$!; kill -s TERM $p; echo \"kill=$?\"; wait $p 2>/tmp/err; echo \"status=$?\"; sed -E 's/:  *[0-9]+ /: PID /' /tmp/err",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr kill: signal -SIGUSR1",
+      "script": "sleep 5 & p=$!; kill -SIGUSR1 $p; echo \"kill=$?\"; wait $p 2>/tmp/err; echo \"status=$?\"; sed -E 's/:  *[0-9]+ /: PID /' /tmp/err",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr kill: signal -10",
+      "script": "sleep 5 & p=$!; kill -10 $p; echo \"kill=$?\"; wait $p 2>/tmp/err; echo \"status=$?\"; sed -E 's/:  *[0-9]+ /: PID /' /tmp/err",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr kill: signal -0",
+      "script": "sleep 5 & p=$!; kill -0 $p; echo \"kill=$?\"; wait $p 2>/tmp/err; echo \"status=$?\"; sed -E 's/:  *[0-9]+ /: PID /' /tmp/err",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr kill: a background job by number",
+      "script": "sleep 5 & kill %1; wait; echo \"status=$?\"",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr kill: a missing job",
+      "script": "kill %4; echo \"status=$?\"",
+      "tags": [
+        "builtin.kill",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr kill: a bad signal",
+      "script": "sleep 5 & kill -BOGUS $!; echo \"status=$?\"; kill $!",
+      "tags": [
+        "builtin.kill",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr kill: no arguments",
+      "script": "kill; echo \"status=$?\"",
+      "tags": [
+        "builtin.kill",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr kill: a trapped signal in a job",
+      "script": "(trap 'echo caught; exit 7' TERM; sleep 5 & wait) & p=$!; sleep 0.2; kill $p; wait $p; echo \"status=$?\"",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "caught\nstatus=7\n"
+        },
+        "stderr": {
+          "text": "bash: stopped job (pid 3, hangup): sleep 5\n"
+        },
+        "reason": "a job cannot outlive its call: bash-tool stops every job still running when the call ends, wherever it was started (disowned, or orphaned by its subshell), and reports it; bash leaves it running"
+      }
+    },
+    {
+      "name": "real tldr wait: a process id",
+      "script": "(sleep 0.1; exit 4) & wait $!; echo \"status=$?\"",
+      "tags": [
+        "builtin.wait"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr wait: all processes",
+      "script": "(sleep 0.1; echo one) & (sleep 0.05; echo two) & wait; echo \"status=$?\"",
+      "tags": [
+        "builtin.wait"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr wait: a job number",
+      "script": "(exit 5) & wait %1; echo \"status=$?\"",
+      "tags": [
+        "builtin.wait"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr wait: a missing process",
+      "script": "wait 99999; echo \"status=$?\"",
+      "tags": [
+        "builtin.wait",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr wait: any job",
+      "script": "(sleep 0.3; exit 1) & (exit 2) & wait -n; echo \"status=$?\"; wait",
+      "tags": [
+        "builtin.wait"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr wait: a pid that is not a child",
+      "script": "wait $$ 2>/tmp/err; echo \"status=$?\"; sed \"s/pid $$ /pid PID /\" /tmp/err",
+      "tags": [
+        "builtin.wait",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr disown: the current job",
+      "script": "sleep 0.2 & disown; jobs; echo \"status=$?\"",
+      "tags": [
+        "builtin.disown"
+      ],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=0\n"
+        },
+        "stderr": {
+          "text": "bash: stopped job [1] (pid 2, hangup): sleep 0.2\n"
+        },
+        "reason": "a job cannot outlive its call: bash-tool stops every job still running when the call ends, wherever it was started (disowned, or orphaned by its subshell), and reports it; bash leaves it running"
+      }
+    },
+    {
+      "name": "real tldr disown: a specific job",
+      "script": "sleep 0.2 & sleep 0.2 & disown %1; jobs | wc -l; wait",
+      "tags": [
+        "builtin.disown"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr disown: all jobs",
+      "script": "sleep 0.2 & sleep 0.2 & disown -a; jobs; echo done",
+      "tags": [
+        "builtin.disown"
+      ],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "done\n"
+        },
+        "stderr": {
+          "text": "bash: stopped job [1] (pid 2, hangup): sleep 0.2\nbash: stopped job [2] (pid 3, hangup): sleep 0.2\n"
+        },
+        "reason": "a job cannot outlive its call: bash-tool stops every job still running when the call ends, wherever it was started (disowned, or orphaned by its subshell), and reports it; bash leaves it running"
+      }
+    },
+    {
+      "name": "real tldr disown: mark a job to keep",
+      "script": "sleep 0.2 & disown -h %1; jobs | wc -l; wait",
+      "tags": [
+        "builtin.disown"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr disown: a missing job",
+      "script": "disown %3; echo \"status=$?\"",
+      "tags": [
+        "builtin.disown",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr let: simple expression",
+      "script": "a=2 b=3; let \"result = a + b\"; echo $result",
+      "tags": [
+        "builtin.let"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr let: post-increment",
+      "script": "x=5; let \"x++\"; echo $x; let \"y = x++\"; echo $x $y",
+      "tags": [
+        "builtin.let"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr let: conditional operator",
+      "script": "x=12; let \"result = (x > 10) ? x : 0\"; echo $result; x=3; let \"result = (x > 10) ? x : 0\"; echo $result",
+      "tags": [
+        "builtin.let"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr let: status when zero",
+      "script": "let \"z = 0\"; echo \"status=$?\"; let \"z = 1\"; echo \"status=$?\"",
+      "tags": [
+        "builtin.let"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr let: several expressions",
+      "script": "let a=1 b=a+1 c=b*10; echo $a $b $c",
+      "tags": [
+        "builtin.let"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr let: division by zero",
+      "script": "let \"d = 1 / 0\"; echo \"status=$?\"",
+      "tags": [
+        "builtin.let",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr let: syntax error",
+      "script": "let \"1 +\"; echo \"status=$?\"",
+      "tags": [
+        "builtin.let",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr let: bases and bitwise operators",
+      "script": "let \"v = 16#ff & 0x0f | 2#100 ^ 010\"; echo $v; let \"s = 1 << 4 >> 1\"; echo $s",
+      "tags": [
+        "builtin.let"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: store a line with a line",
+      "script": "printf '%s\\n' 'hello world' | { read variable; echo \"status=$? [$variable]\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: raw with a line",
+      "script": "printf '%s\\n' 'hello world' | { read -r variable; echo \"[$variable]\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: into an array with a line",
+      "script": "printf '%s\\n' 'hello world' | { read -a array; echo \"${#array[@]} [${array[*]}]\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: store a line with an empty line",
+      "script": "printf '%s\\n' '' | { read variable; echo \"status=$? [$variable]\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: raw with an empty line",
+      "script": "printf '%s\\n' '' | { read -r variable; echo \"[$variable]\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: into an array with an empty line",
+      "script": "printf '%s\\n' '' | { read -a array; echo \"${#array[@]} [${array[*]}]\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: store a line with backslashes",
+      "script": "printf '%s\\n' 'a\\\\b c\\\\' | { read variable; echo \"status=$? [$variable]\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: raw with backslashes",
+      "script": "printf '%s\\n' 'a\\\\b c\\\\' | { read -r variable; echo \"[$variable]\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: into an array with backslashes",
+      "script": "printf '%s\\n' 'a\\\\b c\\\\' | { read -a array; echo \"${#array[@]} [${array[*]}]\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: store a line with leading spaces",
+      "script": "printf '%s\\n' '   x  y  ' | { read variable; echo \"status=$? [$variable]\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: raw with leading spaces",
+      "script": "printf '%s\\n' '   x  y  ' | { read -r variable; echo \"[$variable]\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: into an array with leading spaces",
+      "script": "printf '%s\\n' '   x  y  ' | { read -a array; echo \"${#array[@]} [${array[*]}]\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: store a line with no newline",
+      "script": "printf '%s' 'tail' | { read variable; echo \"status=$? [$variable]\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: raw with no newline",
+      "script": "printf '%s' 'tail' | { read -r variable; echo \"[$variable]\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: into an array with no newline",
+      "script": "printf '%s' 'tail' | { read -a array; echo \"${#array[@]} [${array[*]}]\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: number of characters",
+      "script": "echo abcdef | { read -n 3 variable; echo \"[$variable]\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: number of characters past a newline",
+      "script": "printf 'ab\\ncd\\n' | { read -n 3 variable; echo \"[$variable]\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: exact number of characters",
+      "script": "printf 'ab\\ncd\\n' | { read -N 4 variable; echo \"[$variable]\" | od -c | head -n 1; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: multiple variables from a here string",
+      "script": "read <<< \"The surname is Bond\" _ variable1 _ variable2; echo \"$variable1 $variable2\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: more words than variables",
+      "script": "read a b <<< \"one two three four\"; echo \"[$a] [$b]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: fewer words than variables",
+      "script": "read a b c <<< \"one\"; echo \"[$a] [$b] [$c]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: prompt without a terminal",
+      "script": "read -p \"Enter your input here: \" variable <<< \"typed\"; echo \"[$variable]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: silent mode",
+      "script": "read -s variable <<< \"secret\"; echo \"[$variable]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: each line of output",
+      "script": "printf 'a b\\n c\\n\\nd' | while IFS= read -r line; do echo \"<$line>\"; done",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: each line with the last line lacking a newline",
+      "script": "printf 'a\\nb' | while IFS= read -r line || [ -n \"$line\" ]; do echo \"<$line>\"; done",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: custom delimiter",
+      "script": "printf 'a:b:c' | { read -d : x; echo \"[$x]\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: IFS splitting",
+      "script": "IFS=, read -r a b <<< 'x, y,z'; echo \"[$a] [$b]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: end of input",
+      "script": "read v </dev/null; echo \"status=$? [$v]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: timeout on available input",
+      "script": "read -t 1 v <<< 'fast'; echo \"status=$? [$v]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: default REPLY",
+      "script": "read <<< ' spaced '; echo \"[$REPLY]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr read: invalid option",
+      "script": "read -z v <<< x; echo \"status=$?\"",
+      "tags": [
+        "builtin.read",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readarray: lines from a file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w && printf 'one\\ntwo\\nthree\\nfour\\n' >file.txt\nreadarray array_name < file.txt; declare -p array_name",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readarray: remove trailing delimiters",
+      "script": "mkdir -p /tmp/w && cd /tmp/w && printf 'one\\ntwo\\nthree\\nfour\\n' >file.txt\nreadarray < file.txt -t array_name; declare -p array_name",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readarray: at most n lines",
+      "script": "mkdir -p /tmp/w && cd /tmp/w && printf 'one\\ntwo\\nthree\\nfour\\n' >file.txt\nreadarray < file.txt -n 2 -t array_name; declare -p array_name",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readarray: skip n lines",
+      "script": "mkdir -p /tmp/w && cd /tmp/w && printf 'one\\ntwo\\nthree\\nfour\\n' >file.txt\nreadarray < file.txt -s 1 -t array_name; declare -p array_name",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readarray: custom delimiter",
+      "script": "mkdir -p /tmp/w && cd /tmp/w && printf 'a,b,c' >file.txt\nreadarray < file.txt -d , array_name; declare -p array_name",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readarray: custom delimiter with -t",
+      "script": "mkdir -p /tmp/w && cd /tmp/w && printf 'a,b,,c,' >file.txt\nreadarray < file.txt -d , -t array_name; declare -p array_name",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readarray: empty file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w && : >file.txt\nreadarray -t array_name < file.txt; echo ${#array_name[@]}",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readarray: missing file",
+      "script": "readarray -t array_name < /tmp/nosuch.txt; echo \"status=$?\"",
+      "tags": [
+        "builtin.readarray",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readarray: from a pipe with lastpipe",
+      "script": "mkdir -p /tmp/w && cd /tmp/w && printf 'one\\ntwo\\nthree\\nfour\\n' >file.txt\nshopt -s lastpipe\ncat file.txt | readarray -t arr; echo ${#arr[@]}",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readarray: origin index",
+      "script": "mkdir -p /tmp/w && cd /tmp/w && printf 'one\\ntwo\\nthree\\nfour\\n' >file.txt\narr=(x); readarray -t -O 1 arr < file.txt; declare -p arr",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mapfile: lines from a process substitution",
+      "script": "mapfile -t lines < <(printf 'a\\nb\\n'); declare -p lines",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mapfile: default MAPFILE",
+      "script": "mapfile <<< $'x\\ny'; echo ${#MAPFILE[@]}",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mapfile: callback every line",
+      "script": "mapfile -t -C 'echo cb' -c 1 arr <<< $'x\\ny'",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr return: exit a function prematurely",
+      "script": "func_name() { echo \"This is reached\"; return; echo \"This is not\"; }; func_name; echo \"status=$?\"",
+      "tags": [
+        "builtin.return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr return: a return value",
+      "script": "func_name() { return 3; }; func_name; echo \"status=$?\"",
+      "tags": [
+        "builtin.return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr return: a return value above 255",
+      "script": "func_name() { return 257; }; func_name; echo \"status=$?\"",
+      "tags": [
+        "builtin.return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr return: a non-numeric value",
+      "script": "func_name() { return abc; }; func_name; echo \"status=$?\"",
+      "tags": [
+        "builtin.return",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr return: outside a function",
+      "script": "return; echo \"status=$?\"",
+      "tags": [
+        "builtin.return",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr return: from a sourced file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w && printf 'echo in\\nreturn 5\\necho not\\n' >lib.sh\n. ./lib.sh; echo \"status=$?\"",
+      "tags": [
+        "builtin.return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr return: the last status by default",
+      "script": "f() { false; return; }; f; echo \"status=$?\"",
+      "tags": [
+        "builtin.return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr shift: remove the first parameter",
+      "script": "set -- a b c; shift; echo \"$@\"",
+      "tags": [
+        "builtin.shift"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr shift: remove n parameters",
+      "script": "set -- a b c d; shift 2; echo \"$@ $#\"",
+      "tags": [
+        "builtin.shift"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr shift: more than there are",
+      "script": "set -- a b; shift 3; echo \"status=$? $#\"",
+      "tags": [
+        "builtin.shift"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr shift: negative count",
+      "script": "set -- a; shift -1; echo \"status=$?\"",
+      "tags": [
+        "builtin.shift",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr shift: in a function",
+      "script": "f() { shift; echo \"$*\"; }; f x y z",
+      "tags": [
+        "builtin.shift"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr set: export new variables",
+      "script": "set -a; NEWVAR=exported; bash -c 'echo $NEWVAR'",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr set: notify of finished jobs",
+      "script": "set -b; echo \"$-\" | grep -q b && echo notify-on",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr set: vi mode",
+      "script": "set -o vi; set -o | grep -E '^(vi|emacs) '",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr set: emacs mode",
+      "script": "set -o emacs; set -o | grep -E '^(vi|emacs) '",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr set: list all modes",
+      "script": "set -o",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr set: list all modes as commands",
+      "script": "set +o",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr set: exit when a command fails",
+      "script": "set -e; echo one; false; echo two",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr set: errexit in a condition",
+      "script": "set -e; if false; then :; fi; false || echo handled; echo survived",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr set: errexit in a function called from a condition",
+      "script": "set -e; f() { false; echo after-false; }; f && echo ok",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr set: reset positional parameters",
+      "script": "set -- argument1 'argument 2' argument3; echo $#; printf '<%s>' \"$@\"; echo",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr set: reset to nothing",
+      "script": "set -- a b; set --; echo $#",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr set: unknown option",
+      "script": "set -q; echo \"status=$?\"",
+      "tags": [
+        "builtin.set",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr set: unknown long option",
+      "script": "set -o nosuchoption; echo \"status=$?\"",
+      "tags": [
+        "builtin.set",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr set: the current flags",
+      "script": "set -u; set -f; echo $-",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr shopt: list all options",
+      "script": "shopt",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr shopt: set an option",
+      "script": "shopt -s nullglob; mkdir -p /tmp/w && cd /tmp/w && echo [*.nope]",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr shopt: unset an option",
+      "script": "shopt -s nullglob; shopt -u nullglob; mkdir -p /tmp/w && cd /tmp/w && echo [*.nope]",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr shopt: print as runnable commands",
+      "script": "shopt -p",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr shopt: print one option",
+      "script": "shopt -p extglob; shopt extglob; echo \"status=$?\"",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr shopt: query quietly",
+      "script": "shopt -q extglob; echo \"status=$?\"; shopt -s extglob; shopt -q extglob; echo \"status=$?\"",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr shopt: an invalid option",
+      "script": "shopt -s nosuchopt; echo \"status=$?\"",
+      "tags": [
+        "builtin.shopt",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr shopt: set -o options",
+      "script": "shopt -o -p errexit; shopt -so pipefail; set -o | grep pipefail",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr shopt: globstar",
+      "script": "mkdir -p /tmp/w/a/b && cd /tmp/w && : >a/b/deep.txt && : >top.txt && shopt -s globstar && echo **/*.txt",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr shopt: dotglob",
+      "script": "mkdir -p /tmp/w && cd /tmp/w && : >.h && : >v && shopt -s dotglob && echo *",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr shopt: nocaseglob",
+      "script": "mkdir -p /tmp/w && cd /tmp/w && : >README && shopt -s nocaseglob && echo read*",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr shopt: failglob",
+      "script": "mkdir -p /tmp/w && cd /tmp/w && shopt -s failglob; echo *.nope; echo \"status=$?\"",
+      "tags": [
+        "builtin.shopt",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr source: evaluate a file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w && printf 'X=from_file\\nf() { echo \"f got $*\"; }\\n' >lib.sh\nsource lib.sh; echo $X; f 1 2",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr source: evaluate a file with a dot",
+      "script": "mkdir -p /tmp/w && cd /tmp/w && printf 'X=from_file\\nf() { echo \"f got $*\"; }\\n' >lib.sh\n. ./lib.sh; echo $X",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr source: evaluate a file with arguments",
+      "script": "mkdir -p /tmp/w && cd /tmp/w && printf 'echo \"args: $# $1\"\\n' >a.sh\nsource a.sh one two",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr source: evaluate a missing file",
+      "script": "source /tmp/nosuch.sh; echo \"status=$?\"",
+      "tags": [
+        "builtin.source",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr source: evaluate a file with a syntax error",
+      "script": "mkdir -p /tmp/w && cd /tmp/w && printf 'echo before\\nif then\\n' >bad.sh\nsource bad.sh; echo \"status=$?\"",
+      "tags": [
+        "builtin.source",
+        "error"
+      ],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=2\n"
+        },
+        "stderr": {
+          "text": "bad.sh: line 2: syntax error near unexpected token `then'\nbad.sh: line 2: `if then'\n"
+        },
+        "reason": "fixture: bash-tool's documented all-or-nothing handling of syntax errors (README) runs nothing of a sourced file with a syntax error, where bash runs the commands before it as it reads them; the same decision as ALL_OR_NOTHING in refusals.py"
+      }
+    },
+    {
+      "name": "real tldr source: evaluate a directory",
+      "script": "source /tmp; echo \"status=$?\"",
+      "tags": [
+        "builtin.source",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr source: evaluate a file found on PATH",
+      "script": "mkdir -p /tmp/w/bin && printf 'echo found-on-path\\n' >/tmp/w/bin/lib.sh\nPATH=/tmp/w/bin:$PATH\nsource lib.sh",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr test: equal to a string with '/bin/zsh'",
+      "script": "MY_VAR='/bin/zsh'\ntest \"$MY_VAR\" = \"/bin/zsh\"; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr test: empty with '/bin/zsh'",
+      "script": "GIT_BRANCH='/bin/zsh'\ntest -z \"$GIT_BRANCH\"; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr test: equal to a string with ''",
+      "script": "MY_VAR=''\ntest \"$MY_VAR\" = \"/bin/zsh\"; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr test: empty with ''",
+      "script": "GIT_BRANCH=''\ntest -z \"$GIT_BRANCH\"; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr test: equal to a string with 'a b'",
+      "script": "MY_VAR='a b'\ntest \"$MY_VAR\" = \"/bin/zsh\"; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr test: empty with 'a b'",
+      "script": "GIT_BRANCH='a b'\ntest -z \"$GIT_BRANCH\"; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr test: equal to a string with '-n'",
+      "script": "MY_VAR='-n'\ntest \"$MY_VAR\" = \"/bin/zsh\"; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr test: empty with '-n'",
+      "script": "GIT_BRANCH='-n'\ntest -z \"$GIT_BRANCH\"; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr test: a file exists",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\n: >file && test -f \"file\"; echo \"status=$?\"; test -f \"nope\"; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr test: a directory does not exist",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir d && test ! -d \"d\"; echo \"status=$?\"; test ! -d \"nope\"; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr test: then and else",
+      "script": "test 1 -lt 2 && echo \"true\" || echo \"false\"; test 3 -lt 2 && echo \"true\" || echo \"false\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr test: in a conditional statement",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\n: >f\nif test -f \"f\"; then echo \"File exists\"; else echo \"File does not exist\"; fi\nif test -f \"g\"; then echo \"File exists\"; else echo \"File does not exist\"; fi",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr test: no arguments and one argument",
+      "script": "test; echo \"status=$?\"; test ''; echo \"status=$?\"; test x; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr test: and or with -a -o",
+      "script": "test 1 -eq 1 -a 2 -eq 3; echo \"status=$?\"; test 1 -eq 1 -o 2 -eq 3; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr test: parentheses",
+      "script": "test \\( 1 -eq 2 \\) -o \\( a = a \\); echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr test: string ordering",
+      "script": "test a \\< b; echo \"status=$?\"; test b \\> c; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr test: files newer and older",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ntouch -d 2020-01-01 old && touch -d 2021-01-01 new\ntest new -nt old; echo \"status=$?\"; test new -ot old; echo \"status=$?\"; test new -ef new; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr test: variable set",
+      "script": "v=; test -v v; echo \"status=$?\"; unset v; test -v v; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr test: integer expected",
+      "script": "test abc -gt 1; echo \"status=$?\"",
+      "tags": [
+        "builtin.test",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr trap: list traps",
+      "script": "trap 'echo bye' EXIT; trap 'echo hup' HUP; trap",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr trap: list with none set",
+      "script": "trap; echo \"status=$?\"",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr trap: run on a signal",
+      "script": "trap 'echo \"Caught signal SIGHUP\"' HUP; kill -HUP $$; echo after",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr trap: run on a signal named with SIG",
+      "script": "trap 'echo \"Caught signal SIGHUP\"' SIGHUP; kill -s HUP $$; echo after",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr trap: remove commands",
+      "script": "trap 'echo hup' HUP; trap 'echo int' INT; trap - HUP INT; trap; echo \"status=$?\"",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr trap: remove with SIG names",
+      "script": "trap 'echo hup' SIGHUP; trap - SIGHUP SIGINT; trap",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr trap: list event names",
+      "script": "trap -l",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr trap: ignore a signal",
+      "script": "trap '' INT; kill -INT $$; echo still-here; trap",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr trap: ignore a signal named with SIG",
+      "script": "trap '' SIGINT; kill -s INT $$; echo still-here",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr trap: print one trap",
+      "script": "trap 'echo x' USR1; trap -p USR1",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr trap: an invalid signal",
+      "script": "trap 'echo x' NOSUCHSIG; echo \"status=$?\"",
+      "tags": [
+        "builtin.trap",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr trap: EXIT in a subshell",
+      "script": "(trap 'echo sub-exit' EXIT; echo in-sub); echo after",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr trap: ERR",
+      "script": "trap 'echo \"err at $LINENO\"' ERR; false; true; echo end",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr trap: RETURN",
+      "script": "f() { :; }; trap 'echo returned' RETURN; f; echo end",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr times: print usage shape",
+      "script": "times | sed 's/[0-9][0-9.]*/N/g'",
+      "tags": [
+        "builtin.times"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr time: a command",
+      "script": "{ time echo timed; } 2>/dev/null",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "real tldr time: a command's status",
+      "script": "{ time false; } 2>/dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "real tldr time: format shape",
+      "script": "{ time true; } 2>&1 | sed 's/[0-9][0-9.]*/N/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "real tldr time: TIMEFORMAT",
+      "script": "TIMEFORMAT='took'; { time true; } 2>&1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "real tldr time: a pipeline",
+      "script": "{ time echo a | tr a b; } 2>/dev/null",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "real tldr time: posix format",
+      "script": "{ time -p true; } 2>&1 | sed 's/[0-9][0-9.]*/N/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "real tldr time: read",
+      "script": "{ time read v; } <<< 'input' 2>/dev/null; echo \"[$v]\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: condition is true",
+      "script": "if true; then echo \"Condition is true\"; fi; echo \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: negated condition is true",
+      "script": "if ! true; then echo \"Condition is true\"; fi",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: else branch when true",
+      "script": "if true; then echo \"Condition is true\"; else echo \"Condition is false\"; fi",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: condition is false",
+      "script": "if false; then echo \"Condition is true\"; fi; echo \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: negated condition is false",
+      "script": "if ! false; then echo \"Condition is true\"; fi",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: else branch when false",
+      "script": "if false; then echo \"Condition is true\"; else echo \"Condition is false\"; fi",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: condition is a grep",
+      "script": "if grep -q x <<< x; then echo \"Condition is true\"; fi; echo \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: negated condition is a grep",
+      "script": "if ! grep -q x <<< x; then echo \"Condition is true\"; fi",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: else branch when a grep",
+      "script": "if grep -q x <<< x; then echo \"Condition is true\"; else echo \"Condition is false\"; fi",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: condition is a missing command",
+      "script": "if nosuchcmd; then echo \"Condition is true\"; fi; echo \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: negated condition is a missing command",
+      "script": "if ! nosuchcmd; then echo \"Condition is true\"; fi",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: else branch when a missing command",
+      "script": "if nosuchcmd; then echo \"Condition is true\"; else echo \"Condition is false\"; fi",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: check -f on f",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir d && : >f\nif [[ -f f ]]; then echo \"Condition is true\"; fi; echo \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: check -f on d",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir d && : >f\nif [[ -f d ]]; then echo \"Condition is true\"; fi; echo \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: check -d on d",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir d && : >f\nif [[ -d d ]]; then echo \"Condition is true\"; fi; echo \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: check -d on f",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir d && : >f\nif [[ -d f ]]; then echo \"Condition is true\"; fi; echo \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: check -e on f",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir d && : >f\nif [[ -e f ]]; then echo \"Condition is true\"; fi; echo \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: check -e on nope",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir d && : >f\nif [[ -e nope ]]; then echo \"Condition is true\"; fi; echo \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: a variable is defined",
+      "script": "variable=x\nif [[ -n \"$variable\" ]]; then echo \"Condition is true\"; fi",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: a variable is not defined",
+      "script": "if [[ -n \"$variable\" ]]; then echo \"Condition is true\"; else echo no; fi",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: elif chain",
+      "script": "n=2; if [ $n = 1 ]; then echo one; elif [ $n = 2 ]; then echo two; else echo other; fi",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: status when no branch runs",
+      "script": "if false; then :; fi; echo \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr if: command list as condition",
+      "script": "if false; true; then echo last-wins; fi",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr for: iterate command line parameters",
+      "script": "set -- a 'b c' d; for variable; do echo $variable; done",
+      "tags": [
+        "compound.for"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr for: iterate items",
+      "script": "for variable in item1 \"item 2\" item3; do echo \"Loop is executed: $variable\"; done",
+      "tags": [
+        "compound.for"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr for: iterate an empty list",
+      "script": "for variable in; do echo never; done; echo \"status=$?\"",
+      "tags": [
+        "compound.for"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr for: iterate a range",
+      "script": "for variable in {1..10..3}; do echo \"Loop is executed $variable\"; done",
+      "tags": [
+        "compound.for"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr for: iterate a descending range",
+      "script": "for variable in {5..1..2}; do echo $variable; done",
+      "tags": [
+        "compound.for"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr for: iterate a letter range",
+      "script": "for variable in {a..e}; do printf $variable; done; echo",
+      "tags": [
+        "compound.for"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr for: iterate a zero-padded range",
+      "script": "for variable in {08..11}; do echo $variable; done",
+      "tags": [
+        "compound.for"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr for: iterate files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\n: >file1 && : >'file 2'\nfor variable in file1 'file 2' nope; do [ -e \"$variable\" ] && echo \"exists: $variable\" || echo \"missing: $variable\"; done",
+      "tags": [
+        "compound.for"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr for: iterate directories",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir dir1 dir2\nfor variable in dir1/ dir2/; do echo \"Loop is executed $variable\"; done",
+      "tags": [
+        "compound.for"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr for: every directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p d1 d2 && : >d1/x && : >notadir\nfor variable in */; do (cd \"$variable\" || continue; echo \"in $variable: $(ls)\") done",
+      "tags": [
+        "compound.for"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr for: every directory when there are none",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nfor variable in */; do echo \"[$variable]\"; done",
+      "tags": [
+        "compound.for"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr for: arithmetic for",
+      "script": "for ((i = 0; i < 3; i++)); do echo $i; done",
+      "tags": [
+        "compound.for"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr for: glob with no match",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nfor f in *.nope; do echo \"[$f]\"; done",
+      "tags": [
+        "compound.for"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr while: read stdin",
+      "script": "printf 'l1\\nl2\\n' | while read line; do echo \"$line\"; done",
+      "tags": [
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr while: read stdin with backslashes and spaces",
+      "script": "printf '  a\\\\b  \\n' | while read line; do echo \"[$line]\"; done",
+      "tags": [
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr while: a command forever with a break",
+      "script": "n=0; while :; do n=$((n+1)); [ $n -ge 3 ] && break; sleep 0.01; done; echo $n",
+      "tags": [
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr while: until a command fails",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf '3' >n\nwhile [ \"$(cat n)\" -gt 0 ]; do v=$(cat n); echo $v; echo $((v-1)) >n; done",
+      "tags": [
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr while: reading a file with redirection",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\nb\\n' >f\nwhile IFS= read -r l; do echo \"<$l>\"; done < f",
+      "tags": [
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr until: until a command succeeds",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nn=0; until [ -e ready ]; do n=$((n+1)); [ $n -eq 3 ] && : >ready; done; echo $n",
+      "tags": [
+        "compound.until"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr until: status of an until loop",
+      "script": "until true; do :; done; echo \"status=$?\"",
+      "tags": [
+        "compound.until"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr until: waiting with a sleep",
+      "script": "i=0; until [ $i -ge 2 ]; do echo \"Waiting...\"; i=$((i+1)); sleep 0.01; done; echo \"Launched!\"",
+      "tags": [
+        "compound.until"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr case: string literals with 'words'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one two\\nthree\\n' >README\nCOUNTRULE='words'\ncase $COUNTRULE in words) wc --words README ;; lines) wc --lines README ;; esac; echo \"status=$?\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr case: patterns and a fallback with 'words'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one two\\nthree\\n' >README\nCOUNTRULE='words'\ncase $COUNTRULE in [wW]|words) wc --words README ;; [lL]|lines) wc --lines README ;; *) echo \"what?\" ;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr case: string literals with 'lines'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one two\\nthree\\n' >README\nCOUNTRULE='lines'\ncase $COUNTRULE in words) wc --words README ;; lines) wc --lines README ;; esac; echo \"status=$?\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr case: patterns and a fallback with 'lines'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one two\\nthree\\n' >README\nCOUNTRULE='lines'\ncase $COUNTRULE in [wW]|words) wc --words README ;; [lL]|lines) wc --lines README ;; *) echo \"what?\" ;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr case: string literals with 'w'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one two\\nthree\\n' >README\nCOUNTRULE='w'\ncase $COUNTRULE in words) wc --words README ;; lines) wc --lines README ;; esac; echo \"status=$?\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr case: patterns and a fallback with 'w'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one two\\nthree\\n' >README\nCOUNTRULE='w'\ncase $COUNTRULE in [wW]|words) wc --words README ;; [lL]|lines) wc --lines README ;; *) echo \"what?\" ;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr case: string literals with 'L'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one two\\nthree\\n' >README\nCOUNTRULE='L'\ncase $COUNTRULE in words) wc --words README ;; lines) wc --lines README ;; esac; echo \"status=$?\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr case: patterns and a fallback with 'L'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one two\\nthree\\n' >README\nCOUNTRULE='L'\ncase $COUNTRULE in [wW]|words) wc --words README ;; [lL]|lines) wc --lines README ;; *) echo \"what?\" ;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr case: string literals with 'other'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one two\\nthree\\n' >README\nCOUNTRULE='other'\ncase $COUNTRULE in words) wc --words README ;; lines) wc --lines README ;; esac; echo \"status=$?\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr case: patterns and a fallback with 'other'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one two\\nthree\\n' >README\nCOUNTRULE='other'\ncase $COUNTRULE in [wW]|words) wc --words README ;; [lL]|lines) wc --lines README ;; *) echo \"what?\" ;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr case: string literals with ''",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one two\\nthree\\n' >README\nCOUNTRULE=''\ncase $COUNTRULE in words) wc --words README ;; lines) wc --lines README ;; esac; echo \"status=$?\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr case: patterns and a fallback with ''",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one two\\nthree\\n' >README\nCOUNTRULE=''\ncase $COUNTRULE in [wW]|words) wc --words README ;; [lL]|lines) wc --lines README ;; *) echo \"what?\" ;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr case: match multiple patterns with cat",
+      "script": "ANIMAL=cat\ncase $ANIMAL in cat) echo \"It's a cat\" ;;& cat|dog) echo \"It's a cat or a dog\" ;;& *) echo \"Fallback\" ;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr case: fall through with cat",
+      "script": "ANIMAL=cat\ncase $ANIMAL in cat) echo \"It's a cat\" ;& dog) echo \"It's either a dog or cat fell through\" ;& *) echo \"Fallback\" ;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr case: match multiple patterns with dog",
+      "script": "ANIMAL=dog\ncase $ANIMAL in cat) echo \"It's a cat\" ;;& cat|dog) echo \"It's a cat or a dog\" ;;& *) echo \"Fallback\" ;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr case: fall through with dog",
+      "script": "ANIMAL=dog\ncase $ANIMAL in cat) echo \"It's a cat\" ;& dog) echo \"It's either a dog or cat fell through\" ;& *) echo \"Fallback\" ;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr case: match multiple patterns with cow",
+      "script": "ANIMAL=cow\ncase $ANIMAL in cat) echo \"It's a cat\" ;;& cat|dog) echo \"It's a cat or a dog\" ;;& *) echo \"Fallback\" ;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr case: fall through with cow",
+      "script": "ANIMAL=cow\ncase $ANIMAL in cat) echo \"It's a cat\" ;& dog) echo \"It's either a dog or cat fell through\" ;& *) echo \"Fallback\" ;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr case: quoted pattern",
+      "script": "v='*'\ncase $v in '*') echo literal-star;; *) echo other;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr case: extglob pattern",
+      "script": "shopt -s extglob\nv=abc123\ncase $v in +([a-z])+([0-9])) echo matched;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr case: nocasematch",
+      "script": "shopt -s nocasematch\ncase ABC in abc) echo matched;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr case: parenthesized pattern",
+      "script": "case x in (x) echo paren;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr function: define with the keyword",
+      "script": "function func_name { echo \"Function contents here\"; }\nfunc_name",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr function: run a function",
+      "script": "func_name() { echo \"ran with $#: $*\"; }\nfunc_name a \"b c\"",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr function: define without the keyword",
+      "script": "func_name() { echo \"Function contents here\"; }\nfunc_name; declare -f func_name",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr function: keyword with parentheses",
+      "script": "function f() { echo both; }\nf",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr function: recursion",
+      "script": "fact() { if [ $1 -le 1 ]; then echo 1; else echo $(( $1 * $(fact $(( $1 - 1 ))) )); fi; }\nfact 6",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr function: a subshell body",
+      "script": "f() ( cd /tmp; pwd )\nf; pwd",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr function: redefine",
+      "script": "f() { echo one; }\nf() { echo two; }\nf",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr function: FUNCNAME",
+      "script": "outer() { inner; }\ninner() { echo \"${FUNCNAME[@]}\"; }\nouter",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr function: an invalid name",
+      "script": "function 1=2 { :; }; echo \"status=$?\"",
+      "tags": [
+        "compound.function",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr select: menu of words choosing the first",
+      "script": "select word in apple orange pear banana; do echo \"[$word] [$REPLY]\"; break; done <<< '1'",
+      "tags": [
+        "compound.select"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr select: menu of words choosing the third",
+      "script": "select word in apple orange pear banana; do echo \"[$word] [$REPLY]\"; break; done <<< '3'",
+      "tags": [
+        "compound.select"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr select: menu of words choosing out of range",
+      "script": "select word in apple orange pear banana; do echo \"[$word] [$REPLY]\"; break; done <<< '9'",
+      "tags": [
+        "compound.select"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr select: menu of words choosing an empty line",
+      "script": "select word in apple orange pear banana; do echo \"[$word] [$REPLY]\"; break; done <<< ''",
+      "tags": [
+        "compound.select"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr select: menu of words choosing not a number",
+      "script": "select word in apple orange pear banana; do echo \"[$word] [$REPLY]\"; break; done <<< 'x'",
+      "tags": [
+        "compound.select"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr select: menu from command output",
+      "script": "select line in $(printf 'x\\ny\\n'); do echo $line; break; done <<< 2",
+      "tags": [
+        "compound.select"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr select: prompt and files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\n: >a && : >b\nPS3=\"Select a file: \"; select file in *; do echo $file; break; done <<< 2",
+      "tags": [
+        "compound.select"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr select: menu from an array",
+      "script": "fruits=(apple orange pear banana); select word in ${fruits[@]}; do echo $word; break; done <<< 4",
+      "tags": [
+        "compound.select"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr select: end of input",
+      "script": "select word in a b; do echo $word; done < /dev/null; echo \"status=$?\"",
+      "tags": [
+        "compound.select"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr select: several answers",
+      "script": "printf '9\\n1\\n' | { select word in a b; do [ -n \"$word\" ] && { echo \"got $word\"; break; }; echo \"retry $REPLY\"; done; }",
+      "tags": [
+        "compound.select"
+      ],
+      "options": {}
+    }
+  ]
+}

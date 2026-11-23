@@ -423,18 +423,14 @@ fn release_ends_process(remaining_holds: usize, reader_gone_recorded: bool) -> b
     remaining_holds == 0 && reader_gone_recorded
 }
 
-/// Switches the raw mode of the terminal off, if this process switched it on. A prompt switches
-/// it on and cannot switch it off when the process ends at once. A terminal mode that another
-/// program set, such as a pager that reads the output, stays as it is.
-#[cfg(unix)]
-fn leave_raw_mode() {
-    if crossterm::terminal::is_raw_mode_enabled().unwrap_or(false) {
-        let _ = crossterm::terminal::disable_raw_mode();
-    }
+#[cfg(not(unix))]
+mod platform {
+    pub(super) fn leave_raw_mode() {}
+    pub fn watch_for_closed_stdout() {}
 }
 
-#[cfg(not(unix))]
-fn leave_raw_mode() {}
+use platform::leave_raw_mode;
+pub use platform::*;
 
 /// What happened to bytes written to a standard stream.
 #[derive(Debug, PartialEq, Eq)]
@@ -457,45 +453,52 @@ fn write_and_flush(out: &mut impl Write, bytes: &[u8]) -> std::io::Result<Writte
     outcome_of(out.write_all(bytes).and_then(|()| out.flush()))
 }
 
-/// Finds out without a write whether the reader of stdout has gone. Only a pipe or a socket
-/// whose peer has closed reports an error or a hang-up here; a terminal, a file, a pipe with a
-/// live reader and a socket whose peer only stopped writing do not.
 #[cfg(unix)]
-pub fn stdout_reader_gone() -> bool {
-    peer_gone(rustix::stdio::stdout())
-}
+mod platform {
+    use super::end_for_closed_output;
 
-#[cfg(unix)]
-fn peer_gone(fd: std::os::fd::BorrowedFd<'_>) -> bool {
-    use rustix::event::{PollFd, PollFlags, poll};
-
-    let mut fds = [PollFd::from_borrowed_fd(fd, PollFlags::OUT)];
-    matches!(poll(&mut fds, Some(&rustix::time::Timespec::default())), Ok(ready) if ready > 0)
-        && fds[0].revents().intersects(PollFlags::ERR | PollFlags::HUP)
-}
-
-/// How often the watch for a closed stdout asks the operating system.
-#[cfg(unix)]
-const STDOUT_WATCH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
-
-/// Ends the process when the reader of stdout has gone, also while the command writes nothing.
-/// Where the operating system cannot be asked, the process ends at its next write.
-#[cfg(unix)]
-pub fn watch_for_closed_stdout() {
-    tokio::spawn(async {
-        let mut interval = tokio::time::interval(STDOUT_WATCH_INTERVAL);
-        loop {
-            interval.tick().await;
-            if stdout_reader_gone() {
-                end_for_closed_output();
-                return;
-            }
+    /// Switches the raw mode of the terminal off, if this process switched it on. A prompt switches
+    /// it on and cannot switch it off when the process ends at once. A terminal mode that another
+    /// program set, such as a pager that reads the output, stays as it is.
+    pub(super) fn leave_raw_mode() {
+        if crossterm::terminal::is_raw_mode_enabled().unwrap_or(false) {
+            let _ = crossterm::terminal::disable_raw_mode();
         }
-    });
-}
+    }
 
-#[cfg(not(unix))]
-pub fn watch_for_closed_stdout() {}
+    /// Finds out without a write whether the reader of stdout has gone. Only a pipe or a socket
+    /// whose peer has closed reports an error or a hang-up here; a terminal, a file, a pipe with a
+    /// live reader and a socket whose peer only stopped writing do not.
+    pub fn stdout_reader_gone() -> bool {
+        peer_gone(rustix::stdio::stdout())
+    }
+
+    pub(super) fn peer_gone(fd: std::os::fd::BorrowedFd<'_>) -> bool {
+        use rustix::event::{PollFd, PollFlags, poll};
+
+        let mut fds = [PollFd::from_borrowed_fd(fd, PollFlags::OUT)];
+        matches!(poll(&mut fds, Some(&rustix::time::Timespec::default())), Ok(ready) if ready > 0)
+            && fds[0].revents().intersects(PollFlags::ERR | PollFlags::HUP)
+    }
+
+    /// How often the watch for a closed stdout asks the operating system.
+    const STDOUT_WATCH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+    /// Ends the process when the reader of stdout has gone, also while the command writes nothing.
+    /// Where the operating system cannot be asked, the process ends at its next write.
+    pub fn watch_for_closed_stdout() {
+        tokio::spawn(async {
+            let mut interval = tokio::time::interval(STDOUT_WATCH_INTERVAL);
+            loop {
+                interval.tick().await;
+                if stdout_reader_gone() {
+                    end_for_closed_output();
+                    return;
+                }
+            }
+        });
+    }
+}
 
 fn line_bytes(line: impl Display) -> Vec<u8> {
     format!("{line}\n").into_bytes()
@@ -1154,37 +1157,40 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn a_pipe_whose_reader_has_gone_is_detected_without_a_write() {
-        use std::os::fd::AsFd;
+    mod unix {
+        use crate::log::platform as probe;
+        use test_r::test;
 
-        let (reader, writer) = std::io::pipe().unwrap();
-        assert!(!super::peer_gone(writer.as_fd()));
-        drop(reader);
-        assert!(super::peer_gone(writer.as_fd()));
-    }
+        #[test]
+        fn a_pipe_whose_reader_has_gone_is_detected_without_a_write() {
+            use std::os::fd::AsFd;
 
-    #[cfg(unix)]
-    #[test]
-    fn a_file_and_a_live_socket_are_not_detected_as_gone() {
-        use std::os::fd::AsFd;
+            let (reader, writer) = std::io::pipe().unwrap();
+            assert!(!probe::peer_gone(writer.as_fd()));
+            drop(reader);
+            assert!(probe::peer_gone(writer.as_fd()));
+        }
 
-        let file = tempfile::tempfile().unwrap();
-        assert!(!super::peer_gone(file.as_fd()));
+        #[test]
+        fn a_file_and_a_live_socket_are_not_detected_as_gone() {
+            use std::os::fd::AsFd;
 
-        let (live, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
-        assert!(!super::peer_gone(live.as_fd()));
-    }
+            let file = tempfile::tempfile().unwrap();
+            assert!(!probe::peer_gone(file.as_fd()));
 
-    #[cfg(unix)]
-    #[test]
-    fn a_socket_whose_peer_stopped_writing_but_still_reads_is_not_detected_as_gone() {
-        use std::net::Shutdown;
-        use std::os::fd::AsFd;
+            let (live, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+            assert!(!probe::peer_gone(live.as_fd()));
+        }
 
-        let (ours, peer) = std::os::unix::net::UnixStream::pair().unwrap();
-        peer.shutdown(Shutdown::Write).unwrap();
-        assert!(!super::peer_gone(ours.as_fd()));
+        #[test]
+        fn a_socket_whose_peer_stopped_writing_but_still_reads_is_not_detected_as_gone() {
+            use std::net::Shutdown;
+            use std::os::fd::AsFd;
+
+            let (ours, peer) = std::os::unix::net::UnixStream::pair().unwrap();
+            peer.shutdown(Shutdown::Write).unwrap();
+            assert!(!probe::peer_gone(ours.as_fd()));
+        }
     }
 
     #[test]

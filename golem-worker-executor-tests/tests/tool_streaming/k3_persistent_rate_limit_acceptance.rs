@@ -221,8 +221,8 @@ async fn k3_rate_1_capacity_is_independent_between_principals(
         rate_limit_component,
         agent_type
     );
-    let principal_a = oidc_principal("k3-principal-a");
-    let principal_b = oidc_principal("k3-principal-b");
+    let principal_a = oidc_principal("k3-caller-a");
+    let principal_b = oidc_principal("k3-caller-b");
     let owner_a = agent_key!("ToolStreamingCaller", "k3-rate-1-owner-a");
     let owner_b = agent_key!("ToolStreamingCaller", "k3-rate-1-owner-b");
     let worker_a = executor
@@ -371,6 +371,28 @@ async fn k3_rate_2_distinct_owners_contend_on_one_principal_key(
     assert_eq!(stats.attempts, OWNERS as u64);
     assert_eq!(stats.committed_charges, LIMIT as u64);
     assert_eq!(stats.recorded_decisions, OWNERS as u64);
+
+    // The middleware calls the backend as the tool that it wraps, for the original caller.
+    let backend = executor
+        .keyed_agent_id(rate_limit_component.environment_id, &backend_id)?
+        .agent_id;
+    let expected = Caller {
+        immediate: golem_worker_executor_test_utils::callers::tool_principal(
+            context.default_environment_id,
+            "middleware-probe",
+        ),
+        ..caller.clone()
+    };
+    let admits = executor
+        .recorded_callers(&backend)
+        .await
+        .into_iter()
+        .filter(|(name, _)| name == "admit")
+        .collect::<Vec<_>>();
+    assert_eq!(admits.len(), OWNERS, "{admits:?}");
+    for (_, recorded) in admits {
+        assert_eq!(recorded, expected);
+    }
     Ok(())
 }
 

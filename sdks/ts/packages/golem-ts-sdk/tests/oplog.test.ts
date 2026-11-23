@@ -42,10 +42,7 @@ describe('oplog checkpoint enrichment', () => {
 
   it('keeps the never-live mark of a create entry', () => {
     const environmentId = { uuid: { highBits: 0n, lowBits: 1n } };
-    const agentId = {
-      componentId: { uuid: { highBits: 0n, lowBits: 2n } },
-      agentId: 'sandbox',
-    };
+    const agentId = { uuid: { highBits: 0x00000007_0000_8000n, lowBits: 0x8000_0000_0000_0002n } };
     const create = (neverLive: boolean): RawPublicOplogEntry => ({
       tag: 'create',
       val: {
@@ -73,6 +70,6 @@ describe('oplog checkpoint enrichment', () => {
     }
     expect(marked.val.neverLive).toBe(true);
     expect(unmarked.val.neverLive).toBe(false);
-    expect(marked.val.agentId.agentId).toBe('sandbox');
+    expect(marked.val.agentId.toString()).toBe('00000007-0000-8000-8000-000000000002');
   });
 });

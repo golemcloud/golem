@@ -41,8 +41,8 @@ use crate::log::{
     log_failed_to, log_warn, log_warn_action, logln, message_for_output, try_print_bytes,
 };
 use crate::model::agent::action_result::{
-    AgentCancelInvocationResult, AgentDeleteView, AgentFileContentsResult, AgentInterruptResult,
-    AgentPluginToggleResult, AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
+    AgentDeleteView, AgentFileContentsResult, AgentInterruptResult, AgentPluginToggleResult,
+    AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
 };
 use crate::model::agent::files::{AgentFilesView, FileNodeView};
 use crate::model::agent::oplog::{AgentOplogEntryView, AgentOplogPageView};
@@ -294,10 +294,6 @@ impl AgentCommandHandler {
                     self.cmd_revert(agent_id, last_oplog_index, number_of_invocations)
                         .await
                 }
-                AgentSubcommand::CancelInvocation {
-                    agent_id,
-                    idempotency_key,
-                } => self.cmd_cancel_invocation(agent_id, idempotency_key).await,
                 AgentSubcommand::Files { agent_id, path } => self.cmd_files(agent_id, path).await,
                 AgentSubcommand::FileContents {
                     agent_id,
@@ -632,7 +628,7 @@ impl AgentCommandHandler {
         let selected_agent_name = agent_id_match.display_name();
         let environment = &agent_id_match.environment;
         let wait_for_invocation = !trigger && stdout_format == InvocationStdoutFormat::Value;
-        let live_output = (!no_stream).then(|| {
+        let live_output = (!no_stream && stdout_format != InvocationStdoutFormat::Raw).then(|| {
             Arc::new(LiveOutput::new(
                 self.ctx.clone(),
                 environment.environment_id,
@@ -660,17 +656,26 @@ impl AgentCommandHandler {
             live_output.open(agent_id, &selected_agent_name).await?;
         }
 
-        // The invocation session addresses an agent by its key, without a fingerprint check.
+        // Scalar session calls without an expected fingerprint can keep resolving the key.
         let session_key = match &agent_id_match.address {
             AgentAddress::Key(key) if expected_fingerprint.is_none() => Some((**key).clone()),
             _ => None,
         };
 
         if method_uses_streams {
-            let Some(key) = session_key else {
-                bail!(
-                    "Streaming agent methods are invoked by an agent key, without an expected fingerprint"
-                );
+            use golem_common::model::invocation_session_public::PublicAgentTarget;
+            let target = match &agent_id_match.address {
+                AgentAddress::Id(agent_id) => PublicAgentTarget::Id {
+                    agent_id: *agent_id,
+                    expected_fingerprint,
+                },
+                AgentAddress::Key(key) if expected_fingerprint.is_none() => {
+                    invocation_session::key_target(key)?
+                }
+                AgentAddress::Key(_) => PublicAgentTarget::Id {
+                    agent_id: self.agent_id_of(&agent_id_match).await?,
+                    expected_fingerprint,
+                },
             };
             let result = invocation_session::invoke(
                 self.ctx.clone(),
@@ -679,7 +684,7 @@ impl AgentCommandHandler {
                     application_name: environment.application_name.to_string(),
                     environment_name: environment.environment_name.to_string(),
                     agent_type,
-                    parsed_agent_id: key,
+                    target,
                     method_name,
                     arguments,
                     config: Vec::new(),
@@ -1236,55 +1241,6 @@ impl AgentCommandHandler {
             last_oplog_index,
             number_of_invocations,
         })?;
-
-        Ok(())
-    }
-
-    async fn cmd_cancel_invocation(
-        &self,
-        agent_id: AgentIdArgs,
-        idempotency_key: IdempotencyKey,
-    ) -> anyhow::Result<()> {
-        self.ctx.silence_app_context_init().await;
-        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
-        let agent_id = self.agent_id_of(&agent_id_match).await?;
-
-        log_warn_action(
-            "Canceling invocation",
-            format!(
-                "for agent {} using idempotency key: {}",
-                format_agent_id_match(&agent_id_match),
-                idempotency_key.value.log_color_highlight()
-            ),
-        );
-
-        let clients = self.ctx.golem_clients().await?;
-
-        let canceled = clients
-            .worker
-            .cancel_invocation(
-                &agent_id_match.environment.environment_id.0,
-                &agent_id.0,
-                &idempotency_key.value,
-                None,
-            )
-            .await
-            .map(|result| result.canceled)
-            .map_service_error()?;
-
-        if canceled {
-            log_action("Canceled", "");
-        } else {
-            log_warn_action("Failed", "to cancel, invocation already started");
-        }
-
-        self.ctx
-            .log_handler()
-            .log_output(AgentCancelInvocationResult {
-                canceled,
-                agent_id,
-                idempotency_key: idempotency_key.value,
-            })?;
 
         Ok(())
     }
