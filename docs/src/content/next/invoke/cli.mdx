@@ -16,11 +16,12 @@ The command requires specifying which agent to invoke, and the name of the funct
 There are multiple options for selecting the agent:
 
 - `AgentType(agent-parameters)`
-- `environment/AgentType(agent-parameters)`
-- `application/environment/AgentType(agent-parameters)`
-- `account/application/environment/AgentType(agent-parameters)`
+- `AgentType[agent-id]`
+- `agent-id`
 
-Note that `AgentType(agent-parameters)` is the _agent ID_. The agent type name uses the casing of the agent's source language, matching the name in the source code.
+Each form can be prefixed with `environment/`, `application/environment/` or `account/application/environment/`.
+
+Note that `AgentType(agent-parameters)` is the agent's _key_: it addresses the keyed agent of these constructor parameters, and an invocation by key creates that agent when it does not exist. The _agent ID_ is a UUID that Golem issues when it creates the agent; `AgentType[agent-id]` and a bare `agent-id` address an existing agent by its ID, which is the only way to reach an agent created without a key. The agent type name uses the casing of the agent's source language, matching the name in the source code.
 
 The account, application and environment prefixes can be omitted when they can be inferred from the context, i.e. from the `--environment`/`--local`/`--cloud` flags, the selected profile, or the application manifest found from the current directory.
 
@@ -34,7 +35,7 @@ Do not supply a `Principal` value or placeholder. Effect SDK clients also omit e
 
 Do not wrap all method inputs in one JSON object. A parameter whose value is an object or struct still takes just one argument. A method with no user-supplied parameters takes no arguments, not `'{}'`. Awaited, triggered, and scheduled invocations share the same CLI argument parser and input rules.
 
-The following examples show method declarations and the corresponding CLI method names and arguments. Prefix each command fragment with `golem agent invoke '<agent-id>'`.
+The following examples show method declarations and the corresponding CLI method names and arguments. Prefix each command fragment with `golem agent invoke '<agent-address>'`.
 
 <Tabs items={["TypeScript", "Effect", "Rust", "Scala", "MoonBit", "Go"]}>
 <Tabs.Tab>
@@ -184,11 +185,13 @@ The streaming output can be customized with the following parameters:
 
 ## Cancelling pending invocations
 
-As invocations are executed sequentially, it is possible to cancel a pending invocation before it starts executing. This can be done using the command line interface by running the `agent cancel-invocation` subcommand:
+As invocations are executed sequentially, it is possible to cancel a pending or scheduled invocation before it starts executing. Select it by the agent and the idempotency key it was invoked with:
 
 ```shell copy
-golem agent cancel-invocation <agent-id> <idempotency-key>
+golem invocation cancel --agent <agent-address> --idempotency-key <idempotency-key>
 ```
+
+Use `golem invocation get` with the same arguments to see the state and the result of an invocation, and `golem invocation list --agent <agent-address>` to list the invocations of an agent.
 
 ## Invoking native tools
 

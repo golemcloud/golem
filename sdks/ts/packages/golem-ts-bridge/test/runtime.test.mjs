@@ -13,13 +13,18 @@ import {
   encodeOption,
   encodeStreamSessionBinaryEnvelope,
   encodeStreamSessionTextFrame,
+  getAgent,
+  GolemConflictError,
+  GolemServiceError,
   invokeAgent,
+  lookupAgent,
   parseStreamSessionTextFrame,
   publicValueCodec,
   schemaGraphFromWire,
   schemaType,
   StreamingProtocolError,
   StreamingUnreachableError,
+  upsertAgent,
   Uuid,
 } from '../dist/index.mjs';
 import { createServer as createTcpServer } from 'node:net';
@@ -1240,34 +1245,113 @@ test('AgentStream rejects a second iterator deterministically', async () => {
   assert.throws(() => stream[Symbol.asyncIterator](), /only be iterated once/);
 });
 
+const TEST_ACCOUNT_ID = '00000000-0000-0000-0000-0000000000a1';
+const OTHER_ACCOUNT_ID = '00000000-0000-0000-0000-0000000000a2';
+const TEST_ENVIRONMENT_ID = '00000000-0000-0000-0000-0000000000e1';
+const OTHER_ENVIRONMENT_ID = '00000000-0000-0000-0000-0000000000e2';
+const TEST_AGENT_ID = '00000007-0000-8000-8000-000000000004';
+const TEST_FINGERPRINT = '00000000-0000-4000-8000-00000000f001';
+const TEST_AGENT_URL = `/v1/runtime/envs/${TEST_ENVIRONMENT_ID}/agent-types/agent`;
+
+/**
+ * Answers the environment resolution requests of the bridge: a token of `TEST_ACCOUNT_ID`, which
+ * sees the named environment in its own account and in another one.
+ */
+function environmentResponse(url) {
+  const { pathname, searchParams } = new URL(url, 'http://localhost');
+  if (pathname === '/v1/me/token')
+    return Response.json({
+      id: '00000000-0000-0000-0000-0000000000t1',
+      accountId: TEST_ACCOUNT_ID,
+      createdAt: '2026-01-01T00:00:00Z',
+      expiresAt: '2027-01-01T00:00:00Z',
+    });
+  if (pathname === '/v1/me/visible-environments') {
+    const environment = (id, accountId) => ({
+      environment: { id, name: searchParams.get('env_name') },
+      application: { name: searchParams.get('app_name') },
+      account: { id: accountId, name: 'account', email: 'account@example.test' },
+    });
+    return Response.json({
+      values: [
+        environment(OTHER_ENVIRONMENT_ID, OTHER_ACCOUNT_ID),
+        environment(TEST_ENVIRONMENT_ID, TEST_ACCOUNT_ID),
+      ],
+    });
+  }
+  return undefined;
+}
+
+/** A `fetch` that answers environment resolution and passes every other request to `handler`. */
+function restFetch(handler) {
+  return async (url, init) => environmentResponse(url) ?? handler(url, init);
+}
+
+/** Answers the environment resolution of a Node HTTP server; returns whether it did. */
+async function answerEnvironment(request, response) {
+  const answer = environmentResponse(request.url);
+  if (answer === undefined) return false;
+  response.writeHead(answer.status, { 'content-type': 'application/json' });
+  response.end(await answer.text());
+  return true;
+}
+
+async function withFetch(handler, run) {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = restFetch(handler);
+  try {
+    return await run();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+const restServer = { type: 'custom', url: 'http://example.test', token: 'test' };
+const agentKey = {
+  appName: 'app',
+  envName: 'env',
+  agentTypeName: 'agent',
+  parameters: { kind: 'record', value: { fields: [] } },
+};
+const invocation = {
+  appName: 'app',
+  envName: 'env',
+  agentTypeName: 'agent',
+  parameters: { kind: 'record', value: { fields: [] } },
+  methodName: 'run',
+  methodParameters: { kind: 'record', value: { fields: [] } },
+  mode: 'await',
+};
+const invocationResult = (result) => ({
+  agentId: TEST_AGENT_ID,
+  idempotencyKey: '00000000-0000-4000-8000-000000000001',
+  componentRevision: 1,
+  result,
+});
+
 test('REST request JSON preserves canonical string-form u64 values', async () => {
   let body = '';
-  const http = createHttpServer((request, response) => {
+  let path = '';
+  const http = createHttpServer(async (request, response) => {
+    if (await answerEnvironment(request, response)) return;
+    path = request.url;
     request.setEncoding('utf8');
     request.on('data', (chunk) => (body += chunk));
     request.on('end', () => {
-      response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(
-        JSON.stringify({
-          agentId: { componentId: 'component', agentId: 'agent' },
-          componentRevision: 1,
-        }),
-      );
+      response.writeHead(201, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ agentId: TEST_AGENT_ID, agentFingerprint: TEST_FINGERPRINT }));
     });
   });
   http.listen(0, '127.0.0.1');
   await once(http, 'listening');
   try {
-    await createAgent(
+    const reference = await createAgent(
       { type: 'custom', url: `http://127.0.0.1:${http.address().port}`, token: 'test' },
-      {
-        appName: 'app',
-        envName: 'env',
-        agentTypeName: 'agent',
-        parameters: { kind: 'u64', value: '18446744073709551615' },
-      },
+      { ...agentKey, parameters: { kind: 'u64', value: '18446744073709551615' } },
     );
+    assert.equal(path, `${TEST_AGENT_URL}/agents`);
     assert.match(body, /"value":"18446744073709551615"/u);
+    assert.deepEqual(reference, { agentId: TEST_AGENT_ID, agentFingerprint: TEST_FINGERPRINT });
   } finally {
     await new Promise((resolve) => http.close(resolve));
   }
@@ -1275,39 +1359,27 @@ test('REST request JSON preserves canonical string-form u64 values', async () =>
 
 test('REST request JSON preserves native f32 and f64 negative zero values', async () => {
   const bodies = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (_url, init) => {
-    bodies.push(init.body);
-    return Response.json({
-      agentId: { agentId: 'agent', componentId: 'component' },
-      idempotencyKey: 'key',
-      componentRevision: 1,
-      result: {
-        kind: 'value',
-        graph: { root: { kind: 'record', value: { fields: [] } } },
-        value: { kind: 'record', value: { fields: [] } },
-      },
-    });
-  };
-  try {
-    await createAgent(
-      { type: 'custom', url: 'http://example.test', token: 'test' },
-      {
-        appName: 'app',
-        envName: 'env',
-        agentTypeName: 'agent',
+  await withFetch(
+    async (_url, init) => {
+      bodies.push(init.body);
+      return Response.json(
+        bodies.length === 1
+          ? { agentId: TEST_AGENT_ID, agentFingerprint: TEST_FINGERPRINT }
+          : invocationResult({
+              kind: 'value',
+              graph: { root: { kind: 'record', value: { fields: [] } } },
+              value: { kind: 'record', value: { fields: [] } },
+            }),
+      );
+    },
+    async () => {
+      await createAgent(restServer, {
+        ...agentKey,
         parameters: { kind: 'f32', value: -0 },
-      },
-    );
-    await invokeAgent(
-      { type: 'custom', url: 'http://example.test', token: 'test' },
-      {
-        appName: 'app',
-        envName: 'env',
-        agentTypeName: 'agent',
-        parameters: { kind: 'record', value: { fields: [] } },
         config: [{ path: ['float-shaped'], value: { kind: 'f32', value: -0 } }],
-        methodName: 'run',
+      });
+      await invokeAgent(restServer, {
+        ...invocation,
         methodParameters: {
           kind: 'record',
           value: {
@@ -1317,17 +1389,292 @@ test('REST request JSON preserves native f32 and f64 negative zero values', asyn
             ],
           },
         },
-        mode: 'await',
+      });
+    },
+  );
+  assert.match(bodies[0], /"parameters":\{"kind":"f32","value":-0\}/u);
+  assert.match(
+    bodies[0],
+    /"config":\[\{"path":\["float-shaped"\],"value":\{"kind":"f32","value":0\}\}\]/u,
+  );
+  assert.match(
+    bodies[1],
+    /"methodParameters":\{"kind":"record","value":\{"fields":\[\{"kind":"f64","value":-0\},\{"kind":"u32","value":0\}\]\}\}/u,
+  );
+});
+
+test('createAgent posts keyed, config and env to the agents of the agent type', async () => {
+  const requests = [];
+  await withFetch(
+    async (url, init) => {
+      requests.push({ url, method: init.method, body: JSON.parse(init.body) });
+      return Response.json(
+        { agentId: TEST_AGENT_ID, agentFingerprint: TEST_FINGERPRINT },
+        { status: 201 },
+      );
+    },
+    async () => {
+      const keyed = await createAgent(restServer, {
+        ...agentKey,
+        keyed: true,
+        config: [{ path: ['greeting'], value: { kind: 'string', value: 'hello' } }],
+        env: { MODE: 'test' },
+      });
+      assert.deepEqual(keyed, { agentId: TEST_AGENT_ID, agentFingerprint: TEST_FINGERPRINT });
+      await createAgent(restServer, agentKey);
+    },
+  );
+  assert.deepEqual(requests, [
+    {
+      url: `http://example.test${TEST_AGENT_URL}/agents`,
+      method: 'POST',
+      body: {
+        parameters: agentKey.parameters,
+        config: [{ path: ['greeting'], value: { kind: 'string', value: 'hello' } }],
+        env: { MODE: 'test' },
+        keyed: true,
       },
-    );
-    assert.match(bodies[0], /"parameters":\{"kind":"f32","value":-0\}/u);
-    assert.match(
-      bodies[1],
-      /"config":\[\{"path":\["float-shaped"\],"value":\{"kind":"f32","value":0\}\}\]/u,
-    );
-    assert.match(
-      bodies[1],
-      /"methodParameters":\{"kind":"record","value":\{"fields":\[\{"kind":"f64","value":-0\},\{"kind":"u32","value":0\}\]\}\}/u,
+    },
+    {
+      url: `http://example.test${TEST_AGENT_URL}/agents`,
+      method: 'POST',
+      body: { parameters: agentKey.parameters, config: [], env: {}, keyed: false },
+    },
+  ]);
+});
+
+test('createAgent reports a keyed conflict as a GolemConflictError', async () => {
+  await withFetch(
+    async () =>
+      Response.json(
+        { code: 'conflict', error: 'the keyed agent exists' },
+        { status: 409, statusText: 'Conflict' },
+      ),
+    async () => {
+      const error = await createAgent(restServer, { ...agentKey, keyed: true }).then(
+        () => assert.fail('a conflicting keyed create succeeded'),
+        (error) => error,
+      );
+      assert.ok(error instanceof GolemConflictError);
+      assert.ok(error instanceof GolemServiceError);
+      assert.equal(error._tag, 'GolemConflictError');
+      assert.equal(error.operation, 'createAgent');
+      assert.equal(error.status, 409);
+      assert.deepEqual(error.body, { code: 'conflict', error: 'the keyed agent exists' });
+      assert.match(error.message, /^Agent creation failed: 409 Conflict/u);
+    },
+  );
+});
+
+test('createAgent does not classify an idempotency conflict as a keyed conflict', async () => {
+  await withFetch(
+    async () => Response.json({ code: 'idempotency-conflict' }, { status: 422 }),
+    async () => {
+      await assert.rejects(createAgent(restServer, { ...agentKey, keyed: true }), (error) => {
+        assert.ok(error instanceof GolemServiceError);
+        assert.ok(!(error instanceof GolemConflictError));
+        assert.equal(error.status, 422);
+        return true;
+      });
+    },
+  );
+});
+
+test('upsertAgent and lookupAgent post the constructor parameters of the key', async () => {
+  const requests = [];
+  await withFetch(
+    async (url, init) => {
+      requests.push({ url, body: JSON.parse(init.body) });
+      if (url.endsWith('/lookup') && requests.length > 2)
+        return Response.json({ code: 'not-found', error: 'no agent' }, { status: 404 });
+      return Response.json({ agentId: TEST_AGENT_ID, agentFingerprint: TEST_FINGERPRINT });
+    },
+    async () => {
+      const reference = { agentId: TEST_AGENT_ID, agentFingerprint: TEST_FINGERPRINT };
+      assert.deepEqual(await upsertAgent(restServer, agentKey), reference);
+      assert.deepEqual(await lookupAgent(restServer, agentKey), reference);
+      assert.equal(await lookupAgent(restServer, agentKey), undefined);
+    },
+  );
+  assert.deepEqual(
+    requests.map(({ url }) => url),
+    [
+      `http://example.test${TEST_AGENT_URL}/agents/upsert`,
+      `http://example.test${TEST_AGENT_URL}/agents/lookup`,
+      `http://example.test${TEST_AGENT_URL}/agents/lookup`,
+    ],
+  );
+  for (const { body } of requests) assert.deepEqual(body, { parameters: agentKey.parameters });
+});
+
+const agentType = { appName: 'app', envName: 'env', agentTypeName: 'agent' };
+const TEST_AGENT_METADATA_URL = `http://example.test/v1/runtime/envs/${TEST_ENVIRONMENT_ID}/agents/${TEST_AGENT_ID}`;
+
+/** Agent metadata as the agent metadata endpoint returns it, reduced to the fields the bridge reads. */
+const agentMetadata = (agentTypeName) => ({
+  agentId: TEST_AGENT_ID,
+  ownerKind: 'agent',
+  agentTypeName,
+  environmentId: TEST_ENVIRONMENT_ID,
+  status: 'Idle',
+  fingerprint: TEST_FINGERPRINT,
+});
+
+test('getAgent returns the ID and fingerprint of an agent of the agent type', async () => {
+  const requests = [];
+  await withFetch(
+    async (url, init) => {
+      requests.push({ url, method: init.method ?? 'GET', body: init.body });
+      return Response.json(agentMetadata('agent'));
+    },
+    async () => {
+      assert.deepEqual(await getAgent(restServer, agentType, TEST_AGENT_ID), {
+        agentId: TEST_AGENT_ID,
+        agentFingerprint: TEST_FINGERPRINT,
+      });
+    },
+  );
+  assert.deepEqual(requests, [{ url: TEST_AGENT_METADATA_URL, method: 'GET', body: undefined }]);
+});
+
+test('getAgent reports an agent of another agent type as not found', async () => {
+  await withFetch(
+    async () => Response.json(agentMetadata('other')),
+    async () => {
+      const error = await getAgent(restServer, agentType, TEST_AGENT_ID).then(
+        () => assert.fail('an agent of another type was returned'),
+        (error) => error,
+      );
+      assert.equal(error.name, 'GolemServiceError');
+      assert.equal(error.operation, 'getAgent');
+      assert.equal(error.status, 404);
+      assert.equal(error.body.code, 'AGENT_NOT_FOUND');
+      assert.match(error.message, /^Agent retrieval failed: 404 Not Found/u);
+      assert.match(error.message, /is not of the agent type 'agent'/u);
+    },
+  );
+});
+
+test('getAgent reports an unknown agent as not found', async () => {
+  await withFetch(
+    async () =>
+      Response.json(
+        { code: 'AGENT_NOT_FOUND', error: 'agent not found' },
+        { status: 404, statusText: 'Not Found' },
+      ),
+    async () => {
+      const error = await getAgent(restServer, agentType, TEST_AGENT_ID).then(
+        () => assert.fail('an unknown agent was returned'),
+        (error) => error,
+      );
+      assert.equal(error.name, 'GolemServiceError');
+      assert.equal(error.operation, 'getAgent');
+      assert.equal(error.status, 404);
+      assert.deepEqual(error.body, { code: 'AGENT_NOT_FOUND', error: 'agent not found' });
+    },
+  );
+});
+
+test('invokeAgent addresses the agent by exactly one of agentId or parameters', async () => {
+  const requests = [];
+  await withFetch(
+    async (url, init) => {
+      requests.push({ url, headers: init.headers, body: JSON.parse(init.body) });
+      return Response.json(invocationResult(undefined));
+    },
+    async () => {
+      const byId = await invokeAgent(restServer, {
+        ...invocation,
+        parameters: undefined,
+        agentId: TEST_AGENT_ID,
+        expectedFingerprint: TEST_FINGERPRINT,
+        mode: 'schedule',
+        scheduleAt: '2026-01-01T00:00:00Z',
+        idempotencyKey: 'retry-key',
+      });
+      assert.equal(byId.agentId, TEST_AGENT_ID);
+      await invokeAgent(restServer, invocation);
+      for (const request of [
+        { ...invocation, agentId: TEST_AGENT_ID },
+        { ...invocation, parameters: undefined },
+      ])
+        await assert.rejects(invokeAgent(restServer, request), {
+          name: 'TypeError',
+          message: /exactly one of agentId or parameters/u,
+        });
+    },
+  );
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].url, `http://example.test${TEST_AGENT_URL}/invoke`);
+  assert.equal(requests[0].headers['Idempotency-Key'], 'retry-key');
+  assert.deepEqual(requests[0].body, {
+    agentId: TEST_AGENT_ID,
+    method: 'run',
+    methodParameters: invocation.methodParameters,
+    mode: 'schedule',
+    scheduleAt: '2026-01-01T00:00:00Z',
+    expectedFingerprint: TEST_FINGERPRINT,
+  });
+  assert.equal(requests[1].headers['Idempotency-Key'], undefined);
+  assert.deepEqual(requests[1].body, {
+    parameters: invocation.parameters,
+    method: 'run',
+    methodParameters: invocation.methodParameters,
+    mode: 'await',
+  });
+});
+
+test('the environment resolves in the account of the token and is cached', async () => {
+  const resolutions = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const answer = environmentResponse(url);
+    if (answer !== undefined) {
+      resolutions.push(url);
+      return answer;
+    }
+    return Response.json({ agentId: TEST_AGENT_ID, agentFingerprint: TEST_FINGERPRINT });
+  };
+  const server = { type: 'custom', url: 'http://cache.example.test', token: 'cache' };
+  try {
+    await upsertAgent(server, agentKey);
+    await upsertAgent(server, { ...agentKey, agentTypeName: 'other' });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.deepEqual(resolutions, [
+    'http://cache.example.test/v1/me/token',
+    'http://cache.example.test/v1/me/visible-environments?app_name=app&env_name=env',
+  ]);
+});
+
+test('an environment outside the account of the token does not resolve', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const { pathname } = new URL(url);
+    if (pathname === '/v1/me/token')
+      return Response.json({
+        id: 'token',
+        accountId: TEST_ACCOUNT_ID,
+        createdAt: '',
+        expiresAt: '',
+      });
+    if (pathname === '/v1/me/visible-environments')
+      return Response.json({
+        values: [
+          {
+            environment: { id: OTHER_ENVIRONMENT_ID, name: 'env' },
+            application: { name: 'app' },
+            account: { id: OTHER_ACCOUNT_ID, name: 'other', email: 'other@example.test' },
+          },
+        ],
+      });
+    return assert.fail(`unexpected request ${url}`);
+  };
+  try {
+    await assert.rejects(
+      upsertAgent({ type: 'custom', url: 'http://shared.example.test', token: 'shared' }, agentKey),
+      /Environment 'env' of application 'app' does not exist in the account of the token/u,
     );
   } finally {
     globalThis.fetch = originalFetch;
@@ -1335,10 +1682,10 @@ test('REST request JSON preserves native f32 and f64 negative zero values', asyn
 });
 
 test('invokeAgent losslessly parses nested 64-bit schema integers', async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () =>
-    new Response(`{
-      "agentId": { "agentId": "agent", "componentId": "component" },
+  await withFetch(
+    async () =>
+      new Response(`{
+      "agentId": "${TEST_AGENT_ID}",
       "idempotencyKey": "key",
       "componentRevision": 7,
       "result": {
@@ -1356,43 +1703,31 @@ test('invokeAgent losslessly parses nested 64-bit schema integers', async () => 
           ] } }
         ] }, "kind": "record" }
       }
-    }`);
-
-  try {
-    const response = await invokeAgent(
-      { type: 'custom', url: 'http://example.test', token: 'test' },
-      {
-        appName: 'app',
-        envName: 'env',
-        agentTypeName: 'agent',
-        parameters: { kind: 'record', value: { fields: [] } },
-        methodName: 'run',
-        methodParameters: { kind: 'record', value: { fields: [] } },
-        mode: 'await',
-      },
-    );
-    const fields = response.result.value.value.fields;
-    assert.equal(fields[0].value, '18446744073709551615');
-    assert.equal(fields[1].value, '-9223372036854775808');
-    assert.equal(fields[2].value.elements[0].value, '42');
-    assert.equal(fields[2].value.elements[1].value.fields[0].value, '9');
-    assert.equal(fields[2].value.elements[1].value.fields[1].value, 3.5);
-    assert.equal(
-      fields[2].value.elements[1].value.fields[2].value,
-      'escaped: {"kind":"u64","value":18446744073709551615}',
-    );
-    assert.equal(response.componentRevision, 7);
-    assert.equal(response.result.graph.root.kind, 'record');
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+    }`),
+    async () => {
+      const response = await invokeAgent(restServer, invocation);
+      const fields = response.result.value.value.fields;
+      assert.equal(fields[0].value, '18446744073709551615');
+      assert.equal(fields[1].value, '-9223372036854775808');
+      assert.equal(fields[2].value.elements[0].value, '42');
+      assert.equal(fields[2].value.elements[1].value.fields[0].value, '9');
+      assert.equal(fields[2].value.elements[1].value.fields[1].value, 3.5);
+      assert.equal(
+        fields[2].value.elements[1].value.fields[2].value,
+        'escaped: {"kind":"u64","value":18446744073709551615}',
+      );
+      assert.equal(response.agentId, TEST_AGENT_ID);
+      assert.equal(response.componentRevision, 7);
+      assert.equal(response.result.graph.root.kind, 'record');
+    },
+  );
 });
 
 test('invokeAgent preserves canonical string-form 64-bit integers', async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () =>
-    new Response(`{
-      "agentId": { "agentId": "agent", "componentId": "component" },
+  await withFetch(
+    async () =>
+      new Response(`{
+      "agentId": "${TEST_AGENT_ID}",
       "idempotencyKey": "key",
       "componentRevision": 1,
       "result": { "kind": "value", "graph": ${JSON.stringify(numericFormsGraph)}, "value": { "kind": "record", "value": { "fields": [
@@ -1403,106 +1738,65 @@ test('invokeAgent preserves canonical string-form 64-bit integers', async () => 
         { "kind": "u64", "value": "9007199254740993" },
         { "kind": "f64", "value": -0 }
       ] } } }
-    }`);
-  try {
-    const response = await invokeAgent(
-      { type: 'custom', url: 'http://example.test', token: 'test' },
-      {
-        appName: 'app',
-        envName: 'env',
-        agentTypeName: 'agent',
-        parameters: { kind: 'record', value: { fields: [] } },
-        methodName: 'run',
-        methodParameters: { kind: 'record', value: { fields: [] } },
-        mode: 'await',
-      },
-    );
-    const fields = response.result.value.value.fields;
-    assert.equal(fields[0].value, '1000');
-    assert.equal(fields[1].value, '-200');
-    assert.equal(fields[2].value, '18446744073709551615');
-    assert.equal(fields[3].value, '-9223372036854775808');
-    assert.equal(fields[4].value, '9007199254740993');
-    assert.equal(Object.is(fields[5].value, -0), true);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+    }`),
+    async () => {
+      const response = await invokeAgent(restServer, invocation);
+      const fields = response.result.value.value.fields;
+      assert.equal(fields[0].value, '1000');
+      assert.equal(fields[1].value, '-200');
+      assert.equal(fields[2].value, '18446744073709551615');
+      assert.equal(fields[3].value, '-9223372036854775808');
+      assert.equal(fields[4].value, '9007199254740993');
+      assert.equal(Object.is(fields[5].value, -0), true);
+    },
+  );
 });
 
 test('invokeAgent rejects nonintegral and out-of-range 64-bit numeric forms', async () => {
-  const originalFetch = globalThis.fetch;
-  const request = {
-    appName: 'app',
-    envName: 'env',
-    agentTypeName: 'agent',
-    parameters: { kind: 'record', value: { fields: [] } },
-    methodName: 'run',
-    methodParameters: { kind: 'record', value: { fields: [] } },
-    mode: 'await',
-  };
-  try {
-    for (const [kind, numericForm, expected] of [
-      ['s64', '1e-1', /not an integer/u],
-      ['u64', '1.5', /not an integer/u],
-      ['s64', '9223372036854775808', /out of range/u],
-      ['u64', '18446744073709551616e0', /out of range/u],
-      ['u64', '1e1000000000000000', /out of range/u],
-      ['s64', '1e-1000000000000000', /not an integer/u],
-    ]) {
-      globalThis.fetch = async () =>
+  for (const [kind, numericForm, expected] of [
+    ['s64', '1e-1', /not an integer/u],
+    ['u64', '1.5', /not an integer/u],
+    ['s64', '9223372036854775808', /out of range/u],
+    ['u64', '18446744073709551616e0', /out of range/u],
+    ['u64', '1e1000000000000000', /out of range/u],
+    ['s64', '1e-1000000000000000', /not an integer/u],
+  ]) {
+    await withFetch(
+      async () =>
         new Response(`{
-          "agentId": { "agentId": "agent", "componentId": "component" },
+          "agentId": "${TEST_AGENT_ID}",
           "idempotencyKey": "key",
           "componentRevision": 1,
           "result": { "kind": "value", "graph": { "root": { "kind": "${kind}", "value": {} } }, "value": { "kind": "${kind}", "value": ${numericForm} } }
-        }`);
-      await assert.rejects(
-        invokeAgent({ type: 'custom', url: 'http://example.test', token: 'test' }, request),
-        expected,
-        `${kind} ${numericForm}`,
-      );
-    }
-  } finally {
-    globalThis.fetch = originalFetch;
+        }`),
+      () => assert.rejects(invokeAgent(restServer, invocation), expected, `${kind} ${numericForm}`),
+    );
   }
 });
 
 test('invokeAgent accepts REST results exceeding WebSocket collection budgets', async () => {
-  const originalFetch = globalThis.fetch;
   const elements = Array.from({ length: 40_000 }, (_, value) => ({ kind: 'u32', value }));
-  globalThis.fetch = async () =>
-    Response.json({
-      agentId: { agentId: 'agent', componentId: 'component' },
-      idempotencyKey: 'key',
-      componentRevision: 1,
-      result: { kind: 'value', graph: u32ListGraph, value: { kind: 'list', value: { elements } } },
-    });
-
-  try {
-    const response = await invokeAgent(
-      { type: 'custom', url: 'http://example.test', token: 'test' },
-      {
-        appName: 'app',
-        envName: 'env',
-        agentTypeName: 'agent',
-        parameters: { kind: 'record', value: { fields: [] } },
-        methodName: 'run',
-        methodParameters: { kind: 'record', value: { fields: [] } },
-        mode: 'await',
-      },
-    );
-    assert.equal(response.result.value.value.elements.length, 40_000);
-    assert.deepEqual(response.result.value.value.elements.at(-1), {
-      kind: 'u32',
-      value: 39_999,
-    });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  await withFetch(
+    async () =>
+      Response.json(
+        invocationResult({
+          kind: 'value',
+          graph: u32ListGraph,
+          value: { kind: 'list', value: { elements } },
+        }),
+      ),
+    async () => {
+      const response = await invokeAgent(restServer, invocation);
+      assert.equal(response.result.value.value.elements.length, 40_000);
+      assert.deepEqual(response.result.value.value.elements.at(-1), {
+        kind: 'u32',
+        value: 39_999,
+      });
+    },
+  );
 });
 
 test('invokeAgent accepts REST results exceeding WebSocket depth budgets', async () => {
-  const originalFetch = globalThis.fetch;
   let deepType = { kind: 'u32', value: {} };
   for (let depth = 0; depth < 70; depth += 1)
     deepType = { kind: 'list', value: { element: deepType } };
@@ -1510,56 +1804,55 @@ test('invokeAgent accepts REST results exceeding WebSocket depth budgets', async
     defs: [{ id: 'unused.deep', body: deepType }],
     root: { kind: 'u32', value: {} },
   };
-  globalThis.fetch = async () =>
-    Response.json({
-      agentId: { agentId: 'agent', componentId: 'component' },
-      idempotencyKey: 'key',
-      componentRevision: 1,
-      result: { kind: 'value', value: { kind: 'u32', value: 1 }, graph },
-    });
-
-  try {
-    const response = await invokeAgent(
-      { type: 'custom', url: 'http://example.test', token: 'test' },
-      {
-        appName: 'app',
-        envName: 'env',
-        agentTypeName: 'agent',
-        parameters: { kind: 'record', value: { fields: [] } },
-        methodName: 'run',
-        methodParameters: { kind: 'record', value: { fields: [] } },
-        mode: 'await',
-      },
-    );
-    let nested = response.result.graph.defs[0].body;
-    for (let depth = 0; depth < 70; depth += 1) nested = nested.value.element;
-    assert.equal(nested.kind, 'u32');
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  await withFetch(
+    async () =>
+      Response.json(invocationResult({ kind: 'value', value: { kind: 'u32', value: 1 }, graph })),
+    async () => {
+      const response = await invokeAgent(restServer, invocation);
+      let nested = response.result.graph.defs[0].body;
+      for (let depth = 0; depth < 70; depth += 1) nested = nested.value.element;
+      assert.equal(nested.kind, 'u32');
+    },
+  );
 });
 
 const descriptor = {
   application: 'app',
   environment: 'env',
   agentType: 'agent',
-  constructorParameters: {},
+  target: { kind: 'key', constructorParameters: {} },
   config: [],
   method: 'run',
 };
 
-async function server(handler) {
-  const wss = new WebSocketServer({ port: 0, handleProtocols: (protocols) => [...protocols][0] });
-  await once(wss, 'listening');
-  const port = wss.address().port;
-  wss.on('connection', handler);
+/** An HTTP server that answers environment resolution and upgrades WebSocket requests. */
+async function environmentServer(options = {}) {
+  const http = createHttpServer(async (request, response) => {
+    if (!(await answerEnvironment(request, response))) {
+      response.writeHead(404);
+      response.end();
+    }
+  });
+  const wss = new WebSocketServer({ server: http, ...options });
+  http.listen(0, '127.0.0.1');
+  await once(http, 'listening');
   return {
-    endpoint: { type: 'custom', url: `http://127.0.0.1:${port}`, token: 'test' },
+    wss,
+    endpoint: { type: 'custom', url: `http://127.0.0.1:${http.address().port}`, token: 'test' },
     close: () => {
       for (const client of wss.clients) client.terminate();
-      return new Promise((resolve) => wss.close(resolve));
+      http.closeAllConnections();
+      return new Promise((resolve) => wss.close(() => http.close(resolve)));
     },
   };
+}
+
+async function server(handler) {
+  const local = await environmentServer({
+    handleProtocols: (protocols) => [...protocols][0],
+  });
+  local.wss.on('connection', handler);
+  return local;
 }
 
 async function waitFor(predicate, message = 'condition was not reached') {
@@ -1575,12 +1868,79 @@ function accepted(start, mappings = [], idempotencyKey = start.idempotencyKey) {
     version: 1,
     type: 'invocationAccepted',
     attemptId: start.attemptId,
-    agentId: { componentId: '00000000-0000-0000-0000-000000000004', agentId: 'counter()' },
+    agentId: TEST_AGENT_ID,
     idempotencyKey,
     sessionToken: 'session',
     mappings,
   };
 }
+
+test('a session opens on the environment of its descriptor and selects the agent by key', async () => {
+  let path;
+  let start;
+  const local = await server((socket, request) => {
+    path = request.url;
+    socket.once('message', (data) => {
+      start = JSON.parse(data);
+      finishWith(socket, start, 5);
+    });
+  });
+  try {
+    const value = await plainMethod({ server: local.endpoint })();
+    assert.equal(value, 5);
+    assert.equal(path, `/v1/runtime/envs/${TEST_ENVIRONMENT_ID}/invoke-agent-session`);
+    assert.deepEqual(start.selector, {
+      application: 'app',
+      environment: 'env',
+      agentType: 'agent',
+      target: { kind: 'key', constructorParameters: {} },
+      method: 'run',
+    });
+  } finally {
+    await local.close();
+  }
+});
+
+test('a session targets an ID and fingerprint without constructor parameters', async () => {
+  let start;
+  const local = await server((socket) => {
+    socket.once('message', (data) => {
+      start = JSON.parse(data);
+      finishWith(socket, start, 7);
+    });
+  });
+  const target = { kind: 'id', agentId: TEST_AGENT_ID, expectedFingerprint: TEST_FINGERPRINT };
+  try {
+    const invoke = createStreamingRemoteMethod(
+      () => ({ server: local.endpoint }),
+      () => ({ ...descriptor, target }),
+      () => ({}),
+      (value) => value.value.value,
+    );
+    assert.equal(await invoke(), 7);
+    assert.deepEqual(start.selector.target, target);
+    assert.ok(!('constructorParameters' in start.selector));
+  } finally {
+    await local.close();
+  }
+});
+
+test('an accepted agent ID that is not a UUID is malformed', async () => {
+  const local = await server((socket) => {
+    socket.once('message', (data) => {
+      const start = JSON.parse(data);
+      socket.send(JSON.stringify({ ...accepted(start), agentId: 'agent()' }));
+    });
+  });
+  try {
+    await assert.rejects(plainMethod({ server: local.endpoint })(), {
+      code: 'malformed-message',
+      message: /invalid accepted invocation identity/u,
+    });
+  } finally {
+    await local.close();
+  }
+});
 
 test('acceptance keeps the final identity separate from a non-UUID request seed', async () => {
   const local = await server((socket) => {
@@ -2533,19 +2893,13 @@ test('wire schema graphs validate their own values before local decoding', () =>
 
 test('definitive WebSocket handshake failure does not retry', async () => {
   let attempts = 0;
-  const wss = new WebSocketServer({
-    port: 0,
+  const local = await environmentServer({
     verifyClient: (_info, done) => {
       attempts += 1;
       done(false, 401, 'Unauthorized');
     },
   });
-  await once(wss, 'listening');
-  const endpoint = {
-    type: 'custom',
-    url: `http://127.0.0.1:${wss.address().port}`,
-    token: 'test',
-  };
+  const endpoint = local.endpoint;
   try {
     const method = createStreamingRemoteMethod(
       () => ({ server: endpoint }),
@@ -2557,7 +2911,7 @@ test('definitive WebSocket handshake failure does not retry', async () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(attempts, 1);
   } finally {
-    await new Promise((resolve) => wss.close(resolve));
+    await local.close();
   }
 });
 
@@ -3680,7 +4034,7 @@ async function refusingServer(statuses, handler) {
   });
   wss.on('connection', handler);
   let upgrades = 0;
-  const http = createHttpServer();
+  const http = createHttpServer(answerEnvironment);
   http.on('upgrade', (request, socket, head) => {
     const status = statuses[upgrades++];
     if (status !== undefined) {
@@ -3754,13 +4108,14 @@ test('a start against a closed port fails with StreamingUnreachableError after t
 
 test('an upgrade that never completes is abandoned within the window', async () => {
   const held = [];
-  const tcp = createTcpServer((socket) => held.push(socket));
-  tcp.listen(0, '127.0.0.1');
-  await once(tcp, 'listening');
+  const http = createHttpServer(answerEnvironment);
+  http.on('upgrade', (_request, socket) => held.push(socket));
+  http.listen(0, '127.0.0.1');
+  await once(http, 'listening');
   try {
     const started = Date.now();
     const error = await plainMethod({
-      server: { type: 'custom', url: `http://127.0.0.1:${tcp.address().port}`, token: 'test' },
+      server: { type: 'custom', url: `http://127.0.0.1:${http.address().port}`, token: 'test' },
       reconnectWindowMs: 400,
     })().then(
       () => assert.fail('an upgrade that never completed connected'),
@@ -3771,7 +4126,124 @@ test('an upgrade that never completes is abandoned within the window', async () 
     assert.match(error.lastCause.message, /no WebSocket connection within/);
   } finally {
     for (const socket of held) socket.destroy();
+    http.closeAllConnections();
+    await new Promise((resolve) => http.close(resolve));
+  }
+});
+
+test('an environment resolution that is never answered is abandoned within the window', async () => {
+  const held = [];
+  const tcp = createTcpServer((socket) => held.push(socket));
+  tcp.listen(0, '127.0.0.1');
+  await once(tcp, 'listening');
+  try {
+    const started = Date.now();
+    const error = await plainMethod({
+      server: { type: 'custom', url: `http://127.0.0.1:${tcp.address().port}`, token: 'test' },
+      reconnectWindowMs: 400,
+    })().then(
+      () => assert.fail('an unanswered environment resolution connected'),
+      (error) => error,
+    );
+    assert.ok(Date.now() - started < 3000);
+    assert.ok(error instanceof StreamingUnreachableError, String(error));
+    assert.match(error.lastCause.message, /no environment resolution within/);
+  } finally {
+    for (const socket of held) socket.destroy();
     await new Promise((resolve) => tcp.close(resolve));
+  }
+});
+
+/**
+ * A session server that answers `path` of the environment resolution with each of `statuses` in
+ * turn before it answers normally, and finishes each start with 9.
+ */
+async function lookupRefusingServer(statuses, path = '/v1/me/token') {
+  let lookups = 0;
+  const http = createHttpServer(async (request, response) => {
+    if (new URL(request.url, 'http://localhost').pathname === path) {
+      const status = statuses[lookups++];
+      if (status !== undefined) {
+        response.writeHead(status, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ code: 'REFUSED', error: `refused with ${status}` }));
+        return;
+      }
+    }
+    if (!(await answerEnvironment(request, response))) {
+      response.writeHead(404);
+      response.end();
+    }
+  });
+  const wss = new WebSocketServer({
+    server: http,
+    handleProtocols: (protocols) => [...protocols][0],
+  });
+  wss.on('connection', (socket) => {
+    socket.once('message', (data) => finishWith(socket, JSON.parse(data), 9));
+  });
+  http.listen(0, '127.0.0.1');
+  await once(http, 'listening');
+  return {
+    endpoint: { type: 'custom', url: `http://127.0.0.1:${http.address().port}`, token: 'test' },
+    lookups: () => lookups,
+    close: () => {
+      for (const client of wss.clients) client.terminate();
+      http.closeAllConnections();
+      return new Promise((resolve) => wss.close(() => http.close(resolve)));
+    },
+  };
+}
+
+test('an environment resolution answered 503 is retried', async () => {
+  const local = await lookupRefusingServer([503]);
+  try {
+    assert.equal(await plainMethod({ server: local.endpoint, reconnectWindowMs: 10_000 })(), 9);
+    assert.equal(local.lookups(), 2);
+  } finally {
+    await local.close();
+  }
+});
+
+test('an environment resolution answered 429 is retried', async () => {
+  const local = await lookupRefusingServer([429], '/v1/me/visible-environments');
+  try {
+    assert.equal(await plainMethod({ server: local.endpoint, reconnectWindowMs: 10_000 })(), 9);
+    assert.equal(local.lookups(), 2);
+  } finally {
+    await local.close();
+  }
+});
+
+test('an environment resolution answered 403 fails at once', async () => {
+  const local = await lookupRefusingServer([403]);
+  try {
+    const error = await plainMethod({ server: local.endpoint, reconnectWindowMs: 10_000 })().then(
+      () => assert.fail('a forbidden environment resolution connected'),
+      (error) => error,
+    );
+    assert.equal(error.name, 'GolemServiceError');
+    assert.equal(error.operation, 'resolveEnvironment');
+    assert.equal(error.status, 403);
+    assert.equal(local.lookups(), 1);
+  } finally {
+    await local.close();
+  }
+});
+
+test('an environment resolution answered 503 past the window is unreachable', async () => {
+  const local = await lookupRefusingServer(Array(1000).fill(503));
+  try {
+    const error = await plainMethod({ server: local.endpoint, reconnectWindowMs: 300 })().then(
+      () => assert.fail('connected through a refusing environment resolution'),
+      (error) => error,
+    );
+    assert.ok(error instanceof StreamingUnreachableError, String(error));
+    assert.equal(error.lastCause.name, 'GolemServiceError');
+    assert.equal(error.lastCause.operation, 'resolveEnvironment');
+    assert.equal(error.lastCause.status, 503);
+    assert.ok(local.lookups() > 1);
+  } finally {
+    await local.close();
   }
 });
 
@@ -4241,3 +4713,74 @@ test('aborting a start that cannot connect stops its retries', async () => {
     await local.close();
   }
 });
+
+const lookupDescriptor = {
+  application: 'app',
+  environment: 'env',
+  agentType: 'agent',
+  target: { kind: 'key', constructorParameters: {} },
+  config: [],
+  method: 'run',
+};
+
+/** Answers both lookup requests with HTTP 200 and the given JSON bodies. */
+async function malformedLookupServer(tokenBody, environmentsBody) {
+  let lookups = 0;
+  const http = createHttpServer((request, response) => {
+    const { pathname } = new URL(request.url, 'http://localhost');
+    if (pathname === '/v1/me/token') {
+      lookups++;
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(tokenBody));
+      return;
+    }
+    if (pathname === '/v1/me/visible-environments') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(environmentsBody));
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  http.listen(0, '127.0.0.1');
+  await once(http, 'listening');
+  return {
+    endpoint: {
+      type: 'custom',
+      url: `http://127.0.0.1:${http.address().port}`,
+      token: 'malformed-lookup',
+    },
+    lookups: () => lookups,
+    close: () => {
+      http.closeAllConnections();
+      return new Promise((resolve) => http.close(resolve));
+    },
+  };
+}
+
+for (const [name, tokenBody, environmentsBody] of [
+  ['an environment list without values', { accountId: 'a' }, {}],
+  ['an environment entry without an account', { accountId: 'a' }, { values: [{}] }],
+]) {
+  test(`an environment resolution answered with ${name} fails at once`, async () => {
+    const local = await malformedLookupServer(tokenBody, environmentsBody);
+    try {
+      const error = await createStreamingRemoteMethod(
+        () => ({ server: local.endpoint, reconnectWindowMs: 1_500 }),
+        () => lookupDescriptor,
+        () => ({}),
+        (value) => value.value.value,
+      )().then(
+        () => assert.fail('connected without an environment'),
+        (error) => error,
+      );
+      assert.ok(
+        !(error instanceof StreamingUnreachableError),
+        `an undecodable lookup answer was retried until the window ended: ${error}`,
+      );
+      assert.equal(local.lookups(), 1);
+    } finally {
+      await local.close();
+    }
+  });
+}

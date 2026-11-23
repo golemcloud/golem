@@ -15,7 +15,8 @@
 use std::collections::BTreeMap;
 
 use super::{PredicateValue, RetryContext, RetryProperties};
-use crate::model::agent::parse_agent_id_parts;
+use crate::model::agent::AgentTypeName;
+use crate::model::component::ComponentId;
 use crate::model::{OwnedAgentId, RdbmsPoolKey};
 
 impl RetryProperties {
@@ -70,25 +71,28 @@ impl RetryContext {
         props
     }
 
-    /// Builds retry properties for a worker-to-worker RPC call.
-    pub fn rpc(verb: &str, target: &OwnedAgentId, function: &str) -> RetryProperties {
-        let noun_uri = format!("worker://{}/{}", target.component_id(), target.agent_name());
+    /// Builds retry properties for a worker-to-worker RPC call. `target_component_id`
+    /// is the component that implements the target's type.
+    pub fn rpc(
+        verb: &str,
+        target: &OwnedAgentId,
+        target_component_id: ComponentId,
+        target_agent_type: &AgentTypeName,
+        function: &str,
+    ) -> RetryProperties {
+        let noun_uri = format!("worker://{}", target.storage_key());
         let mut props = Self::base(verb, &noun_uri);
         decompose_uri(&mut props, &noun_uri);
         props
             .set("function", PredicateValue::Text(function.to_string()))
             .set(
                 "target-component-id",
-                PredicateValue::Text(target.component_id().to_string()),
-            );
-
-        if let Ok((agent_type_name, _, _)) = parse_agent_id_parts(&target.agent_name()) {
-            props.set(
+                PredicateValue::Text(target_component_id.to_string()),
+            )
+            .set(
                 "target-agent-type",
-                PredicateValue::Text(agent_type_name.to_string()),
+                PredicateValue::Text(target_agent_type.to_string()),
             );
-        }
-
         props
     }
 

@@ -160,7 +160,7 @@ pub fn render_agent_id_or_raw(
     }
 }
 
-/// Render a full agent ID string in the form `TypeName(params)[phantom]`.
+/// Render an agent key in the form `TypeName(params)`.
 ///
 /// The parameters are rendered using [`render_schema_value`] over each
 /// `Record` field in declaration order.
@@ -185,11 +185,7 @@ pub fn render_agent_id(parsed: &ParsedAgentKey, source_language: &SourceLanguage
         }
         _ => render_schema_value(graph, root, value, source_language),
     };
-    let mut result = format!("{}({rendered})", parsed.agent_type);
-    if let Some(uuid) = &parsed.phantom_id {
-        result.push_str(&format!("[{uuid}]"));
-    }
-    result
+    format!("{}({rendered})", parsed.agent_type)
 }
 
 /// Renders a [`SchemaType`] as a human-readable type expression using

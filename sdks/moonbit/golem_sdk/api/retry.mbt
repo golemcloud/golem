@@ -77,7 +77,7 @@ pub fn remove_retry_policy(name : String) -> Unit {
 /// same name for the host calls of the current task. The scope changes no
 /// agent-wide policy and records no oplog entry.
 pub fn use_retry_policy(policy : NamedRetryPolicy) -> RetryPolicyGuard {
-  { scope: Some(@retry_scope.RetryPolicyScope::retry_policy_scope(policy)) }
+  { scope: Some(@retry_scope.RetryPolicyScope::retry_policy_scope(policy)), }
 }
 
 ///|

@@ -70,7 +70,7 @@ void Downloads.implement({
 });
 
 async function call() {
-  const remote = Downloads.client.get({});
+  const remote = Downloads.client.upsert({});
   const looked = await remote.lookup();
   const found: TextReferenceValue | undefined = looked.isOk() ? looked.val : undefined;
   const maybeBytes: BinaryReferenceValue | undefined = await remote.maybe();

@@ -617,7 +617,7 @@ mod tests {
         }
 
         fn get_id(&self) -> String {
-            self.get_agent_id()
+            self.get_agent_id().uuid.to_string()
         }
 
         fn echo_result(&self, result: Result<(), ()>) -> Result<(), ()> {
@@ -818,7 +818,7 @@ mod tests {
         }
 
         async fn get_id(&self) -> String {
-            self.get_agent_id()
+            self.get_agent_id().uuid.to_string()
         }
 
         async fn echo_result(&self, result: Result<(), ()>) -> Result<(), ()> {
@@ -860,17 +860,17 @@ mod tests {
         }
 
         async fn rpc_call(&self, string: String) -> String {
-            let client = EchoClient::get(self.id.clone(), self.llm_config.clone());
+            let client = EchoClient::upsert(self.id.clone(), self.llm_config.clone());
             client.echo(string).await
         }
 
         fn rpc_call_trigger(&self, string: String) {
-            let client = EchoClient::get(self.id.clone(), self.llm_config.clone());
+            let client = EchoClient::upsert(self.id.clone(), self.llm_config.clone());
             client.trigger_echo(string);
         }
 
         fn rpc_call_schedule(&self, string: String) {
-            let client = EchoClient::get(self.id.clone(), self.llm_config.clone());
+            let client = EchoClient::upsert(self.id.clone(), self.llm_config.clone());
             client
                 .schedule_echo(
                     string,
@@ -887,9 +887,9 @@ mod tests {
     trait AgentWithReservedMethods {
         fn new(init: String) -> Self;
 
-        fn get(&self) -> String;
+        fn upsert(&self) -> String;
 
-        async fn remote_get(&mut self) -> String;
+        async fn remote_upsert(&mut self) -> String;
     }
 
     struct AgentWithGetFunctionImpl {}
@@ -900,14 +900,14 @@ mod tests {
             AgentWithGetFunctionImpl {}
         }
 
-        fn get(&self) -> String {
+        fn upsert(&self) -> String {
             "foo".to_string()
         }
 
-        async fn remote_get(&mut self) -> String {
-            let client = AgentWithReservedMethodsClient::get_("increment".to_string());
+        async fn remote_upsert(&mut self) -> String {
+            let client = AgentWithReservedMethodsClient::upsert1("increment".to_string());
 
-            client.get().await
+            client.upsert().await
         }
     }
 
@@ -1323,6 +1323,28 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
+    async fn generated_clients_create_with_config_and_env(
+        agent_id: &golem_rust::AgentId,
+    ) -> Result<(), golem_rust::GolemReflectError> {
+        let created = ConfigAgentClient::create(golem_rust::CreateOptions {
+            keyed: true,
+            config: ConfigAgentConfigRpc {
+                url: Some("http://localhost".to_string()),
+                port: Some(8080),
+                nested: Default::default(),
+            },
+            env: vec![("MODE".to_string(), "test".to_string())],
+        })
+        .await?;
+        let _: golem_rust::AgentId = created.agent_id().await?;
+        let _ = ConfigAgentClient::create(Default::default()).await?;
+        let _ = ConfigAgentClient::get_by_id(agent_id)?;
+        let _ = ConfigAgentClient::upsert();
+        let _ = ConfigAgentClient::bind_self()?;
+        Ok(())
+    }
+
     #[test]
     fn test_agent_description_and_prompts() {
         DescriptiveAgentImpl::__register_agent_type();
@@ -1400,30 +1422,42 @@ mod tests {
     }
 
     #[agent_definition(
-        mount = "/c/{customer}/{instance}",
-        phantom_id(path = "instance", optional = true)
+        mount = "/c/{instance}",
+        agent_id(path = "instance"),
+        create_route = "/c",
+        filesystem_bindings = [("/state", "/state")]
     )]
     trait SelectedPathAgent {
-        fn new(customer: String) -> Self;
+        fn new(instance: String) -> Self;
         #[endpoint(get = "/read")]
         fn read(&self) -> String;
     }
     struct SelectedPathAgentImpl(String);
     #[agent_implementation]
     impl SelectedPathAgent for SelectedPathAgentImpl {
-        fn new(customer: String) -> Self {
-            Self(customer)
+        fn new(instance: String) -> Self {
+            Self(instance)
         }
         fn read(&self) -> String {
             self.0.clone()
         }
     }
 
-    #[agent_definition(mount = "/c/{customer}", phantom_id(query = "instance"))]
+    #[agent_definition(mount = "/c", agent_id(query = "instance"), create_route = "/c/create", filesystem_bindings = [("/state", "/state")])]
     trait SelectedQueryAgent {
         fn new(customer: String) -> Self;
         #[endpoint(get = "/read")]
         fn read(&self) -> String;
+        #[endpoint(post = "/body")]
+        fn body(&self, instance: String) -> String;
+        #[endpoint(get = "/header", headers("X-Filter" = "instance"))]
+        fn header(&self, instance: String) -> String;
+        #[endpoint(get = "/path/{instance}")]
+        fn path(&self, instance: String) -> String;
+        #[endpoint(get = "/query?filter={instance}")]
+        fn query(&self, instance: String) -> String;
+        #[endpoint(get = "/stream")]
+        fn stream(&self, instance: golem_rust::agentic::AgentStream<String>);
     }
     struct SelectedQueryAgentImpl(String);
     #[agent_implementation]
@@ -1434,30 +1468,43 @@ mod tests {
         fn read(&self) -> String {
             self.0.clone()
         }
+        fn body(&self, instance: String) -> String {
+            instance
+        }
+        fn header(&self, instance: String) -> String {
+            instance
+        }
+        fn path(&self, instance: String) -> String {
+            instance
+        }
+        fn query(&self, instance: String) -> String {
+            instance
+        }
+        fn stream(&self, _instance: golem_rust::agentic::AgentStream<String>) {}
     }
 
     #[test]
-    fn phantom_http_metadata_from_public_macros() {
+    fn agent_id_http_metadata_from_public_macros() {
         use golem_rust::golem_agentic::golem::agent::common::{
-            PhantomIdBinding, PhantomIdBindingDetails,
+            AgentIdBinding, AgentIdBindingDetails, PathSegment,
         };
         SelectedPathAgentImpl::__register_agent_type();
         SelectedQueryAgentImpl::__register_agent_type();
         let agents = golem_rust::agentic::get_all_agent_types();
-        for (name, expected) in [
+        for (name, expected, create_segments) in [
             (
                 "SelectedPathAgent",
-                PhantomIdBinding::Path(PhantomIdBindingDetails {
+                AgentIdBinding::Path(AgentIdBindingDetails {
                     name: "instance".into(),
-                    optional: true,
                 }),
+                vec!["c"],
             ),
             (
                 "SelectedQueryAgent",
-                PhantomIdBinding::Query(PhantomIdBindingDetails {
+                AgentIdBinding::Query(AgentIdBindingDetails {
                     name: "instance".into(),
-                    optional: false,
                 }),
+                vec!["c", "create"],
             ),
         ] {
             let agent = agents.iter().find(|a| a.type_name == name).unwrap();
@@ -1465,22 +1512,100 @@ mod tests {
                 .http_mount
                 .as_ref()
                 .unwrap()
-                .phantom_id_binding
+                .agent_id_binding
                 .as_ref()
                 .unwrap();
             assert_eq!(
                 std::mem::discriminant(actual),
                 std::mem::discriminant(&expected)
             );
-            let (PhantomIdBinding::Path(actual) | PhantomIdBinding::Query(actual)) = actual;
-            let (PhantomIdBinding::Path(expected) | PhantomIdBinding::Query(expected)) = expected;
+            let (AgentIdBinding::Path(actual) | AgentIdBinding::Query(actual)) = actual;
+            let (AgentIdBinding::Path(expected) | AgentIdBinding::Query(expected)) = expected;
             assert_eq!(actual.name, expected.name);
-            assert_eq!(actual.optional, expected.optional);
+            let create_route = agent
+                .http_mount
+                .as_ref()
+                .unwrap()
+                .create_route
+                .as_ref()
+                .unwrap();
+            assert_eq!(create_route.len(), create_segments.len());
+            for (actual, expected) in create_route.iter().zip(create_segments) {
+                assert!(
+                    matches!(actual, PathSegment::Segment(golem_schema::http::wit::wire::PathSegment::Literal(value)) if value == expected)
+                );
+            }
+            assert_eq!(
+                agent.http_mount.as_ref().unwrap().filesystem_bindings.len(),
+                1
+            );
             let golem_rust::golem_agentic::golem::agent::common::InputSchema::Parameters(fields) =
                 &agent.constructor.input_schema;
             assert_eq!(
                 fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
-                vec!["customer"]
+                vec![if name == "SelectedPathAgent" {
+                    "instance"
+                } else {
+                    "customer"
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn query_id_rejects_only_actual_implicit_query_collision() {
+        use golem_rust::golem_agentic::golem::agent::common::HttpMethod;
+        use golem_schema::http::wit::wire as http;
+        SelectedQueryAgentImpl::__register_agent_type();
+        let mut agent = golem_rust::agentic::get_all_agent_types()
+            .into_iter()
+            .find(|agent| agent.type_name == "SelectedQueryAgent")
+            .unwrap();
+        assert!(golem_rust::agentic::validate_wire_agent_http(&agent).is_ok());
+        let extended =
+            golem_rust::agentic::ExtendedAgentType::from_agent_type(agent.clone()).unwrap();
+        let stream = extended
+            .methods
+            .iter()
+            .find(|method| method.name == "stream")
+            .unwrap();
+        assert!(
+            golem_rust::agentic::validate_http_endpoint(
+                "SelectedQueryAgent",
+                stream,
+                extended.http_mount.as_ref()
+            )
+            .is_ok()
+        );
+        let mut explicit = agent.clone();
+        explicit
+            .methods
+            .iter_mut()
+            .find(|method| method.name == "stream")
+            .unwrap()
+            .http_endpoint[0]
+            .query_vars
+            .push(http::QueryVariable {
+                query_param_name: "instance".into(),
+                variable_name: "instance".into(),
+            });
+        assert!(golem_rust::agentic::validate_wire_agent_http(&explicit).is_err());
+        for method in [
+            http::HttpMethod::Get,
+            http::HttpMethod::Head,
+            http::HttpMethod::Delete,
+        ] {
+            agent
+                .methods
+                .iter_mut()
+                .find(|method| method.name == "body")
+                .unwrap()
+                .http_endpoint[0]
+                .http_method = HttpMethod::Method(method);
+            assert!(
+                golem_rust::agentic::validate_wire_agent_http(&agent)
+                    .unwrap_err()
+                    .contains("conflicts")
             );
         }
     }
@@ -1776,15 +1901,15 @@ mod tests {
         }
 
         async fn foo(&self, name: String) -> String {
-            AgentWithContextInjection1Client::get(name.clone())
+            AgentWithContextInjection1Client::upsert(name.clone())
                 .foo(name.clone())
                 .await;
 
-            AgentWithContextInjection2Client::get(name.clone(), 1, "required".into())
+            AgentWithContextInjection2Client::upsert(name.clone(), 1, "required".into())
                 .foo(name.clone(), 1, "required".into())
                 .await;
 
-            AgentWithContextInjection3Client::get(name.clone(), 1, Some("not-undefined".into()))
+            AgentWithContextInjection3Client::upsert(name.clone(), 1, Some("not-undefined".into()))
                 .foo_without_context_1("name".into(), 1)
                 .await;
 
@@ -2039,9 +2164,11 @@ mod tests {
     trait CustomSnapshotAgent {
         fn new(data: String) -> Self;
         fn get_data(&self) -> String;
+        fn get_constructor(&self) -> String;
     }
 
     struct CustomSnapshotAgentImpl {
+        constructor: String,
         data: String,
     }
 
@@ -2049,18 +2176,29 @@ mod tests {
     impl CustomSnapshotAgent for CustomSnapshotAgentImpl {
         fn new(data: String) -> Self {
             CUSTOM_SNAPSHOT_AGENT_CONSTRUCTIONS.fetch_add(1, Ordering::SeqCst);
-            Self { data }
+            Self {
+                constructor: data.clone(),
+                data,
+            }
         }
         fn get_data(&self) -> String {
             self.data.clone()
         }
+        fn get_constructor(&self) -> String {
+            self.constructor.clone()
+        }
 
         async fn load_snapshot(
             bytes: Vec<u8>,
-            _context: golem_rust::agentic::SnapshotRestoreContext,
+            context: golem_rust::agentic::SnapshotRestoreContext,
         ) -> Result<Self, String> {
             CUSTOM_SNAPSHOT_AGENT_RESTORATIONS.fetch_add(1, Ordering::SeqCst);
+            let mut parameters = golem_rust::agentic::DirectAgentInput::new(context.parameters)
+                .map_err(|e| e.to_string())?;
+            let constructor = parameters.take::<String>().map_err(|e| e.to_string())?;
+            parameters.finish().map_err(|e| e.to_string())?;
             Ok(Self {
+                constructor,
                 data: String::from_utf8(bytes).map_err(|e| e.to_string())?,
             })
         }
@@ -2123,7 +2261,7 @@ mod tests {
         let context = SnapshotRestoreContext {
             agent_type: agent_type.0.clone(),
             parameters: wire_input(vec![SchemaValue::String("created".to_string())]),
-            phantom_id: None,
+            agent_id: golem_rust::AgentId::new(golem_rust::Uuid::nil()),
         };
         let restored = with_agent_initiator(
             |initiator| async move {
@@ -2176,8 +2314,10 @@ mod tests {
         use golem_rust::agentic::{
             BaseAgent, SnapshotRestoreContext, get_resolved_agent, with_agent_initiator,
         };
+        use golem_rust::schema::wit::direct;
 
         let agent = CustomSnapshotAgentImpl {
+            constructor: "hello".to_string(),
             data: "hello-world".to_string(),
         };
 
@@ -2196,7 +2336,7 @@ mod tests {
         let context = || SnapshotRestoreContext {
             agent_type: agent_type.0.clone(),
             parameters: wire_input(vec![SchemaValue::String("original".to_string())]),
-            phantom_id: None,
+            agent_id: golem_rust::AgentId::new(golem_rust::Uuid::nil()),
         };
 
         let failed_context = context();
@@ -2237,6 +2377,23 @@ mod tests {
             panic!("expected bytes");
         };
         assert_eq!(saved, b"new-data");
+
+        #[derive(IntoWire)]
+        struct NoArguments {}
+        let constructor = restored
+            .agent
+            .borrow_mut()
+            .invoke(
+                "get_constructor".to_string(),
+                direct::encode(&NoArguments {}).unwrap(),
+                InvocationContext::anonymous(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            direct::decode::<String>(constructor.value.unwrap()).unwrap(),
+            "original"
+        );
     }
 
     #[test]
@@ -3423,7 +3580,7 @@ mod tests {
         let context = || SnapshotRestoreContext {
             agent_type: agent_type.0.clone(),
             parameters: wire_input(vec![SchemaValue::U32(0)]),
-            phantom_id: None,
+            agent_id: golem_rust::AgentId::new(golem_rust::Uuid::nil()),
         };
         for wrong in [
             SnapshotData::Json(b"null".to_vec()),

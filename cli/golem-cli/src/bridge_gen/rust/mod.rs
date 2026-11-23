@@ -157,56 +157,201 @@ impl RustRuntimeConfig {
                     #root_reconnect_policy_reexport
 
                     pub mod __golem_bridge_runtime {
-                    pub use golem_client::bridge::ClientError;
                     pub use golem_client::bridge::GolemServer;
                     pub use golem_client::bridge::ReconnectPolicy;
 
                     #scalar_checks
 
+                    /// The failure of a call of the client.
+                    #[derive(Debug, Clone)]
+                    pub enum ClientError {
+                        InvocationFailed { message: String },
+                        /// The agent does not exist: an unknown ID, the ID of an agent of another
+                        /// type, or an agent that no longer has the fingerprint its client pinned.
+                        NotFound { message: String },
+                        /// A keyed create found an existing agent with the key.
+                        Conflict { message: String },
+                        /// A streaming call could not reach the server within its reconnect window.
+                        Unreachable {
+                            endpoint: String,
+                            window: std::time::Duration,
+                            last_cause: String,
+                        },
+                    }
+
+                    impl std::fmt::Display for ClientError {
+                        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                            match self {
+                                ClientError::InvocationFailed { message }
+                                | ClientError::NotFound { message }
+                                | ClientError::Conflict { message } => write!(f, "{message}"),
+                                ClientError::Unreachable { endpoint, window, last_cause } => {
+                                    write!(f, "{endpoint} was unreachable for {window:?}: {last_cause}")
+                                }
+                            }
+                        }
+                    }
+
+                    impl std::error::Error for ClientError {}
+
+                    impl From<golem_client::bridge::ClientError> for ClientError {
+                        fn from(error: golem_client::bridge::ClientError) -> Self {
+                            match error {
+                                golem_client::bridge::ClientError::InvocationFailed { message } => {
+                                    ClientError::InvocationFailed { message }
+                                }
+                                golem_client::bridge::ClientError::Unreachable { endpoint, window, last_cause } => {
+                                    ClientError::Unreachable { endpoint, window, last_cause }
+                                }
+                            }
+                        }
+                    }
+
+                    impl From<golem_client::invocation_session::SessionTransportError> for ClientError {
+                        fn from(error: golem_client::invocation_session::SessionTransportError) -> Self {
+                            golem_client::bridge::ClientError::from(error).into()
+                        }
+                    }
+
+                    impl From<golem_client::Error<golem_client::api::AgentError>> for ClientError {
+                        fn from(error: golem_client::Error<golem_client::api::AgentError>) -> Self {
+                            let message = error.to_string();
+                            match error {
+                                golem_client::Error::Item(golem_client::api::AgentError::Error404(_)) => ClientError::NotFound { message },
+                                golem_client::Error::Item(golem_client::api::AgentError::Error409(_)) => ClientError::Conflict { message },
+                                _ => ClientError::InvocationFailed { message },
+                            }
+                        }
+                    }
+
+                    impl From<golem_client::Error<golem_client::api::WorkerError>> for ClientError {
+                        fn from(error: golem_client::Error<golem_client::api::WorkerError>) -> Self {
+                            let message = error.to_string();
+                            match error {
+                                golem_client::Error::Item(golem_client::api::WorkerError::Error404(_)) => ClientError::NotFound { message },
+                                _ => ClientError::InvocationFailed { message },
+                            }
+                        }
+                    }
+
+                    /// Options of `create`. `C` is the agent type's local configuration: `()`
+                    /// without one, the `Option` of the value of one declaration, or a tuple of
+                    /// these in declaration order.
+                    #[derive(Debug, Clone, Default)]
+                    pub struct CreateOptions<C = ()> {
+                        /// Creates the keyed agent of the constructor parameters, which fails with
+                        /// [`ClientError::Conflict`] when that agent exists. Without it, each create
+                        /// makes a new agent with a new ID.
+                        pub keyed: bool,
+                        /// Overrides of the local configuration values; `None` keeps a value.
+                        pub config: C,
+                        /// Environment variables added to the ones the manifest defines.
+                        pub env: std::collections::HashMap<String, String>,
+                    }
+
+                    pub(super) fn api_context(config: &golem_client::bridge::Configuration) -> golem_client::Context {
+                        golem_client::Context {
+                            client: reqwest_middleware::ClientWithMiddleware::from(
+                                reqwest::Client::builder().build().unwrap(),
+                            ),
+                            base_url: config.server.url(),
+                            security_token: config.server.token(),
+                        }
+                    }
+
+                    /// Resolves the ID of the configured environment of the configured application
+                    /// in the account of the server token.
+                    pub(super) async fn environment_id(config: &golem_client::bridge::Configuration) -> Result<uuid::Uuid, ClientError> {
+                        golem_client::bridge::environment_id(&config.server.url(), &config.server.token(), &config.app_name, &config.env_name)
+                            .await
+                            .map_err(|error| ClientError::InvocationFailed { message: error.to_string() })
+                    }
+
                     pub(super) async fn create_agent(
                         config: &golem_client::bridge::Configuration,
                         agent_type_name: &str,
                         constructor_parameters: schema::SchemaValue,
-                        phantom_id: Option<uuid::Uuid>,
+                        keyed: bool,
                         agent_config: Vec<golem_client::model::AgentConfigEntryDto>,
-                    ) -> Result<golem_client::model::AgentId, ClientError> {
-                        let client = reqwest_middleware::ClientWithMiddleware::from(
-                            reqwest::Client::builder().build().unwrap()
-                        );
-                        let context = golem_client::Context {
-                            client,
-                            base_url: config.server.url(),
-                            security_token: config.server.token(),
+                        env: std::collections::HashMap<String, String>,
+                    ) -> Result<golem_client::model::AgentReference, ClientError> {
+                        let environment_id = environment_id(config).await?;
+                        let api_client = golem_client::api::AgentClientLive {
+                            context: api_context(config),
                         };
-                        let api_client = golem_client::api::AgentClientLive { context };
-                        let response = golem_client::api::AgentClient::create_agent(
+                        Ok(golem_client::api::AgentClient::create_agent(
                             &api_client,
+                            &environment_id,
+                            agent_type_name,
+                            None,
                             &golem_client::model::CreateAgentRequest {
-                                app_name: config.app_name.to_string(),
-                                env_name: config.env_name.to_string(),
-                                agent_type_name: agent_type_name.to_string(),
-                                parameters: schema::ExternalSchemaValue::try_from(
-                                    constructor_parameters,
-                                ).map_err(|__e| ClientError::InvocationFailed {
-                                    message: format!("Failed to validate constructor parameters: {__e}"),
-                                })?,
-                                phantom_id,
+                                parameters: schema::ExternalSchemaValue::try_from(constructor_parameters)
+                                    .map_err(|__e| ClientError::InvocationFailed {
+                                        message: format!("Failed to validate constructor parameters: {__e}"),
+                                    })?,
                                 config: Some(agent_config),
+                                env: Some(env),
+                                keyed: Some(keyed),
                             },
+                        ).await?)
+                    }
+
+                    pub(super) async fn upsert_agent(
+                        config: &golem_client::bridge::Configuration,
+                        agent_type_name: &str,
+                        constructor_parameters: schema::SchemaValue,
+                    ) -> Result<golem_client::model::AgentReference, ClientError> {
+                        let environment_id = environment_id(config).await?;
+                        let api_client = golem_client::api::AgentClientLive {
+                            context: api_context(config),
+                        };
+                        Ok(golem_client::api::AgentClient::upsert_agent(
+                            &api_client,
+                            &environment_id,
+                            agent_type_name,
+                            &golem_client::model::AgentKeyRequest {
+                                parameters: schema::ExternalSchemaValue::try_from(constructor_parameters)
+                                    .map_err(|__e| ClientError::InvocationFailed {
+                                        message: format!("Failed to validate constructor parameters: {__e}"),
+                                    })?,
+                            },
+                        ).await?)
+                    }
+
+                    /// The fingerprint of the existing agent of `agent_type_name` with the ID.
+                    pub(super) async fn agent_fingerprint(
+                        config: &golem_client::bridge::Configuration,
+                        agent_type_name: &str,
+                        agent_id: golem_common::model::AgentId,
+                    ) -> Result<uuid::Uuid, ClientError> {
+                        let environment_id = environment_id(config).await?;
+                        let api_client = golem_client::api::WorkerClientLive {
+                            context: api_context(config),
+                        };
+                        let metadata = golem_client::api::WorkerClient::get_worker_metadata(
+                            &api_client,
+                            &environment_id,
+                            &agent_id.0,
+                            None,
                         ).await?;
-                        Ok(response.agent_id)
+                        if metadata.agent_type_name.as_ref().map(|name| name.0.as_str()) != Some(agent_type_name) {
+                            return Err(ClientError::NotFound {
+                                message: format!("Agent {} is not a {agent_type_name} agent", agent_id.0),
+                            });
+                        }
+                        Ok(metadata.fingerprint.0)
                     }
 
                     #[derive(Debug, Clone)]
                     pub struct EphemeralInvocationResult<T> {
-                        pub agent_id: golem_client::model::AgentId,
+                        pub agent_id: golem_common::model::AgentId,
                         pub idempotency_key: uuid::Uuid,
                         pub value: T,
                     }
 
                     #[derive(Debug, Clone)]
                     pub struct EphemeralInvocationReceipt {
-                        pub agent_id: golem_client::model::AgentId,
+                        pub agent_id: golem_common::model::AgentId,
                         pub idempotency_key: uuid::Uuid,
                     }
 
@@ -234,6 +379,22 @@ impl RustRuntimeConfig {
                         RpcFailed { message: String },
                         MissingResult { method: String },
                         ConfigEncodingFailed { message: String },
+                        /// The agent does not exist: an unknown ID, or the ID of an agent of
+                        /// another type.
+                        NotFound { message: String },
+                        /// A keyed create found an existing agent with the key.
+                        Conflict { message: String },
+                    }
+
+                    impl From<golem_rust::GolemReflectError> for ClientError {
+                        fn from(error: golem_rust::GolemReflectError) -> Self {
+                            match error {
+                                golem_rust::GolemReflectError::RemoteNotFound(message) => ClientError::NotFound { message },
+                                golem_rust::GolemReflectError::Conflict(message) => ClientError::Conflict { message },
+                                golem_rust::GolemReflectError::SchemaEncode(message) => ClientError::SchemaEncodeFailed { message },
+                                error => ClientError::RpcFailed { message: error.to_string() },
+                            }
+                        }
                     }
 
                     pub mod schema {
@@ -394,6 +555,7 @@ impl RustBridgeGenerator {
                     "__golem_bridge_types",
                     "AgentBinary",
                     "AgentText",
+                    "CreateOptions",
                     "Quantity",
                     "QuantityUnit",
                     "QuantityValue",
@@ -557,7 +719,8 @@ impl RustBridgeGenerator {
             .cloned()
             .collect();
 
-        let mut config_param_defs = Vec::new();
+        let mut config_param_names = Vec::new();
+        let mut config_param_types = Vec::new();
         let mut config_encode_stmts = Vec::new();
         for config in &local_configs {
             let param_name_str = format!(
@@ -571,7 +734,8 @@ impl RustBridgeGenerator {
             );
             let param_name = Ident::new(&self.to_rust_ident(&param_name_str), Span::call_site());
             let param_type = self.type_reference(&config.value_type, false)?;
-            config_param_defs.push(quote! { #param_name: Option<#param_type> });
+            config_param_names.push(param_name.clone());
+            config_param_types.push(quote! { Option<#param_type> });
 
             let path_segments: Vec<TokenStream> = config
                 .path
@@ -601,10 +765,6 @@ impl RustBridgeGenerator {
                         &__config_graph.root,
                         &__config_value,
                     ).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to render config value: {__e}") })?;
-                    session_config.push(golem_common::model::invocation_session_public::PublicConfigEntry {
-                        path: vec![#(#path_segments),*],
-                        value: __config_json.clone(),
-                    });
                     agent_config.push(golem_client::model::AgentConfigEntryDto {
                         path: vec![#(#path_segments),*],
                         value: __config_json.into(),
@@ -613,107 +773,119 @@ impl RustBridgeGenerator {
             });
         }
 
-        let get_with_config_method = if self.agent_type.mode == AgentMode::Durable
-            && !local_configs.is_empty()
-        {
-            quote! {
-                pub async fn get_with_config(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                    let constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
-                    let mut agent_config = Vec::new();
-                    let mut session_config = Vec::new();
-                    #(#config_encode_stmts)*
-                    Self::__create(constructor_parameters, None, agent_config, session_config).await
-                }
-            }
-        } else {
-            quote! {}
+        let durable = self.agent_type.mode == AgentMode::Durable;
+        let config_type = match config_param_types.as_slice() {
+            [] => quote! { () },
+            [config_type] => quote! { #config_type },
+            config_types => quote! { (#(#config_types),*) },
         };
-
-        let new_phantom_doc = if self.agent_type.mode == AgentMode::Durable {
-            "Creates a new agent instance with a fresh random phantom id."
-        } else {
-            "Creates a local logical proxy; each invocation receives a fresh final identity."
+        let bind_config = match config_param_names.as_slice() {
+            [] => quote! {},
+            [name] => quote! { let #name = options.config; },
+            names => quote! { let (#(#names),*) = options.config; },
         };
-        let with_config_methods = if !local_configs.is_empty() {
-            let get_phantom_with_config = (self.agent_type.mode == AgentMode::Durable).then(|| quote! {
-                pub async fn get_phantom_with_config(uuid: uuid::Uuid, #(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                    let constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
-                    let mut agent_config = Vec::new();
-                    let mut session_config = Vec::new();
-                    #(#config_encode_stmts)*
-                    Self::__create(constructor_parameters, Some(uuid), agent_config, session_config).await
-                }
-            });
-            let new_phantom_id = if self.agent_type.mode == AgentMode::Durable {
-                quote! { Some(uuid::Uuid::new_v4()) }
-            } else {
-                quote! { None }
-            };
-            quote! {
-                #get_with_config_method
-                #get_phantom_with_config
-
-                #[doc = #new_phantom_doc]
-                pub async fn new_phantom_with_config(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                    let constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
-                    let mut agent_config = Vec::new();
-                    let mut session_config = Vec::new();
-                    #(#config_encode_stmts)*
-                    Self::__create(constructor_parameters, #new_phantom_id, agent_config, session_config).await
-                }
-            }
-        } else {
-            quote! {}
-        };
-
         let global_config = self.global_config();
 
-        let get_method = if self.agent_type.mode == AgentMode::Durable {
+        let upsert_doc = if durable {
+            "Addresses the keyed agent of the constructor parameters. It does not contact the server: the server creates the agent on the first invocation when it is missing."
+        } else {
+            "Addresses the agent type; each invocation runs on a new one-shot instance."
+        };
+        let durable_constructors = durable.then(|| {
             quote! {
-                pub async fn get(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                /// Creates an agent, and returns after its initialization.
+                ///
+                /// With `keyed`, it creates the keyed agent of the constructor parameters and fails
+                /// with [`ClientError::Conflict`](crate::__golem_bridge_runtime::ClientError::Conflict)
+                /// when that agent exists; otherwise the new agent has no key and a new ID. `config`
+                /// overrides local configuration values, and `env` adds environment variables to the
+                /// ones the manifest defines.
+                pub async fn create(#(#constructor_param_defs,)* options: crate::__golem_bridge_runtime::CreateOptions<#config_type>) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
-                    Self::__create(constructor_parameters, None, vec![], vec![]).await
+                    let mut agent_config = Vec::new();
+                    #bind_config
+                    #(#config_encode_stmts)*
+                    let config = CONFIG.get().expect("Configuration has not been set");
+                    let reference = crate::__golem_bridge_runtime::create_agent(
+                        config,
+                        #agent_type_name,
+                        constructor_parameters,
+                        options.keyed,
+                        agent_config,
+                        options.env,
+                    ).await?;
+                    let agent_id = golem_common::model::AgentId(reference.agent_id);
+                    Ok(Self {
+                        constructor_parameters: None,
+                        target: Some((agent_id, reference.agent_fingerprint)),
+                        agent_id: std::sync::Arc::new(std::sync::OnceLock::from(agent_id)),
+                    })
+                }
+
+                /// Addresses the existing agent with the ID. It never creates the agent: an unknown
+                /// ID, or the ID of an agent of another type, fails with
+                /// [`ClientError::NotFound`](crate::__golem_bridge_runtime::ClientError::NotFound).
+                pub async fn get_by_id(agent_id: golem_common::model::AgentId) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                    let config = CONFIG.get().expect("Configuration has not been set");
+                    let fingerprint = crate::__golem_bridge_runtime::agent_fingerprint(config, #agent_type_name, agent_id).await?;
+                    Ok(Self {
+                        constructor_parameters: None,
+                        target: Some((agent_id, fingerprint)),
+                        agent_id: std::sync::Arc::new(std::sync::OnceLock::from(agent_id)),
+                    })
+                }
+
+                /// Returns the ID of the agent. A client of `upsert` asks the server the first time,
+                /// and the server creates the agent when it is missing.
+                pub async fn agent_id(&self) -> Result<golem_common::model::AgentId, crate::__golem_bridge_runtime::ClientError> {
+                    if let Some(agent_id) = self.agent_id.get() {
+                        return Ok(*agent_id);
+                    }
+                    let config = CONFIG.get().expect("Configuration has not been set");
+                    let reference = crate::__golem_bridge_runtime::upsert_agent(
+                        config,
+                        #agent_type_name,
+                        self.keyed_parameters()?.clone(),
+                    ).await?;
+                    let agent_id = golem_common::model::AgentId(reference.agent_id);
+                    Ok(*self.agent_id.get_or_init(|| agent_id))
                 }
             }
-        } else {
-            quote! {}
-        };
-        let get_phantom_method = (self.agent_type.mode == AgentMode::Durable).then(|| quote! {
-            pub async fn get_phantom(uuid: uuid::Uuid, #(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                let constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
-                Self::__create(constructor_parameters, Some(uuid), vec![], vec![]).await
-            }
         });
-        let new_phantom_id = if self.agent_type.mode == AgentMode::Durable {
-            quote! { Some(uuid::Uuid::new_v4()) }
-        } else {
-            quote! { None }
-        };
-        let agent_id_field = (self.agent_type.mode == AgentMode::Durable)
-            .then(|| quote! { agent_id: golem_client::model::AgentId, });
-        let agent_config_field = (self.agent_type.mode == AgentMode::Ephemeral).then(|| {
-            quote! { agent_config: Vec<golem_client::model::AgentConfigEntryDto>, }
-        });
-        let agent_id_accessor = (self.agent_type.mode == AgentMode::Durable).then(|| {
+        let client_fields = if durable {
             quote! {
-                pub fn agent_id(&self) -> &golem_client::model::AgentId { &self.agent_id }
+                /// The constructor parameters used by a client of `upsert` to address the agent by key.
+                constructor_parameters: Option<crate::__golem_bridge_runtime::schema::SchemaValue>,
+                /// The ID and the fingerprint of the agent of a client of `create` or `get_by_id`;
+                /// its invocations name the agent by them.
+                target: Option<(golem_common::model::AgentId, uuid::Uuid)>,
+                agent_id: std::sync::Arc<std::sync::OnceLock<golem_common::model::AgentId>>,
             }
-        });
-        let ephemeral_local_return = (self.agent_type.mode == AgentMode::Ephemeral).then(|| {
+        } else {
             quote! {
-                return Ok(Self { constructor_parameters, phantom_id: None, agent_config, session_config });
+                constructor_parameters: Option<crate::__golem_bridge_runtime::schema::SchemaValue>,
             }
-        });
-        let invocation_config = if self.agent_type.mode == AgentMode::Ephemeral {
-            quote! { Some(self.agent_config.clone()) }
-        } else {
-            quote! { None }
         };
-        let created_fields = if self.agent_type.mode == AgentMode::Durable {
-            quote! { constructor_parameters, phantom_id, agent_id, session_config }
+        let upsert_fields = if durable {
+            quote! {
+                constructor_parameters: Some(constructor_parameters),
+                target: None,
+                agent_id: std::sync::Arc::new(std::sync::OnceLock::new()),
+            }
         } else {
-            {
-                quote! { constructor_parameters, phantom_id: None, agent_config, session_config }
+            quote! { constructor_parameters: Some(constructor_parameters), }
+        };
+        let invocation_target = if durable {
+            quote! {
+                let (agent_id, parameters, expected_fingerprint) = match &self.target {
+                    Some((agent_id, fingerprint)) => (Some(agent_id.0), None, Some(*fingerprint)),
+                    None => (None, Some(self.keyed_parameters()?.clone()), None),
+                };
+            }
+        } else {
+            quote! {
+                let (agent_id, parameters, expected_fingerprint) =
+                    (None, Some(self.keyed_parameters()?.clone()), None);
             }
         };
 
@@ -766,27 +938,17 @@ impl RustBridgeGenerator {
 
             #[derive(Debug, Clone)]
             pub struct #client_struct_name {
-                constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue,
-                phantom_id: Option<uuid::Uuid>,
-                session_config: Vec<golem_common::model::invocation_session_public::PublicConfigEntry>,
-                #agent_config_field
-                #agent_id_field
+                #client_fields
             }
 
             impl #client_struct_name {
-                #get_method
-
-                #get_phantom_method
-
-                #[doc = #new_phantom_doc]
-                pub async fn new_phantom(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                #[doc = #upsert_doc]
+                pub fn upsert(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
-                    Self::__create(constructor_parameters, #new_phantom_id, vec![], vec![]).await
+                    Ok(Self { #upsert_fields })
                 }
 
-                #with_config_methods
-
-                #agent_id_accessor
+                #durable_constructors
 
                 /// Returns the configured worker service URL.
                 pub fn worker_service_url() -> reqwest::Url {
@@ -798,23 +960,11 @@ impl RustBridgeGenerator {
                     CONFIG.get().expect("Configuration has not been set").server.token()
                 }
 
-                async fn __create(
-                    constructor_parameters: crate::__golem_bridge_runtime::schema::SchemaValue,
-                    phantom_id: Option<uuid::Uuid>,
-                    agent_config: Vec<golem_client::model::AgentConfigEntryDto>,
-                    session_config: Vec<golem_common::model::invocation_session_public::PublicConfigEntry>,
-                ) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                    #ephemeral_local_return
-                    let config = CONFIG.get().expect("Configuration has not been set");
-                    let agent_id = crate::__golem_bridge_runtime::create_agent(
-                        config,
-                        #agent_type_name,
-                        constructor_parameters.clone(),
-                        phantom_id,
-                        agent_config,
-                    ).await?;
-
-                    Ok(Self { #created_fields })
+                /// The constructor parameters that name a keyed agent.
+                fn keyed_parameters(&self) -> Result<&crate::__golem_bridge_runtime::schema::SchemaValue, crate::__golem_bridge_runtime::ClientError> {
+                    self.constructor_parameters.as_ref().ok_or_else(|| crate::__golem_bridge_runtime::ClientError::InvocationFailed {
+                        message: format!("The {} client addresses an agent by ID and has no constructor parameters", #agent_type_name),
+                    })
                 }
 
                 #(#methods)*
@@ -827,31 +977,25 @@ impl RustBridgeGenerator {
                     schedule_at: Option<chrono::DateTime<chrono::Utc>>,
                 ) -> Result<golem_client::model::AgentInvocationResult, crate::__golem_bridge_runtime::ClientError> {
                     let config = CONFIG.get().expect("Configuration has not been set");
-
-                    let client = reqwest_middleware::ClientWithMiddleware::from(
-                        reqwest::Client::builder().build().unwrap()
-                    );
-                    let context = golem_client::Context {
-                        client,
-                        base_url: config.server.url(),
-                        security_token: config.server.token(),
+                    #invocation_target
+                    let environment_id = crate::__golem_bridge_runtime::environment_id(config).await?;
+                    let client = golem_client::api::AgentClientLive {
+                        context: crate::__golem_bridge_runtime::api_context(config),
                     };
-                    let client = golem_client::api::AgentClientLive { context };
                     let response = golem_client::api::AgentClient::invoke_agent(
                         &client,
+                        &environment_id,
+                        #agent_type_name,
                         None,
                         &golem_client::model::AgentInvocationRequest {
-                            app_name: config.app_name.to_string(),
-                            env_name: config.env_name.to_string(),
-                            agent_type_name: #agent_type_name.to_string(),
-                            parameters: crate::__golem_bridge_runtime::schema::ExternalSchemaValue::try_from(
-                                self.constructor_parameters.clone(),
-                            ).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed {
-                                message: format!("Failed to validate constructor parameters: {__e}"),
-                            })?,
-                            phantom_id: self.phantom_id,
-                            config: #invocation_config,
-                            method_name: method_name.to_string(),
+                            agent_id,
+                            parameters: parameters
+                                .map(crate::__golem_bridge_runtime::schema::ExternalSchemaValue::try_from)
+                                .transpose()
+                                .map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed {
+                                    message: format!("Failed to validate constructor parameters: {__e}"),
+                                })?,
+                            method: method_name.to_string(),
                             method_parameters: crate::__golem_bridge_runtime::schema::ExternalSchemaValue::try_from(
                                 method_parameters,
                             ).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed {
@@ -859,9 +1003,7 @@ impl RustBridgeGenerator {
                             })?,
                             mode,
                             schedule_at,
-                            idempotency_key: None,
-                            deployment_revision: None,
-                            owner_account_email: None,
+                            expected_fingerprint,
                         },
                     )
                     .await?;
@@ -870,6 +1012,8 @@ impl RustBridgeGenerator {
             }
 
             #global_config
+
+            pub use crate::__golem_bridge_runtime::CreateOptions;
             }
 
             #[cfg(feature = "client")]
@@ -890,8 +1034,6 @@ impl RustBridgeGenerator {
         let constructor_param_names = self.input_param_ident_names_unique(&constructor_input)?;
         let constructor_param_defs =
             self.input_param_defs_with_ident_names(&constructor_input, &constructor_param_names)?;
-        let constructor_param_refs =
-            self.input_param_refs_with_ident_names(&constructor_param_names);
         let constructor_params_value =
             self.guest_input_wire(&constructor_input, &constructor_param_names, false)?;
 
@@ -905,28 +1047,13 @@ impl RustBridgeGenerator {
 
         let mut impl_names = ParameterNaming::new();
         let guest_method_names = self.allocate_guest_method_names(&mut impl_names)?;
-        let has_get_method = guest_method_names
-            .iter()
-            .any(|names| names.await_name == "get");
-        let get_method_name = (self.agent_type.mode == AgentMode::Durable).then(|| {
-            if has_get_method {
-                Self::ident_from_name(impl_names.fresh("get_"))
-            } else {
-                Self::ident_from_name(impl_names.fresh("get"))
-            }
-        });
-        let get_phantom_method_name = (self.agent_type.mode == AgentMode::Durable)
-            .then(|| Self::ident_from_name(impl_names.fresh("get_phantom")));
-        let new_phantom_method_name = Self::ident_from_name(impl_names.fresh("new_phantom"));
-        let get_with_config_method_name = (self.agent_type.mode == AgentMode::Durable
-            && !local_configs.is_empty())
-        .then(|| Self::ident_from_name(impl_names.fresh("get_with_config")));
-        let get_phantom_with_config_method_name = (self.agent_type.mode == AgentMode::Durable
-            && !local_configs.is_empty())
-        .then(|| Self::ident_from_name(impl_names.fresh("get_phantom_with_config")));
-        let new_phantom_with_config_method_name = (!local_configs.is_empty())
-            .then(|| Self::ident_from_name(impl_names.fresh("new_phantom_with_config")));
-        let create_method_name = Self::ident_from_name(impl_names.fresh("__create"));
+        let durable = self.agent_type.mode == AgentMode::Durable;
+        let upsert_method_name = Self::ident_from_name(impl_names.fresh("upsert"));
+        let create_method_name = durable.then(|| Self::ident_from_name(impl_names.fresh("create")));
+        let get_by_id_method_name =
+            durable.then(|| Self::ident_from_name(impl_names.fresh("get_by_id")));
+        let agent_id_method_name =
+            durable.then(|| Self::ident_from_name(impl_names.fresh("agent_id")));
         let with_scope_card_method_name =
             Self::ident_from_name(impl_names.fresh("with_scope_card"));
         let set_default_scope_card_method_name =
@@ -956,20 +1083,13 @@ impl RustBridgeGenerator {
             )?);
         }
 
-        let mut create_signature_names = ParameterNaming::new();
-        create_signature_names.reserve_many(constructor_param_names.clone());
-        let phantom_id_param = Self::ident_from_name(
-            create_signature_names.fresh(self.to_rust_ident("__golem_bridge_phantom_id")),
-        );
-        let agent_config_param = Self::ident_from_name(
-            create_signature_names.fresh(self.to_rust_ident("__golem_bridge_agent_config")),
-        );
-
-        let mut config_param_defs = Vec::new();
+        let mut config_param_names = Vec::new();
+        let mut config_param_types = Vec::new();
         let mut config_encode_stmts = Vec::new();
         let mut config_names = ParameterNaming::new();
         config_names.reserve_many(constructor_param_names.clone());
-        config_names.reserve(phantom_id_param.to_string());
+        let options_param =
+            Self::ident_from_name(config_names.fresh(self.to_rust_ident("__golem_bridge_options")));
         let agent_config_values = Self::ident_from_name(
             config_names.fresh(self.to_rust_ident("__golem_bridge_agent_config_values")),
         );
@@ -986,7 +1106,8 @@ impl RustBridgeGenerator {
             let param_name =
                 Self::ident_from_name(config_names.fresh(self.to_rust_ident(&param_name_str)));
             let param_type = self.type_reference(&config.value_type, false)?;
-            config_param_defs.push(quote! { #param_name: Option<#param_type> });
+            config_param_names.push(param_name.clone());
+            config_param_types.push(quote! { Option<#param_type> });
 
             let path_segments: Vec<TokenStream> = config
                 .path
@@ -1013,88 +1134,78 @@ impl RustBridgeGenerator {
             });
         }
 
-        let get_with_config_method = if self.agent_type.mode == AgentMode::Durable
-            && !local_configs.is_empty()
-        {
-            let get_with_config_method_name = get_with_config_method_name
-                .as_ref()
-                .expect("durable agents with local config allocate get_with_config");
+        let config_type = match config_param_types.as_slice() {
+            [] => quote! { () },
+            [config_type] => quote! { #config_type },
+            config_types => quote! { (#(#config_types),*) },
+        };
+        let bind_config = match config_param_names.as_slice() {
+            [] => quote! {},
+            [name] => quote! { let #name = #options_param.config; },
+            names => quote! { let (#(#names),*) = #options_param.config; },
+        };
+        let upsert_doc = if durable {
+            "Connects to the keyed agent of the constructor parameters, and creates it when it is missing. An initialized agent is reused without rerunning its constructor."
+        } else {
+            "Connects to the agent type; each invocation runs on a new one-shot instance."
+        };
+        let new_client = quote! {
+            Self {
+                wasm_rpc,
+                __golem_default_scope_card: ::core::default::Default::default(),
+            }
+        };
+        let durable_constructors = durable.then(|| {
+            let create_method_name = create_method_name.as_ref().expect("durable agents allocate create");
+            let get_by_id_method_name = get_by_id_method_name.as_ref().expect("durable agents allocate get_by_id");
+            let agent_id_method_name = agent_id_method_name.as_ref().expect("durable agents allocate agent_id");
             quote! {
-                pub fn #get_with_config_method_name(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                /// Creates a durable agent, and returns after its successful initialization.
+                ///
+                /// With `keyed`, it creates the keyed agent of the constructor parameters and fails
+                /// with [`golem_rust::GolemReflectError::Conflict`] when it already exists. Otherwise
+                /// the new agent has no key and a new ID. `config` overrides the agent's local
+                /// configuration, and `env` adds environment variables to the ones the manifest defines.
+                pub async fn #create_method_name(
+                    #(#constructor_param_defs,)*
+                    #options_param: golem_rust::CreateOptions<#config_type>,
+                ) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let mut #agent_config_values = Vec::new();
+                    #bind_config
                     #(#config_encode_stmts)*
-                    Self::#create_method_name(None, #agent_config_values, #(#constructor_param_refs),*)
+                    let constructor_value = #constructor_params_value;
+                    let wasm_rpc = golem_rust::agentic::__create_agent(
+                        #agent_type_name,
+                        constructor_value,
+                        golem_rust::CreateOptions {
+                            keyed: #options_param.keyed,
+                            config: #agent_config_values,
+                            env: #options_param.env,
+                        },
+                    )
+                    .await
+                    .map_err(crate::__golem_bridge_runtime::ClientError::from)?;
+                    Ok(#new_client)
                 }
-            }
-        } else {
-            quote! {}
-        };
 
-        let new_phantom_doc = if self.agent_type.mode == AgentMode::Durable {
-            "Creates a new agent instance with a fresh random phantom id."
-        } else {
-            "Creates a local logical proxy; each invocation receives a fresh final identity."
-        };
-        let with_config_methods = if !local_configs.is_empty() {
-            let new_phantom_with_config_method_name = new_phantom_with_config_method_name
-                .as_ref()
-                .expect("agents with local config allocate new_phantom_with_config");
-            let get_phantom_with_config_method = get_phantom_with_config_method_name
-                .as_ref()
-                .map(|get_phantom_with_config_method_name| {
-                    quote! {
-                        pub fn #get_phantom_with_config_method_name(#phantom_id_param: golem_rust::Uuid, #(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                            let mut #agent_config_values = Vec::new();
-                            #(#config_encode_stmts)*
-                            Self::#create_method_name(Some(#phantom_id_param), #agent_config_values, #(#constructor_param_refs),*)
-                        }
-                    }
-                });
-            let new_phantom_id = if self.agent_type.mode == AgentMode::Durable {
-                quote! { Some(golem_rust::Uuid::new_v4()) }
-            } else {
-                quote! { None }
-            };
-            quote! {
-                #get_with_config_method
-
-                #get_phantom_with_config_method
-
-                #[doc = #new_phantom_doc]
-                pub fn #new_phantom_with_config_method_name(#(#constructor_param_defs,)* #(#config_param_defs,)*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                    let mut #agent_config_values = Vec::new();
-                    #(#config_encode_stmts)*
-                    Self::#create_method_name(#new_phantom_id, #agent_config_values, #(#constructor_param_refs),*)
+                /// Connects to the existing agent with the ID. It never creates the agent: an
+                /// unknown ID, or the ID of an agent of another type, fails with
+                /// [`golem_rust::GolemReflectError::RemoteNotFound`].
+                pub fn #get_by_id_method_name(agent_id: &golem_rust::AgentId) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                    let wasm_rpc = golem_rust::agentic::__get_agent_by_id(#agent_type_name, agent_id)
+                        .map_err(crate::__golem_bridge_runtime::ClientError::from)?;
+                    Ok(#new_client)
                 }
-            }
-        } else {
-            quote! {}
-        };
 
-        let get_method = if self.agent_type.mode == AgentMode::Durable {
-            let get_method_name = get_method_name
-                .as_ref()
-                .expect("durable agents allocate get");
-            quote! {
-                pub fn #get_method_name(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                    Self::#create_method_name(None, Vec::new(), #(#constructor_param_refs),*)
-                }
-            }
-        } else {
-            quote! {}
-        };
-        let get_phantom_method = get_phantom_method_name.as_ref().map(|get_phantom_method_name| {
-            quote! {
-                pub fn #get_phantom_method_name(#phantom_id_param: golem_rust::Uuid, #(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                    Self::#create_method_name(Some(#phantom_id_param), Vec::new(), #(#constructor_param_refs),*)
+                /// Returns the ID of the agent. On a client of `upsert` it creates the agent when it
+                /// is missing, without invoking a method.
+                pub async fn #agent_id_method_name(&self) -> Result<golem_rust::AgentId, crate::__golem_bridge_runtime::ClientError> {
+                    golem_rust::agentic::__agent_id(&self.wasm_rpc)
+                        .await
+                        .map_err(crate::__golem_bridge_runtime::ClientError::from)
                 }
             }
         });
-        let new_phantom_id = if self.agent_type.mode == AgentMode::Durable {
-            quote! { Some(golem_rust::Uuid::new_v4()) }
-        } else {
-            quote! { None }
-        };
 
         let type_definitions = self.type_definitions()?;
         let multimodals = self.multimodals()?;
@@ -1122,35 +1233,15 @@ impl RustBridgeGenerator {
             }
 
             impl #client_struct_name {
-                #get_method
-
-                #get_phantom_method
-
-                #[doc = #new_phantom_doc]
-                pub fn #new_phantom_method_name(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
-                    Self::#create_method_name(#new_phantom_id, Vec::new(), #(#constructor_param_refs),*)
-                }
-
-                #with_config_methods
-
-                fn #create_method_name(
-                    #phantom_id_param: Option<golem_rust::Uuid>,
-                    #agent_config_param: Vec<golem_rust::golem_agentic::golem::agent::common::TypedAgentConfigValue>,
-                    #(#constructor_param_defs),*
-                ) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
+                #[doc = #upsert_doc]
+                pub fn #upsert_method_name(#(#constructor_param_defs),*) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_value = #constructor_params_value;
-                    let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(
-                        #agent_type_name,
-                        constructor_value,
-                        #phantom_id_param.map(Into::into),
-                        #agent_config_param,
-                    );
-
-                    Ok(Self {
-                        wasm_rpc,
-                        __golem_default_scope_card: ::core::default::Default::default(),
-                    })
+                    let wasm_rpc = golem_rust::agentic::__upsert_agent(#agent_type_name, constructor_value)
+                        .map_err(crate::__golem_bridge_runtime::ClientError::from)?;
+                    Ok(#new_client)
                 }
+
+                #durable_constructors
 
                 /// Returns a view of this client whose awaited method calls lend
                 /// `scope_card` to the callee for the duration of each invocation.
@@ -1808,6 +1899,29 @@ impl RustBridgeGenerator {
             },
         };
         let agent_type_name = self.agent_type.type_name.0.as_str();
+        let key_target = quote! {
+            golem_common::model::invocation_session_public::PublicAgentTarget::Key {
+                constructor_parameters: golem_client::invocation_session::encode_generated_streamless_value(
+                    &__constructor_graph,
+                    self.keyed_parameters()?,
+                ).map_err(|__error| crate::__golem_bridge_runtime::ClientError::InvocationFailed {
+                    message: format!("Failed to encode constructor parameters: {__error}"),
+                })?,
+            }
+        };
+        let target = if self.agent_type.mode == AgentMode::Durable {
+            quote! {
+                match &self.target {
+                    Some((agent_id, fingerprint)) => golem_common::model::invocation_session_public::PublicAgentTarget::Id {
+                        agent_id: *agent_id,
+                        expected_fingerprint: Some(golem_common::model::AgentFingerprint(*fingerprint)),
+                    },
+                    None => #key_target,
+                }
+            }
+        } else {
+            key_target
+        };
 
         Ok(quote! {
             pub async fn #name(
@@ -1828,13 +1942,7 @@ impl RustBridgeGenerator {
                     golem_client::invocation_session::GeneratedEncodeContext::new(__input_graph.clone());
                 let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue =
                     #method_parameters;
-                let constructor_parameters =
-                    golem_client::invocation_session::encode_generated_streamless_value(
-                        &__constructor_graph,
-                        &self.constructor_parameters,
-                    ).map_err(|__error| crate::__golem_bridge_runtime::ClientError::InvocationFailed {
-                        message: format!("Failed to encode constructor parameters: {__error}"),
-                    })?;
+                let target = #target;
                 let config = CONFIG.get().expect("Configuration has not been set");
                 let request = golem_client::invocation_session::GeneratedInvocationRequest {
                     base_url: config.server.url(),
@@ -1842,12 +1950,11 @@ impl RustBridgeGenerator {
                     selector: golem_common::model::invocation_session_public::InvocationSelector {
                         agent_type: #agent_type_name.to_string(),
                         application: config.app_name.clone(),
-                        constructor_parameters,
+                        target,
                         environment: config.env_name.clone(),
                         method: #method_name.to_string(),
-                        phantom_id: self.phantom_id,
                     },
-                    config: self.session_config.clone(),
+                    config: Vec::new(),
                     idempotency_key: uuid::Uuid::new_v4().to_string(),
                     input_graph: __input_graph,
                     output_graph: #output_graph,
@@ -2344,10 +2451,10 @@ impl RustBridgeGenerator {
             Some(return_type) => {
                 let decode_body = self.output_decode_expr(&method.output_schema)?;
                 Ok(quote! {
-                    async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<(golem_client::model::AgentId, uuid::Uuid, Option<#return_type>), crate::__golem_bridge_runtime::ClientError> {
+                    async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<(golem_common::model::AgentId, uuid::Uuid, Option<#return_type>), crate::__golem_bridge_runtime::ClientError> {
                         let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_value;
                         let response = self.invoke(#name_lit, method_parameters, mode, when).await?;
-                        let agent_id = response.agent_id;
+                        let agent_id = golem_common::model::AgentId(response.agent_id);
                         let idempotency_key = response.idempotency_key;
                         match response.result {
                             Some(__typed) => {
@@ -2363,10 +2470,10 @@ impl RustBridgeGenerator {
                 })
             }
             None => Ok(quote! {
-                async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<(golem_client::model::AgentId, uuid::Uuid, Option<()>), crate::__golem_bridge_runtime::ClientError> {
+                async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<(golem_common::model::AgentId, uuid::Uuid, Option<()>), crate::__golem_bridge_runtime::ClientError> {
                     let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_value;
                     let response = self.invoke(#name_lit, method_parameters, mode, when).await?;
-                    Ok((response.agent_id, response.idempotency_key, response.result.map(|_| ())))
+                    Ok((golem_common::model::AgentId(response.agent_id), response.idempotency_key, response.result.map(|_| ())))
                 }
             }),
         }
@@ -5067,17 +5174,21 @@ mod tests {
 
         let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
         for rest_shape in [
-            "pub async fn get(",
-            "pub async fn get_phantom(",
-            "pub async fn new_phantom(",
+            "pub fn upsert(",
+            "pub async fn create(",
+            "pub async fn get_by_id(",
+            "pub async fn agent_id(",
             "pub fn configure(",
             "server: golem_client::bridge::GolemServer",
             "pub mod __golem_bridge_runtime",
             "pub use golem_client::bridge::GolemServer",
-            "pub use golem_client::bridge::ClientError",
+            "pub enum ClientError",
+            "pub struct CreateOptions",
             "pub use golem_common::schema::*",
             "pub use golem_common::agentic::*",
+            "golem_client::bridge::environment_id(",
             "golem_client::api::AgentClient::create_agent",
+            "golem_client::api::AgentClient::upsert_agent",
             "golem_client::api::AgentClient::invoke_agent",
             "reqwest_middleware::ClientWithMiddleware",
         ] {
@@ -5135,6 +5246,8 @@ mod tests {
         assert!(rendered.contains("invoke_generated("));
         assert!(rendered.contains("register_input("));
         assert!(rendered.contains("register_output("));
+        assert!(rendered.contains("PublicAgentTarget::Key"));
+        assert!(!rendered.contains("Streaming calls name their agent"));
         assert!(!rendered.contains("pub async fn trigger_exchange("));
         assert!(!rendered.contains("pub async fn schedule_exchange("));
         assert!(rendered.contains("pub async fn trigger_status("));
@@ -5190,7 +5303,7 @@ mod tests {
     }
 
     #[test]
-    fn ephemeral_guest_generation_does_not_reserve_absent_get_with_config_helper() {
+    fn ephemeral_guest_generation_does_not_reserve_absent_create_helper() {
         let dir = tempfile::TempDir::new().unwrap();
         let target_path =
             Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
@@ -5201,7 +5314,7 @@ mod tests {
             value_type: SchemaType::string(),
         });
         agent_type.methods.push(AgentMethodSchema {
-            name: "get_with_config".to_string(),
+            name: "create".to_string(),
             description: String::new(),
             prompt_hint: None,
             input_schema: InputSchema::parameters(vec![]),
@@ -5221,8 +5334,8 @@ mod tests {
 
         let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
         assert!(
-            lib_rs.contains("pub async fn get_with_config(\n        &self"),
-            "ephemeral agents do not generate a get_with_config constructor, so the user method should keep that public name; generated source:\n{lib_rs}"
+            lib_rs.contains("pub async fn create(\n        &self"),
+            "ephemeral agents do not generate a create constructor, so the user method should keep that public name; generated source:\n{lib_rs}"
         );
     }
 

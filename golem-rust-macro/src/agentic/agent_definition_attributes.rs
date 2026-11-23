@@ -57,7 +57,8 @@ pub fn parse_agent_definition_attributes(
         cors: vec![],
         auth: false,
         phantom_agent: false,
-        phantom_id_binding: None,
+        agent_id_binding: None,
+        create_route: None,
         webhook_suffix: None,
         static_files: vec![],
         filesystem_bindings: vec![],
@@ -93,8 +94,8 @@ pub fn parse_agent_definition_attributes(
             {
                 Some("mode".into())
             }
-            Expr::Call(call) if matches!(&*call.func, Expr::Path(path) if path.path.is_ident("phantom_id")) => {
-                Some("phantom_id".into())
+            Expr::Call(call) if matches!(&*call.func, Expr::Path(path) if path.path.is_ident("agent_id")) => {
+                Some("agent_id".into())
             }
             _ => None,
         };
@@ -188,12 +189,18 @@ pub fn parse_agent_definition_attributes(
     }
 
     let has_filesystem = !http.filesystem_bindings.is_empty();
-    if http.phantom_id_binding.is_some()
-        && (!agent_is_durable || kind == "HttpRouter" || has_filesystem || http.mount.is_none())
+    if http.agent_id_binding.is_some()
+        && (!agent_is_durable || kind == "HttpRouter" || http.phantom_agent || http.mount.is_none())
     {
         return Err(Error::new(
             proc_macro2::Span::call_site(),
-            "phantom_id requires a regular durable HTTP mount without filesystem exposure",
+            "agent_id requires a regular durable HTTP mount without phantom_agent",
+        ));
+    }
+    if http.create_route.is_some() && http.agent_id_binding.is_none() {
+        return Err(Error::new(
+            proc_macro2::Span::call_site(),
+            "create_route requires agent_id",
         ));
     }
     if let Some(name) = &name
@@ -259,7 +266,9 @@ pub fn parse_agent_definition_attributes(
             ));
         }
     }
-    let filesystem_mount = has_filesystem.then(|| http.mount.clone()).flatten();
+    let filesystem_mount = (has_filesystem && http.agent_id_binding.is_none())
+        .then(|| http.mount.clone())
+        .flatten();
     let exposure_path = if kind == "HttpRouter" || has_filesystem {
         Some(compile_exposure_mount(
             http.mount.as_ref().unwrap(),
@@ -272,8 +281,12 @@ pub fn parse_agent_definition_attributes(
         let cors = http.cors;
         let auth = http.auth;
         let phantom_agent = http.phantom_agent;
-        let phantom_id_binding = match http.phantom_id_binding {
+        let agent_id_binding = match http.agent_id_binding {
             Some(binding) => quote! { Some(#binding) },
+            None => quote! { None },
+        };
+        let create_route = match http.create_route {
+            Some(path) => quote! { Some(golem_rust::agentic::get_http_create_route(#path).expect("Invalid HTTP create route")) },
             None => quote! { None },
         };
         let exposure_path = exposure_path.map(|path| quote! { mount.path_prefix = #path; });
@@ -302,7 +315,8 @@ pub fn parse_agent_definition_attributes(
                 #webhook_suffix,
             ).expect("Invalid HTTP mount configuration");
             #exposure_path
-            mount.phantom_id_binding = #phantom_id_binding;
+            mount.agent_id_binding = #agent_id_binding;
+            mount.create_route = #create_route;
             mount.static_bindings = vec![#(#static_files),*];
             mount.filesystem_bindings = vec![#(#filesystem_bindings),*];
             mount.file_response_headers = vec![#(#file_response_headers),*];
@@ -329,7 +343,8 @@ struct ParsedHttpMount {
     cors: Vec<syn::LitStr>,
     auth: bool,
     phantom_agent: bool,
-    phantom_id_binding: Option<TokenStream>,
+    agent_id_binding: Option<TokenStream>,
+    create_route: Option<syn::LitStr>,
     webhook_suffix: Option<syn::LitStr>,
     static_files: Vec<TokenStream>,
     filesystem_bindings: Vec<TokenStream>,
@@ -339,31 +354,27 @@ struct ParsedHttpMount {
 
 fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> {
     if let Expr::Call(call) = expr
-        && matches!(&*call.func, Expr::Path(path) if path.path.is_ident("phantom_id"))
+        && matches!(&*call.func, Expr::Path(path) if path.path.is_ident("agent_id"))
     {
         let mut source = None;
-        let mut optional = false;
         let mut seen = std::collections::HashSet::new();
         for arg in &call.args {
             let Expr::Assign(assign) = arg else {
-                return Err(Error::new_spanned(
-                    arg,
-                    "expected path/query = name or optional = bool",
-                ));
+                return Err(Error::new_spanned(arg, "expected path/query = name"));
             };
             let Expr::Path(key) = &*assign.left else {
-                return Err(Error::new_spanned(arg, "invalid phantom_id option"));
+                return Err(Error::new_spanned(arg, "invalid agent_id option"));
             };
             let key = quote! { #key }.to_string();
             if !seen.insert(key.clone()) {
-                return Err(Error::new_spanned(arg, "duplicate phantom_id option"));
+                return Err(Error::new_spanned(arg, "duplicate agent_id option"));
             }
             match key.as_str() {
                 "path" | "query" => {
                     if source.is_some() {
                         return Err(Error::new_spanned(
                             arg,
-                            "declare exactly one phantom_id source",
+                            "declare exactly one agent_id source",
                         ));
                     }
                     let Expr::Lit(ExprLit {
@@ -376,36 +387,23 @@ fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> 
                             "selector name must be a string literal",
                         ));
                     };
-                    if name.value().is_empty() {
+                    if name.value().trim().is_empty() {
                         return Err(Error::new_spanned(name, "selector name must not be empty"));
                     }
                     source = Some((key, name.clone()));
                 }
-                "optional" => {
-                    let Expr::Lit(ExprLit {
-                        lit: Lit::Bool(value),
-                        ..
-                    }) = &*assign.right
-                    else {
-                        return Err(Error::new_spanned(
-                            arg,
-                            "optional must be a boolean literal",
-                        ));
-                    };
-                    optional = value.value;
-                }
-                _ => return Err(Error::new_spanned(arg, "unknown phantom_id option")),
+                _ => return Err(Error::new_spanned(arg, "unknown agent_id option")),
             }
         }
         let (source, name) = source
-            .ok_or_else(|| Error::new_spanned(expr, "declare exactly one phantom_id source"))?;
+            .ok_or_else(|| Error::new_spanned(expr, "declare exactly one agent_id source"))?;
         let variant = syn::Ident::new(
             if source == "path" { "Path" } else { "Query" },
             proc_macro2::Span::call_site(),
         );
-        out.phantom_id_binding = Some(quote! {
-            golem_rust::golem_agentic::golem::agent::common::PhantomIdBinding::#variant(
-                golem_rust::golem_agentic::golem::agent::common::PhantomIdBindingDetails { name: #name.to_string(), optional: #optional }
+        out.agent_id_binding = Some(quote! {
+            golem_rust::golem_agentic::golem::agent::common::AgentIdBinding::#variant(
+                golem_rust::golem_agentic::golem::agent::common::AgentIdBindingDetails { name: #name.to_string() }
             )
         });
         return Ok(());
@@ -415,6 +413,32 @@ fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> 
         && let Some(ident) = left.path.get_ident()
     {
         match ident.to_string().as_str() {
+            "create_route" => {
+                let Expr::Lit(ExprLit {
+                    lit: Lit::Str(path),
+                    ..
+                }) = &*assign.right
+                else {
+                    return Err(Error::new_spanned(
+                        &assign.right,
+                        "create_route must be a string literal",
+                    ));
+                };
+                for segment in path.value().split('/').skip(1) {
+                    if segment.contains(['{', '}'])
+                        && segment != "{agent-type}"
+                        && segment != "{agent-version}"
+                    {
+                        return Err(Error::new_spanned(
+                            path,
+                            "create_route can contain only literals and system variables",
+                        ));
+                    }
+                }
+                compile_exposure_mount(path, true)?;
+                out.create_route = Some(path.clone());
+                return Ok(());
+            }
             "static_files" => {
                 out.static_files = parse_file_mappings(&assign.right)?;
                 return Ok(());
@@ -525,7 +549,7 @@ fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> 
 
     Err(Error::new_spanned(
         expr,
-        "Unknown agent_definition parameter. Valid parameters are: name, mode, snapshotting, mount, auth, phantom_agent, cors, webhook_suffix, static_files, filesystem_bindings, file_response_headers, openapi_provider_method",
+        "Unknown agent_definition parameter. Valid parameters are: name, mode, snapshotting, mount, agent_id, create_route, auth, phantom_agent, cors, webhook_suffix, static_files, filesystem_bindings, file_response_headers, openapi_provider_method",
     ))
 }
 
@@ -703,51 +727,51 @@ mod tests {
     use test_r::test;
 
     #[test]
-    fn phantom_selector_options_and_restrictions() {
-        for (attrs, variant, optional) in [
+    fn agent_id_options_and_restrictions() {
+        for (attrs, variant) in [
             (
-                quote! { mount = "/c/{id}/{instance}", phantom_id(path = "instance") },
+                quote! { mount = "/c/{instance}", agent_id(path = "instance"), create_route = "/c" },
                 "Path",
-                false,
             ),
             (
-                quote! { mount = "/c/{id}/{instance}", phantom_id(path = "instance", optional = true) },
+                quote! { mount = "/c/{instance}", agent_id(path = "instance"), filesystem_bindings = [("/*", "/public/$1")] },
                 "Path",
-                true,
             ),
             (
-                quote! { mount = "/c/{id}", phantom_id(query = "instance") },
+                quote! { mount = "/c", agent_id(query = "instance"), create_route = "/{agent-type}/create" },
                 "Query",
-                false,
             ),
             (
-                quote! { mount = "/c/{id}", phantom_id(query = "instance", optional = true) },
+                quote! { mount = "/c", agent_id(query = "instance"), filesystem_bindings = [("/*", "/public/$1")] },
                 "Query",
-                true,
             ),
         ] {
             let parsed =
                 parse_agent_definition_attributes(attrs, AgentDefinitionKind::Regular).unwrap();
             let tokens = parsed.http_mount.unwrap().to_string();
             assert!(
-                tokens.contains(&format!("PhantomIdBinding :: {variant}")),
+                tokens.contains(&format!("AgentIdBinding :: {variant}")),
                 "{tokens}"
             );
-            assert!(
-                tokens.contains(&format!("optional : {optional}")),
-                "{tokens}"
-            );
+            assert!(!tokens.contains("optional"), "{tokens}");
+            assert!(tokens.contains("mount . agent_id_binding"), "{tokens}");
+            assert!(tokens.contains("mount . create_route"), "{tokens}");
         }
         for attrs in [
-            quote! { mount = "/c", phantom_id() },
-            quote! { mount = "/c", phantom_id(query = "") },
-            quote! { mount = "/c", phantom_id(path = "a", query = "b") },
-            quote! { mount = "/c", phantom_id(query = "a", optional = "true") },
-            quote! { mount = "/c", phantom_id(query = "a", optional = false, optional = true) },
-            quote! { mount = "/c", phantom_id(query = "a"), phantom_id(query = "b") },
-            quote! { ephemeral, mount = "/c", phantom_id(query = "a") },
-            quote! { phantom_id(query = "a") },
-            quote! { mount = "/c", filesystem_bindings = [("/*", "/public/$1")], phantom_id(query = "a") },
+            quote! { mount = "/c", agent_id() },
+            quote! { mount = "/c", agent_id(query = "") },
+            quote! { mount = "/c", agent_id(path = "a", query = "b") },
+            quote! { mount = "/c", agent_id(query = "a", optional = true) },
+            quote! { mount = "/c", agent_id(query = "a"), agent_id(query = "b") },
+            quote! { ephemeral, mount = "/c", agent_id(query = "a") },
+            quote! { agent_id(query = "a") },
+            quote! { mount = "/c", phantom_agent = true, agent_id(query = "a") },
+            quote! { mount = "/c", create_route = "/c/create" },
+            quote! { mount = "/c", agent_id(query = "a"), create_route = "/c/{a}" },
+            quote! { mount = "/c", agent_id(query = "a"), create_route = "/c/{*rest}" },
+            quote! { mount = "/c", agent_id(query = "a"), create_route = "/c?x=1" },
+            quote! { mount = "/c", agent_id(query = "a"), create_route = "c" },
+            quote! { mount = "/c", agent_id(query = "a"), create_route = 1 },
         ] {
             assert!(
                 parse_agent_definition_attributes(attrs, AgentDefinitionKind::Regular).is_err()
@@ -755,7 +779,7 @@ mod tests {
         }
         assert!(
             parse_agent_definition_attributes(
-                quote! { ephemeral, mount = "/c", phantom_id(query = "a") },
+                quote! { ephemeral, mount = "/c", agent_id(query = "a") },
                 AgentDefinitionKind::HttpRouter
             )
             .is_err()

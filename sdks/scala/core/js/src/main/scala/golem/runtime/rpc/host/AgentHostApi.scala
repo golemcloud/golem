@@ -17,7 +17,7 @@
 package golem.runtime.rpc.host
 
 import golem.host.js._
-import golem.host.js.schema.{JsSchemaGraph, JsSchemaValueTree, JsTypedSchemaValue}
+import golem.host.js.schema.{JsSchemaGraph, JsSchemaValueTree}
 
 import java.util.UUID
 import scala.annotation.unused
@@ -45,7 +45,7 @@ object AgentHostApi {
   type AgentIdLiteral         = JsAgentId
   type UuidLiteral            = JsUuid
   type PromiseIdLiteral       = JsPromiseId
-  type AgentNameFilter        = JsAgentNameFilter
+  type AgentKeyFilter         = JsAgentKeyFilter
   type AgentStatusFilter      = JsAgentStatusFilter
   type AgentVersionFilter     = JsAgentVersionFilter
   type AgentCreatedAtFilter   = JsAgentCreatedAtFilter
@@ -57,7 +57,7 @@ object AgentHostApi {
   @js.native
   @JSImport("golem:api/host@1.5.0", "GetAgents")
   class GetAgentsHandle(
-    @unused componentId: JsComponentId,
+    @unused agentTypeName: String,
     @unused filter: js.UndefOr[JsAgentAnyFilter],
     @unused precise: Boolean
   ) extends js.Object {
@@ -69,14 +69,12 @@ object AgentHostApi {
     def get(): js.Promise[Uint8Array] = js.native
   }
 
-  final case class AgentIdParts(agentTypeName: String, payload: JsTypedSchemaValue, phantom: Option[UUID])
-
   def registeredAgentType(typeName: String): Option[RegisteredAgentType] = {
     val v = AgentRegistryModule.getAgentType(typeName)
     if (v == null || js.isUndefined(v)) None else Some(v)
   }
 
-  def registeredAgentTypeFor(agentId: String): Option[RegisteredAgentType] = {
+  def registeredAgentTypeFor(agentId: AgentIdLiteral): Option[RegisteredAgentType] = {
     val value = AgentRegistryModule.getAgentTypeByAgentId(agentId)
     if (value == null || js.isUndefined(value)) None else Some(value)
   }
@@ -84,36 +82,8 @@ object AgentHostApi {
   def getAllAgentTypes(): List[RegisteredAgentType] =
     AgentRegistryModule.getAllAgentTypes().toList
 
-  def makeAgentId(agentTypeName: String, payload: JsSchemaValueTree, phantom: Option[UUID]): Either[String, String] = {
-    val phantomArg = phantom.fold[js.Any](js.undefined)(uuid => JsUuid.fromUuid(uuid))
-    try Right(AgentRegistryModule.makeAgentId(agentTypeName, payload, phantomArg))
-    catch {
-      case js.JavaScriptException(err) => Left(err.toString)
-    }
-  }
-
-  def parseAgentId(agentId: String): Either[String, AgentIdParts] =
-    try {
-      val tuple                 = AgentRegistryModule.parseAgentId(agentId)
-      val agentType             = tuple(0).asInstanceOf[String]
-      val dataValue             = tuple(1).asInstanceOf[JsTypedSchemaValue]
-      val phantomValue          = tuple(2)
-      val phantom: Option[UUID] =
-        if (phantomValue == null || js.isUndefined(phantomValue)) None
-        else Some(JsUuid.toUuid(phantomValue.asInstanceOf[UuidLiteral]))
-      Right(AgentIdParts(agentType, dataValue, phantom))
-    } catch {
-      case js.JavaScriptException(err) => Left(err.toString)
-    }
-
   def resolveComponentId(componentReference: String): Option[ComponentIdLiteral] =
     toOption(HostModule.resolveComponentId(componentReference))
-
-  def resolveAgentId(componentReference: String, agentName: String): Option[AgentIdLiteral] =
-    toOption(HostModule.resolveAgentId(componentReference, agentName))
-
-  def resolveAgentIdStrict(componentReference: String, agentName: String): Option[AgentIdLiteral] =
-    toOption(HostModule.resolveAgentIdStrict(componentReference, agentName))
 
   def getSelfMetadata(): AgentMetadata =
     HostModule.getSelfMetadata().asInstanceOf[AgentMetadata]
@@ -124,8 +94,8 @@ object AgentHostApi {
   private def toOption[A](value: js.Any): Option[A] =
     if (value == null || js.isUndefined(value)) None else Some(value.asInstanceOf[A])
 
-  def getAgents(componentId: ComponentIdLiteral, filter: Option[AgentAnyFilter], precise: Boolean): GetAgentsHandle =
-    new GetAgentsHandle(componentId, filter.orUndefined, precise)
+  def getAgents(agentTypeName: String, filter: Option[AgentAnyFilter], precise: Boolean): GetAgentsHandle =
+    new GetAgentsHandle(agentTypeName, filter.orUndefined, precise)
 
   def nextAgentBatch(handle: GetAgentsHandle): Option[List[AgentMetadata]] =
     handle.getNext().toOption.map(_.toList)
@@ -157,18 +127,16 @@ object AgentHostApi {
   def updateAgent(agentId: AgentIdLiteral, targetVersion: ComponentVersion, mode: UpdateMode): Unit =
     HostModule.updateAgent(agentId, targetVersion, mode)
 
-  def forkAgent(sourceAgentId: AgentIdLiteral, targetAgentId: AgentIdLiteral, cutOff: OplogIndex): Unit =
-    HostModule.forkAgent(sourceAgentId, targetAgentId, cutOff)
+  def forkAgent(sourceAgentId: AgentIdLiteral, cutOff: OplogIndex): AgentIdLiteral =
+    HostModule.forkAgent(sourceAgentId, cutOff)
 
   def revertAgent(agentId: AgentIdLiteral, target: RevertAgentTarget): Unit =
     HostModule.revertAgent(agentId, target)
 
-  def fork(): (String, UuidLiteral) = {
-    val raw       = HostModule.fork().asInstanceOf[JsForkResult]
-    val tag       = raw.tag
-    val details   = raw.asInstanceOf[JsForkResultOriginal].value
-    val phantomId = details.forkedPhantomId
-    (tag, phantomId)
+  def fork(): (String, AgentIdLiteral) = {
+    val raw     = HostModule.fork().asInstanceOf[JsForkResult]
+    val details = raw.asInstanceOf[JsForkResultOriginal].value
+    (raw.tag, details.forkedAgentId)
   }
 
   object AgentStatus {
@@ -222,9 +190,9 @@ object AgentHostApi {
     def StartsWith: StringFilterComparator = "starts-with"
   }
 
-  object AgentNameFilter {
-    def apply(comparator: StringFilterComparator, value: String): AgentNameFilter =
-      JsAgentNameFilter(comparator, value)
+  object AgentKeyFilter {
+    def apply(comparator: StringFilterComparator, value: String): AgentKeyFilter =
+      JsAgentKeyFilter(comparator, value)
   }
 
   object AgentStatusFilter {
@@ -253,8 +221,8 @@ object AgentHostApi {
   }
 
   object AgentPropertyFilter {
-    def name(filter: AgentNameFilter): AgentPropertyFilter =
-      JsAgentPropertyFilter.name(filter)
+    def key(filter: AgentKeyFilter): AgentPropertyFilter =
+      JsAgentPropertyFilter.key(filter)
 
     def status(filter: AgentStatusFilter): AgentPropertyFilter =
       JsAgentPropertyFilter.status(filter)
@@ -295,14 +263,9 @@ object AgentHostApi {
       JsComponentId(uuid)
   }
 
-  object AgentIdLiteral {
-    def apply(componentId: ComponentIdLiteral, agentId: String): AgentIdLiteral =
-      JsAgentId(componentId, agentId)
-  }
-
   object PromiseIdLiteral {
-    def apply(agentId: AgentIdLiteral, fingerprint: UuidLiteral, oplogIndex: OplogIndex): PromiseIdLiteral =
-      JsPromiseId(agentId, fingerprint, oplogIndex)
+    def apply(agentId: golem.AgentId, fingerprint: UuidLiteral, oplogIndex: OplogIndex): PromiseIdLiteral =
+      JsPromiseId(JsAgentId.fromAgentId(agentId), fingerprint, oplogIndex)
   }
 
   object UuidLiteral {
@@ -317,10 +280,6 @@ object AgentHostApi {
   @JSImport("golem:api/host@1.5.0", JSImport.Namespace)
   private object HostModule extends js.Object {
     def resolveComponentId(componentReference: String): js.Any = js.native
-
-    def resolveAgentId(componentReference: String, agentName: String): js.Any = js.native
-
-    def resolveAgentIdStrict(componentReference: String, agentName: String): js.Any = js.native
 
     def getSelfMetadata(): js.Any = js.native
 
@@ -341,8 +300,7 @@ object AgentHostApi {
     def updateAgent(agentId: AgentIdLiteral, targetVersion: ComponentVersion, mode: UpdateMode): Unit =
       js.native
 
-    def forkAgent(sourceAgentId: AgentIdLiteral, targetAgentId: AgentIdLiteral, oplogIdxCutOff: OplogIndex): Unit =
-      js.native
+    def forkAgent(sourceAgentId: AgentIdLiteral, oplogIdxCutOff: OplogIndex): AgentIdLiteral = js.native
 
     def revertAgent(agentId: AgentIdLiteral, target: RevertAgentTarget): Unit = js.native
 
@@ -356,11 +314,7 @@ object AgentHostApi {
 
     def getAllAgentTypes(): js.Array[RegisteredAgentType] = js.native
 
-    def getAgentTypeByAgentId(agentId: String): RegisteredAgentType = js.native
-
-    def makeAgentId(agentTypeName: String, input: JsSchemaValueTree, phantom: js.Any): String = js.native
-
-    def parseAgentId(agentId: String): js.Array[js.Any] = js.native
+    def getAgentTypeByAgentId(agentId: AgentIdLiteral): RegisteredAgentType = js.native
 
     def createWebhook(promiseId: PromiseIdLiteral): String = js.native
 

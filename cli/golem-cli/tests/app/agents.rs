@@ -454,16 +454,21 @@ async fn assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
 /// The invocation writes its first byte and then waits. Only the watch of stdout can end it
 /// after the reader has left, because the command writes nothing more.
 #[cfg(unix)]
-#[test]
-#[timeout("15 minutes")]
-async fn test_reader_that_leaves_after_the_first_byte_ends_agent_invoke_with_the_exit_code_of_sigpipe()
- {
-    let ctx = streaming_invocation_context().await;
-    assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
-        &ctx,
-        &["produce_byte_then_wait"],
-    )
-    .await;
+mod reader_watch_tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    #[timeout("15 minutes")]
+    async fn test_reader_that_leaves_after_the_first_byte_ends_agent_invoke_with_the_exit_code_of_sigpipe()
+     {
+        let ctx = streaming_invocation_context().await;
+        assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
+            &ctx,
+            &["produce_byte_then_wait"],
+        )
+        .await;
+    }
 }
 
 /// The invocation goes on writing after the reader has left, so a failed write of the output
@@ -525,30 +530,120 @@ async fn test_rejected_agent_invoke_ends_with_the_exit_code_of_sigpipe_when_stde
 }
 
 #[cfg(unix)]
+mod idle_stream_tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    #[timeout("15 minutes")]
+    async fn test_idle_agent_stream_ends_when_stdout_is_closed() {
+        let ctx = streaming_invocation_context().await;
+        let agent = format!(r#"RpcGlobalState("{}")"#, Uuid::new_v4());
+
+        let created = ctx
+            .cli([cmd::AGENT, cmd::INVOKE, &agent, "inc_global_by", "1"])
+            .await;
+        assert!(created.success_or_dump());
+
+        let stream = tokio::time::timeout(
+            Duration::from_secs(40),
+            ctx.cli_closing_stdout_when_quiet([cmd::AGENT, "stream", &agent]),
+        )
+        .await
+        .expect("an idle agent stream kept running with a closed stdout");
+        assert_eq!(
+            stream.exit_code(),
+            Some(CLOSED_OUTPUT_EXIT),
+            "the idle agent stream with a closed stdout did not end with the exit code of SIGPIPE: {}",
+            stream.stderr_text()
+        );
+        assert!(!stream.stderr_text().contains("panicked"));
+    }
+}
+
 #[test]
-#[timeout("15 minutes")]
-async fn test_idle_agent_stream_ends_when_stdout_is_closed() {
+#[timeout("10 minutes")]
+async fn test_streaming_invocation_cli_identity_and_fingerprint() {
     let ctx = streaming_invocation_context().await;
-    let agent = format!(r#"RpcGlobalState("{}")"#, Uuid::new_v4());
+    let key = streaming_agent(&Uuid::new_v4().to_string());
+    let mut previous_reference: Option<(String, String)> = None;
 
-    let created = ctx
-        .cli([cmd::AGENT, cmd::INVOKE, &agent, "inc_global_by", "1"])
-        .await;
-    assert!(created.success_or_dump());
+    for _ in 0..2 {
+        let created = ctx
+            .cli([
+                flag::YES,
+                flag::FORMAT,
+                "json",
+                cmd::AGENT,
+                cmd::CREATE,
+                &key,
+                "--keyed",
+            ])
+            .await;
+        assert!(created.success_or_dump());
+        let reference = created
+            .stdout_json::<serde_json::Value>()
+            .into_iter()
+            .find(|document| document["$type"] == "agent.create")
+            .unwrap();
+        let id = reference["agentId"].as_str().unwrap();
+        let fingerprint = reference["agentFingerprint"].as_str().unwrap();
+        let by_id = format!("StreamingRpcTarget[{id}]");
 
-    let stream = tokio::time::timeout(
-        Duration::from_secs(40),
-        ctx.cli_closing_stdout_when_quiet([cmd::AGENT, "stream", &agent]),
-    )
-    .await
-    .expect("an idle agent stream kept running with a closed stdout");
-    assert_eq!(
-        stream.exit_code(),
-        Some(CLOSED_OUTPUT_EXIT),
-        "the idle agent stream with a closed stdout did not end with the exit code of SIGPIPE: {}",
-        stream.stderr_text()
-    );
-    assert!(!stream.stderr_text().contains("panicked"));
+        if let Some((previous_id, previous_fingerprint)) = &previous_reference {
+            assert_eq!(id, previous_id);
+            assert_ne!(fingerprint, previous_fingerprint);
+            for address in [&key, &by_id] {
+                let stale = ctx
+                    .cli_with_input(
+                        [
+                            cmd::AGENT,
+                            cmd::INVOKE,
+                            address,
+                            "produce",
+                            "[3, 7]",
+                            "--expected-fingerprint",
+                            previous_fingerprint,
+                        ],
+                        b"",
+                    )
+                    .await;
+                assert!(
+                    !stale.success(),
+                    "a stale fingerprint must reject {address}"
+                );
+                assert!(
+                    stale.stderr_text().contains("not-found"),
+                    "{}",
+                    stale.stderr_text()
+                );
+            }
+        }
+
+        for (address, expected) in [
+            (&by_id, None),
+            (&by_id, Some(fingerprint)),
+            (&key, Some(fingerprint)),
+        ] {
+            let mut args = vec![
+                cmd::AGENT,
+                cmd::INVOKE,
+                address.as_str(),
+                "produce",
+                "[3, 7]",
+            ];
+            if let Some(expected) = expected {
+                args.extend(["--expected-fingerprint", expected]);
+            }
+            let output = ctx.cli_with_input(args, b"").await;
+            assert!(output.success(), "{}", output.stderr_text());
+            assert!(output.stdout_text().contains("3\n7\n"));
+        }
+
+        previous_reference = Some((id.to_string(), fingerprint.to_string()));
+        let deleted = ctx.cli([flag::YES, cmd::AGENT, "delete", &key]).await;
+        assert!(deleted.success_or_dump());
+    }
 }
 
 #[test]
@@ -1353,67 +1448,74 @@ async fn test_streaming_invocation_cli_end_to_end() {
 
     let interrupted_agent = streaming_agent(&Uuid::new_v4().to_string());
     #[cfg(unix)]
-    {
-        let exit_code = ctx
-            .cli_ctrl_c_after(
+    mod interruption {
+        use super::*;
+        pub(super) async fn run(ctx: &TestContext, interrupted_agent: &str) {
+            let exit_code = ctx
+                .cli_ctrl_c_after(
+                    [
+                        cmd::AGENT,
+                        cmd::INVOKE,
+                        interrupted_agent,
+                        "transform",
+                        "-",
+                        flag::FORMAT,
+                        "json",
+                        "--no-stream",
+                    ],
+                    "\"kind\":\"accepted\"",
+                    Duration::ZERO,
+                )
+                .await;
+            assert_eq!(exit_code, 130);
+
+            let backpressured_agent = streaming_agent(&Uuid::new_v4().to_string());
+            let exit_code = ctx
+                .cli_ctrl_c_after(
+                    [
+                        cmd::AGENT,
+                        cmd::INVOKE,
+                        &backpressured_agent,
+                        "produce_many_bytes",
+                        "200000",
+                        flag::FORMAT,
+                        "json",
+                        "--no-stream",
+                    ],
+                    "\"kind\":\"accepted\"",
+                    Duration::from_secs(1),
+                )
+                .await;
+            assert_eq!(exit_code, 130);
+        }
+    }
+    #[cfg(not(unix))]
+    mod interruption {
+        use super::*;
+        pub(super) async fn run(ctx: &TestContext, interrupted_agent: &str) {
+            let interactive_agent = interrupted_agent.to_string();
+            ctx.cli_interactive(
                 [
                     cmd::AGENT,
                     cmd::INVOKE,
-                    &interrupted_agent,
+                    &interactive_agent,
                     "transform",
                     "-",
                     flag::FORMAT,
                     "json",
                     "--no-stream",
                 ],
-                "\"kind\":\"accepted\"",
-                Duration::ZERO,
+                |session| {
+                    session.set_expect_timeout(Some(Duration::from_secs(30)));
+                    session.expect_str("\"kind\":\"accepted\"")?;
+                    session.send("\u{3}")?;
+                    session.expect_eof()
+                },
             )
             .await;
-        assert_eq!(exit_code, 130);
-
-        let backpressured_agent = streaming_agent(&Uuid::new_v4().to_string());
-        let exit_code = ctx
-            .cli_ctrl_c_after(
-                [
-                    cmd::AGENT,
-                    cmd::INVOKE,
-                    &backpressured_agent,
-                    "produce_many_bytes",
-                    "200000",
-                    flag::FORMAT,
-                    "json",
-                    "--no-stream",
-                ],
-                "\"kind\":\"accepted\"",
-                Duration::from_secs(1),
-            )
-            .await;
-        assert_eq!(exit_code, 130);
+        }
     }
-    #[cfg(not(unix))]
-    {
-        let interactive_agent = interrupted_agent.clone();
-        ctx.cli_interactive(
-            [
-                cmd::AGENT,
-                cmd::INVOKE,
-                &interactive_agent,
-                "transform",
-                "-",
-                flag::FORMAT,
-                "json",
-                "--no-stream",
-            ],
-            |session| {
-                session.set_expect_timeout(Some(Duration::from_secs(30)));
-                session.expect_str("\"kind\":\"accepted\"")?;
-                session.send("\u{3}")?;
-                session.expect_eof()
-            },
-        )
-        .await;
-    }
+    interruption::run(&ctx, &interrupted_agent).await;
 
     let after_interrupt = ctx
         .cli([
@@ -1499,6 +1601,7 @@ async fn test_go_generated_streaming_bridge_end_to_end() {
 
             import (
             	"context"
+                "errors"
             	"fmt"
             	"log"
             	"reflect"
@@ -1533,11 +1636,38 @@ async fn test_go_generated_streaming_bridge_end_to_end() {
             	}}); err != nil {{
             		log.Fatal(err)
             	}}
-            	agent := must(target.GetStreamingRPCTarget(target.StreamingRPCTargetID{{Name: "go-generated-e2e"}}))
+            	agent := must(target.UpsertStreamingRPCTarget(target.StreamingRPCTargetID{{Name: "go-generated-e2e"}}))
 
             	expect("consume", must(agent.Consume(ctx, bridge.StreamOf[uint32](1, 2, 3))), []uint32{{1, 2, 3}})
             	expect("produce", must(must(agent.Produce(ctx, []uint32{{4, 5}})).Collect(ctx)), []uint32{{4, 5}})
             	expect("transform", must(must(agent.Transform(ctx, bridge.StreamOf[uint32](6, 7))).Collect(ctx)), []uint32{{60, 70}})
+
+                firstCreated := must(target.CreateStreamingRPCTarget(ctx, target.StreamingRPCTargetID{{Name: "go-created"}}))
+                secondCreated := must(target.CreateStreamingRPCTarget(ctx, target.StreamingRPCTargetID{{Name: "go-created"}}))
+                firstID := must(firstCreated.AgentID(ctx))
+                if firstID == must(secondCreated.AgentID(ctx)) {{
+                    log.Fatal("unkeyed creates returned the same ID")
+                }}
+                found := must(target.GetStreamingRPCTargetByID(ctx, firstID))
+                expect("get by ID stream", must(must(found.Transform(ctx, bridge.StreamOf[uint32](8, 9))).Collect(ctx)), []uint32{{80, 90}})
+                expect("created stream", must(must(firstCreated.Produce(ctx, []uint32{{10}})).Collect(ctx)), []uint32{{10}})
+                keyed := must(target.CreateStreamingRPCTarget(ctx, target.StreamingRPCTargetID{{Name: "go-keyed"}}, bridge.Keyed()))
+                _, conflict := target.CreateStreamingRPCTarget(ctx, target.StreamingRPCTargetID{{Name: "go-keyed"}}, bridge.Keyed())
+                if !errors.Is(conflict, bridge.ErrConflict) {{
+                    log.Fatalf("keyed create: want typed conflict, got %v", conflict)
+                }}
+                expect("keyed created stream", must(must(keyed.Transform(ctx, bridge.StreamOf[uint32](11))).Collect(ctx)), []uint32{{110}})
+                keyControl := must(target.UpsertStreamingRPCTarget(target.StreamingRPCTargetID{{Name: "go-keyed"}}))
+                expect("keyed upsert ID", must(keyControl.AgentID(ctx)), must(keyed.AgentID(ctx)))
+                expect("upsert after ID stream", must(must(keyControl.Produce(ctx, []uint32{{12}})).Collect(ctx)), []uint32{{12}})
+                var missingID bridge.AgentID
+                if err := missingID.UnmarshalText([]byte(firstID.String()[:8] + "-0000-8000-8000-000000000099")); err != nil {{
+                    log.Fatal(err)
+                }}
+                _, missing := target.GetStreamingRPCTargetByID(ctx, missingID)
+                if !errors.Is(missing, bridge.ErrNotFound) {{
+                    log.Fatalf("get by ID must fail eagerly: %v", missing)
+                }}
 
             	nested := must(agent.ConsumeNested(ctx, target.NestedStreamInput{{
             		Labels: bridge.StreamOf("left", "right"),
@@ -1579,8 +1709,10 @@ async fn test_go_generated_streaming_bridge_end_to_end() {
             		log.Fatal(err)
             	}}
 
-            	described := must(must(configured.GetConfiguredRPCTarget(
+            	described := must(must(configured.CreateConfiguredRPCTarget(
+            		ctx,
             		configured.ConfiguredRPCTargetID{{Name: "go-configured"}},
+            		bridge.Keyed(),
             		configured.WithConfiguredRPCTargetConfig(configured.ConfiguredRPCTargetConfig{{
             			Count: values.Some[uint32](7),
             			Label: values.Some("go-label"),
@@ -1626,7 +1758,7 @@ async fn test_go_generated_streaming_bridge_end_to_end() {
 async fn test_generated_streaming_bridges_end_to_end() {
     let ctx = streaming_invocation_context().await;
 
-    for language in ["rust", "typescript", "scala", "moonbit"] {
+    for language in ["rust", "typescript", "effect", "scala", "moonbit"] {
         let bridge_root = ctx.cwd_path_join(format!("{language}-streaming-bridge"));
         for (agent_type, package) in [
             ("StreamingRpcTarget", "streaming-rpc-target-client"),
@@ -1686,7 +1818,7 @@ async fn test_generated_streaming_bridges_end_to_end() {
                 "streaming-invocation",
                 "local",
             );
-            let agent = StreamingRpcTarget::get("rust-generated-e2e".to_string()).await?;
+            let agent = StreamingRpcTarget::upsert("rust-generated-e2e".to_string())?;
 
             assert_eq!(agent.consume(input(vec![1_u32, 2, 3])).await?, vec![1, 2, 3]);
             assert_eq!(agent.produce(vec![4, 5]).await?.try_collect::<Vec<_>>().await?, vec![4, 5]);
@@ -1775,7 +1907,7 @@ async fn test_generated_streaming_bridges_end_to_end() {
     )
     .unwrap();
     let rust_config_driver = formatdoc! {r#"
-        use configured_rpc_target_client::{{configure, ConfiguredRpcTarget, GolemServer}};
+        use configured_rpc_target_client::{{configure, ConfiguredRpcTarget, CreateOptions, GolemServer}};
 
         #[tokio::main]
         async fn main() -> Result<(), Box<dyn std::error::Error>> {{
@@ -1787,10 +1919,13 @@ async fn test_generated_streaming_bridges_end_to_end() {
                 "streaming-invocation",
                 "local",
             );
-            let agent = ConfiguredRpcTarget::get_with_config(
+            let agent = ConfiguredRpcTarget::create(
                 "rust-configured".to_string(),
-                Some(7),
-                Some("rust-label".to_string()),
+                CreateOptions {{
+                    keyed: true,
+                    config: (Some(7), Some("rust-label".to_string())),
+                    ..Default::default()
+                }},
             ).await?;
             assert_eq!(
                 agent.describe().await?,
@@ -1823,7 +1958,7 @@ async fn test_generated_streaming_bridges_end_to_end() {
         start_interrupting_websocket_proxy(&worker_service_url, false).await;
     let typescript_driver = formatdoc! {r#"
         import assert from 'node:assert/strict'
-        import {{ agentStream }} from '@golemcloud/golem-ts-bridge'
+        import {{ agentStream, GolemConflictError, GolemServiceError }} from '@golemcloud/golem-ts-bridge'
         import {{ configure, StreamingRpcTarget }} from './streaming-rpc-target-client.js'
 
         const input = <T>(values: T[]) => agentStream((async function* () {{
@@ -1840,10 +1975,29 @@ async fn test_generated_streaming_bridges_end_to_end() {
           application: 'streaming-invocation',
           environment: 'local',
         }})
-        const agent = await StreamingRpcTarget.get('typescript-generated-e2e')
+        const agent = StreamingRpcTarget.upsert('typescript-generated-e2e')
         assert.deepEqual(await agent.consume(input([1, 2, 3])), [1, 2, 3])
         assert.deepEqual(await collect(await agent.produce([4, 5])), [4, 5])
         assert.deepEqual(await collect(await agent.transform(input([6, 7]))), [60, 70])
+        const firstCreated = await StreamingRpcTarget.create('typescript-created')
+        const secondCreated = await StreamingRpcTarget.create('typescript-created')
+        assert.notEqual(await firstCreated.agentId(), await secondCreated.agentId())
+        const found = await StreamingRpcTarget.getById(await firstCreated.agentId())
+        assert.deepEqual(await collect(await found.transform(input([8, 9]))), [80, 90])
+        assert.deepEqual(await collect(await firstCreated.produce([10])), [10])
+        const keyed = await StreamingRpcTarget.create('typescript-keyed', {{ keyed: true }})
+        await assert.rejects(
+          StreamingRpcTarget.create('typescript-keyed', {{ keyed: true }}),
+          (error: unknown) => error instanceof GolemConflictError,
+        )
+        assert.deepEqual(await collect(await keyed.transform(input([11]))), [110])
+        const keyControl = StreamingRpcTarget.upsert('typescript-keyed')
+        assert.equal(await keyControl.agentId(), await keyed.agentId())
+        assert.deepEqual(await collect(await keyControl.produce([12])), [12])
+        await assert.rejects(
+          StreamingRpcTarget.getById((await firstCreated.agentId()).slice(0, 8) + '-0000-8000-8000-000000000099'),
+          (error: unknown) => error instanceof GolemServiceError && error.status === 404 && error.operation === 'getAgent',
+        )
         assert.deepEqual(
           await agent.consumeNested({{ labels: input(['left', 'right']), values: input([10, 11]) }}),
           [['left', 'right'], [10, 11]],
@@ -1923,11 +2077,10 @@ async fn test_generated_streaming_bridges_end_to_end() {
           application: 'streaming-invocation',
           environment: 'local',
         }})
-        const agent = await ConfiguredRpcTarget.getWithConfig(
-          'typescript-configured',
-          7,
-          'typescript-label',
-        )
+        const agent = await ConfiguredRpcTarget.create('typescript-configured', {{
+          keyed: true,
+          config: {{ count: 7, label: 'typescript-label' }},
+        }})
         assert.deepEqual(await agent.describe(), ['typescript-configured', 'typescript-label', 7])
         console.log('TYPESCRIPT_CONFIG_BRIDGE_E2E_OK')
         "#};
@@ -1953,6 +2106,73 @@ async fn test_generated_streaming_bridges_end_to_end() {
         run_generated_driver(typescript_config_command).await,
         "TypeScript config",
         "TYPESCRIPT_CONFIG_BRIDGE_E2E_OK",
+    );
+
+    let effect_client = ctx.cwd_path_join("effect-streaming-bridge/streaming-rpc-target-client");
+    let effect_driver = formatdoc! {r#"
+        import assert from 'node:assert/strict'
+        import {{ Effect, Stream }} from 'effect'
+        import {{ GolemConflictError, GolemServiceError }} from '@golemcloud/golem-ts-bridge'
+        import {{ configure, StreamingRpcTarget }} from './streaming-rpc-target-client.js'
+
+        configure({{
+          server: {{ type: 'custom', url: '{worker_service_url}', token: '{token}' }},
+          application: 'streaming-invocation',
+          environment: 'local',
+        }})
+        await Effect.runPromise(Effect.scoped(Effect.gen(function*() {{
+          const first = yield* StreamingRpcTarget.create('effect-created')
+          const second = yield* StreamingRpcTarget.create('effect-created')
+          assert.notEqual(yield* first.agentId(), yield* second.agentId())
+          const found = yield* StreamingRpcTarget.getById(yield* first.agentId())
+          const transformed = yield* found.transform(Stream.make(8, 9))
+          assert.deepEqual(Array.from(yield* Stream.runCollect(transformed)), [80, 90])
+          const produced = yield* first.produce([10])
+          assert.deepEqual(Array.from(yield* Stream.runCollect(produced)), [10])
+
+          const keyed = yield* StreamingRpcTarget.create('effect-keyed', {{ keyed: true }})
+          const conflict = yield* Effect.result(StreamingRpcTarget.create('effect-keyed', {{ keyed: true }}))
+          assert.equal(conflict._tag, 'Failure')
+          assert.ok(conflict.failure instanceof GolemConflictError)
+          assert.equal(conflict.failure._tag, 'GolemConflictError')
+          assert.equal(conflict.failure.status, 409)
+          const keyedOutput = yield* keyed.transform(Stream.make(11))
+          assert.deepEqual(Array.from(yield* Stream.runCollect(keyedOutput)), [110])
+          const keyControl = yield* StreamingRpcTarget.upsert('effect-keyed')
+          assert.equal(yield* keyControl.agentId(), yield* keyed.agentId())
+          const keyOutput = yield* keyControl.produce([12])
+          assert.deepEqual(Array.from(yield* Stream.runCollect(keyOutput)), [12])
+
+          const missingId = (yield* first.agentId()).slice(0, 8) + '-0000-8000-8000-000000000099'
+          const missing = yield* Effect.result(StreamingRpcTarget.getById(missingId))
+          assert.equal(missing._tag, 'Failure')
+          assert.ok(missing.failure instanceof GolemServiceError)
+          assert.equal(missing.failure.status, 404)
+          assert.equal(missing.failure.operation, 'getAgent')
+        }})))
+        console.log('EFFECT_STREAMING_BRIDGE_E2E_OK')
+        "#};
+    std::fs::write(effect_client.join("e2e.mjs"), effect_driver).unwrap();
+    let mut effect_install = std::process::Command::new("pnpm");
+    effect_install
+        .args(["install", "--ignore-workspace", "--ignore-scripts"])
+        .current_dir(&effect_client);
+    assert_generated_driver(
+        run_generated_driver(effect_install).await,
+        "Effect install",
+        "",
+    );
+    let mut effect_build = std::process::Command::new("pnpm");
+    effect_build
+        .args(["exec", "tsc"])
+        .current_dir(&effect_client);
+    assert_generated_driver(run_generated_driver(effect_build).await, "Effect build", "");
+    let mut effect_command = std::process::Command::new("node");
+    effect_command.arg("e2e.mjs").current_dir(&effect_client);
+    assert_generated_driver(
+        run_generated_driver(effect_command).await,
+        "Effect",
+        "EFFECT_STREAMING_BRIDGE_E2E_OK",
     );
 
     let scala_client = ctx.cwd_path_join("scala-streaming-bridge/streaming-rpc-target-client");
@@ -1995,7 +2215,7 @@ async fn test_generated_streaming_bridges_end_to_end() {
               "streaming-invocation",
               "local",
             )
-            val agent = Await.result(StreamingRpcTargetClient.get("scala-generated-e2e"), timeout)
+            val agent = StreamingRpcTargetClient.upsert("scala-generated-e2e")
 
             assert(Await.result(agent.consume(input(List(UInt(1), UInt(2), UInt(3)))), timeout).map(_.value) == List(1, 2, 3))
             assert(collect(Await.result(agent.produce(List(UInt(4), UInt(5))), timeout)).map(_.value) == List(4, 5))
@@ -2066,10 +2286,11 @@ async fn test_generated_streaming_bridges_end_to_end() {
             )
             val timeout = 90.seconds
             val agent = Await.result(
-              ConfiguredRpcTargetClient.getWithConfig(
+              ConfiguredRpcTargetClient.create(
                 "scala-configured",
-                Some(UInt(7)),
-                Some("scala-label"),
+                keyed = true,
+                count = Some(UInt(7)),
+                label = Some("scala-label"),
               ),
               timeout,
             )
@@ -2180,10 +2401,38 @@ async fn test_generated_streaming_bridges_end_to_end() {
             "streaming-invocation",
             "local",
           )
-          let agent = @client.StreamingRpcTarget::get("moonbit-generated-e2e")
+          let agent = @client.StreamingRpcTarget::upsert("moonbit-generated-e2e")
           assert_eq(agent.consume(uint_input([1, 2, 3])), [1, 2, 3])
           assert_eq(collect_uint(agent.produce([4, 5])), [4, 5])
           assert_eq(collect_uint(agent.transform(uint_input([6, 7]))), [60, 70])
+
+          let first_created = @client.StreamingRpcTarget::create("moonbit-created")
+          let second_created = @client.StreamingRpcTarget::create("moonbit-created")
+          assert_true(first_created.agent_id() != second_created.agent_id())
+          let found = @client.StreamingRpcTarget::get_by_id(first_created.agent_id())
+          assert_eq(collect_uint(found.transform(uint_input([8, 9]))), [80, 90])
+          assert_eq(collect_uint(first_created.produce([10])), [10])
+          let keyed = @client.StreamingRpcTarget::create("moonbit-keyed", keyed=true)
+          try @client.StreamingRpcTarget::create("moonbit-keyed", keyed=true) catch {{
+            error => assert_true(error is @runtime.Conflict(_), msg=error.to_string())
+          }} noraise {{
+            _ => abort("expected a keyed create conflict")
+          }}
+          assert_eq(collect_uint(keyed.transform(uint_input([11]))), [110])
+          let key_control = @client.StreamingRpcTarget::upsert("moonbit-keyed")
+          assert_eq(key_control.agent_id(), keyed.agent_id())
+          assert_eq(collect_uint(key_control.produce([12])), [12])
+          let created_id_text = first_created.agent_id().to_string()
+          let missing_id = @runtime.AgentId::parse(
+            created_id_text[:8].to_owned() + "-0000-8000-8000-000000000099",
+          )
+          try @client.StreamingRpcTarget::get_by_id(
+            missing_id,
+          ) catch {{
+            error => assert_true(error is @runtime.NotFound(_), msg=error.to_string())
+          }} noraise {{
+            _ => abort("get_by_id must fail before an invocation")
+          }}
 
           let nested_input = @client.NestedStreamInput::{{
             labels: string_input(["left", "right"]),
@@ -2268,10 +2517,11 @@ async fn test_generated_streaming_bridges_end_to_end() {
             "streaming-invocation",
             "local",
           )
-          let agent = @client.ConfiguredRpcTarget::get_with_config(
+          let agent = @client.ConfiguredRpcTarget::create(
             "moonbit-configured",
-            Some(7),
-            Some("moonbit-label"),
+            keyed=true,
+            config_count=7,
+            config_label="moonbit-label",
           )
           assert_eq(agent.describe(), ("moonbit-configured", "moonbit-label", 7))
           println("MOONBIT_CONFIG_BRIDGE_E2E_OK")
@@ -2344,7 +2594,7 @@ async fn test_rust_counter() {
                 flag::LANGUAGE,
                 "ts",
                 flag::SCRIPT,
-                &format!("(await CounterAgent.get(\"{uuid}\")).increment()"),
+                &format!("CounterAgent.upsert(\"{uuid}\").increment()"),
             ])
             .await;
         assert!(outputs.success_or_dump());
@@ -2353,6 +2603,52 @@ async fn test_rust_counter() {
         assert!(!outputs.stdout_contains("error"));
         assert!(!outputs.stderr_contains("error"));
     }
+
+    assert_counter_repl_upsert_and_create(&ctx).await;
+}
+
+/// Runs a TS REPL script against the `CounterAgent` of the counter template: `upsert` reaches
+/// the keyed agent every time, a keyed `create` fails with a conflict when the keyed agent
+/// exists, and a `create` without a key makes a new agent.
+async fn assert_counter_repl_upsert_and_create(ctx: &TestContext) {
+    let name = Uuid::new_v4().to_string();
+    let keyed_name = Uuid::new_v4().to_string();
+    let outputs = ctx
+        .cli([
+            cmd::REPL,
+            flag::LANGUAGE,
+            "ts",
+            flag::SCRIPT,
+            &formatdoc! {r#"
+                const counter = CounterAgent.upsert("{name}");
+                await counter.increment();
+                const keyed = await CounterAgent.create("{keyed_name}", {{ keyed: true }});
+                const conflict = await CounterAgent.create("{keyed_name}", {{ keyed: true }}).then(
+                  () => 0,
+                  (error) => error.status,
+                );
+                const unkeyed = await CounterAgent.create("{name}");
+                [
+                  await CounterAgent.upsert("{name}").increment(),
+                  await unkeyed.increment(),
+                  (await CounterAgent.upsert("{keyed_name}").agentId()) === (await keyed.agentId()),
+                  (await unkeyed.agentId()) !== (await counter.agentId()),
+                  conflict,
+                ]
+            "#},
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains_ordered(vec![
+        "Preparing TypeScript REPL",
+        "[",
+        "  2,",
+        "  1,",
+        "  true,",
+        "  true,",
+        "  409",
+        "]",
+    ]));
 }
 
 /// End-to-end test for the Go SDK: creates a Go app from the composable counter
@@ -2625,9 +2921,9 @@ async fn test_go_bridge_e2e() {
 
     ctx.cd(app_name);
 
-    // An ephemeral agent beside the template's durable counter: its client
-    // constructs a phantom per call and reports the instance that ran. Its
-    // configuration, one value nested, is overridden through the typed option.
+    // An ephemeral agent beside the template's durable counter: each call of
+    // its upsert client runs on a new instance and reports the instance that
+    // ran. Its configuration, one value nested, comes from the manifest.
     let lib = walkdir::WalkDir::new(ctx.cwd_path())
         .into_iter()
         .filter_map(Result::ok)
@@ -2782,7 +3078,6 @@ async fn test_go_bridge_e2e() {
             	"log"
 
             	"github.com/golemcloud/golem/sdks/go/bridge"
-            	"github.com/golemcloud/golem/sdks/go/core/values"
             	client "golem.local/bridge/counter-agent-client"
             	echo "golem.local/bridge/echo-agent-client"
             )
@@ -2796,7 +3091,7 @@ async fn test_go_bridge_e2e() {
             	if err != nil {{
             		log.Fatal(err)
             	}}
-            	counter, err := client.GetCounterAgent(client.CounterAgentID{{Name: "go-e2e-counter"}})
+            	counter, err := client.UpsertCounterAgent(client.CounterAgentID{{Name: "go-e2e-counter"}})
             	if err != nil {{
             		log.Fatal(err)
             	}}
@@ -2809,7 +3104,7 @@ async fn test_go_bridge_e2e() {
             	if err != nil {{
             		log.Fatal(err)
             	}}
-            	echoes, err := echo.NewPhantomEchoAgent(echo.EchoAgentID{{Prefix: "go:"}})
+            	echoes, err := echo.UpsertEchoAgent(echo.EchoAgentID{{Prefix: "go:"}})
             	if err != nil {{
             		log.Fatal(err)
             	}}
@@ -2821,26 +3116,8 @@ async fn test_go_bridge_e2e() {
             	if err != nil {{
             		log.Fatal(err)
             	}}
-            	marked, err := echo.NewPhantomEchoAgent(echo.EchoAgentID{{Prefix: "go:"}},
-            		echo.WithEchoAgentConfig(echo.EchoAgentConfig{{Mark: values.Some("!")}}))
-            	if err != nil {{
-            		log.Fatal(err)
-            	}}
-            	three, err := marked.Echo(ctx, "c")
-            	if err != nil {{
-            		log.Fatal(err)
-            	}}
-            	doubled, err := echo.NewPhantomEchoAgent(echo.EchoAgentID{{Prefix: "go:"}},
-            		echo.WithEchoAgentConfig(echo.EchoAgentConfig{{StyleRepeat: values.Some[uint8](2)}}))
-            	if err != nil {{
-            		log.Fatal(err)
-            	}}
-            	four, err := doubled.Echo(ctx, "d")
-            	if err != nil {{
-            		log.Fatal(err)
-            	}}
-            	fmt.Printf("GO_BRIDGE_E2E_OK first=%d second=%d echo=%s,%s,%s,%s fresh=%t\n",
-            		first, second, one.Value, two.Value, three.Value, four.Value, one.AgentID != two.AgentID)
+            	fmt.Printf("GO_BRIDGE_E2E_OK first=%d second=%d echo=%s,%s fresh=%t\n",
+            		first, second, one.Value, two.Value, one.AgentID != two.AgentID)
             }}
             "#
         },
@@ -2873,7 +3150,7 @@ async fn test_go_bridge_e2e() {
         program_dir.display()
     );
     assert!(
-        stdout.contains("GO_BRIDGE_E2E_OK first=1 second=2 echo=go:a,go:b,go:c!,go:dd fresh=true"),
+        stdout.contains("GO_BRIDGE_E2E_OK first=1 second=2 echo=go:a,go:b fresh=true"),
         "Go bridge e2e program did not produce the expected output.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
     );
 }
@@ -4086,7 +4363,7 @@ async fn tool_invoke_stdout_contains_only_raw_bytes() {
     let receipt = &document["response"];
     let owner: golem_common::model::AgentId =
         serde_json::from_value(receipt["agentId"].clone()).unwrap();
-    let owner = format!("{}:{}", owner.component_id.0, owner.agent_id);
+    let owner = owner.to_string();
     let invocation_id = receipt["idempotencyKey"].as_str().unwrap();
     Uuid::parse_str(invocation_id).expect("the receipt contains the final invocation UUID");
     assert_ne!(invocation_id, "structured-cli-repeat");
@@ -4366,9 +4643,9 @@ async fn test_go_agent_guest_bridge_e2e() {
 
             func init() {{
             	agent.Handle(consumer.IncrementProvider, func(_ *golem.Context[state], in consumer.IncrementProviderIn) string {{
-            		counter := golem.Must(provider.GetCounterAgent(provider.CounterAgentID{{Name: in.ProviderName}}))
-            		stepped := golem.Must(provider.GetCounterAgent(provider.CounterAgentID{{Name: in.ProviderName + "-stepped"}},
-            			provider.WithCounterAgentConfig(provider.CounterAgentConfig{{Step: golem.Some[uint32](5)}})))
+            		counter := golem.Must(provider.UpsertCounterAgent(provider.CounterAgentID{{Name: in.ProviderName}}))
+            		stepped := golem.Must(provider.CreateCounterAgent(provider.CounterAgentID{{Name: in.ProviderName + "-stepped"}},
+            			golem.Keyed(), provider.WithCounterAgentConfig(provider.CounterAgentConfig{{Step: golem.Some[uint32](5)}})))
             		return fmt.Sprintf("ok:%d:%d", golem.Must(counter.Increment()), golem.Must(stepped.Increment()))
             	}})
             }}
@@ -4582,7 +4859,10 @@ async fn test_moonbit_tool_guest_bridge_e2e() {
         String::from_utf8_lossy(&wit.stderr)
     );
     let wit = String::from_utf8_lossy(&wit.stdout);
-    assert!(wit.contains("golem:agent/host@2.0.0"), "{wit}");
+    assert!(
+        wit.contains("golem:agent/invocation-context@2.0.0"),
+        "{wit}"
+    );
     assert!(wit.contains("golem:tool/host@0.1.0"), "{wit}");
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
@@ -4650,7 +4930,7 @@ async fn test_ts_counter() {
                 flag::LANGUAGE,
                 "ts",
                 flag::SCRIPT,
-                &format!("(await CounterAgent.get(\"{uuid}\")).increment()"),
+                &format!("CounterAgent.upsert(\"{uuid}\").increment()"),
             ])
             .await;
         assert!(outputs.success_or_dump());
@@ -4659,6 +4939,8 @@ async fn test_ts_counter() {
         assert!(!outputs.stdout_contains("error"));
         assert!(!outputs.stderr_contains("error"));
     }
+
+    assert_counter_repl_upsert_and_create(&ctx).await;
 }
 
 #[test]
@@ -4795,9 +5077,9 @@ async fn test_previous_invocation_failed_revert_workflow() {
 }
 
 #[test]
-async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
+async fn test_long_agent_key_rejected_in_invoke_repl_and_rpc() {
     let mut ctx = TestContext::new();
-    let app_name = "long-agent-id-rejected";
+    let app_name = "long-agent-key-rejected";
 
     let outputs = ctx
         .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "ts"])
@@ -4814,7 +5096,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
         formatdoc! { r#"
             manifestVersion: {MANIFEST_VERSION}
 
-            app: long-agent-id-rejected
+            app: long-agent-key-rejected
 
             environments:
               local:
@@ -4823,7 +5105,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
                 server: cloud
 
             components:
-              long-agent-id-rejected:ts-main:
+              long-agent-key-rejected:ts-main:
                 templates: ts
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
     )
@@ -4864,7 +5146,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
               init: ({ id }) => ({ id: id.id }),
               methods: {
                 async callTarget({ targetId }) {
-                  return await TargetAgent.client.get({ id: targetId }).ping();
+                  return await TargetAgent.client.upsert({ id: targetId }).ping();
                 },
               },
             });
@@ -4887,7 +5169,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
         .cli([flag::YES, cmd::AGENT, cmd::INVOKE, &target_agent, "ping"])
         .await;
     assert!(!outputs.success());
-    assert!(outputs.stderr_contains("Agent id is too long"));
+    assert!(outputs.stderr_contains("Agent key is too long"));
 
     let outputs = ctx
         .cli([
@@ -4895,11 +5177,11 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
             flag::LANGUAGE,
             "ts",
             flag::SCRIPT,
-            &format!("(await TargetAgent.get(\"{long_id}\")).ping()"),
+            &format!("TargetAgent.upsert(\"{long_id}\").ping()"),
         ])
         .await;
     assert!(!outputs.success());
-    assert!(outputs.stderr_contains("Agent id is too long"));
+    assert!(outputs.stderr_contains("Agent key is too long"));
 
     let outputs = ctx
         .cli([
@@ -5417,7 +5699,7 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
             "json",
             flag::SCRIPT,
             r#"
-                (await LongAgentName.get({oneField: "1212", anotherField: 100})).ask({oneField: "1", anotherField: 2})
+                LongAgentName.upsert({oneField: "1212", anotherField: 100}).ask({oneField: "1", anotherField: 2})
             "#,
         ])
         .await;
@@ -5522,10 +5804,9 @@ async fn test_naming_extremes() {
 }
 
 // Runs `agent list --mode <mode> --format json` against the live server and
-// returns the rendered agent-name strings from the response. The JSON view's
-// `agentName` is the rendered, language-specific agent id, e.g.
-// `DurableListAgent("…")`. Panics on non-zero exit or non-JSON output so test
-// failures point at the listing step that broke.
+// returns the agent type names from the response. Ephemeral agents have no key.
+// Panics on non-zero exit or non-JSON output so test failures point at the
+// listing step that broke.
 async fn list_agent_names(ctx: &TestContext, mode: &str) -> Vec<String> {
     let outputs = ctx
         .cli([
@@ -5549,7 +5830,15 @@ async fn list_agent_names(ctx: &TestContext, mode: &str) -> Vec<String> {
         .into_iter()
         .next()
         .unwrap_or_else(|| panic!("`agent list --mode {mode}` produced no JSON output"));
-    response.agents.into_iter().map(|a| a.agent_id).collect()
+    response
+        .agents
+        .into_iter()
+        .map(|a| {
+            a.agent_type
+                .expect("listed agent must have a type")
+                .to_string()
+        })
+        .collect()
 }
 
 // Scaffolds a fresh Rust app with two agent types: `DurableListAgent` (durable
@@ -5719,13 +6008,13 @@ async fn test_agent_list_mode_filter() {
     let count_durable = |names: &[String]| {
         names
             .iter()
-            .filter(|n| n.starts_with("DurableListAgent("))
+            .filter(|n| n.as_str() == "DurableListAgent")
             .count()
     };
     let count_ephemeral = |names: &[String]| {
         names
             .iter()
-            .filter(|n| n.starts_with("EphemeralListAgent("))
+            .filter(|n| n.as_str() == "EphemeralListAgent")
             .count()
     };
 
@@ -6020,7 +6309,7 @@ async fn assert_queued_manual_update_before_pending(ctx: &TestContext, agent: &s
         .expect("agent list must produce structured output")
         .agents
         .into_iter()
-        .find(|listed| listed.agent_id == agent)
+        .find(|listed| listed.agent_key == agent)
         .expect("queued agent must be listed");
     assert_eq!(listed_agent.updates.len(), 1);
     let pending = &listed_agent.updates[0];
@@ -6197,15 +6486,19 @@ async fn test_agent_update_await_correlates_exact_admitted_attempts() {
         .iter()
         .map(|agent| agent.agent_id.as_str())
         .collect::<std::collections::HashSet<_>>();
-    assert!(bulk_agent_ids.contains("UpdateAwaitAgent(\"bulk\")"));
-    assert!(bulk_agent_ids.contains("UpdateAwaitAgent(\"queued\")"));
-    assert!(!bulk_agent_ids.contains("UpdateAwaitAgent(\"automatic\")"));
+    let bulk_id = get_update_await_metadata(&ctx, r#"UpdateAwaitAgent("bulk")"#)
+        .await
+        .agent_id;
+    let queued_id = get_update_await_metadata(&ctx, queued_agent).await.agent_id;
+    let automatic_id = get_update_await_metadata(&ctx, automatic_agent)
+        .await
+        .agent_id;
+    assert!(bulk_agent_ids.contains(bulk_id.as_str()));
+    assert!(bulk_agent_ids.contains(queued_id.as_str()));
+    assert!(!bulk_agent_ids.contains(automatic_id.as_str()));
     assert_eq!(bulk_agent_ids.len(), 2);
     assert_eq!(bulk_result.errors.len(), 1);
-    assert_eq!(
-        bulk_result.errors[0].agent_id,
-        "UpdateAwaitAgent(\"queued\")"
-    );
+    assert_eq!(bulk_result.errors[0].agent_id, queued_id);
     assert!(
         bulk_result.errors[0]
             .error
@@ -6297,13 +6590,14 @@ struct UpdateAwaitAgentListView {
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UpdateAwaitListedAgent {
-    agent_id: String,
+    agent_key: String,
     updates: Vec<UpdateAwaitRecord>,
 }
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UpdateAwaitAgentMetadata {
+    agent_id: String,
     status: String,
     updates: Vec<UpdateAwaitRecord>,
 }
@@ -6339,19 +6633,11 @@ struct UpdateAwaitBulkError {
     error: String,
 }
 
-// JSON view of the `agent list` structured output. We only need the `agents`
-// array and the rendered `agentId` field; serde ignores the `outputType`
-// discriminator injected by the CLI's structured-output wrapper.
+// JSON view of the `agent list` structured output.
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentListResponseView {
-    agents: Vec<AgentListView>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AgentListView {
-    agent_id: String,
+    agents: Vec<golem_cli::model::agent::AgentMetadataView>,
 }
 
 // Use UPDATE_GOLDENFILES=1 or `cargo make cli-integration-tests-update-golden-files` to update files

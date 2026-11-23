@@ -35,8 +35,15 @@ pub(super) fn card_holder_from_proto(
         Holder::Application(application_id) => Ok(CardHolder::Application(ApplicationCardHolder {
             application_id: application_id.into(),
         })),
-        Holder::Agent(agent_id) => Ok(CardHolder::Agent(AgentCardHolder {
-            agent_id: agent_id.try_into()?,
+        Holder::Agent(holder) => Ok(CardHolder::Agent(AgentCardHolder {
+            environment_id: holder
+                .environment_id
+                .ok_or("Missing environment ID of agent card holder")?
+                .try_into()?,
+            agent_id: holder
+                .agent_id
+                .ok_or("Missing agent ID of agent card holder")?
+                .try_into()?,
         })),
     }
 }
@@ -49,7 +56,12 @@ pub(super) fn card_holder_to_proto(
     let holder = match value {
         CardHolder::Account(holder) => Holder::Account(holder.account_id.into()),
         CardHolder::Application(holder) => Holder::Application(holder.application_id.into()),
-        CardHolder::Agent(holder) => Holder::Agent(holder.agent_id.into()),
+        CardHolder::Agent(holder) => {
+            Holder::Agent(golem_api_grpc::proto::golem::worker::AgentCardHolder {
+                environment_id: Some(holder.environment_id.into()),
+                agent_id: Some(holder.agent_id.into()),
+            })
+        }
     };
     golem_api_grpc::proto::golem::worker::CardHolder {
         holder: Some(holder),

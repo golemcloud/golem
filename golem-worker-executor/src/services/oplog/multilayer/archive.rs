@@ -29,6 +29,7 @@ impl InstrumentedOplogArchive {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogArchive for InstrumentedOplogArchive {
     async fn read_source(
         &self,
@@ -152,6 +153,7 @@ impl WrappedOplogArchive {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogArchive for WrappedOplogArchive {
     async fn read_source(
         &self,

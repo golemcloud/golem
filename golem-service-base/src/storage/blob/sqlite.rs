@@ -150,12 +150,12 @@ impl SqliteBlobStorage {
             }
             BlobStorageNamespace::CompressedOplog {
                 environment_id,
-                component_id,
+                type_tag,
                 agent_mode,
                 level,
             } => {
                 let mode = super::agent_mode_prefix(agent_mode);
-                format!("compressed_oplog-{mode}-{environment_id}-{component_id}-{level}")
+                format!("compressed_oplog-{mode}-{environment_id}-{type_tag:08x}-{level}")
             }
             BlobStorageNamespace::InitialAgentFiles { environment_id } => {
                 format!("initial_agent_files-{environment_id}")

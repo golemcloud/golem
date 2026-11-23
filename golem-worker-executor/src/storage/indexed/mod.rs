@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::model::agent::AgentMode;
-use golem_common::model::{AgentId, ShardEpoch};
+use golem_common::model::{OwnedAgentId, ShardEpoch};
 use golem_common::serialization::{DecodeError, decode, serialize};
 use golem_service_base::repo::{RepoError, is_transient_sqlx_error};
 
@@ -274,6 +274,13 @@ fn scan_prefix_upper_bound(prefix: &str) -> Option<String> {
 /// where each entry has a numeric identifier and an arbitrary binary payload. The numeric
 /// identifiers are unique and monotonically increasing within each index, but not necessarily
 /// contiguous.
+///
+/// Keys portable across all backends use [`OwnedAgentId::storage_key`]:
+/// `{environment-uuid}/{agent-uuid}`, with canonical lowercase, hyphenated UUIDs.
+/// In [`IndexedStorageNamespace::StagedOpLog`], a key may also have a `#{stage-uuid}` suffix,
+/// whose UUID uses the same canonical spelling. Postgres requires these formats and returns
+/// [`IndexedStorageError::Other`] for other keys; other backends may accept arbitrary strings.
+/// This restriction applies to index keys, not literal scan prefixes or marker bounds.
 #[async_trait]
 pub trait IndexedStorage: Debug + Sync {
     /// Gets the number of available replicas in the storage cluster
@@ -1047,22 +1054,22 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub enum IndexedStorageNamespace {
     OpLog {
-        agent_id: AgentId,
+        owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
     },
     StagedOpLog {
-        agent_id: AgentId,
+        owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
     },
     CompressedOpLog {
-        agent_id: AgentId,
+        owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
         level: usize,
     },
     /// The chunks a blob archive level holds for an agent: the chunk bytes live in blob storage,
     /// and only the chunks listed here are part of the oplog.
     BlobOplogManifest {
-        agent_id: AgentId,
+        owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
         level: usize,
     },
@@ -1101,9 +1108,8 @@ mod tests {
         memory::InMemoryIndexedStorage, scan_prefix_upper_bound, stable_scan_key_bounds,
     };
     use futures::FutureExt;
-    use golem_common::model::AgentId;
     use golem_common::model::agent::AgentMode;
-    use golem_common::model::component::ComponentId;
+    use golem_common::model::{AgentId, OwnedAgentId};
     use golem_common::serialization::{DecodeError, serialize};
     use proptest::prelude::*;
     use std::panic::AssertUnwindSafe;
@@ -1116,10 +1122,10 @@ mod tests {
         let storage = InMemoryIndexedStorage::new();
         let labelled = storage.with_entity("test", "decode", "entry");
         let namespace = IndexedStorageNamespace::OpLog {
-            agent_id: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "decode-errors".to_string(),
-            },
+            owned_agent_id: OwnedAgentId::new(
+                golem_common::model::environment::EnvironmentId(uuid::Uuid::from_u128(1)),
+                &AgentId::from_parts(7, 1),
+            ),
             agent_mode: AgentMode::Durable,
         };
         for (key, bytes, expected) in [

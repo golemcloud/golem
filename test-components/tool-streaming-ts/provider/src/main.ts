@@ -44,8 +44,9 @@ const MatrixRejection = z.object({
   retryable: z.boolean(),
 });
 
-function principalName(principal: Principal): string {
-  return principal.toString();
+/** Both roles of the caller: "<original>|<immediate>", each "<kind> <ref text>" or "anonymous". */
+function principalName(caller: { original: Principal; immediate: Principal }): string {
+  return `${caller.original.toString()}|${caller.immediate.toString()}`;
 }
 
 const SecretExchange = z.object({
@@ -94,8 +95,8 @@ function revealString(secret: Secret): string {
 function resourceEvidence(context: { caller: Caller }) {
   return {
     provider: 'typescript',
-    principal: principalName(context.caller.immediate),
-    ownerAgentId: getSelfMetadata().agentId.agentId,
+    principal: principalName(context.caller),
+    ownerAgentId: getSelfMetadata().agentId.toString(),
   };
 }
 
@@ -204,8 +205,8 @@ toolDefinition('matrix-core')
             BigInt(request.dimensions.width) * BigInt(request.dimensions.height) * multiplier +
             BigInt(request.labels.length),
           labelSummary: [...request.labels].reverse().join('|'),
-          principal: principalName(context.caller.immediate),
-          ownerAgentId: getSelfMetadata().agentId.agentId,
+          principal: principalName(context.caller),
+          ownerAgentId: getSelfMetadata().agentId.toString(),
         });
       },
     }),

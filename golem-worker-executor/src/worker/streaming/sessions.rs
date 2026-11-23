@@ -313,9 +313,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             return Ok(value);
         };
-        // The original agent consumer can reattach after revert, but never to a new fork.
+        // The original agent or tool consumer can reattach after revert, but never to a new fork.
         let requires_attachment =
-            stream_effective_identity_is_agent(&prepared.attempt.effective_identity)
+            stream_effective_identity_is_internal(&prepared.attempt.effective_identity)
                 && prepared.attempt.session_key.callee_fingerprint
                     == self.initial_worker_metadata.fingerprint;
         let mut streams = StreamSession::open(
@@ -535,19 +535,27 @@ pub(in crate::worker) fn stream_output_consumer_is_observer(
     })?;
     // The first accepted caller owns cancellation, even if a fork dispatched an
     // inherited call before its logical origin did. Other readers abandon only their slot.
-    Ok(caller != attachment.consumer.clone().into()
+    Ok(caller != attachment.consumer.into()
         || environment != attachment.consumer_environment_id.into())
 }
 
-pub(in crate::worker) fn stream_effective_identity_is_agent(effective_identity: &[u8]) -> bool {
-    stream_agent_authority(effective_identity).is_some()
+/// True when an agent or a tool that an agent hosts started the stream.
+pub(in crate::worker) fn stream_effective_identity_is_internal(effective_identity: &[u8]) -> bool {
+    stream_internal_authority(effective_identity).is_some()
 }
 
-pub(in crate::worker) fn stream_agent_authority(effective_identity: &[u8]) -> Option<&[u8]> {
+/// The auth-context entry of the identity of a stream that an agent, or a tool that an agent
+/// hosts, started: the immediate caller is an agent or a tool. `None` for any other stream. The
+/// identity is the auth-context entry followed by the principal entry, when the request has a
+/// principal, so only a second entry is a principal: an auth context alone can also decode as an
+/// agent principal.
+pub(in crate::worker) fn stream_internal_authority(effective_identity: &[u8]) -> Option<&[u8]> {
     let mut cursor = effective_identity;
     let mut last = None;
     let mut authority = None;
+    let mut entries = 0;
     while cursor.len() >= 8 {
+        entries += 1;
         authority = Some(&effective_identity[..effective_identity.len() - cursor.len()]);
         let (length, rest) = cursor.split_at(8);
         let length = u64::from_be_bytes(
@@ -565,7 +573,7 @@ pub(in crate::worker) fn stream_agent_authority(effective_identity: &[u8]) -> Op
         last = Some(value);
         cursor = rest;
     }
-    if !cursor.is_empty() {
+    if !cursor.is_empty() || entries != 2 {
         return None;
     }
     last.and_then(|value| {
@@ -573,7 +581,7 @@ pub(in crate::worker) fn stream_agent_authority(effective_identity: &[u8]) -> Op
             .ok()
             .and_then(|caller| Caller::try_from(caller).ok())
     })
-    .is_some_and(|caller| matches!(caller.immediate, Principal::Agent(_)))
+    .is_some_and(|caller| matches!(caller.immediate, Principal::Agent(_) | Principal::Tool(_)))
     .then_some(authority?)
 }
 
@@ -605,8 +613,8 @@ pub(crate) fn same_origin_stream_invocation(
         return false;
     }
     let (Some(original_authority), Some(retry_authority)) = (
-        stream_agent_authority(&original.effective_identity),
-        stream_agent_authority(&retry.effective_identity),
+        stream_internal_authority(&original.effective_identity),
+        stream_internal_authority(&retry.effective_identity),
     ) else {
         return false;
     };
@@ -639,7 +647,7 @@ pub(crate) fn same_origin_stream_invocation(
                 .origin_invocation
                 .as_ref()
                 .and_then(|origin| origin.callee_environment_id);
-            if parent != Some(&handle.producer.clone().into())
+            if parent != Some(&handle.producer.into())
                 || environment != Some(handle.producer_environment_id.into())
             {
                 return false;
@@ -670,18 +678,19 @@ pub(in crate::worker) fn normalize_stream_join_authority(
     use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
     use golem_common::model::card::{PermissionPattern, PermissionTarget, ScopeCard};
 
-    fn normalize_owner(owner: &mut AgentOwnerPattern, caller: &str, origin: &str) {
+    // A fork keeps the type of its origin, so only the agent ID of the leaf changes.
+    fn normalize_owner(owner: &mut AgentOwnerPattern, caller: &AgentId, origin: &AgentId) {
         if let AgentOwnerPattern::Agent {
-            agent: AgentOwnerLeafPattern::Agent(name),
+            agent: AgentOwnerLeafPattern::Agent(leaf),
             ..
         } = owner
-            && name == caller
+            && leaf.agent_id == *caller
         {
-            *name = origin.to_string();
+            leaf.agent_id = *origin;
         }
     }
 
-    fn normalize_grants(grants: &mut [PermissionPattern], caller: &str, origin: &str) {
+    fn normalize_grants(grants: &mut [PermissionPattern], caller: &AgentId, origin: &AgentId) {
         for grant in grants {
             let owner = match grant {
                 PermissionPattern::Agent(grant) => &mut grant.owner,
@@ -702,8 +711,8 @@ pub(in crate::worker) fn normalize_stream_join_authority(
     }
     let mut auth =
         AuthCtx::try_from(golem_api_grpc::proto::golem::auth::AuthCtx::decode(bytes).ok()?).ok()?;
-    let caller = &config.context.as_ref()?.parent.as_ref()?.name;
-    let origin = &config.origin_invocation.as_ref()?.callee.as_ref()?.name;
+    let caller = &AgentId::try_from(config.context.as_ref()?.parent?).ok()?;
+    let origin = &AgentId::try_from(config.origin_invocation.as_ref()?.callee?).ok()?;
     // Forks monomorphize the retained wallet under their own name. Compare self-scoped
     // grants under the common author, retaining card IDs, scopes, verbs and resources.
     if let AuthCtx::Agent(agent) = &mut auth {
@@ -767,37 +776,37 @@ pub(crate) fn stream_session_record_key(
         )),
         StreamSessionRecord::Prepared(record) => Some(StreamSessionKey {
             callee_environment_id: owner_environment_id,
-            callee: owner.clone(),
+            callee: *owner,
             callee_fingerprint: owner_fingerprint,
             idempotency_key: record.session_key,
         }),
         StreamSessionRecord::ExpiryRefreshed(record) => Some(StreamSessionKey {
             callee_environment_id: owner_environment_id,
-            callee: owner.clone(),
+            callee: *owner,
             callee_fingerprint: owner_fingerprint,
             idempotency_key: record.session_key,
         }),
         StreamSessionRecord::Expired(record) => Some(StreamSessionKey {
             callee_environment_id: owner_environment_id,
-            callee: owner.clone(),
+            callee: *owner,
             callee_fingerprint: owner_fingerprint,
             idempotency_key: record.session_key,
         }),
         StreamSessionRecord::Attached(record) => Some(StreamSessionKey {
             callee_environment_id: owner_environment_id,
-            callee: owner.clone(),
+            callee: *owner,
             callee_fingerprint: owner_fingerprint,
             idempotency_key: record.session_key,
         }),
         StreamSessionRecord::ResumeAttempt(record) => Some(StreamSessionKey {
             callee_environment_id: owner_environment_id,
-            callee: owner.clone(),
+            callee: *owner,
             callee_fingerprint: owner_fingerprint,
             idempotency_key: record.session_key,
         }),
         StreamSessionRecord::Detached(record) => Some(StreamSessionKey {
             callee_environment_id: owner_environment_id,
-            callee: owner.clone(),
+            callee: *owner,
             callee_fingerprint: owner_fingerprint,
             idempotency_key: record.session_key,
         }),
@@ -868,7 +877,7 @@ pub(crate) fn stream_session_record_key(
         )),
         StreamSessionRecord::ExportForkInitialized(record) => Some(StreamSessionKey {
             callee_environment_id: owner_environment_id,
-            callee: owner.clone(),
+            callee: *owner,
             callee_fingerprint: owner_fingerprint,
             idempotency_key: record.session_key,
         }),
@@ -945,56 +954,96 @@ pub(in crate::worker) fn validate_stream_session_record(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::test_callers::{agent_caller, user_principal};
+    use super::{stream_effective_identity_is_internal, stream_internal_authority};
+    use golem_api_grpc::proto::golem::auth::{AuthCtx, UserAuthCtx, auth_ctx};
     use golem_common::model::AgentId;
-    use golem_common::model::component::ComponentId;
     use prost::Message;
     use test_r::test;
 
-    /// The identity bytes as `effective_session_identity` writes them: each part behind its
-    /// length, the caller last.
-    fn identity(caller: &Caller) -> Vec<u8> {
-        let auth = golem_api_grpc::proto::golem::auth::AuthCtx::from(
-            golem_service_base::model::auth::AuthCtx::System,
-        )
-        .encode_to_vec();
-        let caller =
-            golem_api_grpc::proto::golem::component::Caller::from(caller.clone()).encode_to_vec();
+    fn identity(entries: &[Vec<u8>]) -> Vec<u8> {
         let mut identity = Vec::new();
-        for part in [auth, caller] {
-            identity.extend_from_slice(&(part.len() as u64).to_be_bytes());
-            identity.extend_from_slice(&part);
+        for entry in entries {
+            identity.extend_from_slice(&(entry.len() as u64).to_be_bytes());
+            identity.extend_from_slice(entry);
         }
         identity
     }
 
+    // A user auth context has the wire shape of an agent principal: its account ID decodes as
+    // the principal's agent ID.
     #[test]
-    fn stream_agent_authority_reads_the_caller_identity() {
-        let agent = agent_caller(AgentId {
-            component_id: ComponentId(uuid::Uuid::from_u128(1)),
-            agent_id: "Relay(\"r\")".to_string(),
-        });
-        let identity_of_agent = identity(&agent);
-        assert!(stream_agent_authority(&identity_of_agent).is_some());
-        assert!(stream_effective_identity_is_agent(&identity_of_agent));
+    fn a_user_auth_context_without_a_principal_is_not_an_agent_identity() {
+        let user = AuthCtx {
+            value: Some(auth_ctx::Value::User(UserAuthCtx {
+                account_id: Some(
+                    golem_common::model::account::AccountId(uuid::Uuid::from_u128(7)).into(),
+                ),
+                ..Default::default()
+            })),
+        }
+        .encode_to_vec();
+        let agent: golem_api_grpc::proto::golem::component::Caller =
+            crate::test_callers::agent_caller(AgentId::from_parts(7, 1)).into();
 
-        let user = Caller::entry(user_principal());
-        let identity_of_user = identity(&user);
-        assert!(stream_agent_authority(&identity_of_user).is_none());
+        assert!(!stream_effective_identity_is_internal(&identity(
+            std::slice::from_ref(&user)
+        )));
+        assert!(!stream_effective_identity_is_internal(&identity(&[
+            agent.encode_to_vec()
+        ])));
+        assert!(stream_effective_identity_is_internal(&identity(&[
+            user,
+            agent.encode_to_vec()
+        ])));
+    }
 
-        // An agent that acts for a user is the immediate caller, which is what counts.
+    #[test]
+    fn stream_internal_authority_reads_the_caller_identity() {
+        use golem_common::model::caller::Caller;
+
+        let caller_identity = |caller: &Caller| {
+            let wire: golem_api_grpc::proto::golem::component::Caller = caller.clone().into();
+            identity(&[AuthCtx::default().encode_to_vec(), wire.encode_to_vec()])
+        };
+        let agent = crate::test_callers::agent_caller(AgentId::from_parts(7, 1));
+        let identity_of_agent = caller_identity(&agent);
+        assert!(stream_internal_authority(&identity_of_agent).is_some());
+        assert!(stream_effective_identity_is_internal(&identity_of_agent));
+
+        let user = Caller::entry(crate::test_callers::user_principal());
+        assert!(stream_internal_authority(&caller_identity(&user)).is_none());
+
         let mut agent_for_user = agent.clone();
-        agent_for_user.original = user_principal();
-        assert!(stream_agent_authority(&identity(&agent_for_user)).is_some());
+        agent_for_user.original = user.original.clone();
+        assert!(stream_internal_authority(&caller_identity(&agent_for_user)).is_some());
         let mut user_via_agent_root = user.clone();
-        user_via_agent_root.original = agent.original.clone();
-        assert!(stream_agent_authority(&identity(&user_via_agent_root)).is_none());
+        user_via_agent_root.original = agent.original;
+        assert!(stream_internal_authority(&caller_identity(&user_via_agent_root)).is_none());
 
-        // An identity that does not decode is not an agent.
+        // A tool that an agent hosts calls for the same user: its stream is as internal as the
+        // agent's.
+        let tool_for_user = Caller {
+            original: user.original.clone(),
+            immediate: golem_common::model::caller::Principal::Tool(
+                golem_common::model::caller::ToolPrincipal {
+                    issuer: crate::test_callers::TEST_ISSUER.to_string(),
+                    environment_id: golem_common::model::environment::EnvironmentId(
+                        uuid::Uuid::from_u128(0xe0),
+                    ),
+                    tool_name: golem_common::model::tool::ToolName::try_from("report").unwrap(),
+                },
+            ),
+            tokens: Vec::new(),
+        };
+        assert!(stream_internal_authority(&caller_identity(&tool_for_user)).is_some());
+        assert!(stream_effective_identity_is_internal(&caller_identity(
+            &tool_for_user
+        )));
+        assert!(stream_internal_authority(&caller_identity(&Caller::anonymous())).is_none());
+
         let mut garbage = Vec::new();
         garbage.extend_from_slice(&3u64.to_be_bytes());
         garbage.extend_from_slice(&[0xff, 0xff, 0xff]);
-        assert!(stream_agent_authority(&garbage).is_none());
+        assert!(stream_internal_authority(&garbage).is_none());
     }
 }

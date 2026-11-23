@@ -452,16 +452,11 @@ impl CardInterestIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::AgentId;
-    use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use test_r::test;
 
     fn agent(name: &str) -> OwnedAgentId {
-        let agent_id = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: name.to_string(),
-        };
+        let agent_id = crate::test_agent_id(name);
         OwnedAgentId::new(EnvironmentId::new(), &agent_id)
     }
 

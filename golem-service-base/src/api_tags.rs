@@ -51,4 +51,6 @@ pub enum ApiTags {
     AgentTypes,
     /// API working on agent instances
     Agent,
+    /// API working on the invocations of agents
+    Invocation,
 }

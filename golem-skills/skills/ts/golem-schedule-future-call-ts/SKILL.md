@@ -20,14 +20,14 @@ takes a `Datetime` as the first argument, followed by the method's input record
 import { Datetime } from '@golemcloud/golem-ts-sdk';
 import { Counter } from './counter-agent.js';
 
-const counter = Counter.client.get({ name: 'my-counter' });
+const counter = Counter.client.upsert({ name: 'my-counter' });
 
 // Schedule increment to run 60 seconds from now.
 const inOneMinute = Datetime.fromDate(new Date(Date.now() + 60_000));
 counter.increment.schedule(inOneMinute);
 
 // Schedule with arguments.
-const reporter = ReportAgent.client.get({ name: 'daily' });
+const reporter = ReportAgent.client.upsert({ name: 'daily' });
 reporter.generateReport.schedule(
     Datetime.parse('2026-01-02T00:00:00Z'),
     { kind: 'summary' },
@@ -61,7 +61,7 @@ const token = counter.increment.schedule(Datetime.fromDate(new Date(Date.now() +
 token.cancel();
 ```
 
-(To cancel an in-flight — not scheduled — RPC call, pass `{ signal }` as the trailing option to the normal awaited call and abort the `AbortSignal`, for example `method(input, { signal })`. You can also gate a method on agent state, or cancel from the CLI with a known idempotency key via `golem agent cancel-invocation` — see `golem-cancel-queued-invocation`.)
+(To cancel an in-flight — not scheduled — RPC call, pass `{ signal }` as the trailing option to the normal awaited call and abort the `AbortSignal`, for example `method(input, { signal })`. You can also gate a method on agent state, or cancel from the CLI with a known idempotency key via `golem invocation cancel` — see `golem-cancel-queued-invocation`.)
 
 ## Use Cases
 

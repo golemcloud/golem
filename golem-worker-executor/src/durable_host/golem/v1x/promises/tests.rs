@@ -18,9 +18,9 @@ use crate::services::promise::{
 };
 use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use async_trait::async_trait;
-use golem_common::base_model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{AgentFingerprint, AgentId, PromiseId};
+use golem_common::model::{AgentFingerprint, AgentId, OwnedAgentId, PromiseId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -35,6 +35,7 @@ struct NoopPromiseWorkerAccess;
 impl PromiseWorkerAccess for NoopPromiseWorkerAccess {
     async fn activate_worker_if_needed(
         &self,
+        _environment_id: EnvironmentId,
         _promise_id: &PromiseId,
     ) -> Result<(), WorkerExecutorError> {
         Ok(())
@@ -42,7 +43,7 @@ impl PromiseWorkerAccess for NoopPromiseWorkerAccess {
 
     async fn run_excluding_removal<'a>(
         &self,
-        _agent_id: &AgentId,
+        _owned_agent_id: &OwnedAgentId,
         operation: futures::future::BoxFuture<'a, Result<bool, WorkerExecutorError>>,
     ) -> Result<bool, WorkerExecutorError> {
         operation.await
@@ -75,17 +76,24 @@ impl FlakyPromiseService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl PromiseService for FlakyPromiseService {
     async fn create(
         &self,
-        agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
         oplog_idx: OplogIndex,
     ) -> Result<PromiseId, WorkerExecutorError> {
-        self.inner.create(agent_id, fingerprint, oplog_idx).await
+        self.inner
+            .create(owned_agent_id, fingerprint, oplog_idx)
+            .await
     }
 
-    async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError> {
+    async fn poll(
+        &self,
+        environment_id: EnvironmentId,
+        promise_id: PromiseId,
+    ) -> Result<PromiseHandle, WorkerExecutorError> {
         self.polls.fetch_add(1, Ordering::SeqCst);
         if self
             .remaining_failures
@@ -98,23 +106,27 @@ impl PromiseService for FlakyPromiseService {
                 "key-value storage unavailable",
             ));
         }
-        self.inner.poll(promise_id).await
+        self.inner.poll(environment_id, promise_id).await
     }
 
     async fn complete(
         &self,
+        environment_id: EnvironmentId,
         promise_id: PromiseId,
         data: Vec<u8>,
     ) -> Result<bool, WorkerExecutorError> {
-        self.inner.complete(promise_id, data).await
+        self.inner.complete(environment_id, promise_id, data).await
     }
 
     async fn complete_without_wakeup(
         &self,
+        environment_id: EnvironmentId,
         promise_id: PromiseId,
         data: Vec<u8>,
     ) -> Result<bool, WorkerExecutorError> {
-        self.inner.complete_without_wakeup(promise_id, data).await
+        self.inner
+            .complete_without_wakeup(environment_id, promise_id, data)
+            .await
     }
 
     async fn cleanup(&self) {
@@ -122,11 +134,11 @@ impl PromiseService for FlakyPromiseService {
     }
 }
 
-fn agent_id() -> AgentId {
-    AgentId {
-        component_id: ComponentId(Uuid::new_v4()),
-        agent_id: "promise-pollable-test".to_string(),
-    }
+fn owned_agent_id() -> OwnedAgentId {
+    OwnedAgentId::new(
+        EnvironmentId(Uuid::from_u128(1)),
+        &AgentId::from_parts(7, Uuid::new_v4().as_u128() >> 38),
+    )
 }
 
 #[test]
@@ -134,13 +146,14 @@ async fn transient_poll_failure_is_not_memoized() {
     let promise_service = Arc::new(FlakyPromiseService::new(1));
     let promise_id = promise_service
         .create(
-            &agent_id(),
+            &owned_agent_id(),
             AgentFingerprint::new(),
             OplogIndex::from_u64(1),
         )
         .await
         .unwrap();
     let entry = GetPromiseResultEntry::new(
+        EnvironmentId(Uuid::from_u128(1)),
         promise_id.clone(),
         promise_service.clone() as Arc<dyn PromiseService>,
     );
@@ -160,13 +173,14 @@ async fn resolved_handle_observes_completion() {
     let promise_service = Arc::new(FlakyPromiseService::new(1));
     let promise_id = promise_service
         .create(
-            &agent_id(),
+            &owned_agent_id(),
             AgentFingerprint::new(),
             OplogIndex::from_u64(1),
         )
         .await
         .unwrap();
     let entry = GetPromiseResultEntry::new(
+        EnvironmentId(Uuid::from_u128(1)),
         promise_id.clone(),
         promise_service.clone() as Arc<dyn PromiseService>,
     );
@@ -176,7 +190,7 @@ async fn resolved_handle_observes_completion() {
 
     assert!(
         promise_service
-            .complete(promise_id, vec![42])
+            .complete(EnvironmentId(Uuid::from_u128(1)), promise_id, vec![42])
             .await
             .unwrap()
     );

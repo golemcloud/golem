@@ -15,6 +15,7 @@
 use crate::custom_api::route_resolver::RouteResolver;
 use crate::mcp::McpCapabilityLookup;
 use crate::service::agent_resolution_cache::AgentResolutionCache;
+use crate::service::agent_types::AgentTypeResolver;
 use crate::service::auth::AuthService;
 use crate::service::component::ComponentService;
 use golem_common::model::agent::RegistryInvalidationEvent;
@@ -26,6 +27,7 @@ use tracing::{debug, warn};
 pub(crate) struct WorkerServiceRegistryInvalidationHandler {
     component_service: Arc<dyn ComponentService>,
     agent_resolution_cache: Arc<AgentResolutionCache>,
+    agent_types: Arc<AgentTypeResolver>,
     route_resolver: Arc<RouteResolver>,
     auth_service: Arc<dyn AuthService>,
     mcp_capability_lookup: Arc<dyn McpCapabilityLookup>,
@@ -36,6 +38,7 @@ impl WorkerServiceRegistryInvalidationHandler {
         registry_service: Arc<dyn RegistryService>,
         component_service: Arc<dyn ComponentService>,
         agent_resolution_cache: Arc<AgentResolutionCache>,
+        agent_types: Arc<AgentTypeResolver>,
         route_resolver: Arc<RouteResolver>,
         auth_service: Arc<dyn AuthService>,
         mcp_capability_lookup: Arc<dyn McpCapabilityLookup>,
@@ -48,6 +51,7 @@ impl WorkerServiceRegistryInvalidationHandler {
                 Arc::new(Self {
                     component_service,
                     agent_resolution_cache,
+                    agent_types,
                     route_resolver,
                     auth_service,
                     mcp_capability_lookup,
@@ -58,6 +62,7 @@ impl WorkerServiceRegistryInvalidationHandler {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
     async fn on_event(&self, event: RegistryInvalidationEvent) {
         if matches!(
@@ -85,6 +90,7 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
                 warn!("Registry invalidation cursor expired, flushing all caches");
                 self.route_resolver.clear_all().await;
                 self.agent_resolution_cache.clear().await;
+                self.agent_types.clear().await;
                 self.auth_service.clear_all_caches().await;
             }
             RegistryInvalidationEvent::DeploymentChanged {
@@ -104,6 +110,9 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
                     *deployment_revision,
                     *current_deployment_revision,
                 );
+                self.agent_types
+                    .invalidate_environment(*environment_id)
+                    .await;
                 self.route_resolver
                     .invalidate_domains_for_environment(*environment_id)
                     .await;
@@ -183,6 +192,7 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
                     .invalidate_by_app_name(app_name, environment_ids)
                     .await;
                 for env_id in environment_ids {
+                    self.agent_types.invalidate_environment(*env_id).await;
                     self.route_resolver
                         .invalidate_domains_for_environment(*env_id)
                         .await;
@@ -203,6 +213,9 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
                 self.agent_resolution_cache
                     .invalidate_by_env(app_name, env_name, *environment_id)
                     .await;
+                self.agent_types
+                    .invalidate_environment(*environment_id)
+                    .await;
                 self.route_resolver
                     .invalidate_domains_for_environment(*environment_id)
                     .await;
@@ -217,16 +230,18 @@ mod tests {
     use crate::config::{AuthServiceConfig, ComponentServiceConfig, RouteResolverConfig};
     use crate::custom_api::api_definition_lookup::RegistryServiceApiDefinitionsLookup;
     use crate::mcp::RegistryServiceMcpCapabilityLookup;
+    use crate::service::agent_types::tests::registered;
     use crate::service::auth::RemoteAuthService;
     use crate::service::component::RemoteComponentService;
     use crate::service::component::tests::{TestRegistry, component};
+    use golem_common::model::agent::AgentTypeName;
     use golem_common::model::component::ComponentRevision;
     use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
     use std::time::Duration;
     use test_r::test;
 
     #[test]
-    async fn deployment_cursor_and_deletion_events_refresh_current_metadata() {
+    async fn deployment_cursor_and_deletion_events_refresh_current_metadata_and_agent_types() {
         let a = component();
         let mut b = a.clone();
         b.revision = ComponentRevision::new(6).unwrap();
@@ -238,6 +253,12 @@ mod tests {
             registry.clone(),
             &ComponentServiceConfig::default(),
         ));
+        let agent_types = Arc::new(AgentTypeResolver::new(
+            registry.clone(),
+            10,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+        ));
         let handler = WorkerServiceRegistryInvalidationHandler {
             component_service: components.clone(),
             agent_resolution_cache: Arc::new(AgentResolutionCache::new(
@@ -246,6 +267,7 @@ mod tests {
                 Duration::from_secs(60),
                 Duration::from_secs(60),
             )),
+            agent_types: agent_types.clone(),
             route_resolver: Arc::new(RouteResolver::new(
                 &RouteResolverConfig::default(),
                 Arc::new(RegistryServiceApiDefinitionsLookup::new(registry.clone())),
@@ -280,18 +302,38 @@ mod tests {
                 env_name: a.environment_name.to_string(),
             },
         ];
+        let name = AgentTypeName("Cart".to_string());
+        let deployed_revision = async || {
+            agent_types
+                .deployed(a.environment_id, &name)
+                .await
+                .unwrap()
+                .map(|registered| registered.implemented_by.component_revision)
+        };
         for event in events {
+            let event_name = format!("{event:?}");
             *registry.deployed.lock().unwrap() = Some(a.clone());
+            *registry.deployed_agent_type.lock().unwrap() = Some(registered(&name, 1));
             components.invalidate_current().await;
+            agent_types.invalidate_environment(a.environment_id).await;
             assert_eq!(
                 components.get_current_by_id(a.id).await.unwrap().revision,
                 a.revision
             );
+            assert_eq!(deployed_revision().await, ComponentRevision::new(1).ok());
+
             *registry.deployed.lock().unwrap() = Some(b.clone());
+            *registry.deployed_agent_type.lock().unwrap() = Some(registered(&name, 2));
             handler.on_event(event).await;
             assert_eq!(
                 components.get_current_by_id(a.id).await.unwrap().revision,
-                b.revision
+                b.revision,
+                "{event_name}"
+            );
+            assert_eq!(
+                deployed_revision().await,
+                ComponentRevision::new(2).ok(),
+                "{event_name}"
             );
         }
     }

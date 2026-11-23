@@ -31,6 +31,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::component::Component;
 use golem_service_base::service::compiled_component::CompiledComponentService;
 use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
+use golem_service_base::service::type_id_resolution::InvalidationGenerations;
 use golem_service_base::storage::blob::BlobStorage;
 use std::sync::Arc;
 use std::time::Duration;
@@ -115,10 +116,18 @@ pub fn configured(
 pub struct ComponentServiceDefault {
     component_cache: LoadedComponentCache,
     component_metadata_cache: Cache<ComponentKey, (), Component, WorkerExecutorError>,
-    current_component_metadata_cache: Cache<ComponentId, (), Component, WorkerExecutorError>,
+    current_component_metadata_cache:
+        Cache<ComponentId, (), FetchedCurrentMetadata, WorkerExecutorError>,
+    current_metadata_generations: Arc<InvalidationGenerations>,
     compiled_component_service: Arc<dyn CompiledComponentService>,
     registry_client: Arc<dyn RegistryService>,
     compilation_limiter: CompilationLimiter,
+}
+
+#[derive(Clone)]
+struct FetchedCurrentMetadata {
+    generation: u64,
+    metadata: Component,
 }
 
 impl ComponentServiceDefault {
@@ -141,6 +150,7 @@ impl ComponentServiceDefault {
                 max_metadata_capacity,
                 time_to_idle,
             ),
+            current_metadata_generations: Arc::default(),
             compiled_component_service,
             compilation_limiter: CompilationLimiter::new(max_concurrent_compilations),
         }
@@ -148,6 +158,7 @@ impl ComponentServiceDefault {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentService for ComponentServiceDefault {
     async fn get(
         &self,
@@ -224,42 +235,57 @@ impl ComponentService for ComponentServiceDefault {
                     )
                     .await
             }
-            None => {
+            None => loop {
                 let client = self.registry_client.clone();
-                let metadata = self
+                let generations = self.current_metadata_generations.clone();
+                let fetched = self
                     .current_component_metadata_cache
-                    .get_or_insert_simple(&component_id, || {
-                        Box::pin(async move {
-                            client
-                                .get_deployed_component_metadata(component_id)
-                                .await
-                                .map_err(|error| {
-                                    registry_error(
-                                        RegistryCall::Metadata,
-                                        component_id,
-                                        None,
-                                        error,
-                                    )
-                                })
+                    .get_or_insert_simple_spawned(&component_id, move || async move {
+                        let generation = generations.current();
+                        let metadata = client
+                            .get_deployed_component_metadata(component_id)
+                            .await
+                            .map_err(|error| {
+                            registry_error(RegistryCall::Metadata, component_id, None, error)
+                        })?;
+                        Ok(FetchedCurrentMetadata {
+                            generation,
+                            metadata,
                         })
                     })
                     .await?;
 
-                self.component_metadata_cache
-                    .get_or_insert_simple(
-                        &ComponentKey {
-                            component_id,
-                            component_revision: metadata.revision,
-                        },
-                        || {
-                            let metadata = metadata.clone();
-                            Box::pin(async move { Ok(metadata) })
-                        },
-                    )
-                    .await?;
+                if self
+                    .current_metadata_generations
+                    .is_current(fetched.metadata.environment_id, fetched.generation)
+                {
+                    self.component_metadata_cache
+                        .get_or_insert_simple(
+                            &ComponentKey {
+                                component_id,
+                                component_revision: fetched.metadata.revision,
+                            },
+                            || {
+                                let metadata = fetched.metadata.clone();
+                                Box::pin(async move { Ok(metadata) })
+                            },
+                        )
+                        .await?;
 
-                Ok(metadata)
-            }
+                    // Invalidation can run while the revision-keyed cache is populated.
+                    if self
+                        .current_metadata_generations
+                        .is_current(fetched.metadata.environment_id, fetched.generation)
+                    {
+                        return Ok(fetched.metadata);
+                    }
+                }
+                self.current_component_metadata_cache
+                    .remove_if_cached(&component_id, |cached| {
+                        cached.generation == fetched.generation
+                    })
+                    .await;
+            },
         }
     }
 
@@ -300,9 +326,11 @@ impl ComponentService for ComponentServiceDefault {
     }
 
     async fn invalidate_current_deployed_metadata(&self) {
-        let keys = self.current_component_metadata_cache.keys().await;
-        for key in keys {
-            self.current_component_metadata_cache.remove(&key).await;
+        let generation = self.current_metadata_generations.invalidate_all();
+        for (key, _) in self.current_component_metadata_cache.iter().await {
+            self.current_component_metadata_cache
+                .remove_if_cached(&key, |cached| cached.generation < generation)
+                .await;
         }
     }
 
@@ -310,18 +338,16 @@ impl ComponentService for ComponentServiceDefault {
         &self,
         environment_id: EnvironmentId,
     ) {
-        let keys = self
-            .current_component_metadata_cache
-            .iter()
-            .await
-            .into_iter()
-            .filter_map(|(component_id, component)| {
-                (component.environment_id == environment_id).then_some(component_id)
-            })
-            .collect::<Vec<_>>();
-
-        for key in keys {
-            self.current_component_metadata_cache.remove(&key).await;
+        let generation = self.current_metadata_generations.invalidate(environment_id);
+        for (key, fetched) in self.current_component_metadata_cache.iter().await {
+            if fetched.metadata.environment_id == environment_id {
+                self.current_component_metadata_cache
+                    .remove_if_cached(&key, |cached| {
+                        cached.metadata.environment_id == environment_id
+                            && cached.generation < generation
+                    })
+                    .await;
+            }
         }
     }
 
@@ -455,7 +481,7 @@ fn create_component_metadata_cache(
 fn create_current_component_metadata_cache(
     max_capacity: usize,
     time_to_idle: Duration,
-) -> Cache<ComponentId, (), Component, WorkerExecutorError> {
+) -> Cache<ComponentId, (), FetchedCurrentMetadata, WorkerExecutorError> {
     Cache::new(
         Some(max_capacity),
         FullCacheEvictionMode::LeastRecentlyUsed(1),
@@ -580,8 +606,10 @@ mod tests {
     use golem_service_base::service::compiled_component::CompiledComponentServiceDisabled;
     use golem_service_base::service::compiled_component::DefaultCompiledComponentService;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-    use std::collections::HashMap;
-    use test_r::test;
+    use std::collections::{HashMap, VecDeque};
+    use std::sync::Mutex;
+    use test_r::{test, timeout};
+    use tokio::sync::Notify;
 
     #[test]
     fn component_support_validation_distinguishes_shared_and_unshared_memory() {
@@ -605,8 +633,16 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct MetadataLookupGate {
+        started: Notify,
+        release: Notify,
+    }
+
     struct MockRegistryService {
-        components: HashMap<(ComponentId, ComponentRevision), Component>,
+        components: Mutex<HashMap<(ComponentId, ComponentRevision), Component>>,
+        deployed_revisions: Mutex<HashMap<ComponentId, ComponentRevision>>,
+        deployed_lookup_gates: Mutex<HashMap<ComponentId, VecDeque<Arc<MetadataLookupGate>>>>,
         deployed_component_calls: Arc<std::sync::Mutex<HashMap<ComponentId, usize>>>,
         wasm: HashMap<ComponentId, Vec<u8>>,
         missing_wasm_gate: Option<(tokio::sync::Notify, tokio::sync::Notify)>,
@@ -614,15 +650,46 @@ mod tests {
 
     impl MockRegistryService {
         fn new(components: impl IntoIterator<Item = Component>) -> Self {
+            let components = components.into_iter().collect::<Vec<_>>();
             Self {
-                components: components
-                    .into_iter()
-                    .map(|component| ((component.id, component.revision), component))
-                    .collect(),
+                deployed_revisions: Mutex::new(
+                    components
+                        .iter()
+                        .map(|component| (component.id, component.revision))
+                        .collect(),
+                ),
+                components: Mutex::new(
+                    components
+                        .into_iter()
+                        .map(|component| ((component.id, component.revision), component))
+                        .collect(),
+                ),
+                deployed_lookup_gates: Mutex::default(),
                 deployed_component_calls: Arc::new(std::sync::Mutex::new(HashMap::new())),
                 wasm: HashMap::new(),
                 missing_wasm_gate: None,
             }
+        }
+
+        fn set_deployed_revision(&self, component_id: ComponentId, revision: u64) {
+            let mut deployed = self.deployed_revisions.lock().unwrap();
+            let previous = deployed[&component_id];
+            let mut components = self.components.lock().unwrap();
+            let mut component = components[&(component_id, previous)].clone();
+            component.revision = ComponentRevision::new(revision).unwrap();
+            deployed.insert(component_id, component.revision);
+            components.insert((component_id, component.revision), component);
+        }
+
+        fn gate_deployed_lookup(&self, component_id: ComponentId) -> Arc<MetadataLookupGate> {
+            let gate = Arc::new(MetadataLookupGate::default());
+            self.deployed_lookup_gates
+                .lock()
+                .unwrap()
+                .entry(component_id)
+                .or_default()
+                .push_back(gate.clone());
+            gate
         }
 
         fn deployed_component_calls(&self) -> Arc<std::sync::Mutex<HashMap<ComponentId, usize>>> {
@@ -711,6 +778,8 @@ mod tests {
             component_revision: ComponentRevision,
         ) -> Result<Component, RegistryServiceError> {
             self.components
+                .lock()
+                .unwrap()
                 .get(&(component_id, component_revision))
                 .cloned()
                 .ok_or_else(|| RegistryServiceError::NotFound("missing component".to_string()))
@@ -720,16 +789,33 @@ mod tests {
             &self,
             component_id: ComponentId,
         ) -> Result<Component, RegistryServiceError> {
-            let mut calls = self.deployed_component_calls.lock().unwrap();
-            *calls.entry(component_id).or_default() += 1;
-            drop(calls);
-
-            self.components
-                .values()
-                .filter(|component| component.id == component_id)
-                .max_by_key(|component| component.revision)
-                .cloned()
-                .ok_or_else(|| RegistryServiceError::NotFound("missing component".to_string()))
+            {
+                let mut calls = self.deployed_component_calls.lock().unwrap();
+                *calls.entry(component_id).or_default() += 1;
+            }
+            let component = {
+                let deployed = self.deployed_revisions.lock().unwrap();
+                let revision = deployed.get(&component_id).ok_or_else(|| {
+                    RegistryServiceError::NotFound("missing component".to_string())
+                })?;
+                self.components
+                    .lock()
+                    .unwrap()
+                    .get(&(component_id, *revision))
+                    .cloned()
+                    .unwrap()
+            };
+            let gate = self
+                .deployed_lookup_gates
+                .lock()
+                .unwrap()
+                .get_mut(&component_id)
+                .and_then(VecDeque::pop_front);
+            if let Some(gate) = gate {
+                gate.started.notify_one();
+                gate.release.notified().await;
+            }
+            Ok(component)
         }
 
         async fn get_all_deployed_component_revisions(
@@ -1136,6 +1222,202 @@ mod tests {
             calls.get(&second_component_id).copied().unwrap_or_default(),
             1,
             "other environments should stay cached"
+        );
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn current_metadata_lookup_retries_a_fill_crossing_invalidation() {
+        for global in [false, true] {
+            let component_id = ComponentId::new();
+            let environment_id = EnvironmentId::new();
+            let registry = Arc::new(MockRegistryService::new([make_component(
+                component_id,
+                environment_id,
+            )]));
+            let gate = registry.gate_deployed_lookup(component_id);
+            let service = Arc::new(ComponentServiceDefault::new(
+                registry.clone(),
+                1,
+                8,
+                Duration::from_secs(60),
+                0,
+                Arc::new(CompiledComponentServiceDisabled::new()),
+            ));
+            let lookup = tokio::spawn({
+                let service = service.clone();
+                async move { service.get_metadata(component_id, None).await.unwrap() }
+            });
+            gate.started.notified().await;
+            registry.set_deployed_revision(component_id, 2);
+            if global {
+                service.invalidate_all().await;
+            } else {
+                service
+                    .invalidate_current_deployed_metadata_for_environment(environment_id)
+                    .await;
+            }
+            gate.release.notify_one();
+
+            assert_eq!(lookup.await.unwrap().revision.get(), 2);
+            assert_eq!(
+                service
+                    .get_metadata(component_id, None)
+                    .await
+                    .unwrap()
+                    .revision
+                    .get(),
+                2
+            );
+            assert_eq!(
+                service
+                    .get_metadata(component_id, Some(ComponentRevision::new(1).unwrap()))
+                    .await
+                    .unwrap()
+                    .revision
+                    .get(),
+                1
+            );
+            assert_eq!(
+                registry.deployed_component_calls.lock().unwrap()[&component_id],
+                2
+            );
+        }
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn current_metadata_lookup_retries_successive_invalidations() {
+        let component_id = ComponentId::new();
+        let environment_id = EnvironmentId::new();
+        let registry = Arc::new(MockRegistryService::new([make_component(
+            component_id,
+            environment_id,
+        )]));
+        let first = registry.gate_deployed_lookup(component_id);
+        let second = registry.gate_deployed_lookup(component_id);
+        let service = Arc::new(ComponentServiceDefault::new(
+            registry.clone(),
+            1,
+            8,
+            Duration::from_secs(60),
+            0,
+            Arc::new(CompiledComponentServiceDisabled::new()),
+        ));
+        let lookup = tokio::spawn({
+            let service = service.clone();
+            async move { service.get_metadata(component_id, None).await.unwrap() }
+        });
+        for (gate, revision) in [(first, 2), (second, 3)] {
+            gate.started.notified().await;
+            registry.set_deployed_revision(component_id, revision);
+            service
+                .invalidate_current_deployed_metadata_for_environment(environment_id)
+                .await;
+            gate.release.notify_one();
+        }
+        assert_eq!(lookup.await.unwrap().revision.get(), 3);
+        assert_eq!(
+            service
+                .get_metadata(component_id, None)
+                .await
+                .unwrap()
+                .revision
+                .get(),
+            3
+        );
+        assert_eq!(
+            registry.deployed_component_calls.lock().unwrap()[&component_id],
+            3
+        );
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn current_metadata_lookup_ignores_other_environment_invalidations() {
+        let component_id = ComponentId::new();
+        let environment_id = EnvironmentId::new();
+        let registry = Arc::new(MockRegistryService::new([make_component(
+            component_id,
+            environment_id,
+        )]));
+        let gate = registry.gate_deployed_lookup(component_id);
+        let service = Arc::new(ComponentServiceDefault::new(
+            registry.clone(),
+            1,
+            8,
+            Duration::from_secs(60),
+            0,
+            Arc::new(CompiledComponentServiceDisabled::new()),
+        ));
+        let lookup = tokio::spawn({
+            let service = service.clone();
+            async move { service.get_metadata(component_id, None).await.unwrap() }
+        });
+        gate.started.notified().await;
+        registry.set_deployed_revision(component_id, 2);
+        service
+            .invalidate_current_deployed_metadata_for_environment(EnvironmentId::new())
+            .await;
+        gate.release.notify_one();
+        assert_eq!(lookup.await.unwrap().revision.get(), 1);
+        assert_eq!(
+            service
+                .get_metadata(component_id, None)
+                .await
+                .unwrap()
+                .revision
+                .get(),
+            1
+        );
+        assert_eq!(
+            registry.deployed_component_calls.lock().unwrap()[&component_id],
+            1
+        );
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn current_metadata_lookup_recovers_after_cancellation_and_invalidation() {
+        let component_id = ComponentId::new();
+        let environment_id = EnvironmentId::new();
+        let registry = Arc::new(MockRegistryService::new([make_component(
+            component_id,
+            environment_id,
+        )]));
+        let gate = registry.gate_deployed_lookup(component_id);
+        let service = Arc::new(ComponentServiceDefault::new(
+            registry.clone(),
+            1,
+            8,
+            Duration::from_secs(60),
+            0,
+            Arc::new(CompiledComponentServiceDisabled::new()),
+        ));
+        let lookup = tokio::spawn({
+            let service = service.clone();
+            async move { service.get_metadata(component_id, None).await.unwrap() }
+        });
+        gate.started.notified().await;
+        lookup.abort();
+        assert!(lookup.await.unwrap_err().is_cancelled());
+        registry.set_deployed_revision(component_id, 2);
+        service
+            .invalidate_current_deployed_metadata_for_environment(environment_id)
+            .await;
+        gate.release.notify_one();
+        assert_eq!(
+            service
+                .get_metadata(component_id, None)
+                .await
+                .unwrap()
+                .revision
+                .get(),
+            2
+        );
+        assert_eq!(
+            registry.deployed_component_calls.lock().unwrap()[&component_id],
+            2
         );
     }
 

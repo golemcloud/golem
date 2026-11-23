@@ -22,16 +22,17 @@ use anyhow::{Context, Error, anyhow};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::TryStreamExt;
-use futures::io::{AsyncReadExt, AsyncSeekExt};
 use futures::stream::BoxStream;
 use golem_common::model::Timestamp;
-use std::io::{ErrorKind, SeekFrom, Write};
+use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 use tokio::io::AsyncWriteExt;
 use tokio_stream::StreamExt;
+
+use platform::staged_put_file;
 
 /// Keeps blobs as files below a root directory.
 ///
@@ -81,10 +82,8 @@ impl FileSystemBlobStorage {
         // An old file of the staging directory that cannot be removed only takes space, so the
         // storage starts and logs it.
         let staging = canonical.join(STAGING_DIRECTORY);
-        if let Err(error) = tokio::task::spawn_blocking(move || {
-            remove_old_staging_files(&staging, SystemTime::now())
-        })
-        .await?
+        if let Err(error) =
+            filesystem_work(move || remove_old_staging_files(&staging, SystemTime::now())).await?
         {
             tracing::warn!(
                 error = %error,
@@ -202,7 +201,24 @@ impl FileSystemBlobStorage {
             #[cfg(test)]
             gate: self.before_commit.clone(),
         };
-        Ok(tokio::task::spawn_blocking(move || work(&commit)).await??)
+        Ok(filesystem_work(move || work(&commit)).await??)
+    }
+}
+
+/// On multithreaded runtimes, submits blocking filesystem work from a runtime task so new
+/// blocking workers do not inherit the polling thread's scheduling priority. Current-thread
+/// runtimes submit directly because `Handle::block_on` does not drive their scheduler.
+/// Dropping this future detaches the work; callers that must stop a commit keep their drop flag
+/// outside this task.
+async fn filesystem_work<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, tokio::task::JoinError> {
+    if tokio::runtime::Handle::current().runtime_flavor()
+        == tokio::runtime::RuntimeFlavor::CurrentThread
+    {
+        tokio::task::spawn_blocking(work).await
+    } else {
+        tokio::spawn(async move { tokio::task::spawn_blocking(work).await }).await?
     }
 }
 
@@ -272,7 +288,8 @@ impl BlobStorageBackend for FileSystemBlobStorage {
 
         if read_metadata(&full_path).await?.is_some() {
             self.after_metadata();
-            absent_on_not_found(async_fs::read(&full_path).await).map_err(read_error)
+            absent_on_not_found(filesystem_work(move || std::fs::read(&full_path)).await?)
+                .map_err(read_error)
         } else {
             Ok(None)
         }
@@ -348,19 +365,22 @@ impl BlobStorageBackend for FileSystemBlobStorage {
             return Ok(None);
         }
         self.after_metadata();
-        let Some(mut file) =
-            absent_on_not_found(async_fs::File::open(&full_path).await).map_err(read_error)?
-        else {
-            return Ok(None);
-        };
-        // The length comes from the open file, so a change of the path after the open does not
-        // change it.
-        let metadata = file.metadata().await?;
-        let positions = blob_positions(usize::try_from(metadata.len())?, start, end)?;
-        let mut bytes = vec![0; positions.end() - positions.start() + 1];
-        file.seek(SeekFrom::Start(start)).await?;
-        file.read_exact(&mut bytes).await?;
-        Ok(Some(bytes))
+        filesystem_work(move || {
+            let Some(mut file) =
+                absent_on_not_found(std::fs::File::open(&full_path)).map_err(read_error)?
+            else {
+                return Ok(None);
+            };
+            // The length comes from the open file, so a change of the path after the open does not
+            // change it.
+            let metadata = file.metadata()?;
+            let positions = blob_positions(usize::try_from(metadata.len())?, start, end)?;
+            let mut bytes = vec![0; positions.end() - positions.start() + 1];
+            file.seek(SeekFrom::Start(start))?;
+            file.read_exact(&mut bytes)?;
+            Ok(Some(bytes))
+        })
+        .await?
     }
 
     async fn get_metadata_at(
@@ -415,7 +435,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         }
 
         let data: Box<[u8]> = Box::from(data);
-        Ok(tokio::task::spawn_blocking(move || {
+        Ok(filesystem_work(move || {
             in_directory_of(&full_path, || std::fs::write(&full_path, &data))
         })
         .await??)
@@ -450,7 +470,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         self.ensure_path_is_inside_root(&full_path)?;
 
         let file = tokio::fs::File::from_std(
-            tokio::task::spawn_blocking(move || {
+            filesystem_work(move || {
                 in_directory_of(&full_path, || std::fs::File::create(&full_path))
             })
             .await??,
@@ -487,7 +507,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
                 .await;
         }
 
-        Ok(tokio::task::spawn_blocking(move || remove_blob(&full_path, &namespace_root)).await??)
+        Ok(filesystem_work(move || remove_blob(&full_path, &namespace_root)).await??)
     }
 
     async fn create_dir_at(
@@ -500,7 +520,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         let marker = self.marker_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&marker)?;
 
-        Ok(tokio::task::spawn_blocking(move || mark_created(&marker)).await??)
+        Ok(filesystem_work(move || mark_created(&marker)).await??)
     }
 
     async fn list_dir_at(
@@ -515,7 +535,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         self.ensure_path_is_inside_root(&full_path)?;
 
         Ok(
-            tokio::task::spawn_blocking(move || list_names_in(&full_path, &namespace_root))
+            filesystem_work(move || list_names_in(&full_path, &namespace_root))
                 .await?
                 .map_err(read_error)?,
         )
@@ -533,7 +553,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         self.ensure_path_is_inside_root(&full_path)?;
 
         Ok(
-            tokio::task::spawn_blocking(move || list_files_below(&full_path, &namespace_root))
+            filesystem_work(move || list_files_below(&full_path, &namespace_root))
                 .await?
                 .map_err(read_error)?,
         )
@@ -550,10 +570,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         self.ensure_path_is_inside_root(&full_path)?;
         let namespace_root = self.namespace_path(&namespace);
 
-        Ok(
-            tokio::task::spawn_blocking(move || remove_directory(&full_path, &namespace_root))
-                .await??,
-        )
+        Ok(filesystem_work(move || remove_directory(&full_path, &namespace_root)).await??)
     }
 
     async fn exists_at(
@@ -570,7 +587,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
 
         if read_metadata(&blob).await?.is_some() {
             Ok(ExistsResult::File)
-        } else if tokio::task::spawn_blocking(move || holds_an_entry(&directory))
+        } else if filesystem_work(move || holds_an_entry(&directory))
             .await?
             .map_err(read_error)?
         {
@@ -622,10 +639,6 @@ const STAGING_DIRECTORY: &str = ".staging";
 /// Services that share a root can have writes in flight, so a younger file can belong to a write
 /// that still runs.
 const STAGING_FILE_AGE: Duration = Duration::from_secs(60 * 60);
-
-/// The mode that a staged `put_raw` file gets before the process umask, as `File::create` gives.
-#[cfg(unix)]
-const STAGED_PUT_MODE: u32 = 0o666;
 
 /// Tells if a file of the staging directory that was last changed at `modified` is old enough at
 /// `now` to remove.
@@ -687,7 +700,8 @@ fn read_error(error: std::io::Error) -> Error {
 /// can see. A path that the permissions of the blob root hide gives the error of [`read_error`],
 /// because an entry can be there.
 async fn read_metadata(path: &Path) -> Result<Option<std::fs::Metadata>, Error> {
-    match async_fs::metadata(path).await {
+    let path = path.to_path_buf();
+    match filesystem_work(move || std::fs::metadata(path)).await? {
         Ok(metadata) => Ok(Some(metadata)),
         Err(error) if error.kind() == ErrorKind::PermissionDenied => Err(read_error(error)),
         Err(_) => Ok(None),
@@ -735,19 +749,30 @@ fn write_staged(
     })
 }
 
-/// A new file in `staging` with the mode of [`STAGED_PUT_MODE`], which the umask then masks.
 #[cfg(unix)]
-fn staged_put_file(staging: &Path) -> std::io::Result<tempfile::NamedTempFile> {
+mod platform {
     use std::os::unix::fs::PermissionsExt;
-    tempfile::Builder::new()
-        .permissions(std::fs::Permissions::from_mode(STAGED_PUT_MODE))
-        .tempfile_in(staging)
+    use std::path::Path;
+
+    /// The mode that a staged `put_raw` file gets before the process umask, as `File::create` gives.
+    const STAGED_PUT_MODE: u32 = 0o666;
+
+    /// A new file in `staging` with the mode of [`STAGED_PUT_MODE`], which the umask then masks.
+    pub(super) fn staged_put_file(staging: &Path) -> std::io::Result<tempfile::NamedTempFile> {
+        tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(STAGED_PUT_MODE))
+            .tempfile_in(staging)
+    }
 }
 
-/// A new file in `staging`.
 #[cfg(not(unix))]
-fn staged_put_file(staging: &Path) -> std::io::Result<tempfile::NamedTempFile> {
-    tempfile::NamedTempFile::new_in(staging)
+mod platform {
+    use std::path::Path;
+
+    /// A new file in `staging`.
+    pub(super) fn staged_put_file(staging: &Path) -> std::io::Result<tempfile::NamedTempFile> {
+        tempfile::NamedTempFile::new_in(staging)
+    }
 }
 
 /// Removes the file at `target`, as [`remove_blob`] does. A `commit` whose call was dropped stops

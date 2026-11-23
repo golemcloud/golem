@@ -42,14 +42,33 @@ fn bind(addr: SocketAddr) -> io::Result<tokio::net::TcpListener> {
     if addr.is_ipv6() {
         socket.set_only_v6(false)?;
     }
-    // Matches `tokio::net::TcpListener::bind`, so a restarted service can rebind its port while
-    // connections of the previous process are in TIME_WAIT.
-    #[cfg(not(windows))]
-    socket.set_reuse_address(true)?;
+    platform::configure_reuse(&socket)?;
     socket.set_nonblocking(true)?;
     socket.bind(&addr.into())?;
     socket.listen(LISTEN_BACKLOG)?;
     tokio::net::TcpListener::from_std(socket.into())
+}
+
+#[cfg(not(windows))]
+mod platform {
+    use socket2::Socket;
+    use std::io;
+
+    pub(super) fn configure_reuse(socket: &Socket) -> io::Result<()> {
+        // Matches `tokio::net::TcpListener::bind`, so a restarted service can rebind its port
+        // while connections of the previous process are in TIME_WAIT.
+        socket.set_reuse_address(true)
+    }
+}
+
+#[cfg(windows)]
+mod platform {
+    use socket2::Socket;
+    use std::io;
+
+    pub(super) fn configure_reuse(_socket: &Socket) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

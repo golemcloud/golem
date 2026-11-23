@@ -14,7 +14,6 @@
 
 use super::*;
 use crate::services::shard::ShardServiceDefault;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::model::{AgentId, RoutingTable};
@@ -54,12 +53,8 @@ fn epoch_map(entries: impl IntoIterator<Item = (i64, u64)>) -> BTreeMap<ShardId,
 /// An agent id that routes to `shard`, found by search because
 /// `ShardId::from_agent_id` is a hash.
 fn agent_on_shard(shard: i64) -> AgentId {
-    let component_id = ComponentId(Uuid::nil());
     for candidate in 0..10_000 {
-        let agent_id = AgentId {
-            component_id,
-            agent_id: format!("agent-{candidate}"),
-        };
+        let agent_id = crate::test_agent_id(&format!("agent-{candidate}"));
         if ShardId::from_agent_id(&agent_id, SHARDS) == ShardId::new(shard) {
             return agent_id;
         }
@@ -206,6 +201,7 @@ impl MockShardManager {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ShardManager for MockShardManager {
     async fn get_routing_table(&self) -> Result<RoutingTable, ShardManagerError> {
         unimplemented!()

@@ -4,9 +4,9 @@ use super::{
     SnapshotAssistedUpdateMetadata, SuccessfulUpdate, TypedAgentConfigEntry, UpdateRecord,
 };
 use super::{
-    AgentConfigSource, AgentHttpAuthDetails, AgentInvocationMode, AgentMode, CachePolicy,
-    CachePolicyTtl, CorsOptions, HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment,
-    PhantomIdBinding, PhantomIdBindingDetails, ReadOnlyConfig, RegisteredAgentType,
+    AgentConfigSource, AgentHttpAuthDetails, AgentIdBinding, AgentIdBindingDetails,
+    AgentInvocationMode, AgentMode, CachePolicy, CachePolicyTtl, CorsOptions, HttpEndpointDetails,
+    HttpMethod, HttpMountDetails, PathSegment, ReadOnlyConfig, RegisteredAgentType,
     RegisteredAgentTypeImplementer, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
     SnapshottingPeriodic, SystemVariable, SystemVariableSegment,
 };
@@ -219,9 +219,16 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpMountDetails> for Http
                 .collect::<Result<_, _>>()?,
             auth_details: value.auth_details.map(TryInto::try_into).transpose()?,
             phantom_agent: value.phantom_agent,
-            phantom_id_binding: value
-                .phantom_id_binding
-                .map(TryInto::try_into)
+            agent_id_binding: value.agent_id_binding.map(TryInto::try_into).transpose()?,
+            create_route: value
+                .create_route
+                .map(|route| {
+                    route
+                        .path
+                        .into_iter()
+                        .map(TryInto::try_into)
+                        .collect::<Result<Vec<_>, _>>()
+                })
                 .transpose()?,
             cors_options: value
                 .cors_options
@@ -258,7 +265,12 @@ impl From<HttpMountDetails> for golem_api_grpc::proto::golem::component::HttpMou
             path_prefix: value.path_prefix.into_iter().map(Into::into).collect(),
             auth_details: value.auth_details.map(Into::into),
             phantom_agent: value.phantom_agent,
-            phantom_id_binding: value.phantom_id_binding.map(Into::into),
+            agent_id_binding: value.agent_id_binding.map(Into::into),
+            create_route: value.create_route.map(|path| {
+                golem_api_grpc::proto::golem::component::HttpCreateRoute {
+                    path: path.into_iter().map(Into::into).collect(),
+                }
+            }),
             cors_options: Some(value.cors_options.into()),
             webhook_suffix: value.webhook_suffix.into_iter().map(Into::into).collect(),
             static_bindings: value.static_bindings.into_iter().map(Into::into).collect(),
@@ -277,41 +289,33 @@ impl From<HttpMountDetails> for golem_api_grpc::proto::golem::component::HttpMou
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::component::PhantomIdBinding> for PhantomIdBinding {
+impl TryFrom<golem_api_grpc::proto::golem::component::AgentIdBinding> for AgentIdBinding {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::component::PhantomIdBinding,
+        value: golem_api_grpc::proto::golem::component::AgentIdBinding,
     ) -> Result<Self, Self::Error> {
-        use golem_api_grpc::proto::golem::component::phantom_id_binding::Source;
-        match value.source.ok_or("Missing PhantomIdBinding.source")? {
-            Source::Path(value) => Ok(Self::Path(PhantomIdBindingDetails {
-                name: value.name,
-                optional: value.optional,
-            })),
-            Source::Query(value) => Ok(Self::Query(PhantomIdBindingDetails {
-                name: value.name,
-                optional: value.optional,
-            })),
+        use golem_api_grpc::proto::golem::component::agent_id_binding::Source;
+        match value.source.ok_or("Missing AgentIdBinding.source")? {
+            Source::Path(value) => Ok(Self::Path(AgentIdBindingDetails { name: value.name })),
+            Source::Query(value) => Ok(Self::Query(AgentIdBindingDetails { name: value.name })),
         }
     }
 }
 
-impl From<PhantomIdBinding> for golem_api_grpc::proto::golem::component::PhantomIdBinding {
-    fn from(value: PhantomIdBinding) -> Self {
+impl From<AgentIdBinding> for golem_api_grpc::proto::golem::component::AgentIdBinding {
+    fn from(value: AgentIdBinding) -> Self {
         use golem_api_grpc::proto::golem::component::{
-            PhantomIdBindingDetails, phantom_id_binding::Source,
+            AgentIdBindingDetails, agent_id_binding::Source,
         };
         Self {
             source: Some(match value {
-                PhantomIdBinding::Path(value) => Source::Path(PhantomIdBindingDetails {
-                    name: value.name,
-                    optional: value.optional,
-                }),
-                PhantomIdBinding::Query(value) => Source::Query(PhantomIdBindingDetails {
-                    name: value.name,
-                    optional: value.optional,
-                }),
+                AgentIdBinding::Path(value) => {
+                    Source::Path(AgentIdBindingDetails { name: value.name })
+                }
+                AgentIdBinding::Query(value) => {
+                    Source::Query(AgentIdBindingDetails { name: value.name })
+                }
             }),
         }
     }
@@ -943,6 +947,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentMetadata> for AgentMetad
         Ok(Self {
             agent_id: value.agent_id.ok_or("Missing agent_id")?.try_into()?,
             owner_kind: crate::model::agent::OwnerKind::try_from(value.owner_kind)?,
+            agent_type_name: value
+                .agent_type_name
+                .map(crate::model::agent::AgentTypeName),
+            canonical_key: value.canonical_key,
+            constructor_parameters: value.constructor_parameters,
             environment_id: value
                 .environment_id
                 .ok_or("Missing environment_id")?
@@ -1028,6 +1037,10 @@ impl TryFrom<AgentMetadataDto> for golem_api_grpc::proto::golem::worker::AgentMe
         Ok(Self {
             agent_id: Some(value.agent_id.into()),
             owner_kind: value.owner_kind.into(),
+            agent_type_name: value.agent_type_name.map(|name| name.0),
+            canonical_key: value.canonical_key,
+            constructor_parameters: value.constructor_parameters,
+            component_id: None,
             environment_id: Some(value.environment_id.into()),
             created_by: Some(value.created_by.into()),
             env: value.env,
@@ -1365,6 +1378,88 @@ impl TryFrom<TypedAgentConfigEntry>
         Ok(Self {
             path: value.path,
             value: Some(value.value.try_into()?),
+        })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::AgentKey> for super::ParsedAgentKey {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::AgentKey,
+    ) -> Result<Self, Self::Error> {
+        let parameters = value
+            .parameters
+            .ok_or_else(|| "Missing field: AgentKey.parameters".to_string())?
+            .try_into()?;
+        Self::try_new(super::AgentTypeName(value.agent_type_name), parameters)
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::AgentKey> for super::AgentKey {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::AgentKey,
+    ) -> Result<Self, Self::Error> {
+        let constructor = super::ParsedAgentKey::try_from(value)?;
+        Self::new(constructor.agent_type, constructor.parameters).map_err(|err| err.to_string())
+    }
+}
+
+impl TryFrom<super::ParsedAgentKey> for golem_api_grpc::proto::golem::worker::AgentKey {
+    type Error = String;
+
+    fn try_from(value: super::ParsedAgentKey) -> Result<Self, Self::Error> {
+        Ok(Self {
+            agent_type_name: value.agent_type.0,
+            parameters: Some(value.parameters.try_into()?),
+        })
+    }
+}
+
+impl TryFrom<super::AgentKey> for golem_api_grpc::proto::golem::worker::AgentKey {
+    type Error = String;
+
+    fn try_from(value: super::AgentKey) -> Result<Self, Self::Error> {
+        let (agent_type, parameters) = value.into_parts();
+        Ok(Self {
+            agent_type_name: agent_type.0,
+            parameters: Some(parameters.try_into()?),
+        })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::AgentTarget> for super::AgentTarget {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::AgentTarget,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::agent_target::Target;
+
+        match value
+            .target
+            .ok_or_else(|| "Missing field: AgentTarget.target".to_string())?
+        {
+            Target::Key(key) => Ok(Self::Key(key.try_into()?)),
+            Target::Id(id) => Ok(Self::Id(id.try_into()?)),
+        }
+    }
+}
+
+impl TryFrom<super::AgentTarget> for golem_api_grpc::proto::golem::worker::AgentTarget {
+    type Error = String;
+
+    fn try_from(value: super::AgentTarget) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::agent_target::Target;
+
+        let target = match value {
+            super::AgentTarget::Key(key) => Target::Key(key.try_into()?),
+            super::AgentTarget::Id(id) => Target::Id(id.into()),
+        };
+        Ok(Self {
+            target: Some(target),
         })
     }
 }

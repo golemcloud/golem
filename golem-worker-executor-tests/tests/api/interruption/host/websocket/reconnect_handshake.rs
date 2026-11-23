@@ -5,7 +5,7 @@ use test_r::test;
 
 macro_rules! handshake_case {
     ($name:ident, Storage, $path:ident) => {
-        handshake_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $path);
+        handshake_case!(#[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $path);
     };
     ($(#[$attr:meta])* $name:ident, $resource:ident, $path:ident) => {
         $(#[$attr])*
@@ -39,11 +39,22 @@ handshake_case!(
     Compute,
     Accessor
 );
-handshake_case!(
-    durable_websocket_reconnect_handshake_receive_managed_xfs_storage_quota,
-    Storage,
-    Accessor
-);
+#[cfg(target_os = "linux")]
+mod storage {
+    use super::*;
+    use test_r::test;
+
+    handshake_case!(
+        durable_websocket_reconnect_handshake_receive_managed_xfs_storage_quota,
+        Storage,
+        Accessor
+    );
+    handshake_case!(
+        durable_websocket_reconnect_handshake_close_managed_xfs_storage_quota,
+        Storage,
+        Direct
+    );
+}
 handshake_case!(
     durable_websocket_reconnect_handshake_close_memory_quota,
     Memory,
@@ -52,11 +63,6 @@ handshake_case!(
 handshake_case!(
     durable_websocket_reconnect_handshake_close_compute_quota_prepaid,
     Compute,
-    Direct
-);
-handshake_case!(
-    durable_websocket_reconnect_handshake_close_managed_xfs_storage_quota,
-    Storage,
     Direct
 );
 
@@ -141,20 +147,20 @@ pub(super) async fn pending_reconnect_handshake(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let name = agent_id!("WebsocketTest", "monthly-ws-reconnect-target");
-    let id = AgentId::from_agent_id(component.id, &name).unwrap();
+    let name = agent_key!("WebsocketTest", "monthly-ws-reconnect-target");
+    let id = crate::agent::keyed_agent_id(component.environment_id, &name).agent_id;
     let seed_id = executor
         .start_agent(
             &component.id,
-            agent_id!("WebsocketTest", "monthly-ws-reconnect-seed"),
+            agent_key!("WebsocketTest", "monthly-ws-reconnect-seed"),
         )
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id.clone())
         .await
         .context("seed missing")?
         .primary();
-    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
@@ -165,7 +171,7 @@ pub(super) async fn pending_reconnect_handshake(
         limits.run_batch_for_test().await;
     }
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
-    let worker = Worker::get_or_create_suspended(
+    let worker = Worker::get_or_create_suspended_with_freshness(
         seed.all(),
         &owned,
         None,
@@ -174,6 +180,11 @@ pub(super) async fn pending_reconnect_handshake(
         None,
         &InvocationContextStack::fresh(),
         callers::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        golem_worker_executor::worker::CreateIntent::Invocation {
+            owner: golem_worker_executor::worker::NewOwner::keyed(component.id, name.clone()),
+            idempotency_key: None,
+        },
     )
     .await?;
     let pool = worker.websocket_connection_pool();
@@ -181,14 +192,11 @@ pub(super) async fn pending_reconnect_handshake(
     let holder_id = executor
         .start_agent(
             &component.id,
-            agent_id!("WebsocketTest", "monthly-ws-reconnect-holder"),
+            agent_key!("WebsocketTest", "monthly-ws-reconnect-holder"),
         )
         .await?;
     let holder = executor
-        .production_active_agent(&OwnedAgentId::new(
-            context.default_environment_id,
-            &holder_id,
-        ))
+        .production_active_agent(&holder_id.clone())
         .await
         .context("holder missing")?
         .primary();
@@ -209,7 +217,7 @@ pub(super) async fn pending_reconnect_handshake(
         };
         let (first_result, ()) = tokio::time::timeout(Duration::from_secs(15), async { tokio::try_join!(first_call, first_frame) }).await??;
         ensure!(first_result.into_typed::<String>()? == "original");
-        let original = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let original = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         pool::connect_start(&original, 1, 1)?;
         assert_receive_terminal(&original, starts_named(&original, RECEIVE)[0], 1)?;
         assert_invocation(&original, &stored_first_key, 1)?;
@@ -231,7 +239,7 @@ pub(super) async fn pending_reconnect_handshake(
         let holder_key = IdempotencyKey::fresh();
         holder_invocation = Some(tokio::spawn({
             let executor = executor.clone(); let component = component.clone(); let key = holder_key.clone(); let url = peer.url.clone();
-            async move { executor.invoke_and_await_agent_with_key(&component, &agent_id!("WebsocketTest", "monthly-ws-reconnect-holder"), &key, "connect_and_receive_first", data_value!(url)).await }
+            async move { executor.invoke_and_await_agent_with_key(&component, &agent_key!("WebsocketTest", "monthly-ws-reconnect-holder"), &key, "connect_and_receive_first", data_value!(url)).await }
         }));
         let second = peer.handshake().await?;
         ensure!(second.number == 2);
@@ -252,7 +260,7 @@ pub(super) async fn pending_reconnect_handshake(
         let held = peer.held().await?;
         ensure!(held.number == 3);
         executor.commit_oplog(&id).await?;
-        let open = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let open = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         let start = reconnect_pool::operation_start(&open, path, 0, 0)?;
         assert_invocation(&open, &stored_key, 0)?;
         assert_invocation(&open, &stored_first_key, 1)?;
@@ -277,7 +285,7 @@ pub(super) async fn pending_reconnect_handshake(
             if path == Path::Accessor { ensure!(done?.into_typed::<String>()? == "completed"); }
             else { ensure!(done?.into_typed::<Result<(), String>>()?.is_ok()); }
             if path == Path::Direct { peer.closed(3).await?; }
-            let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let completed = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(reconnect_pool::operation_start(&completed, path, 1, 1)? == start);
             ensure!(reconnect_pool::operation_start(&completed, path, 1, 0).is_err(), "Finished cannot retain an undelivered operation");
             let delivery = completed.iter().find_map(|entry| match &entry.entry {
@@ -335,14 +343,14 @@ pub(super) async fn pending_reconnect_handshake(
         let slot = tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await.context("stopped handshake still holds pool slot")??;
         drop(slot);
         peer.assert_effects(3, 2, 2)?;
-        let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let stopped = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         ensure!(reconnect_pool::operation_start(&stopped, path, 0, 0)? == start);
         assert_invocation(&stopped, &stored_key, 0)?;
         let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
         ensure!(entries.values().filter(|entry| matches!(entry, OplogEntry::Suspend { .. })).count() == 1);
         ensure!(!entries.values().any(|entry| matches!(entry, OplogEntry::Error { .. } | OplogEntry::Interrupted { .. } | OplogEntry::Exited { .. })));
         ensure!(!invocation.as_ref().unwrap().is_finished());
-        executor.wait_for_status(&id, AgentStatus::Suspended, Duration::from_secs(10)).await?;
+        executor.wait_for_status(&owned, AgentStatus::Suspended, Duration::from_secs(10)).await?;
         flush_stopped_usage(&limits, &registry, resource).await?;
         let updates = registry.applied_updates();
         check_accounting(&updates[target_updates_start..], resource, true, initial.policy_revision + u64::from(resource == Resource::Storage), initial.period)?;
@@ -360,11 +368,11 @@ pub(super) async fn pending_reconnect_handshake(
         grant.available_durable_storage_byte_seconds = u64::MAX;
         registry.set_policy(grant);
         applied_refresh(&limits, &registry, context.account_id).await?.await?;
-        executor.resume(&id, false).await?;
+        executor.resume(&owned, false).await?;
         let fourth = peer.handshake().await?;
         ensure!(fourth.number == 4);
         executor.commit_oplog(&id).await?;
-        let repairing = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let repairing = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         let intermediate_terminals = if path == Path::Accessor { 0 } else { terminal_count(&repairing, start) };
         let intermediate_deliveries = usize::from(repairing.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == start)));
         ensure!(intermediate_terminals <= 1 && reconnect_pool::operation_start(&repairing, path, intermediate_terminals, intermediate_deliveries)? == start);
@@ -376,7 +384,7 @@ pub(super) async fn pending_reconnect_handshake(
         if path == Path::Accessor { ensure!(done?.into_typed::<String>()? == "repaired"); }
         else { ensure!(done?.into_typed::<Result<(), String>>()?.is_ok()); }
         if path == Path::Direct { peer.closed(4).await?; }
-        let repaired = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let repaired = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         ensure!(reconnect_pool::operation_start(&repaired, path, 1, 1)? == start);
         if path == Path::Accessor {
             assert_receive_terminal(&repaired, start, 1)?;
@@ -422,7 +430,7 @@ pub(super) async fn pending_reconnect_handshake(
         let noop = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent_with_key(&component, &name, &noop_key, "noop", data_value!())).await??;
         ensure!(noop.into_typed::<String>()? == "ok");
         peer.assert_effects(4, 3, if path == Path::Accessor { 3 } else { 2 })?;
-        let replayed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let replayed = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         ensure!(reconnect_pool::operation_start(&replayed, path, 1, 1)? == start);
         assert_invocation(&replayed, &stored_key, 1)?;
         assert_invocation(&replayed, &stored_noop_key, 1)?;
@@ -454,7 +462,7 @@ pub(super) async fn pending_reconnect_handshake(
         handshake::retire_handshake_worker(
             &executor,
             &holder,
-            &holder_id,
+            &holder_id.agent_id,
             holder_invocation
                 .as_ref()
                 .is_some_and(|handle| !holder_joined && !handle.is_finished()),

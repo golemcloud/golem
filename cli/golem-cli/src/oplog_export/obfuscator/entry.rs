@@ -17,7 +17,7 @@
 
 use super::host::Direction;
 use super::value::{Region, Walker, flag, kept_case, number, record, text};
-use super::{ObfuscationContext, agent_reference};
+use super::{ObfuscationContext, own_agent_reference};
 use crate::oplog_export::model::{
     CaseKind, HostTypeMismatchRef, OmittedReason, ReportEntry, ReportField, ReportNode,
     ReportOmission, SchemaLessRpcValueRef, TimestampNode, TupleNode,
@@ -428,7 +428,7 @@ impl Walker<'_, '_> {
     }
 
     fn agent(&self, agent_id: &AgentId) -> ReportNode {
-        ReportNode::Agent(agent_reference(self.ctx, agent_id))
+        self.agent_node(agent_id)
     }
 
     fn host(
@@ -576,9 +576,13 @@ impl Walker<'_, '_> {
                     .add("applicationId", self.tok(application_id))
                     .build()
             }
-            PublicCardHolder::Agent(AgentCardHolder { agent_id }) => {
-                Fields::new().add("agentId", self.agent(agent_id)).build()
-            }
+            PublicCardHolder::Agent(AgentCardHolder {
+                environment_id,
+                agent_id,
+            }) => Fields::new()
+                .add("environmentId", self.tok(environment_id))
+                .add("agentId", self.agent(agent_id))
+                .build(),
         };
         kept_case(
             CaseKind::Variant,
@@ -825,6 +829,7 @@ impl Walker<'_, '_> {
             PublicOplogEntry::Create(CreateParams {
                 timestamp: _,
                 agent_id,
+                agent_type_name,
                 owner_kind,
                 agent_mode,
                 component_revision,
@@ -836,11 +841,21 @@ impl Walker<'_, '_> {
                 initial_total_linear_memory_size,
                 initial_active_plugins,
                 local_agent_config,
-                original_phantom_id,
                 instance_id,
                 never_live,
             }) => Fields::new()
-                .add("agentId", self.agent(agent_id))
+                .add(
+                    "agentId",
+                    if *agent_id == self.ctx.own_agent().agent_id {
+                        ReportNode::Agent(own_agent_reference(self.ctx))
+                    } else {
+                        self.agent(agent_id)
+                    },
+                )
+                .opt(
+                    "agentTypeName",
+                    agent_type_name.as_ref().map(|name| text(name.0.clone())),
+                )
                 .add("ownerKind", name(owner_kind))
                 .add("agentMode", name(agent_mode))
                 .add("componentRevision", number(component_revision.get()))
@@ -884,10 +899,6 @@ impl Walker<'_, '_> {
                             })
                             .collect(),
                     ),
-                )
-                .opt(
-                    "originalPhantomId",
-                    original_phantom_id.as_ref().map(|id| self.tok(id)),
                 )
                 .add("instanceId", text(instance_id.to_string()))
                 .add("neverLive", self.boolean(*never_live))

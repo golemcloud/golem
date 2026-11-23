@@ -45,11 +45,11 @@ import {
 import { AgentClassName } from './agentClassName';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
-import { getRawSelfAgentId } from './host/hostapi';
+import { getSelfAgentId } from './host/hostapi';
 import { createCustomError, invalidInput, invalidMethod } from './internal/agentError';
 import type { InvocationContext } from './caller';
 import { assertNotLiveValue } from './liveValues';
-import { ParsedAgentId } from './agentId';
+import type { AgentId } from './agentId';
 import { isSqliteResource, restoreDatabases, takeDatabases } from './internal/databaseSnapshot';
 import { MultipartPart } from './internal/multipart';
 import type { SnapshotTransport } from './internal/resolvedAgent';
@@ -94,7 +94,49 @@ import {
   CachePolicy,
 } from 'golem:agent/common@2.0.0';
 
-const reservedStateFields = new Set(['config', 'getId', 'getPhantomId']);
+const reservedStateFields = new Set(['config', 'getId']);
+
+function containsStream(graph: SchemaGraph): boolean {
+  const seen = new Set<SchemaType>();
+  const visit = (type: SchemaType): boolean => {
+    if (seen.has(type)) return false;
+    seen.add(type);
+    const body = type.body;
+    switch (body.tag) {
+      case 'stream':
+        return true;
+      case 'ref': {
+        const definition = graph.defs.get(body.id);
+        return definition !== undefined && visit(definition.body);
+      }
+      case 'record':
+        return body.fields.some((field) => visit(field.body));
+      case 'variant':
+        return body.cases.some((entry) => entry.payload !== undefined && visit(entry.payload));
+      case 'tuple':
+        return body.elements.some(visit);
+      case 'list':
+      case 'fixed-list':
+      case 'option':
+        return visit(body.element);
+      case 'map':
+        return visit(body.key) || visit(body.value);
+      case 'result':
+        return (
+          (body.ok !== undefined && visit(body.ok)) || (body.err !== undefined && visit(body.err))
+        );
+      case 'union':
+        return body.branches.some((branch) => visit(branch.body));
+      case 'secret':
+        return visit(body.inner);
+      case 'future':
+        return body.element !== undefined && visit(body.element);
+      default:
+        return false;
+    }
+  };
+  return visit(graph.root);
+}
 
 /**
  * Resolve a method's `readOnly` option to the WIT `read-only-config`, or
@@ -420,18 +462,40 @@ function validateHttpConsistency(
   const mountVars = httpMount ? pathVariableNames(httpMount.pathPrefix) : new Set<string>();
 
   if (httpMount) {
-    const selector = httpMount.phantomIdBinding;
+    const selector = httpMount.agentIdBinding;
+    if (httpMount.createRoute !== undefined) {
+      if (!selector) throw new Error('Create routes require an agent ID binding');
+      if (pathVariableNames(httpMount.createRoute).size) {
+        throw new Error('Create routes cannot contain captures');
+      }
+      if (
+        httpMount.createRoute.some(
+          (segment) =>
+            segment.tag === 'segment' &&
+            segment.val.tag === 'literal' &&
+            (!segment.val.val ||
+              segment.val.val === '.' ||
+              segment.val.val === '..' ||
+              /[\x00-\x1f\x7f/\\]/.test(segment.val.val)),
+        )
+      ) {
+        throw new Error('Create routes require valid literal or system segments');
+      }
+    }
     if (selector) {
       const { name: selectorName } = selector.val;
-      if (!selectorName) {
-        throw new Error('Phantom selector must have a nonempty name');
+      if (
+        typeof selectorName !== 'string' ||
+        !selectorName ||
+        !['path', 'query'].includes(selector.tag)
+      ) {
+        throw new Error('Agent ID binding must have a valid source and nonempty name');
       }
-      if (typeof selector.val.optional !== 'boolean') {
-        throw new Error('Phantom selector optionality must be a boolean');
+      if (httpMount.phantomAgent) {
+        throw new Error('Agent ID binding cannot use phantomAgent');
       }
       if (selector.tag === 'path') {
         if (
-          idNames.has(selectorName) ||
           httpMount.pathPrefix.filter(
             (s) =>
               s.tag === 'segment' &&
@@ -439,11 +503,19 @@ function validateHttpConsistency(
               s.val.val.variableName === selectorName,
           ).length !== 1
         ) {
-          throw new Error(
-            'Phantom path selector must name exactly one mount capture, not an id field',
-          );
+          throw new Error('Agent ID path selector must name exactly one mount capture');
         }
         mountVars.delete(selectorName);
+      }
+      if (
+        mountVars.size ||
+        httpMount.pathPrefix.some(
+          (segment) => segment.tag === 'segment' && segment.val.tag === 'remaining-path-variable',
+        )
+      ) {
+        throw new Error(
+          'Agent ID binding cannot mix constructor captures: ' + [...mountVars].join(', '),
+        );
       }
       for (const mc of methodCodecs.values()) {
         for (const ep of mc.httpEndpoints) {
@@ -451,12 +523,16 @@ function validateHttpConsistency(
             (selector.tag === 'query' &&
               ep.queryVars.some((q) => q.queryParamName === selectorName)) ||
             (selector.tag === 'path' && pathVariableNames(ep.pathSuffix).has(selectorName)) ||
-            (ep.durableStreams &&
+            ((ep.mode ??
+              (mc.inputCodecs.some((input) => containsStream(input.codec.graph)) ||
+              (mc.output.tag === 'single' && containsStream(mc.output.codec.graph))
+                ? 'durable-streams'
+                : 'plain')) === 'durable-streams' &&
               selector.tag === 'query' &&
               ['offset', 'cursor', 'live'].includes(selectorName))
           ) {
             throw new Error(
-              'Phantom selector conflicts with an endpoint binding or durable-stream control',
+              'Agent ID binding conflicts with an endpoint binding or durable-stream control',
             );
           }
         }
@@ -504,6 +580,13 @@ function validateHttpConsistency(
         // Stream resource slots are classified by the registry's route compiler.
         const shape = resolveShapeType(input.codec.graph, input.codec.graph.root);
         if (!explicitQuery.has(input.name) && shape?.tag === 'stream') continue;
+        if (
+          httpMount.agentIdBinding?.tag === 'query' &&
+          !bound.has(input.name) &&
+          input.name === httpMount.agentIdBinding.val.name
+        ) {
+          throw new Error('Agent ID binding conflicts with an implicit query input');
+        }
         if (!isQueryShape(input.codec.graph, input.codec.graph.root)) {
           throw new Error(
             `Agent "${name}" method "${mc.name}" input "${input.name}" cannot bind from query: expected a scalar, scalar list, scalar map, or outer option`,
@@ -602,11 +685,8 @@ function assembleAgentType(
   const router = metadata.router ? compileRouterMount(metadata.router) : undefined;
   const httpMount: HttpMountDetails | undefined =
     router?.mount ?? (metadata.http ? compileHttpMount(name, metadata.http) : undefined);
-  if (
-    httpMount?.phantomIdBinding &&
-    (metadata.mode === 'ephemeral' || router || httpMount.filesystemBindings.length)
-  ) {
-    throw new Error('Phantom selectors require a regular durable mount without file exposure');
+  if (httpMount?.agentIdBinding && (metadata.mode === 'ephemeral' || router)) {
+    throw new Error('Agent ID bindings require a regular durable mount');
   }
   if (router) {
     if (
@@ -687,27 +767,28 @@ function assembleAgentType(
             segment.val.val === '..' ||
             /[\x00-\x1f\x7f/\\]/.test(segment.val.val)),
       ) ||
-      captures.length !== idCodecs.length ||
-      idCodecs.some(
-        (c) =>
-          captures.filter((v) => v === c.name).length !== 1 ||
-          ![
-            'string',
-            'char',
-            'bool',
-            'enum',
-            'u8',
-            'u16',
-            'u32',
-            'u64',
-            's8',
-            's16',
-            's32',
-            's64',
-            'f32',
-            'f64',
-          ].includes(resolveShapeType(c.codec.graph, c.codec.graph.root)?.tag ?? ''),
-      )
+      (!httpMount.agentIdBinding &&
+        (captures.length !== idCodecs.length ||
+          idCodecs.some(
+            (c) =>
+              captures.filter((v) => v === c.name).length !== 1 ||
+              ![
+                'string',
+                'char',
+                'bool',
+                'enum',
+                'u8',
+                'u16',
+                'u32',
+                'u64',
+                's8',
+                's16',
+                's32',
+                's64',
+                'f32',
+                'f64',
+              ].includes(resolveShapeType(c.codec.graph, c.codec.graph.root)?.tag ?? ''),
+          )))
     ) {
       throw new Error(
         'File exposure requires a durable non-phantom agent with every constructor parameter bound exactly once in the mount',
@@ -775,7 +856,7 @@ function assembleAgentType(
 class ResolvedAgentImpl {
   constructor(
     private readonly reg: AgentRuntime,
-    /** The handler `this`: state fields + `getId`/`getPhantomId` helpers. */
+    /** The handler `this`: state fields and the `getId` helper. */
     private readonly instance: Record<string, unknown>,
     private readonly methods: Record<string, (...args: unknown[]) => unknown>,
     /** Optional user-supplied snapshot serializer (`implement({ snapshot })`). */
@@ -791,8 +872,8 @@ class ResolvedAgentImpl {
     return this.reg.agentType;
   }
 
-  getId(): ParsedAgentId {
-    return getRawSelfAgentId();
+  getId(): AgentId {
+    return getSelfAgentId();
   }
 
   async invoke(
@@ -985,8 +1066,7 @@ export function registerAgentInitiator(
         tag: 'ok';
         val: {
           idRecord: Record<string, unknown>;
-          agentId: ParsedAgentId;
-          phantomId: ReturnType<ParsedAgentId['parsedWire']>[2];
+          agentId: AgentId;
           config: ReturnType<typeof buildConfigAccessor>;
         };
       } => {
@@ -1006,16 +1086,7 @@ export function registerAgentInitiator(
       };
     }
 
-    const agentId = getRawSelfAgentId();
-    if (!agentId.value.startsWith(reg.name)) {
-      return {
-        tag: 'err',
-        val: createCustomError(
-          `Expected the container name to start with "${reg.name}", got "${agentId.value}"`,
-        ),
-      };
-    }
-    const [, , phantomId] = agentId.parsedWire();
+    const agentId = getSelfAgentId();
 
     // Fresh-reading config accessor; shared by `init` (via context) and the
     // handler `this`. Each getter re-fetches on access (config may change
@@ -1024,7 +1095,7 @@ export function registerAgentInitiator(
 
     return {
       tag: 'ok',
-      val: { idRecord, agentId, phantomId, config },
+      val: { idRecord, agentId, config },
     };
   };
 
@@ -1042,8 +1113,7 @@ export function registerAgentInitiator(
         );
       }
     }
-    instance.getId = getRawSelfAgentId;
-    instance.getPhantomId = () => getRawSelfAgentId().parsedWire()[2];
+    instance.getId = getSelfAgentId;
     instance.config = config;
     return new ResolvedAgentImpl(
       reg,
@@ -1057,7 +1127,7 @@ export function registerAgentInitiator(
     async initiate(constructorInput: SchemaValueTree, ctx: InvocationContext) {
       const resolved = resolveContext(constructorInput);
       if (resolved.tag === 'err') return resolved;
-      const { idRecord, phantomId, config } = resolved.val;
+      const { idRecord, config } = resolved.val;
 
       // `init` may be synchronous or async (return a Promise); awaiting a plain
       // value is a no-op, so both forms work. The guest `initialize`/load-snapshot
@@ -1067,7 +1137,6 @@ export function registerAgentInitiator(
         state = await impl.init(
           withCaller(ctx, {
             id: idRecord as never,
-            phantomId,
             config,
           }),
         );
@@ -1085,7 +1154,7 @@ export function registerAgentInitiator(
     async loadSnapshot(constructorInput, ctx, bytes, mimeType, databases, parts = new Map()) {
       const resolved = resolveContext(constructorInput);
       if (resolved.tag === 'err') return resolved;
-      const { idRecord, phantomId, config } = resolved.val;
+      const { idRecord, config } = resolved.val;
       let state: object;
       try {
         if (reg.multipartSnapshotSchema) {
@@ -1112,7 +1181,6 @@ export function registerAgentInitiator(
             withCaller(ctx, {
               id: idRecord as never,
               agentId: resolved.val.agentId,
-              phantomId,
               config,
             }),
           );
@@ -1133,7 +1201,6 @@ export function registerAgentInitiator(
               withCaller(ctx, {
                 id: idRecord as never,
                 agentId: resolved.val.agentId,
-                phantomId,
                 config,
               }),
             );

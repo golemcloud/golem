@@ -21,7 +21,7 @@ use golem_common::model::{
     IdempotencyKey, NamedRetryPolicy, Predicate, PredicateValue, RetryConfig, RetryPolicy,
 };
 use golem_common::schema::SchemaValue;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     FailingBlobStoreService, FailingKeyValueService, FailingRpc, LastUniqueId,
@@ -56,7 +56,7 @@ inherit_test_dep!(Tracing);
 /// Helper: count oplog Error entries whose error message contains the given substring.
 async fn count_oplog_errors_containing(
     executor: &impl TestDsl,
-    worker_id: &golem_common::model::AgentId,
+    worker_id: &golem_common::model::OwnedAgentId,
     substring: &str,
 ) -> anyhow::Result<usize> {
     let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
@@ -105,7 +105,7 @@ async fn keyvalue_get_retries_inline_on_transient_failure(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("KeyValue", "in-function-retry-get-1");
+    let agent_id = agent_key!("KeyValue", "in-function-retry-get-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -192,7 +192,7 @@ async fn keyvalue_set_retries_inline_when_idempotent(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("KeyValue", "in-function-retry-set-1");
+    let agent_id = agent_key!("KeyValue", "in-function-retry-set-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -283,7 +283,7 @@ async fn blobstore_get_data_retries_inline_on_transient_failure(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("BlobStore", "in-function-retry-get-data-1");
+    let agent_id = agent_key!("BlobStore", "in-function-retry-get-data-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -381,7 +381,7 @@ async fn in_function_retry_falls_back_to_trap_when_delay_exceeds_threshold(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("KeyValue", "in-function-retry-trap-fallback-1");
+    let agent_id = agent_key!("KeyValue", "in-function-retry-trap-fallback-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -485,7 +485,7 @@ async fn in_function_retry_transitions_from_inline_to_trap_based(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("KeyValue", "in-function-retry-mixed-1");
+    let agent_id = agent_key!("KeyValue", "in-function-retry-mixed-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -733,7 +733,7 @@ async fn http_status_retry_policy_retries_matching_status(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -803,7 +803,7 @@ async fn http_zone1_inline_retry_on_transient_connection_failure(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -870,7 +870,7 @@ async fn http_zone1_waits_out_backoff_above_threshold(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let agent_id = agent_id!("HttpClient");
+    let agent_id = agent_key!("HttpClient");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -946,7 +946,7 @@ async fn http_long_backoff_survives_restart_and_waits_only_until_its_deadline(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let agent_id = agent_id!("HttpClient");
+    let agent_id = agent_key!("HttpClient");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -1061,7 +1061,7 @@ async fn async_rpc_inline_retry_on_transient_remote_error(
         .store()
         .await?;
 
-    let agent_id = agent_id!("RpcCaller", "in-function-retry-rpc-1");
+    let agent_id = agent_key!("RpcCaller", "in-function-retry-rpc-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1136,7 +1136,7 @@ async fn async_rpc_waits_out_backoff_above_threshold(
         .store()
         .await?;
 
-    let agent_id = agent_id!("RpcCaller", "async-rpc-long-backoff");
+    let agent_id = agent_key!("RpcCaller", "async-rpc-long-backoff");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1227,7 +1227,7 @@ async fn async_rpc_long_backoff_suspends_the_idle_agent_and_wakes_at_its_deadlin
         .store()
         .await?;
 
-    let agent_id = agent_id!("RpcCaller", "async-rpc-long-backoff-suspends");
+    let agent_id = agent_key!("RpcCaller", "async-rpc-long-backoff-suspends");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1799,7 +1799,7 @@ async fn http_output_stream_inline_retry_on_body_write_failure(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -1872,7 +1872,7 @@ async fn http_awaiting_response_retry_resends_full_body_after_output_stream_retr
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -1954,7 +1954,7 @@ async fn http_get_retried_inline(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -2324,7 +2324,7 @@ async fn http_resuming_response_body_inline_retry_on_body_read_failure(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -2411,7 +2411,7 @@ async fn http_resuming_response_body_inline_retry_accepts_matching_non_partial_s
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -2491,7 +2491,7 @@ async fn http_write_zeroes_body_reconstruction(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -2551,7 +2551,7 @@ async fn p3_http_request_trailers_are_sent(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let _worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -2589,7 +2589,7 @@ async fn p3_http_oversized_streaming_body_without_content_length_is_sent(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let _worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -2632,7 +2632,7 @@ async fn p3_http_small_open_streaming_body_can_receive_early_response(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let _worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -2675,7 +2675,7 @@ async fn p3_http_declared_small_open_streaming_body_can_receive_early_response(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let _worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -2737,7 +2737,7 @@ async fn http_no_resume_when_request_had_range_header(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -2958,7 +2958,7 @@ async fn http_streamed_upload_inline_retry(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -3050,7 +3050,7 @@ async fn http_large_streamed_upload_inline_retry(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let _worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -3149,7 +3149,7 @@ async fn http_retry_resends_trailers(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let _worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;

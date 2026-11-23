@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::account::AccountId;
-use super::component::ComponentId;
 use super::{AgentFingerprint, AgentId, IdempotencyKey, InvocationId};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
@@ -147,7 +146,7 @@ fn derive_key(domain: &str, fields: &[&[u8]]) -> IdempotencyKey {
     IdempotencyKey::derived_from_bytes(&IdempotencyKey::from(domain), &bytes)
 }
 
-/// An agent-owned invocation, printed as `<component UUID>/<agent name>.<UUID>`.
+/// An agent-owned invocation, printed as `<agent ID>.<UUID>`.
 /// Tool-owned transport identities are not represented by this type yet.
 #[derive(
     Clone,
@@ -267,24 +266,14 @@ impl FromStr for OwnedInvocationId {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let invalid =
-            || "invalid invocation id: expected <component UUID>/<agent name>.<UUID>".to_string();
+        let invalid = || "invalid invocation id: expected <agent ID>.<UUID>".to_string();
         let suffix_start = value.len().checked_sub(37).ok_or_else(invalid)?;
         let owner = value.get(..suffix_start).ok_or_else(invalid)?;
         let suffix = value.get(suffix_start..).ok_or_else(invalid)?;
         let uuid_text = suffix.strip_prefix('.').ok_or_else(invalid)?;
         let uuid = uuid_text.parse::<InvocationId>().map_err(|_| invalid())?;
-        // AgentId::FromStr accepts a colon, but its Display uses a slash.
-        // Split only once: slashes and dots can occur inside the agent name.
-        let (component, name) = owner.split_once('/').ok_or_else(invalid)?;
-        let component_id = ComponentId(Uuid::parse_str(component).map_err(|_| invalid())?);
-        Ok(Self::new(
-            AgentId {
-                component_id,
-                agent_id: name.to_string(),
-            },
-            uuid,
-        ))
+        let agent_id = owner.parse::<AgentId>().map_err(|_| invalid())?;
+        Ok(Self::new(agent_id, uuid))
     }
 }
 
@@ -294,10 +283,7 @@ mod tests {
     use test_r::test;
 
     fn owner() -> AgentId {
-        AgentId {
-            component_id: ComponentId(Uuid::from_u128(1)),
-            agent_id: "counter(\"a.b/c:雪\")".to_string(),
-        }
+        AgentId(uuid::uuid!("00000007-0cfd-8d08-825f-b29b4e7457ad"))
     }
 
     fn fingerprint() -> AgentFingerprint {
@@ -476,18 +462,12 @@ mod tests {
     #[test]
     fn invocation_id_text_roundtrip_and_golden_vector() {
         let id = OwnedInvocationId::new(owner(), InvocationId(Uuid::from_u128(3)));
-        let text = "00000000-0000-0000-0000-000000000001/counter(\"a.b/c:雪\").00000000-0000-0000-0000-000000000003";
+        let text = "00000007-0cfd-8d08-825f-b29b4e7457ad.00000000-0000-0000-0000-000000000003";
         assert_eq!(id.to_string(), text);
         assert_eq!(text.parse::<OwnedInvocationId>().unwrap(), id);
         assert_eq!(id.agent_id(), &owner());
         assert_eq!(id.uuid(), Uuid::from_u128(3));
         assert_eq!(id.id(), InvocationId(Uuid::from_u128(3)));
-        for name in ["", ".", "/", "\"", "雪", "a.b/c.d/\"雪\"", "é🦀."] {
-            let mut agent = owner();
-            agent.agent_id = name.to_string();
-            let id = OwnedInvocationId::new(agent, InvocationId(Uuid::from_u128(4)));
-            assert_eq!(id.to_string().parse::<OwnedInvocationId>().unwrap(), id);
-        }
     }
 
     #[test]
@@ -498,7 +478,8 @@ mod tests {
             "雪",
             "é00000000-0000-0000-0000-000000000003",
             "雪.00000000-0000-0000-0000-000000000003",
-            "00000000-0000-0000-0000-000000000001:name.00000000-0000-0000-0000-000000000003",
+            "00000000-0000-0000-0000-000000000001/name.00000000-0000-0000-0000-000000000003",
+            "counter(\"a\").00000000-0000-0000-0000-000000000003",
         ] {
             assert!(text.parse::<OwnedInvocationId>().is_err(), "{text}");
         }

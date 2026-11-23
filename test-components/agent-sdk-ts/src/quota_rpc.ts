@@ -90,7 +90,7 @@ export const QuotaRpcSenderImpl = QuotaRpcSender.implement({
       const childToken = split(token, BigInt(childExpectedUse));
 
       const receiverName = `${this.name}-receiver`;
-      QuotaRpcReceiver.client.get({ _name: receiverName }).reserveAndCallInLoop.trigger({
+      QuotaRpcReceiver.client.upsert({ _name: receiverName }).reserveAndCallInLoop.trigger({
         childToken,
         host,
         port,

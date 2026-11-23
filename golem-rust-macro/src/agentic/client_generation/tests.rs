@@ -37,7 +37,7 @@ fn render_client(agent_is_durable: bool) -> String {
         &item_trait,
         &[quote! { name: String }, quote! { enabled: bool }],
         &[format_ident!("name"), format_ident!("enabled")],
-        &[quote! { cfg: Config }],
+        &[quote! { Config }],
         &[format_ident!("cfg")],
         &[],
         agent_is_durable,
@@ -45,42 +45,106 @@ fn render_client(agent_is_durable: bool) -> String {
     .to_string()
 }
 
-#[test]
-fn durable_agents_generate_getters() {
-    let rendered = render_client(true);
-
-    assert!(rendered.contains("pub fn get ("));
-    assert!(rendered.contains("get_with_config"));
-    assert!(!rendered.contains("get_agent_type"));
-    assert!(!rendered.contains("component_id"));
-    assert!(rendered.contains("agentic :: __connect_agent_or_panic"));
-    assert!(!rendered.contains("host :: make_agent_id"));
-    assert!(!rendered.contains("WasmRpc :: create"));
+/// The parameter names of the generated inherent function `name`.
+fn generated_params(tokens: proc_macro2::TokenStream, name: &str) -> Vec<String> {
+    let rendered = tokens.to_string();
+    let generated = syn::parse2::<syn::File>(tokens).unwrap();
+    generated
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Impl(item_impl) => item_impl.items.iter().find_map(|item| {
+                let syn::ImplItem::Fn(method) = item else {
+                    return None;
+                };
+                (method.sig.ident == name).then(|| {
+                    method
+                        .sig
+                        .inputs
+                        .iter()
+                        .filter_map(|arg| match arg {
+                            syn::FnArg::Receiver(_) => None,
+                            syn::FnArg::Typed(pat_type) => match pat_type.pat.as_ref() {
+                                syn::Pat::Ident(pat_ident) => Some(pat_ident.ident.to_string()),
+                                _ => None,
+                            },
+                        })
+                        .collect::<Vec<_>>()
+                })
+            }),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("missing generated {name}:\n{rendered}"))
 }
 
 #[test]
-fn ephemeral_agents_generate_known_and_fresh_phantom_getters() {
+fn durable_agents_generate_upsert_create_get_by_id_and_agent_id() {
+    let rendered = render_client(true);
+
+    assert!(rendered.contains("pub fn upsert (name : String , enabled : bool ,) -> Self"));
+    assert!(
+        rendered
+            .contains("agentic :: __upsert_agent_or_panic (\"ExampleAgent\" , constructor_value)")
+    );
+    assert!(rendered.contains(
+        "pub async fn create (name : String , enabled : bool , options : golem_rust :: CreateOptions < Config > ,) -> Result < Self , golem_rust :: GolemReflectError >"
+    ));
+    assert!(rendered.contains("keyed : options . keyed"));
+    assert!(rendered.contains("env : options . env"));
+    assert!(rendered.contains(
+        "config : :: golem_rust :: agentic :: IntoRpcConfigParam :: into_rpc_param (options . config , & [])"
+    ));
+    assert!(rendered.contains(
+        "agentic :: __create_agent (\"ExampleAgent\" , constructor_value , options) . await ?"
+    ));
+    assert!(rendered.contains(
+        "pub fn get_by_id (agent_id : & golem_rust :: AgentId) -> Result < Self , golem_rust :: GolemReflectError >"
+    ));
+    assert!(rendered.contains("agentic :: __get_agent_by_id (\"ExampleAgent\" , agent_id) ?"));
+    assert!(rendered.contains(
+        "pub async fn agent_id (& self) -> Result < golem_rust :: AgentId , golem_rust :: GolemReflectError >"
+    ));
+    assert!(rendered.contains("agentic :: __agent_id (& self . wasm_rpc) . await"));
+    assert!(rendered.contains("agentic :: __bind_self (\"ExampleAgent\") ?"));
+    for removed in [
+        "phantom",
+        "get_with_config",
+        "fn get (",
+        "make_agent_id",
+        "ParsedAgentId",
+        "Uuid :: new_v4",
+        "component_id",
+        "get_agent_type",
+    ] {
+        assert!(!rendered.contains(removed), "{removed}:\n{rendered}");
+    }
+}
+
+#[test]
+fn ephemeral_agents_generate_only_upsert() {
     let rendered = render_client(false);
 
-    assert!(!rendered.contains("pub fn get ("));
-    assert!(!rendered.contains("get_with_config"));
-    assert!(rendered.contains("new_phantom"));
-    assert!(rendered.contains("get_phantom"));
-    assert!(rendered.contains("get_phantom_with_config"));
-    assert!(!rendered.contains("Uuid :: new_v4"));
-    assert!(!rendered.contains("make_agent_id"));
-    assert!(rendered.contains("agentic :: __agent_proxy_or_panic"));
-    assert!(!rendered.contains("__connect_agent"));
+    assert!(rendered.contains("pub fn upsert (name : String , enabled : bool ,) -> Self"));
+    assert!(rendered.contains("agentic :: __upsert_agent_or_panic"));
+    for absent in [
+        "fn create (",
+        "fn get_by_id (",
+        "fn agent_id (",
+        "fn bind_self (",
+        "__create_agent",
+        "phantom",
+        "fn get (",
+    ] {
+        assert!(!rendered.contains(absent), "{absent}:\n{rendered}");
+    }
     assert!(rendered.contains("async_invoke_and_await"));
     assert!(rendered.contains("wasm_rpc . invoke"));
     assert!(rendered.contains("schedule_invocation"));
     assert!(!rendered.contains("_with_metadata"));
-    assert!(!rendered.contains("fn phantom_id ("));
-    assert!(!rendered.contains("fn get_agent_id ("));
 }
 
 #[test]
-fn caller_defined_clients_do_not_load_reflection_metadata() {
+fn caller_defined_clients_return_typed_errors_from_every_constructor() {
     let item_trait = parse_quote! {
         trait ExampleAgent {
             fn new(name: String) -> Self;
@@ -102,10 +166,47 @@ fn caller_defined_clients_do_not_load_reflection_metadata() {
 
     assert!(!rendered.contains("get_agent_type"));
     assert!(!rendered.contains("component_id"));
-    assert!(rendered.contains("agentic :: __connect_agent ("));
-    assert!(rendered.contains("agentic :: __agent_proxy ("));
+    assert!(rendered.contains(
+        "pub fn upsert (name : String ,) -> Result < Self , golem_rust :: GolemReflectError >"
+    ));
+    assert!(rendered.contains(
+        "agentic :: __upsert_agent (\"remote:example/agent\" , golem_rust :: encode_schema_value"
+    ));
+    assert!(rendered.contains("options : golem_rust :: CreateOptions < () >"));
+    assert!(rendered.contains("config : :: std :: vec :: Vec :: new ()"));
+    assert!(rendered.contains(
+        "agentic :: __create_agent (\"remote:example/agent\" , golem_rust :: encode_schema_value"
+    ));
+    assert!(
+        rendered.contains("agentic :: __get_agent_by_id (\"remote:example/agent\" , agent_id) ?")
+    );
+    assert!(!rendered.contains("__upsert_agent_or_panic"));
     assert!(!rendered.contains("WasmRpc :: create"));
-    assert!(rendered.contains("|| golem_rust :: encode_schema_value"));
+}
+
+#[test]
+fn create_takes_several_agent_configs_as_a_tuple() {
+    let item_trait = parse_quote! {
+        trait ExampleAgent {
+            fn new(name: String, #[agent_config] a: Config<A>, #[agent_config] b: Config<B>) -> Self;
+            fn ping(&self);
+        }
+    };
+    let rendered = get_remote_client(
+        &item_trait,
+        &[quote! { name: String }],
+        &[format_ident!("name")],
+        &[quote! { ARpc }, quote! { BRpc }],
+        &[format_ident!("a"), format_ident!("b")],
+        &[],
+        true,
+    )
+    .to_string();
+
+    assert!(rendered.contains("options : golem_rust :: CreateOptions < (ARpc , BRpc) >"));
+    assert!(rendered.contains("let (__golem_config_0 , __golem_config_1) = options . config ;"));
+    assert!(rendered.contains("into_rpc_param (__golem_config_0 , & [])"));
+    assert!(rendered.contains("into_rpc_param (__golem_config_1 , & [])"));
 }
 
 #[test]
@@ -188,7 +289,9 @@ fn constructor_helper_does_not_duplicate_user_method_name() {
     let item_trait = parse_quote! {
         trait ExampleAgent {
             fn new() -> Self;
-            fn new_phantom(&self);
+            fn upsert(&self);
+            fn create(&self);
+            fn get_by_id(&self);
             fn bind_self(&self);
             fn bind_self1(&self);
         }
@@ -197,16 +300,22 @@ fn constructor_helper_does_not_duplicate_user_method_name() {
     let rendered = get_remote_client(&item_trait, &[], &[], &[], &[], &[], true).to_string();
     let rendered = client_part(&rendered);
 
+    for name in ["upsert", "create", "get_by_id", "bind_self"] {
+        assert!(
+            rendered.contains(&format!("pub async fn {name} (& self)")),
+            "real user method names should win over generated constructor helpers:\n{rendered}"
+        );
+        assert_eq!(
+            rendered.matches(&format!("fn {name} (")).count(),
+            1,
+            "generated client must not emit a constructor helper with the same inherent method name as a user method:\n{rendered}"
+        );
+    }
+    assert!(rendered.contains("pub fn upsert1 () -> Self"));
     assert!(
-        rendered.contains("pub async fn new_phantom ("),
-        "real user method names should win over generated constructor helpers:\n{rendered}"
+        rendered.contains("pub async fn create1 (options : golem_rust :: CreateOptions < () > ,)")
     );
-    assert_eq!(
-        rendered.matches("fn new_phantom (").count(),
-        1,
-        "generated client must not emit a constructor helper with the same inherent method name as a user method:\n{rendered}"
-    );
-    assert!(rendered.contains("pub async fn bind_self ("));
+    assert!(rendered.contains("pub fn get_by_id1 (agent_id : & golem_rust :: AgentId)"));
     assert!(rendered.contains("pub async fn bind_self1 ("));
     assert!(
         rendered
@@ -215,38 +324,11 @@ fn constructor_helper_does_not_duplicate_user_method_name() {
 }
 
 #[test]
-fn durable_get_constructor_collision_keeps_existing_get_compat_name() {
-    let item_trait = parse_quote! {
-        trait ExampleAgent {
-            fn new(init: String) -> Self;
-            fn get(&self) -> String;
-        }
-    };
-
-    let rendered = get_remote_client(
-        &item_trait,
-        &[quote! { init: String }],
-        &[format_ident!("init")],
-        &[],
-        &[],
-        &[],
-        true,
-    )
-    .to_string();
-
-    assert!(
-        rendered.contains("pub fn get_ ("),
-        "existing Rust SDK tests and components use get_ as the durable constructor helper when get is a user method; generated client was:\n{rendered}"
-    );
-}
-
-#[test]
 fn accessor_helpers_do_not_duplicate_user_method_names() {
     let item_trait = parse_quote! {
         trait ExampleAgent {
             fn new() -> Self;
-            fn get_agent_id(&self) -> String;
-            fn phantom_id(&self) -> String;
+            fn agent_id(&self) -> String;
         }
     };
 
@@ -254,23 +336,17 @@ fn accessor_helpers_do_not_duplicate_user_method_names() {
     let rendered = client_part(&rendered);
 
     assert!(
-        rendered.contains("pub async fn get_agent_id ("),
-        "real user method names should win over generated accessors:\n{rendered}"
-    );
-    assert!(
-        rendered.contains("pub async fn phantom_id ("),
+        rendered.contains("pub async fn agent_id (& self) -> String"),
         "real user method names should win over generated accessors:\n{rendered}"
     );
     assert_eq!(
-        rendered.matches("fn get_agent_id (").count(),
+        rendered.matches("fn agent_id (").count(),
         1,
-        "generated client must not emit a get_agent_id accessor with the same inherent method name as a user method:\n{rendered}"
+        "generated client must not emit an agent_id accessor with the same inherent method name as a user method:\n{rendered}"
     );
-    assert_eq!(
-        rendered.matches("fn phantom_id (").count(),
-        1,
-        "generated client must not emit a phantom_id accessor with the same inherent method name as a user method:\n{rendered}"
-    );
+    assert!(rendered.contains(
+        "pub async fn agent_id1 (& self) -> Result < golem_rust :: AgentId , golem_rust :: GolemReflectError >"
+    ));
 }
 
 #[test]
@@ -323,57 +399,31 @@ fn schedule_wrappers_deconflict_generated_scheduled_time_parameter() {
 }
 
 #[test]
-fn get_phantom_deconflicts_generated_phantom_id_parameter() {
+fn create_deconflicts_generated_options_parameter() {
     let item_trait = parse_quote! {
         trait ExampleAgent {
-            fn new(phantom_id: String) -> Self;
+            fn new(options: String) -> Self;
             fn run(&self);
         }
     };
 
     let tokens = get_remote_client(
         &item_trait,
-        &[quote! { phantom_id: String }],
-        &[format_ident!("phantom_id")],
+        &[quote! { options: String }],
+        &[format_ident!("options")],
         &[],
         &[],
         &[],
         true,
     );
     let rendered = tokens.to_string();
-    let generated = syn::parse2::<syn::File>(tokens).unwrap();
-    let params = generated
-        .items
-        .iter()
-        .find_map(|item| match item {
-            syn::Item::Impl(item_impl) => item_impl.items.iter().find_map(|item| {
-                let syn::ImplItem::Fn(method) = item else {
-                    return None;
-                };
-                (method.sig.ident == "get_phantom").then(|| {
-                    method
-                        .sig
-                        .inputs
-                        .iter()
-                        .filter_map(|arg| match arg {
-                            syn::FnArg::Receiver(_) => None,
-                            syn::FnArg::Typed(pat_type) => match pat_type.pat.as_ref() {
-                                syn::Pat::Ident(pat_ident) => Some(pat_ident.ident.to_string()),
-                                _ => None,
-                            },
-                        })
-                        .collect::<Vec<_>>()
-                })
-            }),
-            _ => None,
-        })
-        .unwrap_or_else(|| panic!("missing generated get_phantom helper:\n{rendered}"));
-    let unique_params = params.iter().collect::<std::collections::HashSet<_>>();
+    let params = generated_params(tokens, "create");
     assert_eq!(
-        unique_params.len(),
-        params.len(),
-        "get_phantom should deconflict its generated phantom_id parameter from constructor parameters; params were {params:?}:\n{rendered}"
+        params,
+        vec!["options".to_string(), "options1".to_string()],
+        "create should deconflict its generated options parameter from constructor parameters:\n{rendered}"
     );
+    assert!(rendered.contains("keyed : options1 . keyed"));
 }
 
 #[test]
@@ -404,7 +454,7 @@ fn constructor_body_does_not_shadow_constructor_parameters_before_encoding() {
                 let syn::ImplItem::Fn(method) = item else {
                     return None;
                 };
-                (method.sig.ident == "get").then(|| {
+                (method.sig.ident == "upsert").then(|| {
                     let mut bindings = Vec::new();
                     for stmt in &method.block.stmts {
                         let syn::Stmt::Local(local) = stmt else {
@@ -423,7 +473,7 @@ fn constructor_body_does_not_shadow_constructor_parameters_before_encoding() {
             }),
             _ => None,
         })
-        .unwrap_or_else(|| panic!("missing generated get helper:\n{rendered}"));
+        .unwrap_or_else(|| panic!("missing generated upsert helper:\n{rendered}"));
 
     assert!(
         !bindings_before_constructor_value
@@ -433,134 +483,21 @@ fn constructor_body_does_not_shadow_constructor_parameters_before_encoding() {
     );
 }
 
-#[test]
-fn config_encoding_does_not_shadow_config_parameters() {
-    let item_trait = parse_quote! {
-        trait ExampleAgent {
-            fn new(#[agent_config] result: Config) -> Self;
-            fn run(&self);
-        }
-    };
-
-    let rendered = get_remote_client(
-        &item_trait,
-        &[],
-        &[],
-        &[quote! { result: Config }],
-        &[format_ident!("result")],
-        &[],
-        true,
-    )
-    .to_string();
-
-    assert!(
-        !rendered.contains("let mut result = Vec :: new () ; result . append (& mut :: golem_rust :: agentic :: IntoRpcConfigParam :: into_rpc_param (result ,"),
-        "generated config encoding must not shadow a config parameter named result before passing it to IntoRpcConfigParam; generated client was:\n{rendered}"
-    );
-}
-
-#[test]
-fn config_encoding_deconflicts_internal_temp_name_from_config_parameters() {
-    let item_trait = parse_quote! {
-        trait ExampleAgent {
-            fn new(#[agent_config] __golem_rpc_config_params: Config) -> Self;
-            fn run(&self);
-        }
-    };
-
-    let rendered = get_remote_client(
-        &item_trait,
-        &[],
-        &[],
-        &[quote! { __golem_rpc_config_params: Config }],
-        &[format_ident!("__golem_rpc_config_params")],
-        &[],
-        true,
-    )
-    .to_string();
-
-    assert!(
-        !rendered.contains("let mut __golem_rpc_config_params = Vec :: new () ; __golem_rpc_config_params . append (& mut :: golem_rust :: agentic :: IntoRpcConfigParam :: into_rpc_param (__golem_rpc_config_params ,"),
-        "generated config encoding must not shadow a config parameter whose legal Rust identifier matches the internal temporary name; generated client was:\n{rendered}"
-    );
-}
-
-#[test]
-fn config_encoding_does_not_shadow_config_parameter_named_agent_id() {
-    let item_trait = parse_quote! {
-        trait ExampleAgent {
-            fn new(#[agent_config] agent_id: Config) -> Self;
-            fn run(&self);
-        }
-    };
-
-    let tokens = get_remote_client(
-        &item_trait,
-        &[],
-        &[],
-        &[quote! { agent_id: Config }],
-        &[format_ident!("agent_id")],
-        &[],
-        true,
-    );
-    let rendered = tokens.to_string();
-    let generated = syn::parse2::<syn::File>(tokens).unwrap();
-    let shadows_before_config_encoding = generated
-        .items
-        .iter()
-        .find_map(|item| match item {
-            syn::Item::Impl(item_impl) => item_impl.items.iter().find_map(|item| {
-                let syn::ImplItem::Fn(method) = item else {
-                    return None;
-                };
-                (method.sig.ident == "get_with_config").then(|| {
-                    let mut agent_id_is_shadowed = false;
-                    for stmt in &method.block.stmts {
-                        if stmt
-                            .to_token_stream()
-                            .to_string()
-                            .contains("IntoRpcConfigParam :: into_rpc_param (agent_id ,")
-                        {
-                            return agent_id_is_shadowed;
-                        }
-                        if let syn::Stmt::Local(local) = stmt
-                            && let syn::Pat::Ident(pat_ident) = &local.pat
-                            && pat_ident.ident == "agent_id"
-                        {
-                            agent_id_is_shadowed = true;
-                        }
-                    }
-                    false
-                })
-            }),
-            _ => None,
-        })
-        .unwrap_or_else(|| panic!("missing generated get_with_config helper:\n{rendered}"));
-
-    assert!(
-        !shadows_before_config_encoding,
-        "generated config encoding must not bind a local named agent_id before passing the config parameter with the same name to IntoRpcConfigParam; generated client was:\n{rendered}"
-    );
-}
-
-/// The wire `schema-value-tree` now carries an owned, affine `quota-token`
-/// handle, so the generated client must never store it. It stores the
-/// eagerly-computed `agent_id` string instead, rejects quota tokens in the
-/// constructor value before encoding, and delegates identity and connection
-/// establishment with a constructor encoder rather than an affine wire tree.
+/// The wire `schema-value-tree` carries an owned, affine `quota-token` handle, so the
+/// generated client must never store it. It rejects quota tokens in the constructor value
+/// before encoding, and hands the tree to the host once.
 #[test]
 fn client_does_not_store_affine_constructor_tree() {
     let rendered = render_client(true);
+    let client_struct = rendered.split("impl ExampleAgentClient").next().unwrap();
 
-    // No affine wire tree (or its old companion field) is retained.
     assert!(!rendered.contains("constructor_data"));
     assert!(!rendered.contains("agent_type_name"));
-    // Agent id is computed eagerly during construction and stored.
-    assert!(rendered.contains("__connect_agent_or_panic"));
-    assert!(rendered.contains("agent_id : String"));
-    assert!(rendered.contains("let constructor_value = ||"));
-    assert!(rendered.contains("\"ExampleAgent\" , constructor_value ,"));
-    // Quota tokens are rejected in constructor parameters before any encode.
+    assert!(client_struct.contains(
+        "pub struct ExampleAgentClient { wasm_rpc : golem_rust :: golem_agentic :: golem :: agent :: host :: WasmRpc , __golem_default_scope_card : golem_rust :: permissions :: __DefaultScopeCard , }"
+    ));
+    assert!(!rendered.contains("let constructor_value = ||"));
+    assert!(rendered.contains("\"ExampleAgent\" , constructor_value)"));
     assert!(rendered.contains("reject_quota_tokens"));
 }
 

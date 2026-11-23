@@ -16,7 +16,7 @@
 
 package golem.host
 
-import golem.{Principal, PrincipalRef}
+import golem.{AgentId, Principal, PrincipalRef}
 import golem.host.js.{CallerConverter, LegacySnapshotPrincipal}
 import zio.test._
 
@@ -56,9 +56,8 @@ object CallerConverterSpec extends ZIOSpecDefault {
         val agent = principal(
           "agent",
           js.Dynamic.literal(
-            "pair"    -> pair("golem", "agent:a"),
-            "agentId" -> js.Dynamic
-              .literal("componentId" -> js.Dynamic.literal("uuid" -> uuid(3L, 4L)), "agentId" -> "a"),
+            "pair"          -> pair("golem", "agent:a"),
+            "agentId"       -> js.Dynamic.literal("uuid" -> uuid(3L, 4L)),
             "agentType"     -> "Worker",
             "environmentId" -> js.Dynamic.literal("uuid" -> uuid(5L, 6L))
           )
@@ -78,7 +77,13 @@ object CallerConverterSpec extends ZIOSpecDefault {
             .kind
             .name
         }
-        assertTrue(kinds == List("user", "account", "agent", "tool", "anonymous"))
+        val decodedAgent = CallerConverter.principalFromJs(agent).asInstanceOf[Principal.Agent]
+        assertTrue(
+          kinds == List("user", "account", "agent", "tool", "anonymous"),
+          decodedAgent.agentId == AgentId(new java.util.UUID(3L, 4L)),
+          decodedAgent.agentType == "Worker",
+          decodedAgent.environmentId == new java.util.UUID(5L, 6L)
+        )
       },
       test("keeps both roles, the token provenance and the user details") {
         val token = js.Dynamic.literal("id" -> uuid(7L, 8L), "maker" -> pair("golem", "account:1"))

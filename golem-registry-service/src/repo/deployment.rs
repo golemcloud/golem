@@ -87,6 +87,13 @@ pub trait DeploymentRepo: Send + Sync {
         type_id: i64,
     ) -> RepoResult<Option<EnvironmentTypeIdRecord>>;
 
+    /// The latest declaration on each component that has implemented this retained type.
+    async fn list_retained_agent_types(
+        &self,
+        environment_id: Uuid,
+        agent_type_name: &str,
+    ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>>;
+
     /// The last deployed constructor key schema of every agent type name in the
     /// environment, including removed types.
     async fn list_agent_type_constructor_schemas(
@@ -316,6 +323,7 @@ impl<Repo: DeploymentRepo> LoggedDeploymentRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
     async fn list_environment_type_ids(
         &self,
@@ -334,6 +342,17 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
     ) -> RepoResult<Option<EnvironmentTypeIdRecord>> {
         self.repo
             .get_environment_type_id(environment_id, type_id)
+            .instrument(Self::span_env(environment_id))
+            .await
+    }
+
+    async fn list_retained_agent_types(
+        &self,
+        environment_id: Uuid,
+        agent_type_name: &str,
+    ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>> {
+        self.repo
+            .list_retained_agent_types(environment_id, agent_type_name)
             .instrument(Self::span_env(environment_id))
             .await
     }
@@ -847,6 +866,7 @@ impl DbDeploymentRepo<PostgresPool> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
     async fn list_environment_type_ids(
         &self,
@@ -867,6 +887,42 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             sqlx::query_as("SELECT kind, name, type_id FROM environment_agent_type_ids WHERE environment_id = $1 AND type_id = $2")
                 .bind(environment_id).bind(type_id),
         ).await
+    }
+
+    async fn list_retained_agent_types(
+        &self,
+        environment_id: Uuid,
+        agent_type_name: &str,
+    ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>> {
+        self.with_ro("list_retained_agent_types")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                SELECT r.environment_id, r.deployment_revision_id, ids.type_id,
+                    r.agent_type_name, r.canonical_agent_type_name, r.component_id,
+                    c.name AS component_name, r.component_revision_id,
+                    a.account_id AS owner_account_id, ac.email AS owner_account_email,
+                    r.webhook_prefix_authority_and_path, r.agent_type
+                FROM environment_agent_type_ids ids
+                JOIN deployment_registered_agent_types r
+                    ON r.environment_id = ids.environment_id AND r.agent_type_name = ids.name
+                JOIN components c ON c.component_id = r.component_id
+                JOIN environments e ON e.environment_id = r.environment_id AND e.deleted_at IS NULL
+                JOIN applications a ON a.application_id = e.application_id AND a.deleted_at IS NULL
+                JOIN accounts ac ON ac.account_id = a.account_id AND ac.deleted_at IS NULL
+                WHERE ids.environment_id = $1 AND ids.kind = 'agent-type' AND ids.name = $2
+                    AND r.deployment_revision_id = (
+                        SELECT MAX(previous.deployment_revision_id)
+                        FROM deployment_registered_agent_types previous
+                        WHERE previous.environment_id = r.environment_id
+                            AND previous.agent_type_name = r.agent_type_name
+                            AND previous.component_id = r.component_id
+                    )
+                ORDER BY r.deployment_revision_id DESC
+            "# })
+                .bind(environment_id)
+                .bind(agent_type_name),
+            )
+            .await
     }
 
     async fn list_agent_type_constructor_schemas(
@@ -2492,6 +2548,7 @@ trait DeploymentRepoInternal: DeploymentRepo {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Api = <PostgresPool as Pool>::LabelledApi;

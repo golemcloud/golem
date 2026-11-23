@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -97,6 +98,9 @@ type session struct {
 	agent  *Agent
 	method string
 	idem   string
+	// endpoint is the session path under the server URL; empty until a
+	// connection attempt resolved the environment ID.
+	endpoint string
 
 	// pingEvery and pingWait are the keepalive interval and timeout.
 	pingEvery, pingWait time.Duration
@@ -238,28 +242,34 @@ func (s *session) prepareStart() error {
 		return err
 	}
 	a := s.agent
-	constructor, err := schema.MarshalWireValue(a.parameters)
-	if err != nil {
-		return fmt.Errorf("golem: %s constructor arguments: %w", a.typeName, err)
+	var target map[string]any
+	if a.byID {
+		target = map[string]any{"kind": "id", "agentId": a.id.Load()}
+		if a.fingerprint != "" {
+			target["expectedFingerprint"] = a.fingerprint
+		}
+	} else {
+		constructor, err := schema.MarshalWireValue(a.parameters)
+		if err != nil {
+			return fmt.Errorf("golem: %s constructor arguments: %w", a.typeName, err)
+		}
+		target = map[string]any{"kind": "key", "constructorParameters": json.RawMessage(constructor)}
 	}
 	methodParams, err := schema.MarshalWireValue(params)
 	if err != nil {
 		return fmt.Errorf("golem: %s.%s arguments: %w", a.typeName, s.method, err)
 	}
 	selector := map[string]any{
-		"agentType":             a.typeName,
-		"application":           a.configuration.AppName,
-		"constructorParameters": json.RawMessage(constructor),
-		"environment":           a.configuration.EnvName,
-		"method":                s.method,
-	}
-	if a.phantomID != nil {
-		selector["phantomId"] = *a.phantomID
+		"agentType":   a.typeName,
+		"application": a.configuration.AppName,
+		"target":      target,
+		"environment": a.configuration.EnvName,
+		"method":      s.method,
 	}
 	s.attempt = newUUID()
 	s.descriptor, err = encodeMessage("invocationStart", map[string]any{
 		"attemptId":        s.attempt,
-		"config":           configEntriesToDTO(a.config),
+		"config":           []configEntryDTO{},
 		"idempotencyKey":   s.idem,
 		"methodParameters": json.RawMessage(methodParams),
 		"selector":         selector,
@@ -414,6 +424,8 @@ func (s *session) sendCancel(channel uint32, reason string) {
 	})
 }
 
+// url is the session's WebSocket URL, or the server's WebSocket URL while the
+// environment ID is not resolved.
 func (s *session) url() string {
 	base := s.agent.configuration.Server.URL()
 	switch {
@@ -422,7 +434,7 @@ func (s *session) url() string {
 	case strings.HasPrefix(base, "http://"):
 		base = "ws://" + strings.TrimPrefix(base, "http://")
 	}
-	return base + sessionEndpoint
+	return base + s.endpoint
 }
 
 // connect dials until a connection is up, then sends the frozen operation. It
@@ -456,28 +468,18 @@ func (s *session) connect(delay time.Duration) {
 			s.fail(&UnreachableError{Endpoint: s.url(), Window: window, Cause: cause})
 			return
 		}
-		options := &websocket.DialOptions{
-			Subprotocols:    []string{sessionSubprotocol},
-			HTTPHeader:      http.Header{"Authorization": {"Bearer " + s.agent.configuration.Server.Token()}},
-			CompressionMode: websocket.CompressionDisabled,
-		}
-		options.HTTPClient = dialClient(s.agent.configuration.client())
 		attempt, cancel := context.WithTimeout(s.life, min(left, connectTimeout))
-		ws, response, err := websocket.Dial(attempt, s.url(), options)
+		ws, retry, failure := s.dial(attempt)
 		// An attempt cut short by the end of the window keeps the earlier cause.
 		cutShort := left < connectTimeout && attempt.Err() != nil
 		cancel()
-		if err != nil {
+		if failure != nil {
 			if s.life.Err() != nil {
 				return
 			}
-			failure := &Error{Endpoint: "invoke-agent-session", Err: err}
-			if response != nil {
-				failure.Status = response.StatusCode
-				if !retryableStatus(response.StatusCode) {
-					s.fail(failure)
-					return
-				}
+			if !retry {
+				s.fail(failure)
+				return
 			}
 			s.mu.Lock()
 			if !cutShort || s.lastCause == nil {
@@ -511,6 +513,51 @@ func (s *session) connect(delay time.Duration) {
 		}
 		return
 	}
+}
+
+// dial makes one connection attempt within the attempt context: it resolves
+// the environment ID unless an earlier attempt did, then opens the WebSocket.
+// A failure is retried within the reconnect window when the server did not
+// answer within the attempt or answered HTTP 429 or 5xx; any other answer
+// fails the session.
+func (s *session) dial(attempt context.Context) (ws *websocket.Conn, retry bool, failure error) {
+	if s.endpoint == "" {
+		env, err := environmentID(attempt, s.agent)
+		if err != nil {
+			var answer *Error
+			status := 0
+			if errors.As(err, &answer) {
+				status = answer.Status
+			}
+			switch {
+			case status != 0 && (status < 200 || status >= 300):
+				retry = retryableStatus(status)
+			case attempt.Err() != nil:
+				// The answer did not arrive in full within the attempt.
+				retry = true
+			default:
+				// No answer arrived, or one that does not decode or names no
+				// environment in the account of the token.
+				retry = status == 0 && !errors.Is(err, ErrNotFound)
+			}
+			return nil, retry, err
+		}
+		s.endpoint = "/v1/runtime/envs/" + url.PathEscape(env) + sessionEndpoint
+	}
+	options := &websocket.DialOptions{
+		Subprotocols:    []string{sessionSubprotocol},
+		HTTPHeader:      http.Header{"Authorization": {"Bearer " + s.agent.configuration.Server.Token()}},
+		CompressionMode: websocket.CompressionDisabled,
+	}
+	options.HTTPClient = dialClient(s.agent.configuration.client())
+	ws, response, err := websocket.Dial(attempt, s.url(), options)
+	if err != nil {
+		if response != nil {
+			return nil, retryableStatus(response.StatusCode), &Error{Endpoint: "invoke-agent-session", Status: response.StatusCode, Err: err}
+		}
+		return nil, true, &Error{Endpoint: "invoke-agent-session", Err: err}
+	}
+	return ws, false, nil
 }
 
 // awaitAnswer fails the session once the reconnect window ends while the
@@ -870,25 +917,14 @@ func (s *session) accept(c *sessionConn, m message) error {
 	if err != nil {
 		return err
 	}
-	owner, err := m.object("agentId")
+	owner, err := m.str("agentId")
 	if err != nil {
 		return err
 	}
-	if err := owner.membersOnly("agentId", []string{"componentId", "agentId"}); err != nil {
-		return err
-	}
-	componentID, err := owner.str("componentId")
-	if err != nil {
-		return err
-	}
-	agentID, err := owner.str("agentId")
-	if err != nil {
-		return err
-	}
-	if componentID == "" || agentID == "" {
+	var acceptedOwner AgentID
+	if err := acceptedOwner.UnmarshalText([]byte(owner)); err != nil {
 		return protocolErrorf("invalid accepted agent identity")
 	}
-	acceptedOwner := AgentID{ComponentID: componentID, AgentID: agentID}
 	key, err := m.str("idempotencyKey")
 	if err != nil {
 		return err

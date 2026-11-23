@@ -3,14 +3,17 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetActiveRoutesForDomainRequest, get_active_routes_for_domain_response,
     registry_service_client::RegistryServiceClient,
 };
+use golem_client::model::ComponentDto;
+use golem_common::agent_key;
 use golem_common::base_model::agent::AgentTypeName;
 use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
+use golem_common::model::agent::OwnedAgentId;
 use golem_common::model::{AgentId, AgentStatus};
-use golem_common::phantom_agent_id;
 use golem_service_base::custom_api::{CompiledRoutes, RouteBehaviour};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDsl;
-use reqwest::{Response, StatusCode};
+use integration_tests::agents::{agent_type_id, create_agent};
+use reqwest::{Method, Response, StatusCode};
 use serde_json::{Value, json};
 use test_r::{inherit_test_dep, test, timeout};
 use uuid::Uuid;
@@ -68,17 +71,140 @@ async fn set(agent: &HttpTestContext, path: &str) -> anyhow::Result<()> {
 }
 
 #[test]
-#[timeout("180s")]
-async fn selected_phantom_state_and_constructor_isolation(
+#[timeout("240s")]
+async fn mounted_create_returns_constructor_state_and_anonymous_distinct_ids(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let agent = context(deps).await?;
+    for (prefix, query) in [("selected-query", true), ("selected-path", false)] {
+        let key = Uuid::new_v4().to_string();
+        for (field, value) in [
+            (
+                "env",
+                json!({"PAYMENT_API_URL": "https://untrusted.example"}),
+            ),
+            ("env", json!({})),
+            ("config", json!([{"path": ["admin"], "value": true}])),
+            ("config", json!([])),
+        ] {
+            let parameters = golem_common::schema::ExternalSchemaValue::try_from(
+                agent_key!("SelectedQueryAgent", "constructor from body")
+                    .parameters
+                    .value()
+                    .clone(),
+            )
+            .map_err(anyhow::Error::msg)?;
+            let mut body = json!({"parameters": parameters});
+            body[field] = value;
+            let response = agent
+                .client
+                .post(agent.base_url.join(&format!("/{prefix}/create"))?)
+                .json(&body)
+                .send()
+                .await?;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{body}");
+            assert!(!response.headers().contains_key("location"));
+        }
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let parameters = golem_common::schema::ExternalSchemaValue::try_from(
+                agent_key!("SelectedQueryAgent", "constructor from body")
+                    .parameters
+                    .value()
+                    .clone(),
+            )
+            .map_err(anyhow::Error::msg)?;
+            let response = agent
+                .client
+                .post(agent.base_url.join(&format!("/{prefix}/create"))?)
+                .header("idempotency-key", &key)
+                .json(&json!({"parameters": parameters, "keyed": false}))
+                .send()
+                .await?;
+            assert_eq!(response.status(), StatusCode::CREATED);
+            let location = header(&response, "location");
+            let body = response.json::<Value>().await?;
+            assert_eq!(body.as_object().unwrap().len(), 2);
+            let id = body["agentId"].as_str().unwrap().parse::<Uuid>()?;
+            assert!(body["agentFingerprint"].as_str().is_some());
+            assert_eq!(
+                location,
+                if query {
+                    format!("/{prefix}?instance={id}")
+                } else {
+                    format!("/{prefix}/{id}")
+                }
+            );
+            let state = agent
+                .client
+                .get(agent.base_url.join(&location)?)
+                .send()
+                .await?;
+            assert_eq!(state.status(), StatusCode::OK);
+            assert_eq!(state.json::<Value>().await?, json!("constructor from body"));
+            let metadata = agent
+                .user
+                .get_worker_metadata(&OwnedAgentId::new(agent.env_id, &AgentId(id)))
+                .await?;
+            assert_eq!(metadata.canonical_key, None);
+            ids.push(id);
+        }
+        assert_ne!(ids[0], ids[1]);
+        for (constructor, keyed, expected) in [
+            ("invalid keyed", true, StatusCode::BAD_REQUEST),
+            ("fail", false, StatusCode::INTERNAL_SERVER_ERROR),
+        ] {
+            let parameters = golem_common::schema::ExternalSchemaValue::try_from(
+                agent_key!("SelectedQueryAgent", constructor)
+                    .parameters
+                    .value()
+                    .clone(),
+            )
+            .map_err(anyhow::Error::msg)?;
+            let response = agent
+                .client
+                .post(agent.base_url.join(&format!("/{prefix}/create"))?)
+                .json(&json!({"parameters": parameters, "keyed": keyed}))
+                .send()
+                .await?;
+            assert_eq!(response.status(), expected);
+            assert!(!response.headers().contains_key("location"));
+            if keyed {
+                let agent_type = if query {
+                    "SelectedQueryAgent"
+                } else {
+                    "SelectedPathAgent"
+                };
+                let would_create = integration_tests::agents::derive_keyed_agent_id(
+                    &agent.user,
+                    &agent.component_id,
+                    &agent_key!(agent_type, constructor),
+                )
+                .await?;
+                assert_not_created(&agent, would_create.agent_id.0).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("240s")]
+async fn selected_agent_ids_bind_existing_agents_and_never_create(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     let agent = context(deps).await?;
     let id = Uuid::new_v4().to_string();
-    let base = format!("/selected-query/{id}");
-    set(&agent, &format!("{base}/set/11")).await?;
+    let original = existing_agent(&agent, "SelectedQueryAgent", &id).await?;
+    let base = "/selected-query";
+    set(&agent, &selected(&format!("{base}/set/11"), Some(original))).await?;
     let fork = agent
         .client
-        .post(agent.base_url.join(&format!("{base}/fork/37"))?)
+        .post(
+            agent
+                .base_url
+                .join(&selected(&format!("{base}/fork/37"), Some(original)))?,
+        )
         .send()
         .await?
         .error_for_status()?
@@ -86,62 +212,120 @@ async fn selected_phantom_state_and_constructor_isolation(
         .await?
         .parse::<Uuid>()?;
     state(&agent, &selected(&format!("{base}/state"), Some(fork)), 37).await?;
-    state(&agent, &format!("{base}/state"), 11).await?;
-    let unused = Uuid::new_v4();
-    state(&agent, &selected(&format!("{base}/state"), Some(unused)), 0).await?;
     state(
         &agent,
-        &selected(&format!("/selected-query/other-{id}/state"), Some(fork)),
-        0,
+        &selected(&format!("{base}/state"), Some(original)),
+        11,
     )
     .await?;
-    set(&agent, &selected(&format!("{base}/set/42"), Some(fork))).await?;
-    state(&agent, &selected(&format!("{base}/state"), Some(fork)), 42).await?;
-    state(&agent, &format!("{base}/state"), 11).await?;
 
-    for prefix in [
-        "selected-required-query",
-        "selected-path",
-        "selected-required-path",
-    ] {
-        let path_binding = prefix != "selected-required-query";
-        let base = if path_binding {
-            format!("/{prefix}/{fork}/{id}")
-        } else {
-            format!("/{prefix}/{id}")
-        };
-        let url = |suffix: &str, selector: Uuid| {
-            if path_binding {
-                format!("/{prefix}/{selector}/{id}/{suffix}")
-            } else {
-                selected(&format!("{base}/{suffix}"), Some(selector))
-            }
-        };
-        set(&agent, &url("set/21", fork)).await?;
-        set(&agent, &url("set/34", unused)).await?;
-        state(&agent, &url("state", fork), 21).await?;
-        state(&agent, &url("state", unused), 34).await?;
-        let omitted = format!("/{prefix}/{id}/state");
-        if prefix == "selected-path" {
-            state(&agent, &omitted, 0).await?;
-            set(&agent, &format!("/{prefix}/{id}/set/5")).await?;
-            state(&agent, &omitted, 5).await?;
-            state(&agent, &url("state", fork), 21).await?;
-        } else {
-            let response = agent
-                .client
-                .get(agent.base_url.join(&omitted)?)
-                .send()
-                .await?;
+    let chosen = existing_agent(&agent, "SelectedQueryAgent", &id).await?;
+    state(&agent, &selected(&format!("{base}/state"), Some(chosen)), 0).await?;
+    state(
+        &agent,
+        &format!("{base}/query?instance={chosen}&value=73"),
+        73,
+    )
+    .await?;
+    set(&agent, &selected(&format!("{base}/set/42"), Some(chosen))).await?;
+    state(
+        &agent,
+        &selected(&format!("{base}/state"), Some(chosen)),
+        42,
+    )
+    .await?;
+    state(
+        &agent,
+        &selected(&format!("{base}/state"), Some(original)),
+        11,
+    )
+    .await?;
+    state(&agent, &selected(&format!("{base}/state"), Some(fork)), 37).await?;
+    assert_eq!(
+        status(&agent, Method::GET, "/selected-query/state").await?,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        status(
+            &agent,
+            Method::GET,
+            &format!("/selected-query/state?instance={chosen}&unknown=1")
+        )
+        .await?,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        status(
+            &agent,
+            Method::GET,
+            &format!("/selected-query/{id}/state?instance={chosen}")
+        )
+        .await?,
+        StatusCode::NOT_FOUND
+    );
+
+    let unknown = unknown_agent(&agent, "SelectedQueryAgent").await?;
+    for selector in [unknown, Uuid::new_v4()] {
+        for (method, suffix) in [(Method::GET, "state"), (Method::POST, "set/5")] {
             assert_eq!(
-                response.status(),
-                if path_binding {
-                    StatusCode::NOT_FOUND
-                } else {
-                    StatusCode::BAD_REQUEST
-                }
+                status(
+                    &agent,
+                    method,
+                    &selected(&format!("{base}/{suffix}"), Some(selector))
+                )
+                .await?,
+                StatusCode::NOT_FOUND,
+                "selector {selector} on {suffix}"
             );
         }
+    }
+    assert_not_created(&agent, unknown).await?;
+
+    for (prefix, agent_type) in [
+        ("selected-required-query", "SelectedRequiredQueryAgent"),
+        ("selected-path", "SelectedPathAgent"),
+        ("selected-required-path", "SelectedRequiredPathAgent"),
+    ] {
+        let path_binding = prefix != "selected-required-query";
+        let url = |suffix: &str, selector: Uuid| {
+            if path_binding {
+                format!("/{prefix}/{selector}/{suffix}")
+            } else {
+                selected(&format!("/{prefix}/{suffix}"), Some(selector))
+            }
+        };
+        let first = existing_agent(&agent, agent_type, &id).await?;
+        let second = existing_agent(&agent, agent_type, &id).await?;
+        set(&agent, &url("set/21", first)).await?;
+        set(&agent, &url("set/34", second)).await?;
+        state(&agent, &url("state", first), 21).await?;
+        state(&agent, &url("state", second), 34).await?;
+
+        let unknown = unknown_agent(&agent, agent_type).await?;
+        for selector in [unknown, chosen] {
+            for (method, suffix) in [(Method::GET, "state"), (Method::POST, "set/8")] {
+                assert_eq!(
+                    status(&agent, method, &url(suffix, selector)).await?,
+                    StatusCode::NOT_FOUND,
+                    "{prefix}: selector {selector} on {suffix}"
+                );
+            }
+        }
+        assert_not_created(&agent, unknown).await?;
+
+        let omitted = if path_binding {
+            format!("/{prefix}")
+        } else {
+            format!("/{prefix}/state")
+        };
+        assert_eq!(
+            status(&agent, Method::GET, &omitted).await?,
+            if path_binding {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::BAD_REQUEST
+            }
+        );
     }
     Ok(())
 }
@@ -188,24 +372,108 @@ async fn unbound_http_selection_policies_are_preserved(
             .await?;
         assert_eq!(first == second, same, "unbound identity policy for {path}");
     }
-    let key = Uuid::new_v4().to_string();
-    let path = "/ephemeral-stream-agents/instance";
-    let mut results = Vec::new();
-    for _ in 0..2 {
-        results.push(
-            agent
-                .client
-                .get(agent.base_url.join(path)?)
-                .header("idempotency-key", &key)
-                .send()
-                .await?
-                .error_for_status()?
-                .json::<String>()
-                .await?,
-        );
+
+    // The gateway calls agents without a caller scope, so an idempotency key never joins two
+    // requests: each request of a phantomAgent mount creates another durable agent without a
+    // key, and each ephemeral request runs on an instance of its own.
+    let phantom_type_id = agent_type_id(
+        &agent.user,
+        &component(&agent).await?,
+        &AgentTypeName("PhantomStreamAgent".into()),
+    )
+    .await?;
+    for path in [
+        "/phantom-stream-agents/instance",
+        "/ephemeral-stream-agents/instance",
+    ] {
+        let key = Uuid::new_v4().to_string();
+        let mut results = Vec::new();
+        for _ in 0..2 {
+            results.push(
+                agent
+                    .client
+                    .get(agent.base_url.join(path)?)
+                    .header("idempotency-key", &key)
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<String>()
+                    .await?
+                    .parse::<Uuid>()?,
+            );
+        }
+        assert_ne!(results[0], results[1], "{path}");
+        if path.starts_with("/phantom") {
+            for created in results {
+                let created = AgentId(created);
+                assert_eq!(created.type_id(), Some(phantom_type_id));
+                let metadata = agent
+                    .user
+                    .get_worker_metadata(&OwnedAgentId::new(agent.env_id, &created))
+                    .await?;
+                assert_eq!(
+                    metadata.agent_type_name,
+                    Some(AgentTypeName("PhantomStreamAgent".into()))
+                );
+                assert_eq!(metadata.canonical_key, None);
+            }
+        }
     }
-    assert_ne!(results[0], results[1]);
     Ok(())
+}
+
+async fn component(agent: &HttpTestContext) -> anyhow::Result<ComponentDto> {
+    agent
+        .user
+        .get_latest_component_revision(&agent.component_id)
+        .await
+}
+
+/// Creates an agent of `agent_type` without a key and returns its ID.
+async fn existing_agent(
+    agent: &HttpTestContext,
+    agent_type: &str,
+    id: &str,
+) -> anyhow::Result<Uuid> {
+    let created = create_agent(
+        &agent.user,
+        &component(agent).await?,
+        &agent_key!(agent_type, id.to_string()),
+    )
+    .await?;
+    Ok(created.agent_id.0)
+}
+
+/// An ID with the type tag of `agent_type` that no agent has.
+async fn unknown_agent(agent: &HttpTestContext, agent_type: &str) -> anyhow::Result<Uuid> {
+    let type_id = agent_type_id(
+        &agent.user,
+        &component(agent).await?,
+        &AgentTypeName(agent_type.into()),
+    )
+    .await?;
+    Ok(AgentId::random(type_id).0)
+}
+
+async fn assert_not_created(agent: &HttpTestContext, agent_id: Uuid) -> anyhow::Result<()> {
+    assert!(
+        agent
+            .user
+            .get_worker_metadata_opt(&OwnedAgentId::new(agent.env_id, &AgentId(agent_id)))
+            .await?
+            .is_none(),
+        "a selector must not create agent {agent_id}"
+    );
+    Ok(())
+}
+
+async fn status(agent: &HttpTestContext, method: Method, path: &str) -> anyhow::Result<StatusCode> {
+    Ok(agent
+        .client
+        .request(method, agent.base_url.join(path)?)
+        .send()
+        .await?
+        .status())
 }
 
 fn header(response: &Response, name: &str) -> String {
@@ -229,13 +497,14 @@ async fn selected_stream_roots_forks_receipts_and_links(
 ) -> anyhow::Result<()> {
     let agent = context(deps).await?;
     let id = Uuid::new_v4().to_string();
-    let base = format!("/selected-query/{id}/echo");
+    let base = "/selected-query/echo";
     let source = format!("{base}/invocations/s1/streams/input");
     let fork_path = format!("{base}/forks/branch/invocations/s1/streams/input");
-    let p = Uuid::new_v4();
-    let q = Uuid::new_v4();
+    let p = existing_agent(&agent, "SelectedQueryAgent", &id).await?;
+    let q = existing_agent(&agent, "SelectedQueryAgent", &id).await?;
+    let original = existing_agent(&agent, "SelectedQueryAgent", &id).await?;
     let mut p_cut = String::new();
-    for (root, label) in [(None, "original"), (Some(p), "P"), (Some(q), "Q")] {
+    for (root, label) in [(Some(original), "original"), (Some(p), "P"), (Some(q), "Q")] {
         let source_url = selected(&source, root);
         let created = agent
             .client
@@ -368,13 +637,8 @@ async fn selected_stream_roots_forks_receipts_and_links(
         &routes.deployment_revision.to_string(),
         &family.to_string(),
     );
-    let root = phantom_agent_id!("SelectedQueryAgent", p, id.clone()).to_string();
-    let identity = serde_json::to_vec(&(&root, &scope, "branch"))?;
-    let hash = blake3::hash(&identity);
-    let mut bytes: [u8; 16] = hash.as_bytes()[..16].try_into()?;
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let known_fork = Uuid::from_bytes(bytes);
+    let root = AgentId(p);
+    let known_fork = AgentId::durable_stream_fork(routes.environment_id, root, &scope, "branch").0;
     read(
         &agent,
         &selected(&source, Some(known_fork)),
@@ -414,14 +678,16 @@ async fn selected_stream_roots_forks_receipts_and_links(
             .status(),
         StatusCode::GONE
     );
-    read(&agent, &source, json!(["original"])).await?;
+    read(
+        &agent,
+        &selected(&source, Some(original)),
+        json!(["original"]),
+    )
+    .await?;
     read(&agent, &selected(&source, Some(q)), json!(["Q"])).await?;
     read(&agent, &p_fork, json!(["P", "fork-P", "P-fork-only"])).await?;
 
-    let selected_worker = AgentId {
-        component_id: agent.component_id,
-        agent_id: root,
-    };
+    let selected_worker = OwnedAgentId::new(routes.environment_id, &root);
     tokio::time::timeout(std::time::Duration::from_secs(20), async {
         loop {
             if agent
@@ -445,7 +711,14 @@ async fn selected_stream_roots_forks_receipts_and_links(
     assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
     assert!(failed.text().await?.contains("stream slot deleted"));
 
-    let generated_root = Uuid::new_v4();
+    let unknown = unknown_agent(&agent, "SelectedQueryAgent").await?;
+    assert_eq!(
+        status(&agent, Method::PUT, &selected(&base, Some(unknown))).await?,
+        StatusCode::NOT_FOUND
+    );
+    assert_not_created(&agent, unknown).await?;
+
+    let generated_root = existing_agent(&agent, "SelectedQueryAgent", &id).await?;
     let generated = agent
         .client
         .put(
@@ -480,7 +753,7 @@ async fn selected_stream_roots_forks_receipts_and_links(
             .send()
             .await?
             .status(),
-        StatusCode::NOT_FOUND
+        StatusCode::BAD_REQUEST
     );
     Ok(())
 }
@@ -493,9 +766,10 @@ async fn selected_phantom_signed_callback_stays_on_selected_identity(
     use axum::{Router, body::Bytes, routing::post};
     let agent = context(deps).await?;
     let id = Uuid::new_v4();
-    let p = Uuid::new_v4();
-    let base = format!("/selected-query/{id}");
-    set(&agent, &format!("{base}/set/11")).await?;
+    let p = existing_agent(&agent, "SelectedQueryAgent", &id.to_string()).await?;
+    let base = "/selected-query";
+    let original = existing_agent(&agent, "SelectedQueryAgent", &id.to_string()).await?;
+    set(&agent, &selected(&format!("{base}/set/11"), Some(original))).await?;
     set(&agent, &selected(&format!("{base}/set/37"), Some(p))).await?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let callback_server = format!("http://127.0.0.1:{}/", listener.local_addr()?.port());
@@ -547,6 +821,11 @@ async fn selected_phantom_signed_callback_stays_on_selected_identity(
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.json::<Value>().await?, json!(93));
     state(&agent, &selected(&format!("{base}/state"), Some(p)), 93).await?;
-    state(&agent, &format!("{base}/state"), 11).await?;
+    state(
+        &agent,
+        &selected(&format!("{base}/state"), Some(original)),
+        11,
+    )
+    .await?;
     Ok(())
 }

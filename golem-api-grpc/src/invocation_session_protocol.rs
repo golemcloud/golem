@@ -104,6 +104,7 @@ pub struct InvocationSessionState {
     outputs: HashMap<u64, OutputState>,
     expected_tool: Option<(String, Vec<String>, bool, bool, bool)>,
     allows_no_result: bool,
+    allows_any_result_kind: bool,
 }
 
 impl Default for InvocationSessionState {
@@ -128,6 +129,7 @@ impl Default for InvocationSessionState {
             outputs: HashMap::new(),
             expected_tool: None,
             allows_no_result: false,
+            allows_any_result_kind: false,
         }
     }
 }
@@ -424,6 +426,7 @@ impl InvocationSessionState {
                     (None, None)
                         if mode == crate::proto::golem::worker::AgentInvocationMode::Lookup =>
                     {
+                        self.allows_any_result_kind = true;
                         Ok(())
                     }
                     (Some(_), Some(_)) | (None, None) => Err(
@@ -594,7 +597,7 @@ impl InvocationSessionState {
         self.idempotency_key = Some(*key);
         self.resume = true;
         self.resume_cursors = cursors;
-        self.resume_agent_id = resume.agent_id.clone();
+        self.resume_agent_id = resume.agent_id;
         self.resume_environment_id = resume.environment_id;
         self.resume_attachment_id = resume.attachment_id;
         self.resume_attempt_id = resume.attempt_id;
@@ -618,9 +621,7 @@ impl InvocationSessionState {
             .agent_id
             .as_ref()
             .ok_or_else(|| "invocation acceptance has no agent identity".to_string())?;
-        if agent_id.name.is_empty() {
-            return Err("invocation acceptance has an empty agent name".to_string());
-        }
+        validate_agent_id(agent_id, "invocation acceptance agent ID")?;
         if accepted.joined_origin_observer
             && (self.resume
                 || accepted.attachment_id.is_some()
@@ -833,7 +834,7 @@ impl InvocationSessionState {
                     ),
                 }
             }
-            self.accepted_agent_id = Some(agent_id.clone());
+            self.accepted_agent_id = Some(*agent_id);
             self.accepted_revision = accepted.component_revision;
             self.accepted_epoch = Some(accepted.epoch);
             self.phase = SessionPhase::Active;
@@ -943,7 +944,7 @@ impl InvocationSessionState {
             }
         }
         self.idempotency_key = Some(*invocation_key);
-        self.accepted_agent_id = Some(agent_id.clone());
+        self.accepted_agent_id = Some(*agent_id);
         self.accepted_revision = accepted.component_revision;
         self.accepted_epoch = durable_acceptance.then_some(accepted.epoch);
         self.joined_origin_observer = accepted.joined_origin_observer;
@@ -979,7 +980,7 @@ impl InvocationSessionState {
                 Vec::new()
             }
             Some(invocation_session_result::Result::ToolResult(tool_result)) => {
-                if self.expected_tool.is_none() {
+                if self.expected_tool.is_none() && !self.allows_any_result_kind {
                     return Err(
                         "agent-method invocation returned an external-tool result".to_string()
                     );
@@ -1869,14 +1870,7 @@ fn required_uuid<'a>(
 }
 
 fn validate_agent_id(agent_id: &AgentId, field: &str) -> Result<(), String> {
-    if agent_id.name.is_empty() {
-        return Err(format!("{field} has an empty agent name"));
-    }
-    let component_id = agent_id
-        .component_id
-        .as_ref()
-        .ok_or_else(|| format!("{field} has no component ID"))?;
-    required_uuid(&component_id.value, &format!("{field} component ID"))?;
+    required_uuid(&agent_id.value, field)?;
     Ok(())
 }
 
@@ -2185,7 +2179,6 @@ fn stream_references(value: &SchemaValue) -> Result<Vec<u64>, String> {
 mod tests {
     use super::*;
     use crate::proto::golem::common::EnvironmentId;
-    use crate::proto::golem::component::ComponentId;
     use crate::proto::golem::worker::{
         AttachmentRevoked, InputStreamHighWater, InvocationFailure, InvocationRejected,
         InvocationStart, OutputStreamItem, ResumeAttach, StreamConsumerCancelled, StreamCursor,
@@ -2303,10 +2296,7 @@ mod tests {
 
     fn agent_id() -> AgentId {
         AgentId {
-            component_id: Some(ComponentId {
-                value: Some(uuid(20)),
-            }),
-            name: "agent".to_string(),
+            value: Some(uuid(20)),
         }
     }
 
@@ -3136,9 +3126,9 @@ mod tests {
 
         let mut forwarded = mapping(7, StreamMappingRole::Input);
         let handle = forwarded.handle.as_mut().unwrap();
-        handle.producer.as_mut().unwrap().name = "original-producer".to_string();
+        handle.producer.as_mut().unwrap().value = Some(uuid(21));
         let source = handle.source_invocation.as_mut().unwrap();
-        source.callee.as_mut().unwrap().name = "original-producer".to_string();
+        source.callee.as_mut().unwrap().value = Some(uuid(21));
         source.idempotency_key = Some(uuid(7));
 
         let mut acceptance = accepted();
@@ -3298,7 +3288,7 @@ mod tests {
                 0 => result.idempotency_key = None,
                 1 => result.idempotency_key.as_mut().unwrap().high_bits += 1,
                 2 => result.idempotency_key.as_mut().unwrap().low_bits += 1,
-                3 => result.agent_id.as_mut().unwrap().name = "other-agent".to_string(),
+                3 => result.agent_id.as_mut().unwrap().value = Some(uuid(22)),
                 _ => unreachable!(),
             }
             assert!(state.validate_response(&invalid).is_err());
@@ -3484,7 +3474,7 @@ mod tests {
                 unreachable!()
             };
             match mutate {
-                0 => accepted.agent_id.as_mut().unwrap().name = "other".to_string(),
+                0 => accepted.agent_id.as_mut().unwrap().value = Some(uuid(22)),
                 1 => accepted.environment_id.as_mut().unwrap().value = Some(uuid(30)),
                 2 => accepted.attachment_id = Some(uuid(31)),
                 3 => accepted.attempt_id = Some(uuid(32)),
@@ -4599,6 +4589,56 @@ mod tests {
                 mode != AgentInvocationMode::Await
             );
         }
+    }
+
+    #[test]
+    fn only_a_lookup_without_method_or_tool_accepts_both_result_kinds() {
+        use crate::proto::golem::worker::{
+            AgentInvocationMode, PublicExternalToolResult, PublicToolInvocationResult,
+        };
+
+        let tool_result = response(invocation_response::Response::Result(
+            InvocationSessionResult {
+                result: Some(invocation_session_result::Result::ToolResult(
+                    PublicExternalToolResult {
+                        result: Some(public_external_tool_result::Result::Success(
+                            PublicToolInvocationResult { result: None },
+                        )),
+                    },
+                )),
+                agent_id: Some(agent_id()),
+                idempotency_key: invocation_key(),
+                ..Default::default()
+            },
+        ));
+        for (method_name, valid) in [(None, true), (Some("run".to_string()), false)] {
+            let mut state = InvocationSessionState::default();
+            state
+                .validate_trusted_request(&trusted_request(invocation_request::Request::Start(
+                    InvocationStart {
+                        idempotency_key: key(),
+                        mode: AgentInvocationMode::Lookup as i32,
+                        method_name,
+                        ..Default::default()
+                    },
+                )))
+                .unwrap();
+            state.validate_response(&accepted()).unwrap();
+            assert_eq!(state.validate_response(&tool_result).is_ok(), valid);
+        }
+
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_trusted_request(&trusted_request(invocation_request::Request::Start(
+                InvocationStart {
+                    idempotency_key: key(),
+                    mode: AgentInvocationMode::Lookup as i32,
+                    ..Default::default()
+                },
+            )))
+            .unwrap();
+        state.validate_response(&accepted()).unwrap();
+        state.validate_response(&result(scalar(1))).unwrap();
     }
 
     #[test]

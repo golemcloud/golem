@@ -70,6 +70,7 @@ impl CreateOplogConstructor {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogConstructor for CreateOplogConstructor {
     fn shard_epoch(&self) -> Option<ShardEpoch> {
         self.shard_epoch
@@ -191,6 +192,7 @@ impl Debug for ForwardingOplogService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogService for ForwardingOplogService {
     async fn lock_lifecycle(&self, agent_id: &AgentId) -> OplogLifecycleGuard {
         self.inner.lock_lifecycle(agent_id).await
@@ -441,16 +443,16 @@ impl OplogService for ForwardingOplogService {
         self.inner.try_exists(owned_agent_id, agent_mode).await
     }
 
-    async fn scan_for_component(
+    async fn scan_for_type(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        type_id: TypeId,
         modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<ScanPage, WorkerExecutorError> {
         self.inner
-            .scan_for_component(environment_id, component_id, modes, cursor, count)
+            .scan_for_type(environment_id, type_id, modes, cursor, count)
             .await
     }
 

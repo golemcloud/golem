@@ -13,10 +13,12 @@
 // limitations under the License.
 
 pub mod account;
+pub mod account_path;
 pub mod account_usage;
 pub mod address_class;
 pub mod agent;
 pub mod agent_config;
+pub(crate) mod agent_id;
 pub mod agent_secret;
 pub mod api;
 pub mod application;
@@ -51,6 +53,7 @@ pub mod optional_field_update;
 pub mod path;
 pub mod permission_share;
 pub mod plan;
+pub mod plan_dimension;
 pub mod plugin_registration;
 pub mod quota;
 pub mod regions;
@@ -70,7 +73,6 @@ pub use durable_stream::*;
 pub use invocation_id::{IdempotencyScope, InvocationRequestKey, OwnedInvocationId};
 pub use worker_filter::*;
 
-use crate::base_model::component::ComponentId;
 use crate::{declare_structs, newtype_uuid};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::Ordering;
@@ -201,25 +203,7 @@ impl ShardId {
     }
 
     pub fn hash_agent_id(agent_id: &AgentId) -> i64 {
-        let (high_bits, low_bits) = (
-            (agent_id.component_id.0.as_u128() >> 64) as i64,
-            agent_id.component_id.0.as_u128() as i64,
-        );
-        let high = Self::hash_string(&high_bits.to_string());
-        let agent_name = &agent_id.agent_id;
-        let component_agent_name = format!("{low_bits}{agent_name}");
-        let low = Self::hash_string(&component_agent_name);
-        ((high as i64) << 32) | ((low as i64) & 0xFFFFFFFF)
-    }
-
-    fn hash_string(string: &str) -> i32 {
-        let mut hash = 0;
-        if hash == 0 && !string.is_empty() {
-            for val in &mut string.bytes() {
-                hash = 31_i32.wrapping_mul(hash).wrapping_add(val as i32);
-            }
-        }
-        hash
+        agent_id.routing_hash()
     }
 
     pub fn is_left_neighbor(&self, other: &ShardId) -> bool {
@@ -233,83 +217,7 @@ impl Display for ShardId {
     }
 }
 
-#[derive(
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Ord,
-    PartialOrd,
-    Hash,
-    serde::Serialize,
-    serde::Deserialize,
-    golem_schema_derive::IntoSchema,
-    golem_schema_derive::FromSchema,
-)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-#[schema(named = "agent-id")]
-pub struct AgentId {
-    pub component_id: ComponentId,
-    pub agent_id: String,
-}
-
-impl AgentId {
-    pub fn to_redis_key(&self) -> String {
-        format!("{}:{}", self.component_id.0, self.agent_id)
-    }
-
-    pub fn to_agent_urn(&self) -> String {
-        format!("urn:worker:{}/{}", self.component_id, self.agent_id)
-    }
-
-    /// Gives the agent name in percent-encoding. The function encodes each character that is not
-    /// an unreserved URL character, so the result is one segment of a URL path.
-    ///
-    /// The result can be longer than a file name can be, so it is not a directory name.
-    pub fn agent_name_encoded(&self) -> String {
-        urlencoding::encode(&self.agent_id).into_owned()
-    }
-}
-
-impl FromStr for AgentId {
-    type Err = String;
-
-    /// Reads `<component_id>:<agent_name>`. The function splits the text at its first `:`,
-    /// because a component id holds no `:` and an agent name can hold one.
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Some((component_id, agent_name)) = s.split_once(':') {
-            let component_id_uuid = Uuid::from_str(component_id)
-                .map_err(|_| format!("invalid component id: {s} - expected uuid"))?;
-            let component_id = ComponentId(component_id_uuid);
-            Ok(Self {
-                component_id,
-                agent_id: agent_name.to_string(),
-            })
-        } else {
-            Err(format!(
-                "invalid agent id: {s} - expected format: <component_id>:<agent_name>"
-            ))
-        }
-    }
-}
-
-impl Display for AgentId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&format!("{}/{}", self.component_id, self.agent_id))
-    }
-}
-
-impl AsRef<AgentId> for &AgentId {
-    fn as_ref(&self) -> &AgentId {
-        self
-    }
-}
+pub use agent_id::{AgentId, RESERVED_TYPE_TAG};
 
 // The schema of `PromiseId` is implemented in `schema::common_impls`: it follows the WIT
 // `promise-id` record, whose `fingerprint` is a plain `uuid`.
@@ -330,12 +238,12 @@ pub struct PromiseId {
 }
 
 impl PromiseId {
-    pub fn to_redis_key(&self) -> String {
+    /// The storage key of the promise of an agent in the environment:
+    /// `{env-uuid}/{agent-uuid}:{fingerprint}:{oplog-index}`.
+    pub fn storage_key(&self, environment_id: environment::EnvironmentId) -> String {
         format!(
-            "{}:{}:{}",
-            self.agent_id.to_redis_key(),
-            self.fingerprint,
-            self.oplog_idx
+            "{environment_id}/{}:{}:{}",
+            self.agent_id, self.fingerprint, self.oplog_idx
         )
     }
 }
@@ -953,27 +861,30 @@ fn canonicalize_agent_path(path: &[String]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentId, ComponentId};
+    use super::AgentId;
     use std::str::FromStr;
     use test_r::test;
-    use uuid::Uuid;
 
     #[test]
-    fn an_agent_id_text_splits_at_its_first_colon() {
-        let component_id = Uuid::from_u128(0x0d9f6c1e2b8a4f3d9e7c5a4b3c2d1e0f);
-
+    fn an_agent_id_round_trips_through_every_encoding() {
+        let id = AgentId::from_parts(7, 0x2AA_AAAA_AAAA_AAAA_AAAA_AAAA);
+        let text = "00000007-aaaa-8aaa-aaaa-aaaaaaaaaaaa";
+        assert_eq!(id.to_string(), text);
+        assert_eq!(AgentId::from_str(text), Ok(id));
         assert_eq!(
-            (
-                AgentId::from_str(&format!(r#"{component_id}:counter("a:b")"#)),
-                AgentId::from_str(r#"counter("a")"#).is_err(),
-            ),
-            (
-                Ok(AgentId {
-                    component_id: ComponentId(component_id),
-                    agent_id: r#"counter("a:b")"#.to_string(),
-                }),
-                true,
-            )
+            AgentId::from_str("00000007-AAAA-8AAA-AAAA-AAAAAAAAAAAA"),
+            Ok(id)
         );
+        assert!(AgentId::from_str(r#"counter("a")"#).is_err());
+        assert_eq!(serde_json::to_string(&id).unwrap(), format!("\"{text}\""));
+        assert_eq!(
+            serde_json::from_str::<AgentId>(&format!("\"{text}\"")).unwrap(),
+            id
+        );
+        let bytes = desert_rust::serialize_to_byte_vec(&id).unwrap();
+        assert_eq!(bytes.len(), 16);
+        assert_eq!(desert_rust::deserialize::<AgentId>(&bytes).unwrap(), id);
+        let proto: golem_api_grpc::proto::golem::worker::AgentId = id.into();
+        assert_eq!(AgentId::try_from(proto), Ok(id));
     }
 }

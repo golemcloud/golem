@@ -163,6 +163,7 @@ pub async fn validate_scope_card(
 pub struct NoopCardService;
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl CardService for NoopCardService {
     async fn record_revoked_cards(&self, _card_ids: &[CardId]) {}
 
@@ -270,6 +271,7 @@ impl CardServiceDefault {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl CardService for CardServiceDefault {
     async fn record_revoked_cards(&self, card_ids: &[CardId]) {
         let mut state = self.state.write().await;

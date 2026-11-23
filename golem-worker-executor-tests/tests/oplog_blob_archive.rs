@@ -19,9 +19,9 @@ use aws_sdk_s3::Client;
 use aws_sdk_s3::config::Credentials;
 use golem_common::config::RedisConfig;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{LogLevel, OplogEntry, OplogIndex};
+use golem_common::model::type_id::TypeId;
 use golem_common::model::{AgentId, OwnedAgentId, RetryConfig, ScanCursor, ShardEpoch};
 use golem_common::redis::RedisPool;
 use golem_service_base::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
@@ -221,7 +221,7 @@ async fn append_worker(
 async fn drain(
     service: &BlobOplogArchiveService,
     environment_id: &EnvironmentId,
-    component_id: &ComponentId,
+    type_id: TypeId,
     modes: Option<AgentMode>,
     page_size: u64,
 ) -> Vec<OwnedAgentId> {
@@ -229,7 +229,7 @@ async fn drain(
     let mut acc: Vec<OwnedAgentId> = Vec::new();
     loop {
         let (next_cursor, ids) = service
-            .scan_for_component(environment_id, component_id, modes, cursor, page_size)
+            .scan_for_type(environment_id, type_id, modes, cursor, page_size)
             .await
             .unwrap();
         assert!(ids.len() as u64 <= page_size);
@@ -239,17 +239,17 @@ async fn drain(
         }
         cursor = next_cursor;
     }
-    acc.sort_by(|a, b| a.agent_id.agent_id.cmp(&b.agent_id.agent_id));
+    acc.sort_by_key(|owned| owned.agent_id);
     acc
 }
 
 /// The blob oplog archive holds the lowest-layer copies of ephemeral (and
-/// archived durable) workers. This test verifies that `scan_for_component`
+/// archived durable) workers. This test verifies that `scan_for_type`
 /// against the blob archive lists workers correctly and filters by agent mode,
 /// running the same checks against both an in-memory backend and a real
 /// S3-compatible (RustFS) backend.
 #[test]
-async fn blob_archive_scan_for_component_filters_by_mode(
+async fn blob_archive_scan_for_type_filters_by_mode(
     #[dimension(storage)] storage: &Arc<dyn GetBlobStorage + Send + Sync>,
 ) {
     let blob_storage = storage.get_blob_storage().await;
@@ -263,43 +263,35 @@ async fn blob_archive_scan_for_component_filters_by_mode(
     );
 
     let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
+    let type_id = TypeId::try_from(7u32).unwrap();
 
-    let make_owned = |name: String| {
-        OwnedAgentId::new(
-            environment_id,
-            &AgentId {
-                component_id,
-                agent_id: name,
-            },
-        )
-    };
+    let make_owned = || OwnedAgentId::new(environment_id, &AgentId::random(type_id));
 
     let mut ephemeral = Vec::new();
-    for i in 0..5 {
-        let owned = make_owned(format!("eph-{i}"));
+    for _ in 0..5 {
+        let owned = make_owned();
         append_worker(&service, &owned, AgentMode::Ephemeral).await;
         ephemeral.push(owned);
     }
     let mut durable = Vec::new();
-    for i in 0..3 {
-        let owned = make_owned(format!("dur-{i}"));
+    for _ in 0..3 {
+        let owned = make_owned();
         append_worker(&service, &owned, AgentMode::Durable).await;
         durable.push(owned);
     }
 
     let mut expected_ephemeral = ephemeral.clone();
-    expected_ephemeral.sort_by(|a, b| a.agent_id.agent_id.cmp(&b.agent_id.agent_id));
+    expected_ephemeral.sort_by_key(|owned| owned.agent_id);
     let mut expected_durable = durable.clone();
-    expected_durable.sort_by(|a, b| a.agent_id.agent_id.cmp(&b.agent_id.agent_id));
+    expected_durable.sort_by_key(|owned| owned.agent_id);
     let mut expected_both: Vec<OwnedAgentId> = ephemeral.into_iter().chain(durable).collect();
-    expected_both.sort_by(|a, b| a.agent_id.agent_id.cmp(&b.agent_id.agent_id));
+    expected_both.sort_by_key(|owned| owned.agent_id);
 
     assert_eq!(
         drain(
             &service,
             &environment_id,
-            &component_id,
+            type_id,
             Some(AgentMode::Ephemeral),
             100
         )
@@ -310,7 +302,7 @@ async fn blob_archive_scan_for_component_filters_by_mode(
         drain(
             &service,
             &environment_id,
-            &component_id,
+            type_id,
             Some(AgentMode::Durable),
             100
         )
@@ -318,18 +310,18 @@ async fn blob_archive_scan_for_component_filters_by_mode(
         expected_durable
     );
     assert_eq!(
-        drain(&service, &environment_id, &component_id, None, 100).await,
+        drain(&service, &environment_id, type_id, None, 100).await,
         expected_both
     );
     assert_eq!(
-        drain(&service, &environment_id, &component_id, None, 2).await,
+        drain(&service, &environment_id, type_id, None, 2).await,
         expected_both
     );
 
-    // A component with no archived workers yields an empty scan.
-    let empty_component_id = ComponentId::new();
+    // A type with no archived workers yields an empty scan.
+    let empty_type_id = TypeId::try_from(8u32).unwrap();
     assert_eq!(
-        drain(&service, &environment_id, &empty_component_id, None, 100).await,
+        drain(&service, &environment_id, empty_type_id, None, 100).await,
         Vec::<OwnedAgentId>::new()
     );
 }
@@ -477,13 +469,7 @@ async fn blob_chunk_listed_by_an_append_with_a_lost_reply_stays_readable(
     let through_relay = blob_level("127.0.0.1".to_string(), relay.port).await;
     let direct = blob_level(redis.public_host(), redis.public_port()).await;
 
-    let owned_agent_id = OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "lost-append-reply".to_string(),
-        },
-    );
+    let owned_agent_id = crate::fresh_owned_agent_id();
     let log = || OplogEntry::log(None, LogLevel::Debug, "test".into(), "test".into(), None);
     let entries = vec![
         (OplogIndex::INITIAL, log()),
@@ -758,19 +744,16 @@ async fn an_unlisted_blob_object_is_never_read_on_s3() {
         inner: s3.s3_storage().await,
         reads: AtomicUsize::new(0),
     });
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "unlisted-blob-object".to_string(),
-    };
-    let environment_id = EnvironmentId::new();
-    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let owned_agent_id = crate::fresh_owned_agent_id();
+    let environment_id = owned_agent_id.environment_id;
+    let agent_id = owned_agent_id.agent_id;
     storage
         .put_raw(
             "blob_oplog",
             "test",
             BlobStorageNamespace::CompressedOplog {
                 environment_id,
-                component_id: agent_id.component_id,
+                type_tag: agent_id.type_tag(),
                 agent_mode: AgentMode::Durable,
                 level: 0,
             },
@@ -872,13 +855,7 @@ async fn each_level_of_the_compressed_oplog_keeps_its_own_chunks(
         )
     };
     let (first, second) = (level(0), level(1));
-    let owned_agent_id = OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "levels".to_string(),
-        },
-    );
+    let owned_agent_id = crate::fresh_owned_agent_id();
     let log = |message: &str| {
         OplogEntry::log(
             None,

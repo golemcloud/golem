@@ -20,7 +20,6 @@ use desert_rust::{BinaryDeserializer, BinarySerializer};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFingerprint, AgentId, Timestamp};
 use golem_common::serialization::{deserialize, serialize};
@@ -1225,9 +1224,11 @@ pub enum BlobStorageNamespace {
         agent_id: AgentId,
         agent_mode: AgentMode,
     },
+    /// The archived oplogs of the agents of one type: `type_tag` is the type tag of their agent
+    /// IDs.
     CompressedOplog {
         environment_id: EnvironmentId,
-        component_id: ComponentId,
+        type_tag: u32,
         agent_mode: AgentMode,
         level: usize,
     },
@@ -1254,37 +1255,11 @@ pub enum PutIfAbsent {
     AlreadyExists,
 }
 
-/// Gives one path segment for an agent, which a backend can use as a directory name.
-///
-/// The segment is the agent name with each character that is not an ASCII letter, a digit, `-` or
-/// `_` replaced by `_`. The name is cut to 32 characters, and an empty name gives `agent`. Then
-/// come `-` and the blake3 hash of the full agent id, which holds the component id and the agent
-/// name. So the segment has at most 97 bytes, and it holds no separator and no `.` segment. The
-/// hash makes it very unlikely that two agents get the same segment. An agent name can be longer
-/// than a file name, and it can hold `/`, `\` and `.` segments. So a backend does not use the agent
-/// name itself.
+/// Gives one path segment for an agent, which a backend can use as a directory name: the
+/// lower-case text of the agent ID. It is 36 bytes of hex digits and `-`, so it holds no
+/// separator and no `.` segment.
 pub fn agent_path_segment(agent_id: &AgentId) -> String {
-    let logical = agent_id.to_string();
-    let digest = blake3::hash(logical.as_bytes()).to_hex();
-
-    let mut sanitized_prefix = String::with_capacity(32);
-    for ch in agent_id.agent_id.chars() {
-        if sanitized_prefix.len() >= 32 {
-            break;
-        }
-
-        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
-            sanitized_prefix.push(ch);
-        } else {
-            sanitized_prefix.push('_');
-        }
-    }
-
-    if sanitized_prefix.is_empty() {
-        sanitized_prefix.push_str("agent");
-    }
-
-    format!("{sanitized_prefix}-{digest}")
+    agent_id.to_string()
 }
 
 /// Gives the segments of the location of a namespace in a backend that keeps all namespaces in
@@ -1310,20 +1285,18 @@ pub(crate) fn namespace_segments(namespace: &BlobStorageNamespace) -> Vec<String
             "oplog_payload".to_string(),
             agent_mode_prefix(*agent_mode).to_string(),
             environment_id.to_string(),
-            // A bounded segment of the agent, because an agent id can be longer than a file
-            // name, and it can hold `/`, `\` and `.` segments.
             agent_path_segment(agent_id),
         ],
         BlobStorageNamespace::CompressedOplog {
             environment_id,
-            component_id,
+            type_tag,
             agent_mode,
             level,
         } => vec![
             "compressed_oplog".to_string(),
             agent_mode_prefix(*agent_mode).to_string(),
             environment_id.to_string(),
-            component_id.to_string(),
+            format!("{type_tag:08x}"),
             level.to_string(),
         ],
         BlobStorageNamespace::InitialAgentFiles { environment_id } => {
@@ -2033,7 +2006,6 @@ mod tests {
     };
     use anyhow::{Context, anyhow};
     use golem_common::model::AgentId;
-    use golem_common::model::component::ComponentId;
     use pretty_assertions::assert_eq;
     use std::path::{Path, PathBuf};
     use test_r::test;
@@ -2258,27 +2230,32 @@ mod tests {
         );
     }
 
-    /// The guest gives its names as text, so only a path of another source can break this
-    /// rule. `normalized_blob_path` gives the error, so no `NormalizedBlobPath` holds such a
-    /// path and the functions that read the one form cannot get one.
     #[cfg(unix)]
-    #[test]
-    fn a_path_that_is_not_utf8_gives_the_utf8_rule() {
+    mod unix {
+        use super::*;
+        use pretty_assertions::assert_eq;
         use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt;
+        use test_r::test;
 
-        let path = Path::new(OsStr::from_bytes(b"a/\xff"));
-        let expected = BlobNameError::NotUtf8 {
-            path: path.to_path_buf(),
-        };
+        /// The guest gives its names as text, so only a path of another source can break this
+        /// rule. `normalized_blob_path` gives the error, so no `NormalizedBlobPath` holds such a
+        /// path and the functions that read the one form cannot get one.
+        #[test]
+        fn a_path_that_is_not_utf8_gives_the_utf8_rule() {
+            let path = Path::new(OsStr::from_bytes(b"a/\xff"));
+            let expected = BlobNameError::NotUtf8 {
+                path: path.to_path_buf(),
+            };
 
-        assert_eq!(
-            (
-                normalized_blob_path(path).map(|path| path.to_path_buf()),
-                blob_path_to_string(path),
-            ),
-            (Err(expected.clone()), Err(expected))
-        );
+            assert_eq!(
+                (
+                    normalized_blob_path(path).map(|path| path.to_path_buf()),
+                    blob_path_to_string(path),
+                ),
+                (Err(expected.clone()), Err(expected))
+            );
+        }
     }
 
     /// A guest picks the name of its container and the name of its object, so it can give two
@@ -2308,28 +2285,12 @@ mod tests {
         );
     }
 
-    /// The segment is the agent name with each character that is not an ASCII letter, a digit, `-`
-    /// or `_` replaced by `_`. The name is cut to 32 characters, and an empty name gives `agent`.
-    /// Then come `-` and the blake3 hash of the full agent id. The first agent name here is longer
-    /// than 32 characters and holds characters that the segment replaces. The second name is empty.
     #[test]
-    fn the_path_segment_of_an_agent_keeps_its_form() {
-        let component_id =
-            ComponentId(uuid::Uuid::parse_str("0d9f6c1e-2b8a-4f3d-9e7c-5a4b3c2d1e0f").unwrap());
-        let segments = [r#"counter("a/../b", 12345678901234567890)"#, ""].map(|agent| {
-            agent_path_segment(&AgentId {
-                component_id,
-                agent_id: agent.to_string(),
-            })
-        });
-
+    fn the_path_segment_of_an_agent_is_its_id() {
+        let agent_id: AgentId = "0000000A-0cfd-8d08-825f-B29B4E7457AD".parse().unwrap();
         assert_eq!(
-            segments,
-            [
-                "counter__a____b___12345678901234-97f0841e19646b6f20282e1d316187fb327b2df867064639c28e15d22dd797ec"
-                    .to_string(),
-                "agent-6a683fb8dbe943ef400d01ca02589e2b93eb9e982cfff9bf930fdcad6787107f".to_string(),
-            ]
+            agent_path_segment(&agent_id),
+            "0000000a-0cfd-8d08-825f-b29b4e7457ad"
         );
     }
 

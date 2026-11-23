@@ -17,18 +17,17 @@ package golem
 import (
 	"fmt"
 	"reflect"
-	"slices"
 
 	"github.com/golemcloud/golem/sdks/go/golem/internal/identity"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
-	apiHost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
 // Client addresses one agent instance for remote calls. It is produced by
-// [AgentDefinition.Get] and consumed by the call methods on [MethodDef].
+// [AgentDefinition.Upsert], [AgentDefinition.Create] or
+// [AgentDefinition.GetByID], and consumed by the call methods on [MethodDef].
 //
 // The Id type parameter is what makes cross-agent calls type-safe: a
 // MethodDef[PaymentID, …] only accepts a Client[PaymentID], so aiming a method
@@ -39,13 +38,55 @@ import (
 type Client[Id any] struct {
 	rpc       *host.WasmRpc
 	agentType string
-	agentID   string
-	phantomID Option[UUID]
+	// id is shared by the copies of a client, so the ID that AgentID learns
+	// from the host is learned once.
+	id        *clientID
 	scopeCard ScopeCard
 }
 
-// AgentID returns the target's agent id, as resolved by the host.
-func (c Client[Id]) AgentID() string { return c.agentID }
+type clientID struct {
+	id    AgentID
+	known bool
+}
+
+func newClient[Id any](c identity.Connection) Client[Id] {
+	id := &clientID{}
+	if c.AgentID.IsSome() {
+		id.id, id.known = agentIDFromWit(c.AgentID.Some()), true
+	}
+	return Client[Id]{rpc: c.RPC, agentType: c.TypeName, id: id}
+}
+
+// AgentID returns the ID of the client's agent. A client of Upsert asks the
+// host for it the first time, and the host creates the agent when it is
+// missing; the other clients already know it. A failure is a
+// [RemoteCallError]. It panics on a zero Client.
+func (c Client[Id]) AgentID() (AgentID, error) {
+	if c.rpc == nil {
+		panic(fmt.Errorf("golem: AgentID: called on a zero Client"))
+	}
+	if c.id.known {
+		return c.id.id, nil
+	}
+	id, failure := identity.AgentID(identity.Connection{TypeName: c.agentType, AgentID: witTypes.None[types.AgentId](), RPC: c.rpc})
+	if failure != nil {
+		return AgentID{}, rpcErrorToGo(c.agentType, "<agent-id>", failure.RPCError)
+	}
+	c.id.id, c.id.known = agentIDFromWit(id), true
+	return c.id.id, nil
+}
+
+// MustAgentID is [Client.AgentID] that panics on a failure.
+func (c Client[Id]) MustAgentID() AgentID { return Must(c.AgentID()) }
+
+// target names the client's agent in errors: its ID when the client knows it,
+// and otherwise its agent type.
+func (c Client[Id]) target() string {
+	if c.id != nil && c.id.known {
+		return c.id.id.String()
+	}
+	return c.agentType
+}
 
 // WithScopeCard returns a copy of the client whose awaited calls — Call,
 // MustCall and CallAsync — carry card as their scope card, unless the call
@@ -61,125 +102,178 @@ func (c Client[Id]) WithScopeCard(card ScopeCard) Client[Id] {
 	return c
 }
 
-// PhantomID returns the phantom instance id this client addresses, or None for a
-// durable client. A [AgentDefinition.NewPhantom] client carries the freshly allocated id here
-// (re-address it later with [WithPhantomID]).
-func (c Client[Id]) PhantomID() Option[UUID] { return c.phantomID }
+// CreateOpt configures the agent that a Create makes.
+type CreateOpt func(*createOpts)
 
-// ClientOpt configures a client.
-type ClientOpt func(*clientOpts)
-
-type clientOpts struct {
-	phantomID witTypes.Option[types.Uuid]
-	configs   []configOverrideFn
+type createOpts struct {
+	keyed   bool
+	configs []configOverrideFn
+	env     []witTypes.Tuple2[string, string]
 }
 
-// WithPhantomID addresses a specific phantom instance of the target agent.
-// Use [AgentDefinition.NewPhantom] to allocate a fresh one.
-func WithPhantomID(id UUID) ClientOpt {
-	return func(o *clientOpts) { o.phantomID = witTypes.Some(uuidToWit(id)) }
+// Keyed makes Create create the keyed agent of the constructor parameters: the
+// agent that Upsert with the same parameters reaches. The create fails with a
+// [RemoteCallError] of kind [RemoteConflict] when that agent already exists.
+// Without Keyed, Create makes a new agent with a new ID and no key.
+func Keyed() CreateOpt { return func(o *createOpts) { o.keyed = true } }
+
+// WithEnv adds the environment variable name to the new agent's environment,
+// next to the ones its manifest defines. The caller's own environment is not
+// copied to the new agent.
+func WithEnv(name, value string) CreateOpt {
+	return func(o *createOpts) {
+		o.env = append(o.env, witTypes.Tuple2[string, string]{F0: name, F1: value})
+	}
 }
 
-// Get returns a client addressing the agent instance identified by id, or panics
-// if the target can't be resolved (a bad config override, or invalid
-// constructor parameters). The target is this component's own agent, so such a
-// failure is a programming or configuration error with no in-band recovery; the
-// panic traps the component, as in Rust.
+// createOptions builds the host's create options for an agent registered as
+// e. A config override that does not match the target's declarations is an
+// error. Pure.
+func createOptions(d *definitions, e *agentEntry, opts []CreateOpt) (host.CreateOptions, error) {
+	var o createOpts
+	for _, f := range opts {
+		f(&o)
+	}
+	agentConfig, err := buildAgentConfig(d, e, o.configs)
+	if err != nil {
+		return host.CreateOptions{}, err
+	}
+	return host.CreateOptions{Keyed: o.keyed, AgentConfig: agentConfig, Env: o.env}, nil
+}
+
+// encodeID encodes the constructor parameters of the agent registered under
+// name. An unknown name panics; an id that does not encode is an error.
+func encodeID[Id any](d *definitions, op, name string, id Id) (*agentEntry, types.SchemaValueTree, error) {
+	e := d.agents[name]
+	if e == nil {
+		panic(fmt.Errorf("golem: %s: unknown agent %s", op, name))
+	}
+	ctor, err := tryEncodeParams(e.idFields, reflect.ValueOf(&id).Elem())
+	if err != nil {
+		return e, ctor, fmt.Errorf("golem: %s %s: the id does not encode: %w", op, name, err)
+	}
+	return e, ctor, nil
+}
+
+// Upsert returns a client for the keyed agent of the constructor parameters id,
+// or panics if the host refuses it. The host creates the agent when it is
+// missing, without its configuration overrides; use [AgentDefinition.Create]
+// with [Keyed] to give a new keyed agent overrides. For an ephemeral agent,
+// each invocation runs on a new one-shot instance. The target is this
+// component's own agent, so a refusal is a programming or configuration error
+// with no in-band recovery; the panic traps the component, as in Rust.
 //
 // The id is encoded with the same codecs the target uses to decode its
 // constructor parameters — they are derived from the same Go types — so caller
 // and callee agree by construction rather than by convention.
-func (a *AgentDefinition[Id, Cfg]) Get(id Id, opts ...ClientOpt) Client[Id] {
-	return Must(getClient[Id](defs, a.name, id, opts))
+func (a *AgentDefinition[Id, Cfg]) Upsert(id Id) Client[Id] {
+	return Must(upsertClient[Id](defs, a.name, id))
 }
 
-// getClient builds a client for an agent registered under name. It is shared by
-// the local ([AgentDefinition.Get]) and client ([FullAgentClient.Get]) paths,
-// which differ only in how the target was declared, never in how it is called.
-//
-// Misuse — an unknown name, an ephemeral target without a phantom, an override
-// that does not match the declared config — panics. An id that does not encode,
-// and what only the host can check (the constructor parameters, whether the
-// target is deployed), is returned as an error.
-func getClient[Id any](d *definitions, name string, id Id, opts []ClientOpt) (Client[Id], error) {
-	e := d.agents[name]
-	if e == nil {
-		panic(fmt.Errorf("golem: Get: unknown agent %s", name))
-	}
-
-	var o clientOpts
-	o.phantomID = witTypes.None[types.Uuid]()
-	for _, f := range opts {
-		f(&o)
-	}
-	if err := requireIdentity(e, o.phantomID.IsSome()); err != nil {
-		panic(err)
-	}
-
-	ctor, err := tryEncodeParams(e.idFields, reflect.ValueOf(&id).Elem())
+// upsertClient builds a client of Upsert for an agent registered under name.
+// It is shared by the local ([AgentDefinition.Upsert]) and client
+// ([FullAgentClient.Upsert]) paths, which differ only in how the target was
+// declared, never in how it is called.
+func upsertClient[Id any](d *definitions, name string, id Id) (Client[Id], error) {
+	_, ctor, err := encodeID(d, "Upsert", name, id)
 	if err != nil {
-		return Client[Id]{}, fmt.Errorf("golem: Get %s: the id does not encode: %w", name, err)
+		return Client[Id]{}, err
 	}
-
-	// Encode and validate any config overrides against the target's declarations
-	// before touching the host, so a mistyped or undeclared key is a clear error.
-	agentConfig, err := buildAgentConfig(d, e, o.configs)
-	if err != nil {
-		panic(fmt.Errorf("golem: Get %s: %w", name, err))
-	}
-
-	// Resolve the id up front: it is wanted for error messages, and a failure
-	// here means the constructor parameters are wrong — better to surface that
-	// now than as an opaque not-found on the first call.
-	connected, failure := identity.Construct(name, ctor, o.phantomID, agentConfig)
+	connected, failure := identity.Upsert(name, ctor)
 	if failure != nil {
-		if failure.Stage == identity.ConstructStage {
-			return Client[Id]{}, fmt.Errorf("golem: Get %s: %w", name, agentErrorToGo(failure.AgentError))
-		}
-		return Client[Id]{}, rpcErrorToGo(name, "<constructor>", failure.RPCError)
+		return Client[Id]{}, rpcErrorToGo(name, "<upsert>", failure.RPCError)
 	}
-
-	phantomID := None[UUID]()
-	if o.phantomID.IsSome() {
-		phantomID = Some(uuidFromWit(o.phantomID.Some()))
-	}
-	return Client[Id]{
-		rpc:       connected.RPC,
-		agentType: name,
-		agentID:   connected.AgentID,
-		phantomID: phantomID,
-	}, nil
+	return newClient[Id](connected), nil
 }
 
-// requireIdentity refuses to address an ephemeral agent without a phantom: it
-// has no durable identity to get.
-func requireIdentity(e *agentEntry, phantom bool) error {
-	if e.mode == common.AgentModeEphemeral && !phantom {
-		return fmt.Errorf("golem: Get %s: an ephemeral agent has no durable identity; use NewPhantom", e.name)
+// Create creates a durable agent with the constructor parameters id, and
+// returns a client for it once its constructor has finished. Without [Keyed]
+// the new agent has a new ID and no key; the client's [Client.AgentID] reads
+// the ID. Its options set configuration overrides ([AgentDefinition.WithConfig],
+// [WithConfigEntries]) and environment variables ([WithEnv]).
+//
+// A failure the host reports, such as the [RemoteConflict] of a keyed create,
+// is a [RemoteCallError]. An ephemeral agent cannot be created: each of its
+// invocations runs on a new instance, so it is addressed with Upsert only. An
+// override that does not match the declared config panics.
+func (a *AgentDefinition[Id, Cfg]) Create(id Id, opts ...CreateOpt) (Client[Id], error) {
+	return createClient[Id](defs, a.name, id, opts)
+}
+
+// MustCreate is [AgentDefinition.Create] that panics on a failure.
+func (a *AgentDefinition[Id, Cfg]) MustCreate(id Id, opts ...CreateOpt) Client[Id] {
+	return Must(a.Create(id, opts...))
+}
+
+func createClient[Id any](d *definitions, name string, id Id, opts []CreateOpt) (Client[Id], error) {
+	e, ctor, err := encodeID(d, "Create", name, id)
+	if err != nil {
+		return Client[Id]{}, err
 	}
-	return nil
+	if e.mode == common.AgentModeEphemeral {
+		return Client[Id]{}, fmt.Errorf("golem: Create %s: an ephemeral agent is not created; address it with Upsert", name)
+	}
+	options, err := createOptions(d, e, opts)
+	if err != nil {
+		panic(fmt.Errorf("golem: Create %s: %w", name, err))
+	}
+	connected, failure := identity.Create(name, ctor, options)
+	if failure != nil {
+		return Client[Id]{}, rpcErrorToGo(name, "<create>", failure.RPCError)
+	}
+	return newClient[Id](connected), nil
 }
 
-// newPhantomClient allocates a fresh phantom instance and returns a client for
-// it, shared by the local and remote paths.
-func newPhantomClient[Id any](d *definitions, name string, id Id, opts []ClientOpt) (Client[Id], error) {
-	phantom := uuidFromWit(apiHost.GenerateIdempotencyKey())
-	return getClient[Id](d, name, id, append(slices.Clone(opts), WithPhantomID(phantom)))
+// GetByID returns a client for the existing agent with the ID. It never creates
+// the agent: an unknown ID, or the ID of an agent of another type, is a
+// [RemoteCallError] of kind [RemoteNotFound]. An ephemeral agent's ID named one
+// invocation, so it is refused.
+func (a *AgentDefinition[Id, Cfg]) GetByID(id AgentID) (Client[Id], error) {
+	return getClientByID[Id](defs, a.name, id)
 }
 
-// Bind addresses an existing agent by its id, which must name this agent type
-// and carry a constructor of shape Id. Binding does not create the agent, but
-// the first call to a durable identity does. An ephemeral agent's id cannot be
-// bound: it named one invocation.
-func (a *AgentDefinition[Id, Cfg]) Bind(agentID string) (Client[Id], error) {
-	return bindTypedClient[Id](defs, a.name, agentID)
+// MustGetByID is [AgentDefinition.GetByID] that panics on a failure.
+func (a *AgentDefinition[Id, Cfg]) MustGetByID(id AgentID) Client[Id] {
+	return Must(a.GetByID(id))
+}
+
+func getClientByID[Id any](d *definitions, name string, id AgentID) (Client[Id], error) {
+	if e := d.agents[name]; e != nil && e.mode == common.AgentModeEphemeral {
+		return Client[Id]{}, fmt.Errorf("golem: GetByID %s: an ephemeral agent's ID cannot be addressed", name)
+	}
+	connected, failure := identity.GetByID(name, agentIDToWit(id))
+	if failure != nil {
+		return Client[Id]{}, rpcErrorToGo(id.String(), "<get-by-id>", failure.RPCError)
+	}
+	return newClient[Id](connected), nil
+}
+
+// LookupID returns the ID of the keyed agent of the constructor parameters id,
+// or None when no such agent exists. It never creates the agent.
+func (a *AgentDefinition[Id, Cfg]) LookupID(id Id) (Option[AgentID], error) {
+	return lookupID[Id](defs, a.name, id)
+}
+
+func lookupID[Id any](d *definitions, name string, id Id) (Option[AgentID], error) {
+	_, ctor, err := encodeID(d, "LookupID", name, id)
+	if err != nil {
+		return None[AgentID](), err
+	}
+	found, failure := identity.Lookup(name, ctor)
+	if failure != nil {
+		return None[AgentID](), rpcErrorToGo(name, "<lookup>", failure.RPCError)
+	}
+	if found.IsNone() {
+		return None[AgentID](), nil
+	}
+	return Some(agentIDFromWit(found.Some())), nil
 }
 
 // BindSelf binds the current durable incarnation without creating it or waiting for initialization.
 //
-// Use this to schedule work on self from inside the constructor. Normal Get reuses an
+// Use this to schedule work on self from inside the constructor. Upsert reuses an
 // initialized agent without rerunning its constructor, but waits for an unfinished
-// constructor. Calling Get on self from that constructor would therefore deadlock.
+// constructor. Calling Upsert on self from that constructor would therefore deadlock.
 //
 // Scheduled work runs after construction finishes. This does not make awaited self-calls
 // reentrant or bypass method permissions. A different agent type or an ephemeral owner
@@ -191,92 +285,22 @@ func (a *AgentDefinition[Id, Cfg]) BindSelf() (Client[Id], error) {
 func bindSelfClient[Id any](name string) (Client[Id], error) {
 	connected, failure := identity.BindSelf(name)
 	if failure != nil {
-		if failure.Stage == identity.ParseStage {
+		if failure.Stage == identity.TypeStage {
 			return Client[Id]{}, agentErrorToGo(failure.AgentError)
 		}
 		return Client[Id]{}, rpcErrorToGo(name, "<bind-self>", failure.RPCError)
 	}
-	phantom := None[UUID]()
-	if connected.PhantomID.IsSome() {
-		phantom = Some(uuidFromWit(connected.PhantomID.Some()))
-	}
-	return Client[Id]{rpc: connected.RPC, agentType: connected.TypeName, agentID: connected.AgentID, phantomID: phantom}, nil
+	return newClient[Id](connected), nil
 }
 
-// AgentID renders the identity of the instance id (and phantom, if any)
-// names, without creating it. It panics on failure, like [AgentDefinition.Get].
-func (a *AgentDefinition[Id, Cfg]) AgentID(id Id, phantom Option[UUID]) string {
-	return Must(makeTypedAgentID[Id](defs, a.name, id, phantom))
-}
-
-// bindTypedClient binds an agent id to a definition: the id must name the
-// type, its constructor must decode into Id, and the type must be durable.
-func bindTypedClient[Id any](d *definitions, name, agentID string) (Client[Id], error) {
-	parsed, err := ParseAgentID[Id](agentID)
-	if err != nil {
-		return Client[Id]{}, err
-	}
-	if parsed.TypeName != name {
-		return Client[Id]{}, fmt.Errorf("golem: agent id %q names %s, not %s", agentID, parsed.TypeName, name)
-	}
-	if e := d.agents[name]; e != nil && e.mode == common.AgentModeEphemeral {
-		return Client[Id]{}, fmt.Errorf("golem: %s is ephemeral; an ephemeral agent id cannot be bound", name)
-	}
-	return bindClient[Id](agentID)
-}
-
-// bindClient addresses the agent agentID names. The host parses the id and
-// reports a target that is not deployed; nothing else about it is checked here.
-func bindClient[Id any](agentID string) (Client[Id], error) {
-	connected, failure := identity.Connect(agentID)
+// getAnyClientByID returns a client for the existing agent with the ID, of the
+// type its ID names.
+func getAnyClientByID[Id any](id AgentID) (Client[Id], error) {
+	connected, failure := identity.GetAnyByID(agentIDToWit(id))
 	if failure != nil {
-		if failure.Stage == identity.ParseStage {
-			return Client[Id]{}, fmt.Errorf("golem: parsing agent id %q: %w", agentID, agentErrorToGo(failure.AgentError))
-		}
-		return Client[Id]{}, rpcErrorToGo(failure.TypeName, "<bind>", failure.RPCError)
+		return Client[Id]{}, rpcErrorToGo(id.String(), "<get-by-id>", failure.RPCError)
 	}
-	phantomID := None[UUID]()
-	if connected.PhantomID.IsSome() {
-		phantomID = Some(uuidFromWit(connected.PhantomID.Some()))
-	}
-	return Client[Id]{
-		rpc:       connected.RPC,
-		agentType: connected.TypeName,
-		agentID:   agentID,
-		phantomID: phantomID,
-	}, nil
-}
-
-// makeTypedAgentID renders an agent id from a typed constructor value.
-func makeTypedAgentID[Id any](d *definitions, name string, id Id, phantom Option[UUID]) (string, error) {
-	e := d.agents[name]
-	if e == nil {
-		return "", fmt.Errorf("golem: unknown agent %s", name)
-	}
-	ctor, err := tryEncodeParams(e.idFields, reflect.ValueOf(&id).Elem())
-	if err != nil {
-		return "", fmt.Errorf("golem: %s: the id does not encode: %w", name, err)
-	}
-	p := witTypes.None[types.Uuid]()
-	if u, has := phantom.Get(); has {
-		p = witTypes.Some(uuidToWit(u))
-	}
-	resolved, failure := identity.Render(name, ctor, p)
-	if failure != nil {
-		return "", fmt.Errorf("golem: %s: %w", name, agentErrorToGo(failure.AgentError))
-	}
-	return resolved, nil
-}
-
-// NewPhantom allocates a fresh phantom instance of the target agent and returns
-// a client for it (panicking on failure, like [AgentDefinition.Get]). The freshly
-// allocated phantom id rides on the client — read it back with [Client.PhantomID]
-// to address the same instance again (via [WithPhantomID]).
-//
-// Ephemeral agents have no durable identity, so this is the only way to obtain
-// a client for one.
-func (a *AgentDefinition[Id, Cfg]) NewPhantom(id Id, opts ...ClientOpt) Client[Id] {
-	return Must(newPhantomClient[Id](defs, a.name, id, opts))
+	return newClient[Id](connected), nil
 }
 
 // AgentErrorKind classifies an [AgentError]. The kinds are the host's

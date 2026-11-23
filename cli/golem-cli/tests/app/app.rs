@@ -167,106 +167,109 @@ async fn assert_the_server_keeps_running_without_a_reader(closed: ClosedStream) 
 /// in canonical mode with echo afterwards. When `wait_for` is given, the file is created once
 /// the text has appeared on the terminal.
 #[cfg(unix)]
-async fn assert_terminal_is_usable_after_closed_stdout(
-    ctx: &TestContext,
-    pipeline: String,
-    wait_for: Option<(&'static str, std::path::PathBuf)>,
-) {
-    let working_dir = ctx.working_dir.clone();
-    let (exit, output) = tokio::task::spawn_blocking(move || {
-        let script =
-            format!("stty icanon echo; {pipeline}; echo \"EXIT=${{PIPESTATUS[0]}}\"; stty -a");
-        let mut command = std::process::Command::new("bash");
-        command
-            .current_dir(working_dir)
-            .env("TERM", "xterm-256color")
-            .args(["-c", &script]);
-        use expectrl::Expect;
-        let mut session = expectrl::Session::spawn(command).expect("failed to spawn bash");
-        session.set_expect_timeout(Some(Duration::from_secs(60)));
-        if let Some((text, file)) = wait_for {
-            session
-                .expect(text)
-                .unwrap_or_else(|error| panic!("'{text}' did not appear: {error}"));
-            std::fs::write(file, "").unwrap();
-        }
-        let exit = session
-            .expect(expectrl::Regex("EXIT=[0-9]+"))
-            .expect("the CLI did not end")
-            .as_bytes()
-            .to_vec();
-        let rest = session.expect(expectrl::Eof).expect("no end of output");
-        (
-            String::from_utf8_lossy(&exit).to_string(),
-            String::from_utf8_lossy(rest.as_bytes()).to_string(),
-        )
-    })
-    .await
-    .unwrap();
+mod terminal_tests {
+    use super::*;
+    use test_r::test;
 
-    println!("{exit}\n{output}");
-    assert!(exit.ends_with("EXIT=141"), "{exit}");
-    let flags: Vec<&str> = output.split_whitespace().collect();
-    assert!(
-        flags.contains(&"icanon"),
-        "the terminal is not in canonical mode after the CLI ended"
-    );
-    assert!(
-        flags.contains(&"echo"),
-        "the terminal does not echo after the CLI ended"
-    );
-}
+    async fn assert_terminal_is_usable_after_closed_stdout(
+        ctx: &TestContext,
+        pipeline: String,
+        wait_for: Option<(&'static str, std::path::PathBuf)>,
+    ) {
+        let working_dir = ctx.working_dir.clone();
+        let (exit, output) = tokio::task::spawn_blocking(move || {
+            let script =
+                format!("stty icanon echo; {pipeline}; echo \"EXIT=${{PIPESTATUS[0]}}\"; stty -a");
+            let mut command = std::process::Command::new("bash");
+            command
+                .current_dir(working_dir)
+                .env("TERM", "xterm-256color")
+                .args(["-c", &script]);
+            use expectrl::Expect;
+            let mut session = expectrl::Session::spawn(command).expect("failed to spawn bash");
+            session.set_expect_timeout(Some(Duration::from_secs(60)));
+            if let Some((text, file)) = wait_for {
+                session
+                    .expect(text)
+                    .unwrap_or_else(|error| panic!("'{text}' did not appear: {error}"));
+                std::fs::write(file, "").unwrap();
+            }
+            let exit = session
+                .expect(expectrl::Regex("EXIT=[0-9]+"))
+                .expect("the CLI did not end")
+                .as_bytes()
+                .to_vec();
+            let rest = session.expect(expectrl::Eof).expect("no end of output");
+            (
+                String::from_utf8_lossy(&exit).to_string(),
+                String::from_utf8_lossy(rest.as_bytes()).to_string(),
+            )
+        })
+        .await
+        .unwrap();
 
-/// The CLI waits at an interactive prompt, with the terminal in raw mode, when the reader of its
-/// stdout leaves.
-#[cfg(unix)]
-#[test]
-#[timeout("2m")]
-async fn the_terminal_settings_come_back_when_the_reader_of_stdout_leaves_during_a_prompt(
-    _tracing: &Tracing,
-) {
-    let ctx = TestContext::new();
-    let golem_cli = ctx.golem_cli_path.display();
-    let config_dir = ctx.config_dir.path().display();
-    let leave = ctx.cwd_path_join("reader-leaves");
+        println!("{exit}\n{output}");
+        assert!(exit.ends_with("EXIT=141"), "{exit}");
+        let flags: Vec<&str> = output.split_whitespace().collect();
+        assert!(
+            flags.contains(&"icanon"),
+            "the terminal is not in canonical mode after the CLI ended"
+        );
+        assert!(
+            flags.contains(&"echo"),
+            "the terminal does not echo after the CLI ended"
+        );
+    }
 
-    // The reader of stdout stays until the prompt has appeared.
-    let pipeline = format!(
-        "'{golem_cli}' --config-dir '{config_dir}' profile new \
+    /// The CLI waits at an interactive prompt, with the terminal in raw mode, when the reader of its
+    /// stdout leaves.
+    #[test]
+    #[timeout("2m")]
+    async fn the_terminal_settings_come_back_when_the_reader_of_stdout_leaves_during_a_prompt(
+        _tracing: &Tracing,
+    ) {
+        let ctx = TestContext::new();
+        let golem_cli = ctx.golem_cli_path.display();
+        let config_dir = ctx.config_dir.path().display();
+        let leave = ctx.cwd_path_join("reader-leaves");
+
+        // The reader of stdout stays until the prompt has appeared.
+        let pipeline = format!(
+            "'{golem_cli}' --config-dir '{config_dir}' profile new \
          | {{ while [ ! -e '{leave}' ]; do sleep 0.2; done; }}",
-        leave = leave.display()
-    );
-    assert_terminal_is_usable_after_closed_stdout(
-        &ctx,
-        pipeline,
-        Some(("create a new profile interactively", leave)),
-    )
-    .await;
-}
+            leave = leave.display()
+        );
+        assert_terminal_is_usable_after_closed_stdout(
+            &ctx,
+            pipeline,
+            Some(("create a new profile interactively", leave)),
+        )
+        .await;
+    }
 
-/// The reader of stdout takes the terminal before the CLI starts, as a pager does: it sets raw
-/// mode, and it puts the terminal back before it leaves. The CLI opens no prompt, so the terminal
-/// must stay as the reader left it.
-#[cfg(unix)]
-#[test]
-#[timeout("2m")]
-async fn the_terminal_settings_stay_as_the_reader_of_stdout_left_them(_tracing: &Tracing) {
-    let ctx = TestContext::new();
-    let golem_cli = ctx.golem_cli_path.display();
-    let config_dir = ctx.config_dir.path().display();
-    let raw_mode_set = ctx.cwd_path_join("raw-mode-set");
+    /// The reader of stdout takes the terminal before the CLI starts, as a pager does: it sets raw
+    /// mode, and it puts the terminal back before it leaves. The CLI opens no prompt, so the terminal
+    /// must stay as the reader left it.
+    #[test]
+    #[timeout("2m")]
+    async fn the_terminal_settings_stay_as_the_reader_of_stdout_left_them(_tracing: &Tracing) {
+        let ctx = TestContext::new();
+        let golem_cli = ctx.golem_cli_path.display();
+        let config_dir = ctx.config_dir.path().display();
+        let raw_mode_set = ctx.cwd_path_join("raw-mode-set");
 
-    // The CLI starts once the terminal is in raw mode. The reader takes the first byte of the
-    // output, so the CLI runs when the reader puts the terminal back and leaves. The rest of the
-    // output does not fit into the pipe, so the CLI ends at a failed write.
-    let pipeline = format!(
-        "{{ while [ ! -e '{raw_mode_set}' ]; do sleep 0.1; done; \
+        // The CLI starts once the terminal is in raw mode. The reader takes the first byte of the
+        // output, so the CLI runs when the reader puts the terminal back and leaves. The rest of the
+        // output does not fit into the pipe, so the CLI ends at a failed write.
+        let pipeline = format!(
+            "{{ while [ ! -e '{raw_mode_set}' ]; do sleep 0.1; done; \
             '{golem_cli}' --config-dir '{config_dir}' completion bash; }} \
          | {{ stty raw -echo < /dev/tty; touch '{raw_mode_set}'; head -c 1 > /dev/null; \
               stty sane < /dev/tty; }}",
-        raw_mode_set = raw_mode_set.display()
-    );
-    assert_terminal_is_usable_after_closed_stdout(&ctx, pipeline, None).await;
+            raw_mode_set = raw_mode_set.display()
+        );
+        assert_terminal_is_usable_after_closed_stdout(&ctx, pipeline, None).await;
+    }
 }
 
 #[test]
@@ -1166,17 +1169,21 @@ async fn moonbit_component_build_waits_for_independently_buildable_agent_provide
 }
 
 #[cfg(unix)]
-#[test]
-async fn moon_dependency_preparation_is_cached_per_module_root(_tracing: &Tracing) {
-    use std::os::unix::fs::PermissionsExt;
+mod moon_dependency_tests {
+    use super::*;
+    use test_r::test;
 
-    let mut ctx = TestContext::new();
-    let fake_bin = ctx.cwd_path_join("fake-bin");
-    let fake_moon = fake_bin.join("moon");
-    fs::create_dir_all(&fake_bin).unwrap();
-    fs::write_str(
-        &fake_moon,
-        indoc! {r#"
+    #[test]
+    async fn moon_dependency_preparation_is_cached_per_module_root(_tracing: &Tracing) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut ctx = TestContext::new();
+        let fake_bin = ctx.cwd_path_join("fake-bin");
+        let fake_moon = fake_bin.join("moon");
+        fs::create_dir_all(&fake_bin).unwrap();
+        fs::write_str(
+            &fake_moon,
+            indoc! {r#"
             #!/bin/sh
             set -eu
             case "${1:-}" in
@@ -1193,32 +1200,32 @@ async fn moon_dependency_preparation_is_cached_per_module_root(_tracing: &Tracin
                 ;;
             esac
         "#},
-    )
-    .unwrap();
-    std::fs::set_permissions(&fake_moon, std::fs::Permissions::from_mode(0o755)).unwrap();
-    ctx.add_env_var(
-        "PATH",
-        format!(
-            "{}:{}",
-            fake_bin.display(),
-            std::env::var("PATH").unwrap_or_default()
-        ),
-    );
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake_moon, std::fs::Permissions::from_mode(0o755)).unwrap();
+        ctx.add_env_var(
+            "PATH",
+            format!(
+                "{}:{}",
+                fake_bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        );
 
-    let moon_mod = indoc! {r#"
+        let moon_mod = indoc! {r#"
         name = "identical-module"
         version = "0.0.1"
         preferred_target = "wasm"
     "#};
-    for module in ["a", "b"] {
-        fs::create_dir_all(ctx.cwd_path_join(module)).unwrap();
-        fs::write_str(ctx.cwd_path_join(format!("{module}/moon.mod")), moon_mod).unwrap();
-    }
-    fs::create_dir_all(ctx.cwd_path_join("b/.mooncakes")).unwrap();
+        for module in ["a", "b"] {
+            fs::create_dir_all(ctx.cwd_path_join(module)).unwrap();
+            fs::write_str(ctx.cwd_path_join(format!("{module}/moon.mod")), moon_mod).unwrap();
+        }
+        fs::create_dir_all(ctx.cwd_path_join("b/.mooncakes")).unwrap();
 
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
+        fs::write_str(
+            ctx.cwd_path_join("golem.yaml"),
+            formatdoc! {r#"
             manifestVersion: {MANIFEST_VERSION}
 
             app: moon-dependency-preparation-cache
@@ -1242,27 +1249,26 @@ async fn moon_dependency_preparation_is_cached_per_module_root(_tracing: &Tracin
                   verify-module-preparation:
                     - command: moon build
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
+        )
+        .unwrap();
 
-    let outputs = ctx.cli(["exec", "verify-module-preparation"]).await;
-    assert!(outputs.success_or_dump());
-    assert!(ctx.cwd_path_join("a/.mooncakes/prepared").exists());
-    assert!(ctx.cwd_path_join("b/.mooncakes/prepared").exists());
-}
+        let outputs = ctx.cli(["exec", "verify-module-preparation"]).await;
+        assert!(outputs.success_or_dump());
+        assert!(ctx.cwd_path_join("a/.mooncakes/prepared").exists());
+        assert!(ctx.cwd_path_join("b/.mooncakes/prepared").exists());
+    }
 
-#[cfg(unix)]
-#[test]
-async fn moon_dependency_preparation_uses_physical_ancestor_for_parent_dir(_tracing: &Tracing) {
-    use std::os::unix::fs::PermissionsExt;
+    #[test]
+    async fn moon_dependency_preparation_uses_physical_ancestor_for_parent_dir(_tracing: &Tracing) {
+        use std::os::unix::fs::PermissionsExt;
 
-    let mut ctx = TestContext::new();
-    let fake_bin = ctx.cwd_path_join("fake-bin");
-    let fake_moon = fake_bin.join("moon");
-    fs::create_dir_all(&fake_bin).unwrap();
-    fs::write_str(
-        &fake_moon,
-        indoc! {r#"
+        let mut ctx = TestContext::new();
+        let fake_bin = ctx.cwd_path_join("fake-bin");
+        let fake_moon = fake_bin.join("moon");
+        fs::create_dir_all(&fake_bin).unwrap();
+        fs::write_str(
+            &fake_moon,
+            indoc! {r#"
             #!/bin/sh
             set -eu
             case "${1:-}" in
@@ -1279,29 +1285,29 @@ async fn moon_dependency_preparation_uses_physical_ancestor_for_parent_dir(_trac
                 ;;
             esac
         "#},
-    )
-    .unwrap();
-    std::fs::set_permissions(&fake_moon, std::fs::Permissions::from_mode(0o755)).unwrap();
-    ctx.add_env_var(
-        "PATH",
-        format!(
-            "{}:{}",
-            fake_bin.display(),
-            std::env::var("PATH").unwrap_or_default()
-        ),
-    );
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake_moon, std::fs::Permissions::from_mode(0o755)).unwrap();
+        ctx.add_env_var(
+            "PATH",
+            format!(
+                "{}:{}",
+                fake_bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        );
 
-    let moon_mod = indoc! {r#"
+        let moon_mod = indoc! {r#"
         name = "module"
         version = "0.0.1"
         preferred_target = "wasm"
     "#};
-    fs::write_str(ctx.cwd_path_join("moon.mod"), moon_mod).unwrap();
-    fs::create_dir_all(ctx.cwd_path_join("component/nested")).unwrap();
-    fs::write_str(ctx.cwd_path_join("component/nested/moon.mod"), moon_mod).unwrap();
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
+        fs::write_str(ctx.cwd_path_join("moon.mod"), moon_mod).unwrap();
+        fs::create_dir_all(ctx.cwd_path_join("component/nested")).unwrap();
+        fs::write_str(ctx.cwd_path_join("component/nested/moon.mod"), moon_mod).unwrap();
+        fs::write_str(
+            ctx.cwd_path_join("golem.yaml"),
+            formatdoc! {r#"
             manifestVersion: {MANIFEST_VERSION}
 
             app: moon-dependency-preparation-parent-dir
@@ -1319,16 +1325,17 @@ async fn moon_dependency_preparation_uses_physical_ancestor_for_parent_dir(_trac
                     - command: moon build
                       dir: nested/..
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
-    )
-    .unwrap();
+        )
+        .unwrap();
 
-    let outputs = ctx.cli(["exec", "verify-module-preparation"]).await;
-    assert!(outputs.success_or_dump());
-    assert!(ctx.cwd_path_join(".mooncakes/prepared").exists());
-    assert!(
-        !ctx.cwd_path_join("component/nested/.mooncakes/prepared")
-            .exists()
-    );
+        let outputs = ctx.cli(["exec", "verify-module-preparation"]).await;
+        assert!(outputs.success_or_dump());
+        assert!(ctx.cwd_path_join(".mooncakes/prepared").exists());
+        assert!(
+            !ctx.cwd_path_join("component/nested/.mooncakes/prepared")
+                .exists()
+        );
+    }
 }
 
 #[test]
@@ -7669,18 +7676,18 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
             Available\s+agent\s+client\s+types:
             .*
             (
-                SampleAgent\.get\(
+                SampleAgent\.upsert\(
                     name:\s*string,\s*
                     region:\s*string,\s*
                     mode:\s*"fast"\s*\|\s*"safe",\s*
                     complex\?:\s*.*
                 \)
                 .*
-                CounterAgent\.get\(name:\s*string\)
+                CounterAgent\.upsert\(name:\s*string\)
             |
-                CounterAgent\.get\(name:\s*string\)
+                CounterAgent\.upsert\(name:\s*string\)
                 .*
-                SampleAgent\.get\(
+                SampleAgent\.upsert\(
                     name:\s*string,\s*
                     region:\s*string,\s*
                     mode:\s*"fast"\s*\|\s*"safe",\s*
@@ -7713,36 +7720,36 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
             // Hints on "enter"
             {
                 session.send_line_wait_eval_expect_str("Counter", "CounterAgent")?;
-                session.send_line_wait_eval_expect_regex("CounterAgent.", "get .* getPhantom ")?;
+                session.send_line_wait_eval_expect_regex("CounterAgent.", "create .*getById .*upsert")?;
                 session.send_line_wait_eval_expect_regex(
-                    "CounterAgent.get",
-                    "\\(method\\) CounterAgent\\.get\\(name: string\\): Promise<.*CounterAgent>",
+                    "CounterAgent.upsert",
+                    "\\(method\\) CounterAgent\\.upsert\\(name: string\\): CounterAgent",
                 )?;
-                session.send_line_wait_eval_expect_str("CounterAgent.get(", "\"?\"")?;
+                session.send_line_wait_eval_expect_str("CounterAgent.upsert(", "\"?\"")?;
                 session.send_line_wait_eval_expect_regex(
-                    "CounterAgent.get(\"xyz\")",
+                    "CounterAgent.create(\"xyz\")",
                     "awaiting Promise<.*CounterAgent>",
                 )?;
 
                 session.send_line_wait_eval_expect_str(
-                    "(await CounterAgent.get(\"xyz\")).",
+                    "(await CounterAgent.create(\"xyz\")).",
                     "increment",
                 )?;
 
                 session.send_line_wait_eval_expect_str(
-                    "CounterAgent.get(\"xyz\").then(c => c.",
+                    "CounterAgent.create(\"xyz\").then(c => c.",
                     "increment",
                 )?;
 
                 session.send_line_wait_eval_expect_str("Sample", "SampleAgent")?;
 
                 session.send_line_wait_eval_expect_regex(
-                    "(await SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" })).",
+                    "(await SampleAgent.create(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" })).",
                     "sampleMethod",
                 )?;
 
                 session.send_line_wait_eval_expect_regex(
-                    "SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" }).then(c => c.",
+                    "SampleAgent.create(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" }).then(c => c.",
                     "sampleMethod",
                 )?;
             }
@@ -7754,7 +7761,7 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
 
                 session.send_tab_list_wait_completion_expect_regex(
                     "CounterAgent.",
-                    "get .* getPhantom ",
+                    "create .*getById .*upsert",
                 )?;
                 session.kill_line()?;
 
@@ -7763,21 +7770,21 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
 
                 session.send_tab_list_wait_completion_expect_regex(
                     "CounterAgent.get",
-                    "get .* getPhantom",
+                    "getById .*getConfiguration",
                 )?;
                 session.kill_line()?;
 
-                session.send_tab_wait_completion_expect_str("CounterAgent.get(", "\"?\"")?;
+                session.send_tab_wait_completion_expect_str("CounterAgent.upsert(", "\"?\"")?;
                 session.kill_line()?;
 
                 session.send_tab_list_wait_completion_expect_regex(
-                    "(await CounterAgent.get(\"xyz\")).",
+                    "(await CounterAgent.create(\"xyz\")).",
                     "increment",
                 )?;
                 session.kill_line()?;
 
                 session.send_tab_list_wait_completion_expect_regex(
-                    "CounterAgent.get(\"xyz\").then(x => x.",
+                    "CounterAgent.create(\"xyz\").then(x => x.",
                     "increment",
                 )?;
                 session.kill_line()?;
@@ -7786,13 +7793,13 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
                 session.kill_line()?;
 
                 session.send_tab_list_wait_completion_expect_regex(
-                    "(await SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" })).",
+                    "(await SampleAgent.create(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" })).",
                     "sampleMethod",
                 )?;
                 session.kill_line()?;
 
                 session.send_tab_list_wait_completion_expect_regex(
-                    "SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" }).then(x => x.",
+                    "SampleAgent.create(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" }).then(x => x.",
                     "sampleMethod",
                 )?;
                 session.kill_line()?;
@@ -7830,7 +7837,7 @@ async fn ts_repl_foreground_cli_terminal_control(_tracing: &Tracing) {
 
             session.set_expect_timeout(Some(Duration::from_secs(120)));
             session.send_line_and_expect_str(
-                r#"await CounterAgent.get("x").then(_ => "AGENT_CREATED_1")"#,
+                r#"await CounterAgent.create("x").then(_ => "AGENT_CREATED_1")"#,
                 "AGENT_CREATED_1",
             )?;
             session.expect_regex(r"golem-ts-repl\[[^\]]+\]\[[^\]]+\]>")?;
@@ -7844,7 +7851,7 @@ async fn ts_repl_foreground_cli_terminal_control(_tracing: &Tracing) {
             session.expect_regex(r"golem-ts-repl\[[^\]]+\]\[[^\]]+\]>")?;
 
             session.send_line_and_expect_str(
-                r#"await CounterAgent.get("x").then(_ => "AGENT_CREATED_2")"#,
+                r#"await CounterAgent.create("x").then(_ => "AGENT_CREATED_2")"#,
                 "AGENT_CREATED_2",
             )?;
             session.expect_regex(r"golem-ts-repl\[[^\]]+\]\[[^\]]+\]>")?;

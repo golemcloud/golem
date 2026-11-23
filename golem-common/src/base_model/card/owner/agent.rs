@@ -13,29 +13,59 @@
 // limitations under the License.
 
 use super::*;
+use crate::base_model::AgentId;
 use crate::model::account::AccountEmail;
 use crate::model::agent::AgentTypeName;
 use crate::model::application::ApplicationName;
 use crate::model::component::ComponentName;
 use crate::model::environment::EnvironmentName;
 
-/// The last segment of an agent owner.
+/// A concrete agent in an agent owner: its ID and, when Golem resolved it, the name of its type.
 ///
-/// The owner text holds a concrete agent name in percent-encoding. A render writes `%`, `/` and
-/// `?` as `%25`, `%2F` and `%3F`. So the name is one owner segment and holds no slot variable. A
-/// parse decodes the name. In the text, each `%` before two hex digits gives one byte of the name.
-/// `Agent` holds the name after the decode.
+/// The owner text holds only the ID. The type name is trusted: Golem sets it from the agent's
+/// Create entry when it builds the owner of a running agent, and a parse never sets it. Two
+/// leaves are equal when their IDs are equal, so the type name only decides whether an agent
+/// type wildcard covers the agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub struct AgentOwnerLeaf {
+    pub agent_id: AgentId,
+    pub agent_type: Option<AgentTypeName>,
+}
+
+impl PartialEq for AgentOwnerLeaf {
+    fn eq(&self, other: &Self) -> bool {
+        self.agent_id == other.agent_id
+    }
+}
+
+impl Eq for AgentOwnerLeaf {}
+
+impl std::hash::Hash for AgentOwnerLeaf {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.agent_id.hash(state);
+    }
+}
+
+/// The last segment of an agent owner: an agent ID, or `Type(*)` for every agent of a type.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AgentOwnerLeafPattern {
-    Agent(String),
+    Agent(AgentOwnerLeaf),
     AgentTypeWildcard(AgentTypeName),
 }
 
 impl AgentOwnerLeafPattern {
+    /// The leaf of a running agent, with the trusted name of its type.
+    pub fn agent(agent_id: AgentId, agent_type: Option<AgentTypeName>) -> Self {
+        Self::Agent(AgentOwnerLeaf {
+            agent_id,
+            agent_type,
+        })
+    }
+
     /// Reads the last segment of an agent owner. A segment that ends with `(*)` is an agent type
-    /// wildcard. The function decodes each other segment as an agent name in percent-encoding. A
-    /// name that does not decode to UTF-8 gives an error.
+    /// wildcard. Each other segment must be an agent ID.
     pub fn parse(value: &str) -> Result<Self, String> {
         let value = parse_concrete_segment(value)?;
         if let Some(agent_type) = value.strip_suffix("(*)")
@@ -45,17 +75,18 @@ impl AgentOwnerLeafPattern {
                 agent_type.to_string(),
             )));
         }
-        urlencoding::decode(value)
-            .map(|agent| Self::Agent(agent.into_owned()))
+        value
+            .parse::<AgentId>()
+            .map(|agent_id| Self::agent(agent_id, None))
             .map_err(|_| value.to_string())
     }
 
     fn subsumes(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Agent(left), Self::Agent(right)) => left == right,
-            (Self::AgentTypeWildcard(left), Self::Agent(right)) => right
-                .strip_prefix(left.as_str())
-                .is_some_and(|suffix| suffix.starts_with('(') && suffix.ends_with(')')),
+            (Self::AgentTypeWildcard(left), Self::Agent(right)) => {
+                right.agent_type.as_ref() == Some(left)
+            }
             (Self::AgentTypeWildcard(left), Self::AgentTypeWildcard(right)) => left == right,
             (Self::Agent(_), Self::AgentTypeWildcard(_)) => false,
         }

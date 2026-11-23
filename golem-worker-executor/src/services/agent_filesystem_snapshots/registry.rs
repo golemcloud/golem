@@ -325,7 +325,6 @@ mod tests {
     use super::*;
     use crate::services::agent_filesystem_snapshots::ConfirmOutcome;
     use futures::FutureExt as _;
-    use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::{AgentId, OwnedAgentId};
     use test_r::test;
@@ -334,13 +333,7 @@ mod tests {
     fn a_dropped_wait_releases_the_decision_of_the_ended_job() {
         let registry = Arc::new(Registry::default());
         let agent = AgentSnapshots::agent(
-            &OwnedAgentId::new(
-                EnvironmentId::new(),
-                &AgentId {
-                    component_id: ComponentId::new(),
-                    agent_id: "waiting".to_string(),
-                },
-            ),
+            &OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 1)),
             golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
         );
         let name = FilesystemSnapshotName::periodic();
@@ -379,13 +372,7 @@ mod tests {
     fn the_stop_of_the_deletes_of_a_job_is_a_child_of_its_stop_and_the_state_holds_it() {
         let registry = Arc::new(Registry::default());
         let agent = AgentSnapshots::agent(
-            &OwnedAgentId::new(
-                EnvironmentId::new(),
-                &AgentId {
-                    component_id: ComponentId::new(),
-                    agent_id: "retention-stop".to_string(),
-                },
-            ),
+            &OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 2)),
             golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
         );
         let name = FilesystemSnapshotName::periodic();

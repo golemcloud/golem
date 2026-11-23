@@ -28,10 +28,10 @@
 
 use crate::base_model::agent::AgentTypeName;
 use crate::base_model::agent::{
-    AgentConfigSource, AgentHttpAuthDetails, AgentMode, CachePolicy, CachePolicyTtl, CorsOptions,
-    HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment, PhantomIdBinding,
-    PhantomIdBindingDetails, ReadOnlyConfig, Snapshotting, SnapshottingConfig,
-    SnapshottingEveryNInvocation, SnapshottingPeriodic, SystemVariable, SystemVariableSegment,
+    AgentConfigSource, AgentHttpAuthDetails, AgentIdBinding, AgentIdBindingDetails, AgentMode,
+    CachePolicy, CachePolicyTtl, CorsOptions, HttpEndpointDetails, HttpMethod, HttpMountDetails,
+    PathSegment, ReadOnlyConfig, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
+    SnapshottingPeriodic, SystemVariable, SystemVariableSegment,
 };
 use crate::base_model::caller::{
     AccountAuthentication, AccountPrincipal, AgentPrincipal, Caller, Claims, GolemSubject, Pair,
@@ -110,18 +110,14 @@ impl From<golem_schema::schema::wit::wire::AccountId> for AccountId {
 impl From<AgentId> for golem_schema::schema::wit::wire::AgentId {
     fn from(value: AgentId) -> Self {
         Self {
-            component_id: value.component_id.into(),
-            agent_id: value.agent_id,
+            uuid: uuid_to_core2(value.0),
         }
     }
 }
 
 impl From<golem_schema::schema::wit::wire::AgentId> for AgentId {
     fn from(value: golem_schema::schema::wit::wire::AgentId) -> Self {
-        AgentId {
-            component_id: value.component_id.into(),
-            agent_id: value.agent_id,
-        }
+        AgentId(uuid_from_core2(value.uuid))
     }
 }
 
@@ -264,15 +260,13 @@ pub fn decode_agent_type(w: &wire::AgentType) -> Result<AgentTypeSchema, AgentWi
     })
 }
 
-/// Encode a [`RegisteredAgentTypeSchema`] into the wire form. The wire type
-/// carries only the implementer's `component-id`; the component revision is
+/// Encode a [`RegisteredAgentTypeSchema`] into the wire form. The implementer is
 /// host-side metadata that does not cross this interface.
 pub fn encode_registered_agent_type(
     rt: &RegisteredAgentTypeSchema,
 ) -> Result<wire::RegisteredAgentType, AgentWitError> {
     Ok(wire::RegisteredAgentType {
         agent_type: encode_agent_type(&rt.agent_type)?,
-        implemented_by: rt.implemented_by.component_id.into(),
     })
 }
 
@@ -618,7 +612,10 @@ impl From<HttpMountDetails> for wire::HttpMountDetails {
             path_prefix: value.path_prefix.into_iter().map(Into::into).collect(),
             auth_details: value.auth_details.map(Into::into),
             phantom_agent: value.phantom_agent,
-            phantom_id_binding: value.phantom_id_binding.map(Into::into),
+            agent_id_binding: value.agent_id_binding.map(Into::into),
+            create_route: value
+                .create_route
+                .map(|path| path.into_iter().map(Into::into).collect()),
             cors_options: value.cors_options.into(),
             webhook_suffix: value.webhook_suffix.into_iter().map(Into::into).collect(),
             static_bindings: value.static_bindings.into_iter().map(Into::into).collect(),
@@ -643,7 +640,10 @@ impl From<wire::HttpMountDetails> for HttpMountDetails {
             path_prefix: value.path_prefix.into_iter().map(Into::into).collect(),
             auth_details: value.auth_details.map(Into::into),
             phantom_agent: value.phantom_agent,
-            phantom_id_binding: value.phantom_id_binding.map(Into::into),
+            agent_id_binding: value.agent_id_binding.map(Into::into),
+            create_route: value
+                .create_route
+                .map(|path| path.into_iter().map(Into::into).collect()),
             cors_options: value.cors_options.into(),
             webhook_suffix: value.webhook_suffix.into_iter().map(Into::into).collect(),
             static_bindings: value.static_bindings.into_iter().map(Into::into).collect(),
@@ -662,32 +662,28 @@ impl From<wire::HttpMountDetails> for HttpMountDetails {
     }
 }
 
-impl From<PhantomIdBinding> for wire::PhantomIdBinding {
-    fn from(value: PhantomIdBinding) -> Self {
+impl From<AgentIdBinding> for wire::AgentIdBinding {
+    fn from(value: AgentIdBinding) -> Self {
         match value {
-            PhantomIdBinding::Path(value) => Self::Path(wire::PhantomIdBindingDetails {
-                name: value.name,
-                optional: value.optional,
-            }),
-            PhantomIdBinding::Query(value) => Self::Query(wire::PhantomIdBindingDetails {
-                name: value.name,
-                optional: value.optional,
-            }),
+            AgentIdBinding::Path(value) => {
+                Self::Path(wire::AgentIdBindingDetails { name: value.name })
+            }
+            AgentIdBinding::Query(value) => {
+                Self::Query(wire::AgentIdBindingDetails { name: value.name })
+            }
         }
     }
 }
 
-impl From<wire::PhantomIdBinding> for PhantomIdBinding {
-    fn from(value: wire::PhantomIdBinding) -> Self {
+impl From<wire::AgentIdBinding> for AgentIdBinding {
+    fn from(value: wire::AgentIdBinding) -> Self {
         match value {
-            wire::PhantomIdBinding::Path(value) => Self::Path(PhantomIdBindingDetails {
-                name: value.name,
-                optional: value.optional,
-            }),
-            wire::PhantomIdBinding::Query(value) => Self::Query(PhantomIdBindingDetails {
-                name: value.name,
-                optional: value.optional,
-            }),
+            wire::AgentIdBinding::Path(value) => {
+                Self::Path(AgentIdBindingDetails { name: value.name })
+            }
+            wire::AgentIdBinding::Query(value) => {
+                Self::Query(AgentIdBindingDetails { name: value.name })
+            }
         }
     }
 }
@@ -1275,7 +1271,8 @@ mod tests {
                 )],
                 auth_details: Some(AgentHttpAuthDetails { required: true }),
                 phantom_agent: false,
-                phantom_id_binding: None,
+                agent_id_binding: None,
+                create_route: None,
                 cors_options: CorsOptions {
                     allowed_patterns: vec!["https://example.com".into()],
                 },
@@ -1330,24 +1327,31 @@ mod tests {
     }
 
     #[test]
-    fn phantom_binding_round_trips_through_all_transports() {
-        for optional in [false, true] {
-            for binding in [
-                PhantomIdBinding::Path(PhantomIdBindingDetails {
-                    name: "instance".into(),
-                    optional,
+    fn agent_id_binding_round_trips_through_all_transports() {
+        for create_route in [
+            None,
+            Some(vec![]),
+            Some(vec![PathSegment::Segment(
+                golem_schema::http::PathSegment::Literal(LiteralSegment {
+                    value: "create".into(),
                 }),
-                PhantomIdBinding::Query(PhantomIdBindingDetails {
+            )]),
+        ] {
+            for binding in [
+                AgentIdBinding::Path(AgentIdBindingDetails {
+                    name: "instance".into(),
+                }),
+                AgentIdBinding::Query(AgentIdBindingDetails {
                     name: "other-instance".into(),
-                    optional,
                 }),
             ] {
                 let mut original = sample_agent_type();
                 original.http_mount = Some(HttpMountDetails {
                     path_prefix: vec![],
                     auth_details: None,
-                    phantom_agent: true,
-                    phantom_id_binding: Some(binding),
+                    phantom_agent: false,
+                    agent_id_binding: Some(binding),
+                    create_route: create_route.clone(),
                     cors_options: CorsOptions {
                         allowed_patterns: vec![],
                     },
@@ -1377,8 +1381,8 @@ mod tests {
                 );
             }
         }
-        let malformed = golem_api_grpc::proto::golem::component::PhantomIdBinding { source: None };
-        assert!(PhantomIdBinding::try_from(malformed).is_err());
+        let malformed = golem_api_grpc::proto::golem::component::AgentIdBinding { source: None };
+        assert!(AgentIdBinding::try_from(malformed).is_err());
     }
 
     #[test]
@@ -1498,7 +1502,7 @@ mod tests {
         let wire::Principal::Agent(details) = &mut agent else {
             unreachable!()
         };
-        details.agent_id.agent_id = "Other(\"x\")".to_string();
+        details.agent_id = AgentId::from_parts(7, 0xbad).into();
         assert!(Principal::try_from(agent).is_err());
 
         // A subject of another kind is refused.

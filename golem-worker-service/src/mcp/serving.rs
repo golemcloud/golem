@@ -63,6 +63,7 @@ pub enum ServeRefusal {
 pub struct StatelessServing(pub Arc<McpDeployment>);
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl McpServing for StatelessServing {
     async fn serve(
         &self,

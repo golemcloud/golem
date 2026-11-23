@@ -92,13 +92,31 @@ pub fn validate_protobuf_agent_id(
     agent_id: Option<golem_api_grpc::proto::golem::worker::AgentId>,
 ) -> Result<AgentId, AgentError> {
     let agent_id = agent_id.ok_or_else(|| bad_request_error("Missing worker id"))?;
-    let agent_id: AgentId = agent_id
+    agent_id
         .try_into()
-        .map_err(|e| bad_request_error(format!("Invalid worker id: {e}")))?;
-    Ok(AgentId {
-        component_id: agent_id.component_id,
-        agent_id: agent_id.agent_id,
-    })
+        .map_err(|e| bad_request_error(format!("Invalid worker id: {e}")))
+}
+
+pub fn validate_protobuf_environment_id(
+    environment_id: Option<golem_api_grpc::proto::golem::common::EnvironmentId>,
+) -> Result<golem_common::model::environment::EnvironmentId, AgentError> {
+    environment_id
+        .ok_or_else(|| bad_request_error("Missing environment_id"))?
+        .try_into()
+        .map_err(|e| bad_request_error(format!("Invalid environment_id: {e}")))
+}
+
+/// The agent a request names by its agent ID and environment.
+pub fn validate_protobuf_owned_agent_id(
+    agent_id: Option<golem_api_grpc::proto::golem::worker::AgentId>,
+    environment_id: Option<golem_api_grpc::proto::golem::common::EnvironmentId>,
+) -> Result<golem_common::model::OwnedAgentId, AgentError> {
+    let agent_id = validate_protobuf_agent_id(agent_id)?;
+    let environment_id = validate_protobuf_environment_id(environment_id)?;
+    Ok(golem_common::model::OwnedAgentId::new(
+        environment_id,
+        &agent_id,
+    ))
 }
 
 pub fn validate_component_file_path(file_path: String) -> Result<CanonicalFilePath, AgentError> {
@@ -170,6 +188,12 @@ pub fn error_to_status(error: AgentError) -> Status {
                 }
                 worker_execution_error::Error::AgentAlreadyExists(err) => {
                     format!("Worker Already Exists: Worker ID = {:?}", err.agent_id)
+                }
+                worker_execution_error::Error::AgentKeyCollision(err) => {
+                    format!(
+                        "Agent Key Collision: Agent ID = {:?}, Requested Key = {}",
+                        err.agent_id, err.requested_key
+                    )
                 }
                 worker_execution_error::Error::CreateIdempotencyKeyConflict(err) => {
                     format!(
@@ -265,6 +289,12 @@ pub fn error_to_status(error: AgentError) -> Status {
                 }
                 worker_execution_error::Error::ShardingNotReady(_) => {
                     "Sharding Not Ready".to_string()
+                }
+                worker_execution_error::Error::InvocationCancelled(_) => {
+                    "Invocation Cancelled".to_string()
+                }
+                worker_execution_error::Error::CannotCancelRunningInvocation(_) => {
+                    "Cannot Cancel Running Invocation".to_string()
                 }
                 worker_execution_error::Error::FileSystemError(_) => {
                     "Failed accessing worker filesystem".to_string()

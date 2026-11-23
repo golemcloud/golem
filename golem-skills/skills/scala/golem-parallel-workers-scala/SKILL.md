@@ -9,7 +9,7 @@ description: "Fan out work to multiple parallel agents and collect results in a 
 
 Golem agents admit invocations **sequentially**. Futures and asynchronous I/O can overlap within one invocation; this is not CPU-thread parallelism. Distribute work across **multiple agent instances** for independently scheduled execution. This skill covers two approaches:
 
-1. **Child agents via codegen-generated `XClient.get(id)`** — spawn separate agent instances, dispatch work, and collect results
+1. **Child agents via codegen-generated `XClient.upsert(id)`** — spawn separate agent instances, dispatch work, and collect results
 2. **`HostApi.fork()`** — clone the current agent at the current execution point for lightweight parallel execution
 
 ## Approach 1: Child Agent Fan-Out
@@ -36,7 +36,7 @@ class CoordinatorImpl() extends Coordinator {
   override def fanOut(items: List[String]): Future[List[String]] = {
     // Spawn one child per item and call concurrently
     val futures = items.zipWithIndex.map { case (item, i) =>
-      val child = WorkerClient.get(i)
+      val child = WorkerClient.upsert(i)
       child.process(item)
     }
 
@@ -69,14 +69,10 @@ import golem.HostApi.PromiseId
 import zio.blocks.schema.Schema
 
 case class WorkResult(value: String) derives Schema
-case class PromiseRef(componentHigh: String, componentLow: String,
-                      agent: String, fingerprintHigh: String, fingerprintLow: String,
+case class PromiseRef(agent: golem.AgentId, fingerprintHigh: String, fingerprintLow: String,
                       oplogIndex: String) derives Schema {
   def toHost: PromiseId = HostApi.PromiseIdLiteral(
-    HostApi.AgentIdLiteral(
-      HostApi.ComponentIdLiteral(HostApi.UuidLiteral(
-        scala.scalajs.js.BigInt(componentHigh), scala.scalajs.js.BigInt(componentLow))),
-      agent),
+    agent,
     HostApi.UuidLiteral(
       scala.scalajs.js.BigInt(fingerprintHigh), scala.scalajs.js.BigInt(fingerprintLow)),
     scala.scalajs.js.BigInt(oplogIndex))
@@ -84,9 +80,7 @@ case class PromiseRef(componentHigh: String, componentLow: String,
 
 object PromiseRef {
   def fromHost(pid: PromiseId): PromiseRef = PromiseRef(
-    pid.agentId.componentId.uuid.highBits.toString,
-    pid.agentId.componentId.uuid.lowBits.toString,
-    pid.agentId.agentId,
+    golem.host.js.JsAgentId.toAgentId(pid.agentId),
     pid.fingerprint.highBits.toString,
     pid.fingerprint.lowBits.toString,
     pid.oplogIdx.toString)
@@ -106,7 +100,7 @@ class CoordinatorImpl() extends Coordinator {
 
     // Fire-and-forget: trigger each child with its promise ID
     val accepted = regions.zip(promiseIds).map { case (region, pid) =>
-      val child = RegionWorkerClient.get(region)
+      val child = RegionWorkerClient.upsert(region)
       child.runReport.trigger(PromiseRef.fromHost(pid))
     }
 
@@ -146,7 +140,7 @@ override def fanOutChunked(items: List[String]): Future[List[String]] = {
   chunks.foldLeft(Future.successful(List.empty[String])) { (accFut, chunk) =>
     accFut.flatMap { acc =>
       val futures = chunk.zipWithIndex.map { case (item, i) =>
-        WorkerClient.get(i).process(item)
+        WorkerClient.upsert(i).process(item)
       }
       Future.sequence(futures).map(acc ++ _)
     }
@@ -161,7 +155,7 @@ Use `Future.traverse` with `recover` for partial failure handling:
 ```scala
 override def fanOutWithErrors(items: List[String]): Future[(List[String], List[String])] = {
   val futures = items.zipWithIndex.map { case (item, i) =>
-    WorkerClient.get(i).process(item)
+    WorkerClient.upsert(i).process(item)
       .map(Right(_))
       .recover { case e: Throwable => Left(s"Item $item failed: ${e.getMessage}") }
   }
@@ -176,7 +170,7 @@ override def fanOutWithErrors(items: List[String]): Future[(List[String], List[S
 
 ## Approach 2: `HostApi.fork()`
 
-`HostApi.fork()` clones the current agent at the current execution point, creating a new agent instance with the same state but a unique phantom ID. Only a durable agent can fork, and the forked agent is durable too. Use Golem promises to synchronize between the original and forked agents.
+`HostApi.fork()` clones the current agent at the current execution point, creating a new agent instance with the same state, a new agent ID and no key. Only a durable agent can fork, and the forked agent is durable too. Use Golem promises to synchronize between the original and forked agents.
 
 ### Basic Fork Pattern
 
@@ -239,7 +233,7 @@ override def multiFork(n: Int): Future[List[String]] = {
 |----------|-------------|------------------|
 | Work is **independent** and stateless | ✅ Best fit | Works but overkill |
 | Need to **share current state** with workers | ❌ Must pass via args | ✅ Forked copy inherits state |
-| Workers need **persistent identity** | ✅ Each has own ID | ❌ Each forked agent gets a generated phantom ID |
+| Workers need **persistent identity** | ✅ Each has own ID | ❌ Each forked agent gets a new agent ID and no key |
 | Number of parallel tasks is **dynamic** | ✅ Spawn as many as needed | ✅ Fork in a loop |
 | Need **simple error isolation** | ✅ Child failure doesn't crash parent | ⚠️ Forked agent shares oplog lineage |
 

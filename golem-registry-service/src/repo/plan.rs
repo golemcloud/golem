@@ -57,6 +57,7 @@ impl<Repo: PlanRepo> LoggedPlanRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: PlanRepo> PlanRepo for LoggedPlanRepo<Repo> {
     async fn create_or_update(&self, plan: PlanRecord) -> RepoResult<()> {
         let span = Self::span_id(plan.plan_id);
@@ -113,6 +114,7 @@ impl<DBP: Pool> DbPlanRepo<DBP> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl PlanRepo for DbPlanRepo<PostgresPool> {
     async fn create_or_update(&self, plan: PlanRecord) -> RepoResult<()> {
         for attempt in 1..=MAX_PLAN_UPDATE_ATTEMPTS {

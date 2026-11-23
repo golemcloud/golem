@@ -1,0 +1,2518 @@
+{
+  "tier": "sweep",
+  "description": "Grammar sweep: redirections (files, descriptors, duplication, closing, {var}, noclobber,\nerrors) and here-documents and here-strings (see sweep_grammar_param.py for the scheme).",
+  "cases": [
+    {
+      "name": "gram redir operator out to new file",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data > new; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator out to existing file",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data > ex; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator out to directory",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data > dir; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator out to missing directory",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data > no/such; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator out to empty variable",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data > $e; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator out to spaced variable",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data > $sp; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator out to quoted spaced variable",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data > \"$sp\"; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator out to dev null",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data > /dev/null; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator out to glob one",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data > e*; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator out to glob two",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data > *x*; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator out to brace",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data > {p,q}; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator out to tilde",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data > ~/t; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator append to new file",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >> new; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator append to existing file",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >> ex; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator append to directory",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >> dir; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator append to missing directory",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >> no/such; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator append to empty variable",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >> $e; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator append to spaced variable",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >> $sp; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator append to quoted spaced variable",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >> \"$sp\"; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator append to dev null",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >> /dev/null; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator append to glob one",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >> e*; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator append to glob two",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >> *x*; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator append to brace",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >> {p,q}; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator append to tilde",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >> ~/t; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator in to new file",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; cat < new; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator in to existing file",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; cat < ex; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator in to directory",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; cat < dir; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator in to missing directory",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; cat < no/such; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator in to empty variable",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; cat < $e; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator in to spaced variable",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; cat < $sp; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator in to quoted spaced variable",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; cat < \"$sp\"; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator in to dev null",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; cat < /dev/null; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator in to glob one",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; cat < e*; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator in to glob two",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; cat < *x*; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator in to brace",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; cat < {p,q}; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator in to tilde",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; cat < ~/t; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator read write to new file",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; cat <> new; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator read write to missing directory",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; cat <> no/such; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator read write to empty variable",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; cat <> $e; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator read write to dev null",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; cat <> /dev/null; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator read write to glob one",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; cat <> e*; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator read write to glob two",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; cat <> *x*; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator read write to brace",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; cat <> {p,q}; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator read write to tilde",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; cat <> ~/t; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator clobber to new file",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >| new; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator clobber to missing directory",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >| no/such; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator clobber to empty variable",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >| $e; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator clobber to dev null",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >| /dev/null; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator clobber to glob one",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >| e*; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator clobber to glob two",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >| *x*; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator clobber to brace",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >| {p,q}; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator clobber to tilde",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >| ~/t; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator both to new file",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data &> new; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator both to missing directory",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data &> no/such; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator both to empty variable",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data &> $e; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator both to dev null",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data &> /dev/null; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator both to glob one",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data &> e*; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator both to glob two",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data &> *x*; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator both to brace",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data &> {p,q}; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator both to tilde",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data &> ~/t; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator both append to existing file",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data &>> ex; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator both append to quoted spaced variable",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data &>> \"$sp\"; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator dup out to new file",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >& new; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator dup out to missing directory",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >& no/such; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator dup out to empty variable",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >& $e; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator dup out to dev null",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >& /dev/null; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator dup out to glob one",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >& e*; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator dup out to glob two",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >& *x*; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator dup out to brace",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >& {p,q}; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator dup out to tilde",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data >& ~/t; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator fd3 out to new file",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data 3> new; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator fd3 out to missing directory",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data 3> no/such; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator fd3 out to empty variable",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data 3> $e; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator fd3 out to dev null",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data 3> /dev/null; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator fd3 out to glob one",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data 3> e*; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator fd3 out to glob two",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data 3> *x*; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator fd3 out to brace",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data 3> {p,q}; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator fd3 out to tilde",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data 3> ~/t; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator fd0 out to new file",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data 0> new; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator fd0 out to missing directory",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data 0> no/such; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator fd0 out to empty variable",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data 0> $e; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator fd0 out to dev null",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data 0> /dev/null; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator fd0 out to glob one",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data 0> e*; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator fd0 out to glob two",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data 0> *x*; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator fd0 out to brace",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data 0> {p,q}; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir operator fd0 out to tilde",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; HOME=/tmp; e=; sp='a b'; echo data 0> ~/t; echo \"status=$?\"; for f in new ex; do [[ -f $f ]] && printf '%s=[%s]\\n' \"$f\" \"$(< $f)\"; done; echo *",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir noclobber refuses an existing file",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; set -C; echo new > ex; echo status=$?; cat ex",
+      "tags": [
+        "redirection.noclobber"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir noclobber allows a new file",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; set -C; echo n > fresh; cat fresh",
+      "tags": [
+        "redirection.noclobber"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir noclobber allows append",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; set -C; echo more >> ex; cat ex",
+      "tags": [
+        "redirection.noclobber"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir noclobber clobber operator overrides",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; set -C; echo forced >| ex; cat ex",
+      "tags": [
+        "redirection.noclobber"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir noclobber allows dev null",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; set -C; echo x > /dev/null; echo status=$?",
+      "tags": [
+        "redirection.noclobber"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir noclobber read write is allowed",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; set -C; echo rw 1<> ex; cat ex",
+      "tags": [
+        "redirection.noclobber"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir noclobber both operator refuses",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; set -C; echo x &> ex; echo status=$?",
+      "tags": [
+        "redirection.noclobber"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir noclobber off again",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; set -C; set +C; echo again > ex; cat ex",
+      "tags": [
+        "redirection.noclobber"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir noclobber set -o noclobber",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; set -o noclobber; echo x > ex; echo status=$?",
+      "tags": [
+        "redirection.noclobber"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir noclobber with exec",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; set -C; exec 3> ex; echo status=$?",
+      "tags": [
+        "redirection.noclobber"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir noclobber in a subshell",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; set -C; ( echo x > ex ); echo status=$?",
+      "tags": [
+        "redirection.noclobber"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir noclobber empty file is refused too",
+      "script": "cd /tmp; echo old > ex; mkdir -p dir; : > empty; set -C; echo x > empty; echo status=$?",
+      "tags": [
+        "redirection.noclobber"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order stderr to stdout then file",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } 2>&1 > f; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order file then stderr to stdout",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } > f 2>&1; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order stdout to stderr",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } >&2; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order both to file",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } &> f; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order in a pipeline both to file",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } &> f | while read -r l; do echo \"piped:$l\"; done; [[ -f f ]] && cat f; true",
+      "tags": [
+        "redirection.duplicate",
+        "compound.pipeline"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order stderr to file",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } 2> f; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order stderr closed",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } 2>&-; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order stdout closed",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } >&-; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order swap through fd 3",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } 3>&1 1>&2 2>&3 3>&-; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order stderr to dev null",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } 2>/dev/null; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order in a pipeline stderr to dev null",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } 2>/dev/null | while read -r l; do echo \"piped:$l\"; done; [[ -f f ]] && cat f; true",
+      "tags": [
+        "redirection.duplicate",
+        "compound.pipeline"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order stdout to dev stderr",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } >/dev/stderr; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order stderr to dev stdout",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } 2>/dev/stdout; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order fd 3 unopened",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } >&3; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order fd 9 then use",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } 9>f >&9; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order move fd",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } 3>f 1>&3-; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order append both",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } &>> f; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order stderr append",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } 2>> f; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order stdout to stdout",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } >&1; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order dup with variable",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } >&$fd; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order dup to word",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } >& f; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order stderr to closed stdout",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } >&- 2>&1; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order dup out of range",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } >&99999999999; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir order dup a negative",
+      "script": "cd /tmp; fd=2; { echo out; echo err >&2; } >&-1; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd read from fd 3",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; exec 3< /tmp/in; read -r a <&3; read -r b <&3; echo \"$a $b\"; exec 3<&-",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd close stdin then read",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; read x <&-; echo status=$?",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd close stdin for cat",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; cat <&-; echo status=$?",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {},
+      "expectedStderr": {
+        "value": {
+          "text": "cat: -: Bad file descriptor\n"
+        },
+        "reason": "as in tool_layer.py: GNU utilities report a closed standard input a second time when they close it at exit (`cat: closing standard input: …`); bash-tool reports the failed read once"
+      }
+    },
+    {
+      "name": "gram redir fd read from closed fd",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; exec 3<&-; read x <&3; echo status=$?",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd read write descriptor",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; exec 4<> /tmp/in; read -r l <&4; echo \"$l\"; echo appended >&4; exec 4>&-; cat /tmp/in",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd input from dev stdin",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; echo via | cat /dev/stdin",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd input dup of stdin",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; echo dup | cat <&0",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd here-string to fd 5",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; cat <&5 5<<< five",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd input from a missing file stops the command",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; cat < /tmp/missing; echo status=$?",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd input redirect before command",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; < /tmp/in cat",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd redirect only command creates a file",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; > /tmp/created; [[ -f /tmp/created ]] && echo exists",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd redirect only command missing input",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; < /tmp/missing; echo status=$?",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd redirect in the middle of arguments",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; echo a > /tmp/mid b c; cat /tmp/mid",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd multiple output redirects",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; echo m > /tmp/m1 > /tmp/m2; cat /tmp/m1; echo --; cat /tmp/m2",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd multiple input redirects",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; cat < /tmp/in < /tmp/in2",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd fd above 9",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; exec 10> /tmp/ten; echo ten >&10; exec 10>&-; cat /tmp/ten",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd fd 255",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; echo x >&255; echo status=$?",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd redirect expansion happens once",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; n=0; echo x > /tmp/r$((n+=1)); echo $n; cat /tmp/r1",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd redirect target with command substitution",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; echo sub > \"/tmp/$(echo sub)\"; cat /tmp/sub",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd stdout to a file and back",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; exec 3>&1; exec > /tmp/cap; echo captured; exec 1>&3 3>&-; cat /tmp/cap",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd stderr of a builtin",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; cd /nonexistent 2> /tmp/e; echo status=$?; cat /tmp/e",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd stderr of a syntax error in eval",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; eval 'if' 2> /tmp/e; echo status=$?; cat /tmp/e",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd stderr of an expansion error",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; ( echo ${u?gone} ) 2> /tmp/e; echo status=$?; cat /tmp/e",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd command not found redirected",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; nosuchcmd_zz 2> /tmp/e; echo status=$?; cat /tmp/e",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd redirect on an assignment",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; v=1 > /tmp/asg; echo $v; [[ -f /tmp/asg ]] && echo created",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd redirect failure skips an assignment",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; v=1 > /tmp/no/x; echo \"[${v-unset}] $?\"",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd redirect failure on a function call",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; f() { echo called; }; f > /tmp/no/x; echo status=$?",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd redirect failure on a group",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; { echo in-group; } > /tmp/no/x; echo status=$?",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd redirect failure on a loop",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; for i in 1; do echo body; done > /tmp/no/x; echo status=$?",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd redirect failure on a subshell",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; ( echo sub ) > /tmp/no/x; echo status=$?",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd redirect failure on exec",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; exec 3> /tmp/no/x; echo \"after status=$?\"",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd redirect failure on a special builtin in posix mode",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; set -o posix; : > /tmp/no/x; echo after",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd redirect failure with set -e",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; set -e; echo x > /tmp/no/x; echo not",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd ambiguous redirect status",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; v='a b'; echo x > $v; echo status=$?",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd unset variable redirect",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; echo x > $unset_zz; echo status=$?",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd redirect to a quoted empty string",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; echo x > ''; echo status=$?",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd redirect to an fd variable name",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; exec {fdv}> /tmp/fv; echo \"fd ok $((fdv >= 10))\"; echo into >&$fdv; exec {fdv}>&-; cat /tmp/fv",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd fd variable for input",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; exec {rin}< /tmp/in; read -r -u $rin line; echo \"$line\"; exec {rin}<&-",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd fd variable close then use",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; exec {c}> /tmp/fc; exec {c}>&-; echo x >&$c; echo status=$?",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd fd variable on a command",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; echo on-cmd {w}> /tmp/fw; echo \"$((w >= 10))\"; cat /tmp/fw",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd fd variable invalid name",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; exec {1bad}> /tmp/x; echo status=$?",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd fd variable with an array element",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; exec {a[1]}> /tmp/fa; echo \"$(( a[1] >= 10 ))\"; echo el >&${a[1]}; cat /tmp/fa",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd fd variable readonly",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; readonly ro=1; exec {ro}> /tmp/x; echo status=$?",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd varredir_close",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; shopt -s varredir_close; echo x {v}> /tmp/vc; echo y >&$v; echo status=$?",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd dev fd path of an open descriptor",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; exec 3< /tmp/in; cat /dev/fd/3; exec 3<&-",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd dev fd of a closed descriptor",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; cat /dev/fd/7; echo status=$?",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd dev stderr in a redirect",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; echo to-err > /dev/stderr",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd redirect inside command substitution",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; x=$(echo inner > /tmp/ic; echo out); echo \"$x\"; cat /tmp/ic",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd redirect of a pipeline stage",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; echo a 2>/dev/null | cat > /tmp/ps; cat /tmp/ps",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd pipe and stderr operator",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; { echo o; echo e >&2; } |& while read -r l; do echo \"<$l>\"; done",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir fd pipe stderr only",
+      "script": "printf 'line1\\nline2\\n' > /tmp/in; printf 'other\\n' > /tmp/in2; { echo o; echo e >&2; } 2>&1 >/dev/null | while read -r l; do echo \"<$l>\"; done",
+      "tags": [
+        "redirection.duplicate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound group with input",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; { echo g; } < /tmp/in; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound group with here-string",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; { echo g; } <<< hs; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound subshell with output",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; ( echo s ) > /tmp/o; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound subshell with both",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; ( echo s ) &> /tmp/o; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound subshell with append twice",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; ( echo s ) >> /tmp/o >> /tmp/o; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound subshell with stderr",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; ( echo s ) 2> /tmp/o; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound for with input",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; for i in 1; do echo f; done < /tmp/in; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound for with here-string",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; for i in 1; do echo f; done <<< hs; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound while with input",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; while read -r l; do echo \"w:$l\"; done < /tmp/in; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound while with here-string",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; while read -r l; do echo \"w:$l\"; done <<< hs; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound if with output",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; if true; then echo i; fi > /tmp/o; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound if with both",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; if true; then echo i; fi &> /tmp/o; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound if with append twice",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; if true; then echo i; fi >> /tmp/o >> /tmp/o; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound if with stderr",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; if true; then echo i; fi 2> /tmp/o; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound case with output",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; case x in x) echo c;; esac > /tmp/o; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound case with both",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; case x in x) echo c;; esac &> /tmp/o; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound case with append twice",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; case x in x) echo c;; esac >> /tmp/o >> /tmp/o; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound case with stderr",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; case x in x) echo c;; esac 2> /tmp/o; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound arith with input",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; (( 1 )) < /tmp/in; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound arith with here-string",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; (( 1 )) <<< hs; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound cond with output",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; [[ -n x ]] > /tmp/o; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound cond with both",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; [[ -n x ]] &> /tmp/o; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound cond with append twice",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; [[ -n x ]] >> /tmp/o >> /tmp/o; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound cond with stderr",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; [[ -n x ]] 2> /tmp/o; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound function call with input",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; fn < /tmp/in; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound function call with here-string",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; fn <<< hs; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound select with output",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; select s in a; do echo \"$s\"; break; done > /tmp/o; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound select with both",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; select s in a; do echo \"$s\"; break; done &> /tmp/o; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound select with append twice",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; select s in a; do echo \"$s\"; break; done >> /tmp/o >> /tmp/o; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir compound select with stderr",
+      "script": "printf 'line1\\n' > /tmp/in; fn() { echo fn; read -r l && echo \"fn:$l\"; }; select s in a; do echo \"$s\"; break; done 2> /tmp/o; echo \"status=$?\"; [[ -f /tmp/o ]] && cat /tmp/o; true",
+      "tags": [
+        "redirection.output"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir exec exec output to a file",
+      "script": "exec > /tmp/eo; echo hidden; exec >&2; cat /tmp/eo >&2",
+      "tags": [
+        "redirection.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir exec exec stderr to stdout",
+      "script": "exec 2>&1; echo e >&2",
+      "tags": [
+        "redirection.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir exec exec input",
+      "script": "printf 'a\\nb\\n' > /tmp/ei; exec < /tmp/ei; read x; read y; echo \"$x$y\"",
+      "tags": [
+        "redirection.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir exec exec closes",
+      "script": "exec 3> /tmp/c3; exec 3>&-; echo x >&3; echo status=$?",
+      "tags": [
+        "redirection.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir exec exec in a subshell does not persist",
+      "script": "( exec > /tmp/es; echo inner ); echo outer; cat /tmp/es",
+      "tags": [
+        "redirection.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir exec exec in a function persists",
+      "script": "f() { exec 4> /tmp/ef; }; f; echo via4 >&4; cat /tmp/ef",
+      "tags": [
+        "redirection.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir exec exec with no command and no redirect",
+      "script": "exec; echo still",
+      "tags": [
+        "redirection.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir exec exec numbered duplicate",
+      "script": "exec 5>&1; echo five >&5",
+      "tags": [
+        "redirection.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir exec exec move descriptor",
+      "script": "exec 6>&1; exec 7>&6-; echo seven >&7; echo x >&6; echo status=$?",
+      "tags": [
+        "redirection.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc plain: variables",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<EOF\nv=$v braced=${v} default=${u:-d}\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc plain: escapes",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<EOF\ndollar=\\$v backslash=\\\\ backquote=\\` quote=\\\" other=\\n\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc plain: line continuation",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<EOF\nfirst \\\ncontinued\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc plain: tabs",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<EOF\n\tone tab\n\t\ttwo tabs\n    spaces\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc plain: array",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<EOF\narr=${a[1]} all=${a[*]} count=${#a[@]}\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc plain: empty",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<EOF\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc single quoted: variables",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<'EOF'\nv=$v braced=${v} default=${u:-d}\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc single quoted: escapes",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<'EOF'\ndollar=\\$v backslash=\\\\ backquote=\\` quote=\\\" other=\\n\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc single quoted: line continuation",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<'EOF'\nfirst \\\ncontinued\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc single quoted: tabs",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<'EOF'\n\tone tab\n\t\ttwo tabs\n    spaces\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc single quoted: array",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<'EOF'\narr=${a[1]} all=${a[*]} count=${#a[@]}\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc single quoted: empty",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<'EOF'\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc double quoted: variables",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<\"EOF\"\nv=$v braced=${v} default=${u:-d}\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc double quoted: escapes",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<\"EOF\"\ndollar=\\$v backslash=\\\\ backquote=\\` quote=\\\" other=\\n\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc double quoted: line continuation",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<\"EOF\"\nfirst \\\ncontinued\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc double quoted: tabs",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<\"EOF\"\n\tone tab\n\t\ttwo tabs\n    spaces\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc double quoted: array",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<\"EOF\"\narr=${a[1]} all=${a[*]} count=${#a[@]}\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc double quoted: empty",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<\"EOF\"\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc partly quoted: variables",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<E\"O\"F\nv=$v braced=${v} default=${u:-d}\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc partly quoted: escapes",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<E\"O\"F\ndollar=\\$v backslash=\\\\ backquote=\\` quote=\\\" other=\\n\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc partly quoted: line continuation",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<E\"O\"F\nfirst \\\ncontinued\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc partly quoted: tabs",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<E\"O\"F\n\tone tab\n\t\ttwo tabs\n    spaces\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc partly quoted: array",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<E\"O\"F\narr=${a[1]} all=${a[*]} count=${#a[@]}\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc partly quoted: empty",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<E\"O\"F\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc backslashed: variables",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<\\EOF\nv=$v braced=${v} default=${u:-d}\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc backslashed: escapes",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<\\EOF\ndollar=\\$v backslash=\\\\ backquote=\\` quote=\\\" other=\\n\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc backslashed: line continuation",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<\\EOF\nfirst \\\ncontinued\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc backslashed: tabs",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<\\EOF\n\tone tab\n\t\ttwo tabs\n    spaces\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc backslashed: array",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<\\EOF\narr=${a[1]} all=${a[*]} count=${#a[@]}\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc backslashed: empty",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<\\EOF\nEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc dash plain: variables",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<-EOF\nv=$v braced=${v} default=${u:-d}\n\tEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc dash plain: command substitution",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<-EOF\nsub=$(echo s) back=`echo b`\n\tEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc dash plain: arithmetic",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<-EOF\nsum=$((1+2)) legacy=$[2*2]\n\tEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc dash plain: escapes",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<-EOF\ndollar=\\$v backslash=\\\\ backquote=\\` quote=\\\" other=\\n\n\tEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc dash plain: quotes are literal",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<-EOF\n'single' \"double\" $'ansi'\n\tEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc dash plain: tabs",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<-EOF\n\tone tab\n\t\ttwo tabs\n    spaces\n\tEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc dash plain: positional",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<-EOF\nargs=$# first=$1 all=$@\n\tEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc dash plain: glob and tilde are literal",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<-EOF\n* ~ {a,b}\n\tEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc dash plain: delimiter like lines",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<-EOF\nEOF \n EOF\nEOFX\n\tEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc dash quoted: variables",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<-'EOF'\nv=$v braced=${v} default=${u:-d}\n\tEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc dash quoted: escapes",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<-'EOF'\ndollar=\\$v backslash=\\\\ backquote=\\` quote=\\\" other=\\n\n\tEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc dash quoted: line continuation",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<-'EOF'\nfirst \\\ncontinued\n\tEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc dash quoted: tabs",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<-'EOF'\n\tone tab\n\t\ttwo tabs\n    spaces\n\tEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc dash quoted: array",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<-'EOF'\narr=${a[1]} all=${a[*]} count=${#a[@]}\n\tEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc dash quoted: empty",
+      "script": "cd /tmp; HOME=/h; v=val; a=(x y z); set -- p1 p2; cat <<-'EOF'\n\tEOF\necho \"status=$?\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc two on one line",
+      "script": "cat <<A; cat <<B\none\nA\ntwo\nB",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc two on one command",
+      "script": "cat <<A <<B\none\nA\ntwo\nB",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc to a numbered fd",
+      "script": "cat <&3 3<<EOF\nfd3\nEOF",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc to a while loop",
+      "script": "while read -r l; do echo \"<$l>\"; done <<EOF\na\n b\nEOF",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc in a function called twice",
+      "script": "f() {\ncat <<EOF\nin f $1\nEOF\n}\nf one; f two",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc in a loop",
+      "script": "for i in 1 2; do\ncat <<EOF\niter $i\nEOF\ndone",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc in a command substitution",
+      "script": "x=$(cat <<EOF\ninside\nEOF\n); echo \"[$x]\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc in a pipeline",
+      "script": "cat <<EOF | while read -r l; do echo \"p:$l\"; done\nx\ny\nEOF",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc followed by more commands on the line",
+      "script": "cat <<EOF && echo after\nbody\nEOF",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc in an if condition",
+      "script": "if cat <<EOF\ncond\nEOF\nthen echo yes; fi",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc delimiter with trailing space does not end it",
+      "script": "cat <<EOF\nbody\nEOF \nEOF",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc unterminated with dash",
+      "script": "cat <<-EOF\n\tno end",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc empty delimiter",
+      "script": "cat <<''\nbody\n\necho after",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc delimiter with a dollar",
+      "script": "cat <<$x\nbody\n$x",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc delimiter with spaces quoted",
+      "script": "cat <<'E F'\nbody\nE F",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc delimiter is a number",
+      "script": "cat <<1\nbody\n1",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc body with a lone backslash at the end",
+      "script": "cat <<EOF\nend\\\nEOF",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc unquoted body keeps single quotes",
+      "script": "v=x; cat <<EOF\n'$v'\nEOF",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc dash strips only tabs",
+      "script": "cat <<-EOF\n\t\ttabbed\n  spaced\n\tEOF",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc dash with a tab before delimiter",
+      "script": "cat <<-EOF\n\tbody\n\t\tEOF",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc here-document into a variable with read",
+      "script": "read -r -d '' v <<EOF\nmulti\nline\nEOF\necho \"$v\"",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc here-document with nested command substitution heredoc",
+      "script": "cat <<A\n$(cat <<B\ninner\nB\n)\nA",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc here-document to a function",
+      "script": "f() { cat; }; f <<EOF\nto-f\nEOF",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc here-document on a group",
+      "script": "{ read a; read b; } <<EOF\n1\n2\nEOF\necho $a$b",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc here-document with a very long line",
+      "script": "cat <<EOF | { IFS= read -r l; echo ${#l}; }\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nEOF",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc here-document body expansions run once",
+      "script": "n=0; cat <<EOF\n$((n+=1))\nEOF\necho $n",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc here-document with unset under set -u",
+      "script": "set -u; cat <<EOF\n${u:-fine}\nEOF",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc here-document with a comment line",
+      "script": "cat <<EOF\n# not a comment\nEOF",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc here-document in eval",
+      "script": "eval 'cat <<EOF\nevaled\nEOF'",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc here-document after a semicolon list",
+      "script": "echo a; cat <<EOF; echo b\nmid\nEOF",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc here-document with CRLF delimiter",
+      "script": "cat <<EOF\nbody\nEOF\r\necho after\nEOF",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir heredoc here-document and xtrace",
+      "script": "set -x; cat <<EOF\ntraced\nEOF",
+      "tags": [
+        "redirection.heredoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring literal",
+      "script": "cd /tmp; HOME=/h; sp='a  b'; a=(x 'y z'); set -- p 'q r'; nl=$'l1\\nl2'; tn=$'t\\n'; while IFS= read -r l; do printf '<%s>' \"$l\"; done <<< word; echo",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring empty",
+      "script": "cd /tmp; HOME=/h; sp='a  b'; a=(x 'y z'); set -- p 'q r'; nl=$'l1\\nl2'; tn=$'t\\n'; while IFS= read -r l; do printf '<%s>' \"$l\"; done <<< ''; echo",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring variable with spaces",
+      "script": "cd /tmp; HOME=/h; sp='a  b'; a=(x 'y z'); set -- p 'q r'; nl=$'l1\\nl2'; tn=$'t\\n'; while IFS= read -r l; do printf '<%s>' \"$l\"; done <<< $sp; echo",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring quoted variable",
+      "script": "cd /tmp; HOME=/h; sp='a  b'; a=(x 'y z'); set -- p 'q r'; nl=$'l1\\nl2'; tn=$'t\\n'; while IFS= read -r l; do printf '<%s>' \"$l\"; done <<< \"$sp\"; echo",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring array at",
+      "script": "cd /tmp; HOME=/h; sp='a  b'; a=(x 'y z'); set -- p 'q r'; nl=$'l1\\nl2'; tn=$'t\\n'; while IFS= read -r l; do printf '<%s>' \"$l\"; done <<< ${a[@]}; echo",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring quoted array at",
+      "script": "cd /tmp; HOME=/h; sp='a  b'; a=(x 'y z'); set -- p 'q r'; nl=$'l1\\nl2'; tn=$'t\\n'; while IFS= read -r l; do printf '<%s>' \"$l\"; done <<< \"${a[@]}\"; echo",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring array star",
+      "script": "cd /tmp; HOME=/h; sp='a  b'; a=(x 'y z'); set -- p 'q r'; nl=$'l1\\nl2'; tn=$'t\\n'; while IFS= read -r l; do printf '<%s>' \"$l\"; done <<< \"${a[*]}\"; echo",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring dollar at",
+      "script": "cd /tmp; HOME=/h; sp='a  b'; a=(x 'y z'); set -- p 'q r'; nl=$'l1\\nl2'; tn=$'t\\n'; while IFS= read -r l; do printf '<%s>' \"$l\"; done <<< $@; echo",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring glob",
+      "script": "cd /tmp; HOME=/h; sp='a  b'; a=(x 'y z'); set -- p 'q r'; nl=$'l1\\nl2'; tn=$'t\\n'; while IFS= read -r l; do printf '<%s>' \"$l\"; done <<< *; echo",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring tilde",
+      "script": "cd /tmp; HOME=/h; sp='a  b'; a=(x 'y z'); set -- p 'q r'; nl=$'l1\\nl2'; tn=$'t\\n'; while IFS= read -r l; do printf '<%s>' \"$l\"; done <<< ~; echo",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring brace",
+      "script": "cd /tmp; HOME=/h; sp='a  b'; a=(x 'y z'); set -- p 'q r'; nl=$'l1\\nl2'; tn=$'t\\n'; while IFS= read -r l; do printf '<%s>' \"$l\"; done <<< {a,b}; echo",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring newline value",
+      "script": "cd /tmp; HOME=/h; sp='a  b'; a=(x 'y z'); set -- p 'q r'; nl=$'l1\\nl2'; tn=$'t\\n'; while IFS= read -r l; do printf '<%s>' \"$l\"; done <<< $nl; echo",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring trailing newline value",
+      "script": "cd /tmp; HOME=/h; sp='a  b'; a=(x 'y z'); set -- p 'q r'; nl=$'l1\\nl2'; tn=$'t\\n'; while IFS= read -r l; do printf '<%s>' \"$l\"; done <<< $tn; echo",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring command substitution",
+      "script": "cd /tmp; HOME=/h; sp='a  b'; a=(x 'y z'); set -- p 'q r'; nl=$'l1\\nl2'; tn=$'t\\n'; while IFS= read -r l; do printf '<%s>' \"$l\"; done <<< $(printf 'x\\n\\n'); echo",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring ansi-c",
+      "script": "cd /tmp; HOME=/h; sp='a  b'; a=(x 'y z'); set -- p 'q r'; nl=$'l1\\nl2'; tn=$'t\\n'; while IFS= read -r l; do printf '<%s>' \"$l\"; done <<< $'a\\tb'; echo",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring arithmetic",
+      "script": "cd /tmp; HOME=/h; sp='a  b'; a=(x 'y z'); set -- p 'q r'; nl=$'l1\\nl2'; tn=$'t\\n'; while IFS= read -r l; do printf '<%s>' \"$l\"; done <<< $((6*7)); echo",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring unset",
+      "script": "cd /tmp; HOME=/h; sp='a  b'; a=(x 'y z'); set -- p 'q r'; nl=$'l1\\nl2'; tn=$'t\\n'; while IFS= read -r l; do printf '<%s>' \"$l\"; done <<< $unset_zz; echo",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring to read -a",
+      "script": "read -ra arr <<< 'a b  c'; echo ${#arr[@]}",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring to a function",
+      "script": "f() { read -r x; echo \"[$x]\"; }; f <<< in-f",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring to a numbered fd",
+      "script": "read -r -u 4 x 4<<< fdfour; echo $x",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring twice on one command",
+      "script": "cat <<< first <<< second",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring with a here-document",
+      "script": "cat <<< hs <<EOF\nhd\nEOF",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring in a loop condition",
+      "script": "while read -r l; do echo $l; break; done <<< loop",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram redir herestring large",
+      "script": "v=$(printf '%0500d' 0); cat <<< \"$v\" | { IFS= read -r l; echo ${#l}; }",
+      "tags": [
+        "redirection.herestring"
+      ],
+      "options": {}
+    }
+  ]
+}

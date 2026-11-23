@@ -16,7 +16,12 @@ async fn establish_reader_order(
     let entries = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             executor.commit_oplog(id).await?;
-            let entries = executor.get_oplog(id, OplogIndex::INITIAL).await?;
+            let entries = executor
+                .get_oplog(
+                    &OwnedAgentId::new(executor.context.default_environment_id, id),
+                    OplogIndex::INITIAL,
+                )
+                .await?;
             if starts_named(&entries, RECEIVE).len() == 1 {
                 break Ok::<_, anyhow::Error>(entries);
             }
@@ -41,11 +46,18 @@ async fn establish_reader_order(
     .promise_id;
     ensure!(&promise.agent_id == id && promise.oplog_idx == creates[0]);
     ensure!(terminal_count(&entries, creates[0]) == 1);
-    executor.complete_promise(&promise, vec![1]).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &promise, vec![1])
+        .await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             executor.commit_oplog(id).await?;
-            let entries = executor.get_oplog(id, OplogIndex::INITIAL).await?;
+            let entries = executor
+                .get_oplog(
+                    &OwnedAgentId::new(executor.context.default_environment_id, id),
+                    OplogIndex::INITIAL,
+                )
+                .await?;
             if starts_named(&entries, TIMED_RECEIVE).len() == 1 {
                 assert_invocation(&entries, key, 0)?;
                 break Ok::<_, anyhow::Error>(());
@@ -93,14 +105,14 @@ async fn durable_websocket_two_receive_interruption(
         .store()
         .await?;
     let seed_id = executor
-        .start_agent(&component.id, agent_id!("WebsocketTest", "lock-seed"))
+        .start_agent(&component.id, agent_key!("WebsocketTest", "lock-seed"))
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id.clone())
         .await
         .context("seed Worker missing")?
         .primary();
-    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
@@ -108,18 +120,24 @@ async fn durable_websocket_two_receive_interruption(
     })
     .await?;
     limits.run_batch_for_test().await;
-    let name = agent_id!("WebsocketTest", "lock-contention");
+    let name = agent_key!("WebsocketTest", "lock-contention");
     let key = IdempotencyKey::fresh();
-    let id = AgentId::from_agent_id(component.id, &name).unwrap();
-    let worker = Worker::get_or_create_suspended(
+    let id = crate::agent::keyed_agent_id(component.environment_id, &name).agent_id;
+    let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    let worker = Worker::get_or_create_suspended_with_freshness(
         seed.all(),
-        &OwnedAgentId::new(context.default_environment_id, &id),
+        &owned,
         None,
         vec![],
         None,
         None,
         &InvocationContextStack::fresh(),
         callers::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        golem_worker_executor::worker::CreateIntent::Invocation {
+            owner: golem_worker_executor::worker::NewOwner::keyed(component.id, name.clone()),
+            idempotency_key: None,
+        },
     )
     .await?;
     let mut peer = Peer::start().await?;
@@ -149,7 +167,7 @@ async fn durable_websocket_two_receive_interruption(
         ensure!(handshake.number == 1);
         establish_reader_order(&executor, &id, &stored_key).await?;
         executor.commit_oplog(&id).await?;
-        let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         let receives = starts_named(&entries, RECEIVE);
         let timed = starts_named(&entries, TIMED_RECEIVE);
         ensure!(receives.len() == 1 && timed.len() == 1 && receives[0] < timed[0], "not two ordered receive Starts: {entries:#?}");
@@ -171,7 +189,7 @@ async fn durable_websocket_two_receive_interruption(
         info!(%key, %id, untimed_start = %receives[0], timed_start = %timed[0], "Two receive Starts recorded with peer frames withheld");
         let first_frame = handshake.send;
         // Keep the peer frame withheld until interruption closes the socket.
-        tokio::time::timeout(Duration::from_secs(10), executor.interrupt(&id)).await??;
+        tokio::time::timeout(Duration::from_secs(10), executor.interrupt(&owned)).await??;
         peer.closed(1).await?;
         tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
         tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
@@ -205,7 +223,7 @@ async fn durable_websocket_two_receive_interruption(
 
 macro_rules! lock_case {
     ($name:ident, Storage, $mode:ident) => {
-        lock_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
+        lock_case!(#[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
     };
     ($(#[$attr:meta])* $name:ident, $resource:ident, $mode:ident) => {
         $(#[$attr])*
@@ -248,16 +266,22 @@ lock_case!(
     Compute,
     Ephemeral
 );
-lock_case!(
-    durable_websocket_reader_lock_stop_only_managed_xfs_storage_quota,
-    Storage,
-    Durable
-);
-lock_case!(
-    ephemeral_websocket_reader_lock_stop_only_managed_xfs_storage_quota,
-    Storage,
-    Ephemeral
-);
+#[cfg(target_os = "linux")]
+mod storage {
+    use super::*;
+    use test_r::test;
+
+    lock_case!(
+        durable_websocket_reader_lock_stop_only_managed_xfs_storage_quota,
+        Storage,
+        Durable
+    );
+    lock_case!(
+        ephemeral_websocket_reader_lock_stop_only_managed_xfs_storage_quota,
+        Storage,
+        Ephemeral
+    );
+}
 
 fn lock_receive_starts(
     entries: &[PublicOplogEntryWithIndex],
@@ -349,14 +373,17 @@ async fn pending_reader_lock(
         .store()
         .await?;
     let seed_id = executor
-        .start_agent(&component.id, agent_id!("WebsocketTest", "monthly-ws-seed"))
+        .start_agent(
+            &component.id,
+            agent_key!("WebsocketTest", "monthly-ws-seed"),
+        )
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id.clone())
         .await
         .unwrap()
         .primary();
-    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
@@ -376,25 +403,21 @@ async fn pending_reader_lock(
     let target_updates_start = registry.applied_updates().len();
     let durable = mode == AgentMode::Durable;
     let name = if durable {
-        agent_id!("WebsocketTest", "monthly-ws-timed-receive")
+        agent_key!("WebsocketTest", "monthly-ws-timed-receive")
     } else {
-        agent_id!("EphemeralWebsocketTest", "monthly-ws-timed-receive")
+        agent_key!("EphemeralWebsocketTest", "monthly-ws-timed-receive")
     };
     let key = IdempotencyKey::fresh();
-    let physical = if durable {
-        name.clone()
-    } else {
-        name.clone()
-            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
-                &executor,
-                &key,
-                "receive_lock_contention",
-            ))
-            .unwrap()
-    };
-    let id = AgentId::from_agent_id(component.id, &physical).unwrap();
+    let id = invocation_agent_id(
+        &executor,
+        component.environment_id,
+        &name,
+        durable,
+        &key,
+        "receive_lock_contention",
+    );
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
-    let worker = Worker::get_or_create_suspended(
+    let worker = Worker::get_or_create_suspended_with_freshness(
         seed.all(),
         &owned,
         None,
@@ -403,6 +426,15 @@ async fn pending_reader_lock(
         None,
         &InvocationContextStack::fresh(),
         callers::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        invocation_create_intent(
+            &executor,
+            component.id,
+            &name,
+            durable,
+            &key,
+            "receive_lock_contention",
+        ),
     )
     .await?;
     let mut peer = Peer::start().await?;
@@ -440,7 +472,7 @@ async fn pending_reader_lock(
         let receive_starts = tokio::time::timeout(Duration::from_secs(15), async {
             loop {
                 executor.commit_oplog(&id).await?;
-                let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
                 if entries.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == TIMED_RECEIVE)) {
                     let start = lock_receive_starts(&entries, 0)?;
                     assert_invocation(&entries, &stored_key, 0)?;
@@ -525,7 +557,7 @@ async fn pending_reader_lock(
         let released_slot = tokio::time::timeout(Duration::from_secs(5), pool.acquire())
             .await.context("retired socket must release WebSocket slot")??;
         drop(released_slot);
-        let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let stopped = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         assert_invocation(&stopped, &stored_key, 0)?;
         ensure!(
             lock_receive_starts(&stopped, 0)?.1 == receive_start,
@@ -587,7 +619,7 @@ async fn pending_reader_lock(
             target_joined = true;
             ensure!(failed?.is_err());
         }
-        executor.wait_for_status(&id, if durable { AgentStatus::Suspended } else { AgentStatus::Failed }, Duration::from_secs(10)).await?;
+        executor.wait_for_status(&owned, if durable { AgentStatus::Suspended } else { AgentStatus::Failed }, Duration::from_secs(10)).await?;
         ensure!(count_agent_invocation_pair_since(&stopped, OplogIndex::INITIAL) == (2, 1));
         info!(?resource, ?mode, ?errors, suspends, "Reader-lock stop retained one unfinished method with mode-specific lifecycle outcome");
         flush_stopped_usage(&limits, &registry, resource).await?;
@@ -632,9 +664,9 @@ async fn pending_reader_lock(
             ensure!(retry.is_err(), "failed ephemeral invocation cannot recover after capacity returns");
             peer.assert_counts(1, 0)?;
             // An independent durable Worker proves the failed connection released the only slot.
-            let probe_name = agent_id!("WebsocketTest", "monthly-ws-pool-probe");
-            let probe_agent_id = AgentId::from_agent_id(component.id, &probe_name).unwrap();
-            probe_id = Some(probe_agent_id.clone());
+            let probe_name = agent_key!("WebsocketTest", "monthly-ws-pool-probe");
+            let probe_agent_id = crate::agent::keyed_agent_id(component.environment_id, &probe_name).agent_id;
+            probe_id = Some(probe_agent_id);
             let probe_key = IdempotencyKey::fresh();
             let probe = executor.invoke_and_await_agent_with_key(&component, &probe_name, &probe_key, "receive_lock_contention", data_value!(peer.url.clone(), 300_000u64));
             let response = async {
@@ -656,14 +688,14 @@ async fn pending_reader_lock(
             let mut payloads = vec![first, second];
             payloads.sort();
             ensure!(payloads == vec!["probe-1".to_string(), "probe-2".to_string()]);
-            let failed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let failed = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(lock_receive_starts(&failed, 0)?.1 == receive_start);
             assert_invocation(&failed, &stored_key, 0)?;
             ensure!(count_agent_invocation_pair_since(&failed, OplogIndex::INITIAL) == (2, 1));
             ensure!(failed.iter().filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))).count() == 1);
             ensure!(!worker.is_loaded().await);
             peer.assert_counts(2, 2)?;
-            executor.wait_for_status(&id, AgentStatus::Failed, Duration::from_secs(10)).await?;
+            executor.wait_for_status(&owned, AgentStatus::Failed, Duration::from_secs(10)).await?;
             info!(?resource, %key, %receive_start, handshakes = 2, frames = 2, "Ephemeral failure stayed terminal after capacity restoration; independent Worker reused WebSocket slot");
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -771,15 +803,15 @@ async fn durable_websocket_two_receives_with_second_frame_timeout(
     let seed_id = executor
         .start_agent(
             &component.id,
-            agent_id!("WebsocketTest", "timeout-lock-seed"),
+            agent_key!("WebsocketTest", "timeout-lock-seed"),
         )
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id.clone())
         .await
         .context("seed Worker missing")?
         .primary();
-    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
@@ -787,18 +819,24 @@ async fn durable_websocket_two_receives_with_second_frame_timeout(
     })
     .await?;
     limits.run_batch_for_test().await;
-    let name = agent_id!("WebsocketTest", "timeout-lock-contention");
+    let name = agent_key!("WebsocketTest", "timeout-lock-contention");
     let key = IdempotencyKey::fresh();
-    let id = AgentId::from_agent_id(component.id, &name).unwrap();
-    let worker = Worker::get_or_create_suspended(
+    let id = crate::agent::keyed_agent_id(component.environment_id, &name).agent_id;
+    let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    let worker = Worker::get_or_create_suspended_with_freshness(
         seed.all(),
-        &OwnedAgentId::new(context.default_environment_id, &id),
+        &owned,
         None,
         vec![],
         None,
         None,
         &InvocationContextStack::fresh(),
         callers::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        golem_worker_executor::worker::CreateIntent::Invocation {
+            owner: golem_worker_executor::worker::NewOwner::keyed(component.id, name.clone()),
+            idempotency_key: None,
+        },
     )
     .await?;
     let mut peer = Peer::start().await?;
@@ -829,7 +867,7 @@ async fn durable_websocket_two_receives_with_second_frame_timeout(
         establish_reader_order(&executor, &id, &stored_key).await?;
         let mut raw = worker.raw_interrupt_for_test();
         executor.commit_oplog(&id).await?;
-        let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         let untimed = starts_named(&entries, RECEIVE);
         let timed = starts_named(&entries, TIMED_RECEIVE);
         ensure!(starts_named(&entries, CONNECT).len() == 1 && untimed.len() == 1 && timed.len() == 1 && untimed[0] < timed[0]);
@@ -839,7 +877,7 @@ async fn durable_websocket_two_receives_with_second_frame_timeout(
         tokio::time::sleep(Duration::from_millis(800)).await;
         ensure!(!invocation.is_finished());
         executor.commit_oplog(&id).await?;
-        let before_release = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let before_release = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         for start in [untimed[0], timed[0]] { assert_receive_terminal(&before_release, start, 0)?; }
         ensure!(raw.try_recv().is_err());
         peer.assert_counts(1, 0)?;
@@ -847,7 +885,7 @@ async fn durable_websocket_two_receives_with_second_frame_timeout(
         let result = tokio::time::timeout(Duration::from_secs(10), &mut invocation).await.context("timed frame did not expire after lock acquisition")??;
         ensure!(result?.into_typed::<Result<(String, Option<String>), String>>()? == Ok(("first".to_string(), None)));
         ensure!(raw.try_recv().is_err());
-        let complete = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let complete = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         for start in [untimed[0], timed[0]] { assert_receive_terminal(&complete, start, 1)?; }
         assert_invocation(&complete, &stored_key, 1)?;
         assert_settled_history(&complete)?;

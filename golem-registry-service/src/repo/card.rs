@@ -74,6 +74,7 @@ impl<Repo: CardRepo> LoggedCardRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: CardRepo> CardRepo for LoggedCardRepo<Repo> {
     async fn create(&self, card: CardRecord) -> Result<CardRecord, CardRepoError> {
         let span = Self::span_card_id(CardId(card.card_id));
@@ -451,6 +452,7 @@ impl DbCardRepo<SqlitePool> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl CardRepo for DbCardRepo<PostgresPool> {
     async fn create(&self, record: CardRecord) -> Result<CardRecord, CardRepoError> {
         self.db_pool

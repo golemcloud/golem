@@ -1884,7 +1884,6 @@ struct UnmanagedAgents {
     provisioning: SandboxFilesystemProvisioning,
     scratch: Arc<HostDirectory>,
     store: InitialFileStore,
-    component_id: ComponentId,
 }
 
 impl UnmanagedAgents {
@@ -1905,22 +1904,18 @@ impl UnmanagedAgents {
             provisioning,
             scratch,
             store: InitialFileStore::new().await,
-            component_id: ComponentId::new(),
         }
     }
 
     fn agent(&self, name: &str) -> OwnedAgentId {
-        OwnedAgentId::new(
-            self.store.environment_id,
-            &AgentId::from_agent_name_string(self.component_id, name).unwrap(),
-        )
+        OwnedAgentId::new(self.store.environment_id, &crate::test_agent_id(name))
     }
 
     fn root(&self, agent: &OwnedAgentId) -> PathBuf {
         self.parent
             .path()
             .join(agent.environment_id.to_string())
-            .join(agent.agent_id.component_id.to_string())
+            .join(format!("{:08x}", agent.agent_id.type_tag()))
             .join(agent_path_segment(&agent.agent_id))
     }
 
@@ -2085,235 +2080,234 @@ fn list_entries(
 }
 
 #[cfg(target_os = "macos")]
-#[test]
-#[timeout("60s")]
-#[test_r::tag(native_apfs)]
-async fn apfs_alias_renamed_initial_file_is_captured_and_restores_with_native_spelling() {
-    assert_apfs_alias_capture_restores(
-        "caf\u{e9}.txt",
-        "caf\u{e9}.txt",
-        "cafe\u{301}.txt",
-        "cafe\u{301}.txt",
-    )
-    .await;
-}
+mod macos {
+    use super::*;
+    use test_r::{test, timeout};
 
-#[cfg(target_os = "macos")]
-#[test]
-#[timeout("60s")]
-#[test_r::tag(native_apfs)]
-async fn apfs_alias_renamed_initial_file_parent_keeps_the_stored_ancestor_spelling() {
-    assert_apfs_alias_capture_restores(
-        "outer/caf\u{e9}/file.txt",
-        "outer/caf\u{e9}",
-        "outer/cafe\u{301}",
-        "outer/cafe\u{301}/file.txt",
-    )
-    .await;
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-#[timeout("60s")]
-#[test_r::tag(native_apfs)]
-async fn apfs_case_alias_renamed_initial_file_restores_on_a_case_insensitive_volume() {
-    let observation = tempfile::tempdir().unwrap();
-    std::fs::write(observation.path().join("case-probe"), b"case mode").unwrap();
-    let insensitive = observation.path().join("CASE-PROBE").exists();
-    println!("native APFS case-insensitive lookup observed: {insensitive}");
-    if insensitive {
-        assert_apfs_alias_capture_restores("ro.txt", "ro.txt", "RO.txt", "RO.txt").await;
-    } else {
-        assert_eq!(
-            std::fs::read(observation.path().join("CASE-PROBE"))
-                .unwrap_err()
-                .kind(),
-            std::io::ErrorKind::NotFound,
-        );
+    #[test]
+    #[timeout("60s")]
+    #[test_r::tag(native_apfs)]
+    async fn apfs_alias_renamed_initial_file_is_captured_and_restores_with_native_spelling() {
+        assert_apfs_alias_capture_restores(
+            "caf\u{e9}.txt",
+            "caf\u{e9}.txt",
+            "cafe\u{301}.txt",
+            "cafe\u{301}.txt",
+        )
+        .await;
     }
-}
 
-#[cfg(target_os = "macos")]
-#[test]
-#[timeout("60s")]
-#[test_r::tag(native_apfs)]
-async fn apfs_capture_of_a_tree_with_hard_links_restores_the_link_groups() {
-    let agents = apfs_agents().await;
-    let files = [
-        agents
-            .store
-            .declare("/dir/ro.txt", AgentFilePermissions::ReadOnly, b"read-only")
-            .await,
-        agents
-            .store
-            .declare("/rw.txt", AgentFilePermissions::ReadWrite, b"read-write")
-            .await,
-        agents
-            .store
-            .declare("/old-name.txt", AgentFilePermissions::ReadWrite, b"renamed")
-            .await,
-        agents
-            .store
-            .declare("/gone.txt", AgentFilePermissions::ReadWrite, b"deleted")
-            .await,
-    ];
-    let source_agent = agents.agent("hard-link-source");
-    let source = agents
-        .start(&source_agent, &files, NO_RESTORE)
-        .await
-        .unwrap();
-    let generation = resident_generation_handle(&source);
-    let at = |path: &str| PathTarget::at_root(&generation, path).unwrap();
-    assert_eq!(
-        write_file(&generation, Ok(at("agent.txt")), b"agent data").await,
-        StepOutcome::Done
-    );
-    futures::stream::iter([
-        NamespaceEdit::Link {
-            source: at("agent.txt"),
-            destination: at("agent-alias.txt"),
-        },
-        NamespaceEdit::Link {
-            source: at("dir/ro.txt"),
-            destination: at("ro-alias.txt"),
-        },
-        NamespaceEdit::Move {
-            source: at("old-name.txt"),
-            destination: at("new-name.txt"),
-        },
-        NamespaceEdit::Remove {
-            target: at("gone.txt"),
-            expected: ObjectKind::File,
-        },
-        NamespaceEdit::Move {
-            source: at("dir"),
-            destination: at("moved-dir"),
-        },
-    ])
-    .for_each(|edit| {
-        let generation = &generation;
-        async move {
-            edit_namespace(generation, edit).unwrap().await.unwrap();
+    #[test]
+    #[timeout("60s")]
+    #[test_r::tag(native_apfs)]
+    async fn apfs_alias_renamed_initial_file_parent_keeps_the_stored_ancestor_spelling() {
+        assert_apfs_alias_capture_restores(
+            "outer/caf\u{e9}/file.txt",
+            "outer/caf\u{e9}",
+            "outer/cafe\u{301}",
+            "outer/cafe\u{301}/file.txt",
+        )
+        .await;
+    }
+
+    #[test]
+    #[timeout("60s")]
+    #[test_r::tag(native_apfs)]
+    async fn apfs_case_alias_renamed_initial_file_restores_on_a_case_insensitive_volume() {
+        let observation = tempfile::tempdir().unwrap();
+        std::fs::write(observation.path().join("case-probe"), b"case mode").unwrap();
+        let insensitive = observation.path().join("CASE-PROBE").exists();
+        println!("native APFS case-insensitive lookup observed: {insensitive}");
+        if insensitive {
+            assert_apfs_alias_capture_restores("ro.txt", "ro.txt", "RO.txt", "RO.txt").await;
+        } else {
+            assert_eq!(
+                std::fs::read(observation.path().join("CASE-PROBE"))
+                    .unwrap_err()
+                    .kind(),
+                std::io::ErrorKind::NotFound,
+            );
         }
-    })
-    .await;
-    let expected = read_tree(&agents.root(&source_agent));
-    let group = |names: [&str; 2]| names.into_iter().map(String::from).collect::<BTreeSet<_>>();
-    assert_eq!(
-        expected.links,
-        BTreeSet::from([
-            group(["agent-alias.txt", "agent.txt"]),
-            group(["moved-dir/ro.txt", "ro-alias.txt"]),
-        ])
-    );
-    assert!(expected.nodes.contains_key("rw.txt"));
-    assert!(expected.nodes.contains_key("new-name.txt"));
-    assert!(!expected.nodes.contains_key("old-name.txt"));
-    assert!(!expected.nodes.contains_key("gone.txt"));
-    let captured = copied(capture(&source, Duration::from_secs(5), None))
-        .await
-        .unwrap();
-    let restored_agent = agents.agent("hard-link-restored");
-    let restored = agents
-        .start(&restored_agent, &files, Some(copying_restore(&captured)))
-        .await
-        .unwrap_or_else(|error| panic!("a capture with hard links must restore: {error}"));
-    assert_eq!(read_tree(&agents.root(&restored_agent)), expected);
-    captured.discard().await.unwrap();
-    delete(seal(source)).await.unwrap();
-    delete(seal(restored)).await.unwrap();
-}
-
-/// Filesystems on APFS storage in a temporary directory, with one initial-file store.
-#[cfg(target_os = "macos")]
-async fn apfs_agents() -> UnmanagedAgents {
-    let parent = tempfile::tempdir().unwrap();
-    let (provisioning, directories) =
-        crate::services::agent_filesystem::provision_executor_directories(
-            &FilesystemStorageMode::Apfs {
-                root: parent.path().into(),
-            },
-            golem_common::model::RetryConfig::default(),
-        )
-        .await
-        .unwrap();
-    UnmanagedAgents {
-        parent,
-        provisioning,
-        scratch: Arc::new(directories.scratch),
-        store: InitialFileStore::new().await,
-        component_id: ComponentId::new(),
     }
-}
 
-#[cfg(target_os = "macos")]
-async fn assert_apfs_alias_capture_restores(
-    declared: &str,
-    move_from: &str,
-    move_to: &str,
-    stored_file: &str,
-) {
-    let agents = apfs_agents().await;
-    let files = [agents
-        .store
-        .declare(
-            &format!("/{declared}"),
-            AgentFilePermissions::ReadOnly,
-            b"initial",
-        )
-        .await];
-    let source_agent = agents.agent("alias-source");
-    let source = agents
-        .start(&source_agent, &files, NO_RESTORE)
-        .await
-        .unwrap();
-    let generation = resident_generation_handle(&source);
-    futures::stream::iter([(move_from, "temporary"), ("temporary", move_to)])
-        .for_each(|(from, to)| {
+    #[test]
+    #[timeout("60s")]
+    #[test_r::tag(native_apfs)]
+    async fn apfs_capture_of_a_tree_with_hard_links_restores_the_link_groups() {
+        let agents = apfs_agents().await;
+        let files = [
+            agents
+                .store
+                .declare("/dir/ro.txt", AgentFilePermissions::ReadOnly, b"read-only")
+                .await,
+            agents
+                .store
+                .declare("/rw.txt", AgentFilePermissions::ReadWrite, b"read-write")
+                .await,
+            agents
+                .store
+                .declare("/old-name.txt", AgentFilePermissions::ReadWrite, b"renamed")
+                .await,
+            agents
+                .store
+                .declare("/gone.txt", AgentFilePermissions::ReadWrite, b"deleted")
+                .await,
+        ];
+        let source_agent = agents.agent("hard-link-source");
+        let source = agents
+            .start(&source_agent, &files, NO_RESTORE)
+            .await
+            .unwrap();
+        let generation = resident_generation_handle(&source);
+        let at = |path: &str| PathTarget::at_root(&generation, path).unwrap();
+        assert_eq!(
+            write_file(&generation, Ok(at("agent.txt")), b"agent data").await,
+            StepOutcome::Done
+        );
+        futures::stream::iter([
+            NamespaceEdit::Link {
+                source: at("agent.txt"),
+                destination: at("agent-alias.txt"),
+            },
+            NamespaceEdit::Link {
+                source: at("dir/ro.txt"),
+                destination: at("ro-alias.txt"),
+            },
+            NamespaceEdit::Move {
+                source: at("old-name.txt"),
+                destination: at("new-name.txt"),
+            },
+            NamespaceEdit::Remove {
+                target: at("gone.txt"),
+                expected: ObjectKind::File,
+            },
+            NamespaceEdit::Move {
+                source: at("dir"),
+                destination: at("moved-dir"),
+            },
+        ])
+        .for_each(|edit| {
             let generation = &generation;
             async move {
-                edit_namespace(
-                    generation,
-                    NamespaceEdit::Move {
-                        source: PathTarget::at_root(generation, from).unwrap(),
-                        destination: PathTarget::at_root(generation, to).unwrap(),
-                    },
-                )
-                .unwrap()
-                .await
-                .unwrap();
+                edit_namespace(generation, edit).unwrap().await.unwrap();
             }
         })
         .await;
-    let source_root = agents.root(&source_agent).into_boxed_path();
-    let expected = read_tree(&source_root);
-    assert!(expected.nodes.contains_key(stored_file));
-    assert!(!expected.nodes.contains_key(declared));
-    assert_eq!(
-        std::fs::read(source_root.join(declared)).unwrap(),
-        b"initial"
-    );
-    let captured = copied(capture(&source, Duration::from_secs(5), None))
-        .await
-        .unwrap();
-    let restored_agent = agents.agent("alias-restored");
-    let restored = agents
-        .start(&restored_agent, &files, Some(copying_restore(&captured)))
-        .await
-        .unwrap_or_else(|error| panic!("an alias-renamed capture must restore: {error}"));
-    assert_eq!(read_tree(&agents.root(&restored_agent)), expected);
-    assert!(
-        left_out_of(&captured).is_empty(),
-        "an alias-renamed initial file must keep its bytes in the capture"
-    );
-    assert!(
-        read_tree(&captured.directory().join("tree"))
-            .nodes
-            .contains_key(stored_file)
-    );
-    captured.discard().await.unwrap();
-    delete(seal(source)).await.unwrap();
-    delete(seal(restored)).await.unwrap();
+        let expected = read_tree(&agents.root(&source_agent));
+        let group = |names: [&str; 2]| names.into_iter().map(String::from).collect::<BTreeSet<_>>();
+        assert_eq!(
+            expected.links,
+            BTreeSet::from([
+                group(["agent-alias.txt", "agent.txt"]),
+                group(["moved-dir/ro.txt", "ro-alias.txt"]),
+            ])
+        );
+        assert!(expected.nodes.contains_key("rw.txt"));
+        assert!(expected.nodes.contains_key("new-name.txt"));
+        assert!(!expected.nodes.contains_key("old-name.txt"));
+        assert!(!expected.nodes.contains_key("gone.txt"));
+        let captured = copied(capture(&source, Duration::from_secs(5), None))
+            .await
+            .unwrap();
+        let restored_agent = agents.agent("hard-link-restored");
+        let restored = agents
+            .start(&restored_agent, &files, Some(copying_restore(&captured)))
+            .await
+            .unwrap_or_else(|error| panic!("a capture with hard links must restore: {error}"));
+        assert_eq!(read_tree(&agents.root(&restored_agent)), expected);
+        captured.discard().await.unwrap();
+        delete(seal(source)).await.unwrap();
+        delete(seal(restored)).await.unwrap();
+    }
+
+    /// Filesystems on APFS storage in a temporary directory, with one initial-file store.
+    async fn apfs_agents() -> UnmanagedAgents {
+        let parent = tempfile::tempdir().unwrap();
+        let (provisioning, directories) =
+            crate::services::agent_filesystem::provision_executor_directories(
+                &FilesystemStorageMode::Apfs {
+                    root: parent.path().into(),
+                },
+                golem_common::model::RetryConfig::default(),
+            )
+            .await
+            .unwrap();
+        UnmanagedAgents {
+            parent,
+            provisioning,
+            scratch: Arc::new(directories.scratch),
+            store: InitialFileStore::new().await,
+        }
+    }
+
+    async fn assert_apfs_alias_capture_restores(
+        declared: &str,
+        move_from: &str,
+        move_to: &str,
+        stored_file: &str,
+    ) {
+        let agents = apfs_agents().await;
+        let files = [agents
+            .store
+            .declare(
+                &format!("/{declared}"),
+                AgentFilePermissions::ReadOnly,
+                b"initial",
+            )
+            .await];
+        let source_agent = agents.agent("alias-source");
+        let source = agents
+            .start(&source_agent, &files, NO_RESTORE)
+            .await
+            .unwrap();
+        let generation = resident_generation_handle(&source);
+        futures::stream::iter([(move_from, "temporary"), ("temporary", move_to)])
+            .for_each(|(from, to)| {
+                let generation = &generation;
+                async move {
+                    edit_namespace(
+                        generation,
+                        NamespaceEdit::Move {
+                            source: PathTarget::at_root(generation, from).unwrap(),
+                            destination: PathTarget::at_root(generation, to).unwrap(),
+                        },
+                    )
+                    .unwrap()
+                    .await
+                    .unwrap();
+                }
+            })
+            .await;
+        let source_root = agents.root(&source_agent).into_boxed_path();
+        let expected = read_tree(&source_root);
+        assert!(expected.nodes.contains_key(stored_file));
+        assert!(!expected.nodes.contains_key(declared));
+        assert_eq!(
+            std::fs::read(source_root.join(declared)).unwrap(),
+            b"initial"
+        );
+        let captured = copied(capture(&source, Duration::from_secs(5), None))
+            .await
+            .unwrap();
+        let restored_agent = agents.agent("alias-restored");
+        let restored = agents
+            .start(&restored_agent, &files, Some(copying_restore(&captured)))
+            .await
+            .unwrap_or_else(|error| panic!("an alias-renamed capture must restore: {error}"));
+        assert_eq!(read_tree(&agents.root(&restored_agent)), expected);
+        assert!(
+            left_out_of(&captured).is_empty(),
+            "an alias-renamed initial file must keep its bytes in the capture"
+        );
+        assert!(
+            read_tree(&captured.directory().join("tree"))
+                .nodes
+                .contains_key(stored_file)
+        );
+        captured.discard().await.unwrap();
+        delete(seal(source)).await.unwrap();
+        delete(seal(restored)).await.unwrap();
+    }
 }
 
 #[test]

@@ -33,11 +33,10 @@ async fn exclusive_create_retries_after_deletion_instead_of_returning_a_missing_
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent = executor
-        .start_agent(&component.id, agent_id!("Counter", "create-after-delete"))
-        .await?;
+    let name = agent_key!("Counter", "create-after-delete");
+    let agent = executor.start_agent(&component.id, name.clone()).await?;
     let original = executor.get_worker_metadata(&agent).await?.fingerprint;
-    let owned = OwnedAgentId::new(context.default_environment_id, &agent);
+    let owned = agent.clone();
     executor.set_worker_deletion_hook(Arc::new(DeletionStageHook::new(
         owned.clone(),
         None,
@@ -49,7 +48,8 @@ async fn exclusive_create_retries_after_deletion_instead_of_returning_a_missing_
 
     let key = IdempotencyKey::fresh();
     let request = CreateWorkerRequest {
-        agent_id: Some(agent.clone().into()),
+        constructor: Some(crate::agent::proto_agent_key(&name)?),
+        component_id: Some(component.id.into()),
         component_owner_account_id: Some(context.account_id.into()),
         environment_id: Some(context.default_environment_id.into()),
         ignore_already_existing: false,
@@ -72,7 +72,9 @@ async fn exclusive_create_retries_after_deletion_instead_of_returning_a_missing_
         WorkerExecutorError::ShardingNotReady
     ));
 
-    executor.delete_worker(&agent).await?;
+    executor
+        .delete_worker_with_fingerprint(&agent, original)
+        .await?;
     let response = executor
         .client
         .clone()

@@ -208,6 +208,7 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
     fn observe_function_call(&self, interface: &str, function: &str) {
         record_host_function_call(interface, function);

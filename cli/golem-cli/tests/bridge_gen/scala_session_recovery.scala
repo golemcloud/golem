@@ -17,6 +17,8 @@ class StreamRuntimeTest extends munit.FunSuite {
     private val out = socket.getOutputStream
     private val request = new StringBuilder
     while (!request.toString.endsWith("\r\n\r\n")) request.append(in.read().toChar)
+    // A plain check: munit's assert blocks a peer thread until the test ends.
+    if (!request.toString.startsWith("GET /v1/runtime/envs/env-id/invoke-agent-session ")) throw new AssertionError(request.toString)
     private val key = request.toString.split("\r\n").find(_.toLowerCase.startsWith("sec-websocket-key:")).get.split(":", 2)(1).trim
     private val accept = Base64.getEncoder.encodeToString(MessageDigest.getInstance("SHA-1").digest((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").getBytes(UTF_8)))
     out.write(s"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Protocol: golem.agent-invocation.v1\r\nSec-WebSocket-Accept: $accept\r\n\r\n".getBytes(UTF_8))
@@ -49,12 +51,15 @@ class StreamRuntimeTest extends munit.FunSuite {
     }
     def close(): Unit = socket.close()
   }
+  // Seeds the environment lookup, so the peer sees only the session upgrade.
+  private def seedEnvironment(port: Int): Unit =
+    Bridge.environmentIds.put((s"http://127.0.0.1:$port", "token", "app", "env"), "env-id")
   private def field(value: Json, name: String): Json = Json.requireField(value, name).toOption.get
   private def text(value: Json, name: String): String = Json.asString(field(value, name)).toOption.get
   private def message(kind: String, fields: (String, Json)*): Json =
     Json.parse(StreamSessionProtocol.message(kind, fields.toVector)).fold(e => throw new IllegalArgumentException(e), identity)
 
-  for (rejectAfterTakeover <- List(false, true); terminal <- List("finished", "failed", "consumer-cancelled")) test(s"resume switches to takeover and retries its uncertain descriptor ($rejectAfterTakeover, $terminal)") {
+  for (targetMode <- List("key", "key-known", "id"); rejectAfterTakeover <- List(false, true); terminal <- List("finished", "failed", "consumer-cancelled")) test(s"resume switches to takeover and retries its uncertain descriptor ($targetMode, $rejectAfterTakeover, $terminal)") {
     val server = new ServerSocket(0)
     val peerDone = Promise[Unit]()
     val consumed = Promise[Unit]()
@@ -67,10 +72,14 @@ class StreamRuntimeTest extends munit.FunSuite {
       try {
         val startPeer = connect()
         val start = startPeer.receive()
+        val target = if (targetMode == "id")
+          Json.obj("kind" -> Json.string("id"), "agentId" -> Json.string("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"), "expectedFingerprint" -> Json.string("pinned"))
+        else Json.obj("kind" -> Json.string("key"), "constructorParameters" -> Json.parse("""{"kind":"tuple","value":{"elements":[]}}""").toOption.get)
+        assertEquals(field(start, "selector").render, Json.obj("agentType" -> Json.string("RecoveryAgent"), "application" -> Json.string("app"), "target" -> target, "environment" -> Json.string("env"), "method" -> Json.string("run")).render)
         val key = Json.string("00000000-0000-0000-0000-000000000123")
         assertNotEquals(key.render, field(start, "idempotencyKey").render)
         def accepted(p: Peer, descriptor: Json): Unit = p.send(message("invocationAccepted",
-          "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
+          "agentId" -> Json.string("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"),
           "attemptId" -> field(descriptor, "attemptId"), "idempotencyKey" -> key,
           "sessionToken" -> Json.string("stable-session"), "mappings" -> mappings))
         accepted(startPeer, start)
@@ -122,11 +131,14 @@ class StreamRuntimeTest extends munit.FunSuite {
       finally { sockets.foreach(_.close()); server.close() }
     }
     val empty = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"tuple","value":{"elements":[]}}}""")
+    seedEnvironment(server.getLocalPort)
     val resolved = ResolvedAgent(Configuration(GolemServer.Custom(s"http://127.0.0.1:${server.getLocalPort}", "token"), "app", "env", global),
-      "RecoveryAgent", SchemaValue.TupleValue(Nil), None, Nil, None)
+      "RecoveryAgent", if (targetMode == "id") None else Some(SchemaValue.TupleValue(Nil)),
+      if (targetMode == "id") Some(AgentReference(AgentId("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"), "pinned")) else None)
+    if (targetMode == "key-known") resolved.knownAgentId.set(Some(AgentId("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d")))
     try {
-      val result = Await.result(Bridge.invokeStreamingAgent(resolved, "run", () => SchemaValue.TupleValue(Nil), empty, empty, Some(PublicValueCodec.fromSchemaGraphJson(graph)), Nil), 15.seconds)
-      assertEquals(result.agentId, AgentId("component", "accepted-agent"))
+      val result = Await.result(Bridge.invokeStreamingAgent(resolved, "run", () => SchemaValue.TupleValue(Nil), empty, empty, Some(PublicValueCodec.fromSchemaGraphJson(graph))), 15.seconds)
+      assertEquals(result.agentId, AgentId("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"))
       assertEquals(result.idempotencyKey, "00000000-0000-0000-0000-000000000123")
       val stream = StreamSession.output(result.result.get, SchemaValueCodec.asString, "json",
         PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"string","value":{}}}"""))
@@ -158,11 +170,12 @@ class StreamRuntimeTest extends munit.FunSuite {
       } finally { p.close(); server.close() }
     }
     val empty = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"tuple","value":{"elements":[]}}}""")
+    seedEnvironment(server.getLocalPort)
     val resolved = ResolvedAgent(Configuration(GolemServer.Custom(s"http://127.0.0.1:${server.getLocalPort}", "token"), "app", "env", global),
-      "RecoveryAgent", SchemaValue.TupleValue(Nil), None, Nil, None)
+      "RecoveryAgent", Some(SchemaValue.TupleValue(Nil)), None)
     try {
       val error = intercept[Throwable] {
-        Await.result(Bridge.invokeStreamingAgent(resolved, "run", () => SchemaValue.TupleValue(Nil), empty, empty, None, Nil), 15.seconds)
+        Await.result(Bridge.invokeStreamingAgent(resolved, "run", () => SchemaValue.TupleValue(Nil), empty, empty, None), 15.seconds)
       }
       failed.success(())
       Await.result(peer, 10.seconds)
@@ -170,7 +183,7 @@ class StreamRuntimeTest extends munit.FunSuite {
     } finally server.close()
   }
   private def accept(p: Peer, start: Json): Unit = p.send(message("invocationAccepted",
-    "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
+    "agentId" -> Json.string("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"),
     "attemptId" -> field(start, "attemptId"), "idempotencyKey" -> Json.string("00000000-0000-0000-0000-000000000123"),
     "sessionToken" -> Json.string("stable-session"), "mappings" -> Json.arr(Vector.empty)))
 
@@ -229,7 +242,7 @@ class StreamRuntimeTest extends munit.FunSuite {
           "streamToken" -> Json.string("input-token"), "provisionalRef" -> field(provisional, "provisionalRef"),
           "inputHighWater" -> Json.obj("sequence" -> Json.string("0"), "terminal" -> Json.bool(false)))))
         def accept(p: Peer, descriptor: Json, streams: Json): Unit = p.send(message("invocationAccepted",
-          "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
+          "agentId" -> Json.string("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"),
           "attemptId" -> field(descriptor, "attemptId"), "idempotencyKey" -> Json.string("00000000-0000-0000-0000-000000000123"),
           "sessionToken" -> Json.string("input-session"), "mappings" -> streams))
         accept(first, start, initialMappings)
@@ -266,11 +279,12 @@ class StreamRuntimeTest extends munit.FunSuite {
       else if (failSource) Future.failed(new IllegalStateException("local source diagnostic"))
       else Future.successful(AgentStreamStep.End)
     })
+    seedEnvironment(server.getLocalPort)
     val resolved = ResolvedAgent(Configuration(GolemServer.Custom(s"http://127.0.0.1:${server.getLocalPort}", "token"), "app", "env", global),
-      "RecoveryAgent", SchemaValue.TupleValue(Nil), None, Nil, None)
+      "RecoveryAgent", Some(SchemaValue.TupleValue(Nil)), None)
     try {
       Await.result(Bridge.invokeStreamingAgent(resolved, "run", () => StreamSession.input(source, SchemaValue.StringValue.apply, "json", stringCodec),
-        empty, streamCodec, None, Nil), 15.seconds)
+        empty, streamCodec, None), 15.seconds)
       Await.result(peer, 15.seconds)
     } finally server.close()
   }
@@ -289,7 +303,7 @@ class StreamRuntimeTest extends munit.FunSuite {
             "streamToken" -> Json.string("input-token"), "inputHighWater" -> Json.obj("sequence" -> Json.string(sequence), "terminal" -> Json.bool(false))) ++
             (if (initial) Vector("provisionalRef" -> field(provisional, "provisionalRef")) else Vector.empty))
           p.send(message("invocationAccepted",
-            "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
+            "agentId" -> Json.string("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"),
             "attemptId" -> field(descriptor, "attemptId"), "idempotencyKey" -> Json.string("00000000-0000-0000-0000-000000000123"),
             "sessionToken" -> Json.string("input-session"), "mappings" -> Json.arr(Vector(mapping))))
         }
@@ -334,11 +348,12 @@ class StreamRuntimeTest extends munit.FunSuite {
         val error = new IllegalStateException("packed source diagnostic")
         if (synchronousThrow) throw error else Future.failed(error)
     })
+    seedEnvironment(server.getLocalPort)
     val resolved = ResolvedAgent(Configuration(GolemServer.Custom(s"http://127.0.0.1:${server.getLocalPort}", "token"), "app", "env", global),
-      "RecoveryAgent", SchemaValue.TupleValue(Nil), None, Nil, None)
+      "RecoveryAgent", Some(SchemaValue.TupleValue(Nil)), None)
     try {
       Await.result(Bridge.invokeStreamingAgent(resolved, "run", () => StreamSession.input(source, SchemaValue.U8Value.apply, "u8", codec),
-        empty, streamCodec, None, Nil), 15.seconds)
+        empty, streamCodec, None), 15.seconds)
       Await.result(peer, 15.seconds)
     } finally server.close()
   }
@@ -352,7 +367,7 @@ class StreamRuntimeTest extends munit.FunSuite {
         val start = p.receive()
         val mappings = Json.arr(Vector(Json.obj("channel" -> Json.fromLong(7), "direction" -> Json.string("output"), "streamToken" -> Json.string("output-token"))))
         p.send(message("invocationAccepted",
-          "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
+          "agentId" -> Json.string("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"),
           "attemptId" -> field(start, "attemptId"), "idempotencyKey" -> Json.string("00000000-0000-0000-0000-000000000123"),
           "sessionToken" -> Json.string("session"), "mappings" -> mappings))
         p.send(message("invocationResult", "result" -> Json.obj("kind" -> Json.string("value"), "graph" -> Json.parse(graph).toOption.get,
@@ -369,11 +384,12 @@ class StreamRuntimeTest extends munit.FunSuite {
       } finally { p.close(); server.close() }
     }
     val empty = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"tuple","value":{"elements":[]}}}""")
+    seedEnvironment(server.getLocalPort)
     val resolved = ResolvedAgent(Configuration(GolemServer.Custom(s"http://127.0.0.1:${server.getLocalPort}", "token"), "app", "env", global),
-      "RecoveryAgent", SchemaValue.TupleValue(Nil), None, Nil, None)
+      "RecoveryAgent", Some(SchemaValue.TupleValue(Nil)), None)
     try {
       val result = Await.result(Bridge.invokeStreamingAgent(resolved, "run", () => SchemaValue.TupleValue(Nil), empty, empty,
-        Some(PublicValueCodec.fromSchemaGraphJson(graph)), Nil), 15.seconds)
+        Some(PublicValueCodec.fromSchemaGraphJson(graph))), 15.seconds)
       val stream = StreamSession.output(result.result.get, SchemaValueCodec.asString, "json",
         PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"string","value":{}}}"""))
       Await.result(Await.result(stream.consume(), 5.seconds).drop(), 5.seconds)
@@ -400,7 +416,7 @@ class StreamRuntimeTest extends munit.FunSuite {
           "provisionalRef" -> field(field(entry, "value"), "provisionalRef"),
           "inputHighWater" -> Json.obj("sequence" -> Json.string("0"), "terminal" -> Json.bool(false))) }
         p.send(message("invocationAccepted",
-          "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
+          "agentId" -> Json.string("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"),
           "attemptId" -> field(start, "attemptId"), "idempotencyKey" -> Json.string("00000000-0000-0000-0000-000000000123"),
           "sessionToken" -> Json.string("session"), "mappings" -> Json.arr(mappings)))
         if (mode != "immediate") {
@@ -445,11 +461,12 @@ class StreamRuntimeTest extends munit.FunSuite {
         }
       }, () => { cancelled(index).trySuccess(()); Future.unit })
     }
+    seedEnvironment(server.getLocalPort)
     val resolved = ResolvedAgent(Configuration(GolemServer.Custom(s"http://127.0.0.1:${server.getLocalPort}", "token"), "app", "env", global),
-      "RecoveryAgent", SchemaValue.TupleValue(Nil), None, Nil, None)
+      "RecoveryAgent", Some(SchemaValue.TupleValue(Nil)), None)
     try {
       val (invocation, cancellation) = Bridge.invokeStreamingAgentCancelable(resolved, "run", () => SchemaValue.TupleValue(sources.map(source =>
-        StreamSession.input(source, SchemaValue.U8Value.apply, "u8", codec)).toList), empty, PublicValueCodec.fromSchemaGraphJson(inputGraph.render), None, Nil)
+        StreamSession.input(source, SchemaValue.U8Value.apply, "u8", codec)).toList), empty, PublicValueCodec.fromSchemaGraphJson(inputGraph.render), None)
       val checked = Future.firstCompletedOf(List(invocation, peer.flatMap(_ => Promise[AgentInvocationResult]().future)))
       if (mode == "session-cancel") {
         Await.result(prefixReceived.future, 5.seconds)
@@ -478,7 +495,7 @@ class StreamRuntimeTest extends munit.FunSuite {
         val mapping = Json.obj("channel" -> Json.fromInt(1), "direction" -> Json.string("input"), "streamToken" -> Json.string("input-token"),
           "provisionalRef" -> field(provisional, "provisionalRef"), "inputHighWater" -> Json.obj("sequence" -> Json.string("0"), "terminal" -> Json.bool(false)))
         p.send(message("invocationAccepted",
-          "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
+          "agentId" -> Json.string("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"),
           "attemptId" -> field(start, "attemptId"), "idempotencyKey" -> Json.string("00000000-0000-0000-0000-000000000123"),
           "sessionToken" -> Json.string("session"), "mappings" -> Json.arr(Vector(mapping))))
         Await.result(finished.future, 10.seconds)
@@ -488,11 +505,12 @@ class StreamRuntimeTest extends munit.FunSuite {
     val codec = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"u8","value":{}}}""")
     val streamCodec = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"stream","value":{"inner":{"kind":"u8","value":{}}}}}""")
     val source = AgentStream.fromPull[Int](() => Future.failed(new IllegalStateException("x" * (StreamSessionProtocol.MaxReplayBytes + 1))))
+    seedEnvironment(server.getLocalPort)
     val resolved = ResolvedAgent(Configuration(GolemServer.Custom(s"http://127.0.0.1:${server.getLocalPort}", "token"), "app", "env", global),
-      "RecoveryAgent", SchemaValue.TupleValue(Nil), None, Nil, None)
+      "RecoveryAgent", Some(SchemaValue.TupleValue(Nil)), None)
     try {
       val error = intercept[BridgeException](Await.result(Bridge.invokeStreamingAgent(resolved, "run",
-        () => StreamSession.input(source, SchemaValue.U8Value.apply, "u8", codec), empty, streamCodec, None, Nil), 10.seconds))
+        () => StreamSession.input(source, SchemaValue.U8Value.apply, "u8", codec), empty, streamCodec, None), 10.seconds))
       assert(error.getMessage.contains("unacknowledged input exceeds"))
       finished.success(())
       Await.result(peer, 10.seconds)
@@ -516,7 +534,7 @@ class StreamRuntimeTest extends munit.FunSuite {
         val mappings = Json.arr((1 to count).map(ch => Json.obj("channel" -> Json.fromInt(ch), "direction" -> Json.string("output"), "streamToken" -> Json.string(s"output-$ch"))).toVector)
         val pongs = Future { scala.concurrent.blocking { try p.receive() catch { case _: java.io.IOException => () } } }
         p.send(message("invocationAccepted",
-          "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
+          "agentId" -> Json.string("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"),
           "attemptId" -> field(start, "attemptId"), "idempotencyKey" -> Json.string("00000000-0000-0000-0000-000000000123"),
           "sessionToken" -> Json.string("session"), "mappings" -> mappings))
         val element = Json.obj("kind" -> Json.string("string"), "value" -> Json.string("x" * chunkSize))
@@ -540,11 +558,12 @@ class StreamRuntimeTest extends munit.FunSuite {
       } finally { p.close(); server.close() }
     }
     val empty = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"tuple","value":{"elements":[]}}}""")
+    seedEnvironment(server.getLocalPort)
     val resolved = ResolvedAgent(Configuration(GolemServer.Custom(s"http://127.0.0.1:${server.getLocalPort}", "token"), "app", "env", global),
-      "RecoveryAgent", SchemaValue.TupleValue(Nil), None, Nil, None)
+      "RecoveryAgent", Some(SchemaValue.TupleValue(Nil)), None)
     try {
       val invocation = Bridge.invokeStreamingAgent(resolved, "run", () => SchemaValue.TupleValue(Nil), empty, empty,
-        Some(PublicValueCodec.fromSchemaGraphJson(graph.render)), Nil)
+        Some(PublicValueCodec.fromSchemaGraphJson(graph.render)))
       val checkedInvocation = Future.firstCompletedOf(List(invocation, peer.flatMap(_ => Promise[AgentInvocationResult]().future)))
       if (mode.endsWith("limit")) {
         val error = intercept[BridgeException](Await.result(checkedInvocation, 30.seconds))
@@ -593,7 +612,7 @@ class StreamRuntimeTest extends munit.FunSuite {
         val first = connect()
         val start = first.receive()
         def accept(p: Peer, descriptor: Json): Unit = p.send(message("invocationAccepted",
-          "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
+          "agentId" -> Json.string("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"),
           "attemptId" -> field(descriptor, "attemptId"), "idempotencyKey" -> Json.string("00000000-0000-0000-0000-000000000123"),
           "sessionToken" -> Json.string("stable-session"), "mappings" -> Json.arr(Vector.empty)))
         def reject(p: Peer, descriptor: Json, rejectionCode: String, canRetry: Boolean): Unit =
@@ -623,11 +642,12 @@ class StreamRuntimeTest extends munit.FunSuite {
       } finally { sockets.foreach(_.close()); server.close() }
     }
     val empty = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"tuple","value":{"elements":[]}}}""")
+    seedEnvironment(server.getLocalPort)
     val resolved = ResolvedAgent(Configuration(GolemServer.Custom(s"http://127.0.0.1:${server.getLocalPort}", "token"), "app", "env", global),
-      "RecoveryAgent", SchemaValue.TupleValue(Nil), None, Nil, None)
+      "RecoveryAgent", Some(SchemaValue.TupleValue(Nil)), None)
     try {
       val error = intercept[BridgeException] {
-        Await.result(Bridge.invokeStreamingAgent(resolved, "run", () => SchemaValue.TupleValue(Nil), empty, empty, None, Nil), 15.seconds)
+        Await.result(Bridge.invokeStreamingAgent(resolved, "run", () => SchemaValue.TupleValue(Nil), empty, empty, None), 15.seconds)
       }
       assert(error.getMessage.contains(if (scenario == "stale-start") "pending operation" else code))
       failed.success(())

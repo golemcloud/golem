@@ -231,7 +231,7 @@ async fn dns_record_lookups_replay_without_queries_and_link_a_answers(
         &["db.test".to_string(), "missing.test".to_string()],
     )
     .await?;
-    let agent = agent_id!("Networking", "dns-records");
+    let agent = agent_key!("Networking", "dns-records");
     configure_scope_card_root(&authority, &component, &agent)?;
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
 
@@ -351,7 +351,7 @@ async fn a_discarded_a_answer_links_nothing_live_or_on_replay(
         &["db.test".to_string()],
     )
     .await?;
-    let agent = agent_id!("Networking", "dns-discarded");
+    let agent = agent_key!("Networking", "dns-discarded");
     configure_scope_card_root(&authority, &component, &agent)?;
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
     let cancel_value = executor
@@ -363,7 +363,7 @@ async fn a_discarded_a_answer_links_nothing_live_or_on_replay(
 
     // The lookup's End is recorded, but its completion stays unpublished until the guest has
     // dropped the lookup, so the guest discards an answer that the host call returned.
-    let mut end = executor.gate_next_call_end(&worker, true).await;
+    let mut end = executor.gate_next_call_end(&worker.agent_id, true).await;
     let mut output = executor.make_worker_log_event_stream(&worker).await?;
     let key = IdempotencyKey::fresh();
     let params = || {
@@ -377,7 +377,9 @@ async fn a_discarded_a_answer_links_nothing_live_or_on_replay(
         .await?;
     tokio::time::timeout(Duration::from_secs(10), end.entered()).await?;
     let lookup_start = end.start_index();
-    executor.complete_promise(&cancel, vec![1]).await?;
+    executor
+        .complete_promise(&context.default_environment_id, &cancel, vec![1])
+        .await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while let Some(event) = output.message().await? {
             if golem_test_framework::dsl::stdout_event_matching(&event, "dns lookup discarded\n") {
@@ -494,7 +496,7 @@ async fn a_crash_between_a_delivered_answer_and_the_connect_keeps_the_link(
         &["db.test".to_string()],
     )
     .await?;
-    let agent = agent_id!("Networking", "dns-crash-before-connect");
+    let agent = agent_key!("Networking", "dns-crash-before-connect");
     configure_scope_card_root(&authority, &component, &agent)?;
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
     let proceed_value = executor
@@ -549,7 +551,9 @@ async fn a_crash_between_a_delivered_answer_and_the_connect_keeps_the_link(
     .await??;
 
     executor.simulated_crash(&worker).await?;
-    executor.complete_promise(&proceed, vec![1]).await?;
+    executor
+        .complete_promise(&component.environment_id, &proceed, vec![1])
+        .await?;
     let connected = executor
         .invoke_and_await_agent_with_key(&component, &agent, &key, "dns_then_connect_p3", params())
         .await?
@@ -603,7 +607,7 @@ async fn a_revert_keeps_the_link_of_an_external_a_answer(
         &["db.test".to_string()],
     )
     .await?;
-    let agent = agent_id!("Networking", "dns-revert-external");
+    let agent = agent_key!("Networking", "dns-revert-external");
     configure_scope_card_root(&authority, &component, &agent)?;
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
 
@@ -674,7 +678,7 @@ async fn aaaa_and_alias_answers_link_the_queried_name_and_record_types_convert(
         ],
     )
     .await?;
-    let agent = agent_id!("Networking", "dns-record-types");
+    let agent = agent_key!("Networking", "dns-record-types");
     configure_scope_card_root(&authority, &component, &agent)?;
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
     let (executor_ref, component_ref, agent_ref) = (&executor, &component, &agent);
@@ -804,7 +808,7 @@ async fn a_server_failure_retries_until_the_server_answers(
         &["flaky.test".to_string()],
     )
     .await?;
-    let agent = agent_id!("Networking", "dns-retry");
+    let agent = agent_key!("Networking", "dns-retry");
     configure_scope_card_root(&authority, &component, &agent)?;
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
     let retries = || async {
@@ -889,7 +893,7 @@ async fn lookups_fail_without_a_query_when_agent_sockets_are_disabled(
         &["db.test".to_string()],
     )
     .await?;
-    let agent = agent_id!("Networking", "dns-disabled");
+    let agent = agent_key!("Networking", "dns-disabled");
     configure_scope_card_root(&authority, &component, &agent)?;
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
 

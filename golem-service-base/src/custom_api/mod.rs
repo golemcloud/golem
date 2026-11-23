@@ -440,11 +440,55 @@ impl RouteMatch {
         {
             return Err("MountPrefix cannot contain a catch-all".into());
         }
+        if let RouteBehaviour::CallAgent(call) = behavior {
+            call.constructor_input.validate()?;
+            call.method_input.validate()?;
+            call.expected_agent_response.validate()?;
+            call.agent_selection
+                .validate(path, &call.constructor_parameters)?;
+            if let AgentSelection::Query { name } = &call.agent_selection {
+                if call.method_parameters.iter().any(|parameter| matches!(parameter,
+                    MethodParameter::Query { query_parameter_name, .. } if query_parameter_name == name)) {
+                    return Err("Agent ID query cannot also bind a method parameter".into());
+                }
+            }
+        }
+        if let RouteBehaviour::CreateAgent(create) = behavior {
+            if !matches!(
+                self,
+                Self::Method {
+                    method: HttpMethod::Method(golem_schema::http::HttpMethod::Post(_)),
+                    ..
+                }
+            ) || path
+                .iter()
+                .any(|segment| !matches!(segment, PathSegment::Literal { .. }))
+            {
+                return Err("CreateAgent requires an exact literal POST route".into());
+            }
+            create.agent.validate(&create.location)?;
+            let captures = capture_count(&create.location);
+            match &create.agent.agent_selection {
+                AgentSelection::Path { index } if captures == 1 && usize::from(*index) == 0 => {}
+                AgentSelection::Query { .. } if captures == 0 => {}
+                _ => return Err("CreateAgent location must bind only the agent ID".into()),
+            }
+            if create
+                .location
+                .iter()
+                .any(|segment| matches!(segment, PathSegment::CatchAll { .. }))
+            {
+                return Err("CreateAgent location cannot contain a catch-all".into());
+            }
+        }
         if let RouteBehaviour::Mount(mount) = behavior {
-            mount.files.agent().constructor_input.validate()?;
+            mount.files.agent().validate(path)?;
             for target in mount.handler.iter().chain(mount.openapi_provider.iter()) {
                 let MountTarget::AgentMethod(target) = target;
-                target.agent.constructor_input.validate()?;
+                target.agent.validate(path)?;
+                if !matches!(target.agent.agent_selection, AgentSelection::Key) {
+                    return Err("Router methods require Key selection".into());
+                }
                 target.method.input.validate()?;
                 target.method.output.validate()?;
                 if target.method.method_name.is_empty() {
@@ -469,6 +513,9 @@ impl RouteMatch {
             .map_err(|error| error.to_string())?;
             match &mount.files {
                 MountFileSource::Router { file_index, .. } => {
+                    if !matches!(mount.files.agent().agent_selection, AgentSelection::Key) {
+                        return Err("HttpRouter mount requires Key selection".into());
+                    }
                     if path
                         .iter()
                         .any(|segment| !matches!(segment, PathSegment::Literal { .. }))
@@ -497,6 +544,9 @@ impl RouteMatch {
                     }
                 }
                 MountFileSource::Live { agent } => {
+                    if matches!(agent.agent_selection, AgentSelection::Fresh) {
+                        return Err("Filesystem mount cannot use Fresh selection".into());
+                    }
                     let captures = path
                         .iter()
                         .filter(|segment| matches!(segment, PathSegment::Variable { .. }))
@@ -530,6 +580,15 @@ pub enum RouteBehaviour {
     WebhookCallback(WebhookCallbackBehaviour),
     OpenApiSpec(OpenApiSpecBehaviour),
     Mount(MountBehaviour),
+    CreateAgent(CreateAgentBehaviour),
+}
+
+#[derive(Debug, BinaryCodec)]
+#[desert(evolution())]
+pub struct CreateAgentBehaviour {
+    pub agent: MountAgent,
+    /// Full compiled mount path used to render the created agent's Location.
+    pub location: Vec<PathSegment>,
 }
 
 #[derive(Debug, BinaryCodec)]
@@ -564,6 +623,15 @@ pub struct MountAgent {
     pub agent_type: AgentTypeName,
     pub constructor_input: CompiledInputSchema,
     pub constructor_parameters: Vec<ConstructorParameter>,
+    pub agent_selection: AgentSelection,
+}
+
+impl MountAgent {
+    fn validate(&self, path: &[PathSegment]) -> Result<(), String> {
+        self.constructor_input.validate()?;
+        self.agent_selection
+            .validate(path, &self.constructor_parameters)
+    }
 }
 
 #[derive(Debug, BinaryCodec)]
@@ -619,7 +687,7 @@ pub struct CallAgentBehaviour {
     /// parameters.
     pub constructor_input: CompiledInputSchema,
     pub constructor_parameters: Vec<ConstructorParameter>,
-    pub phantom_selection: PhantomSelection,
+    pub agent_selection: AgentSelection,
     pub method_name: String,
     /// Self-contained schema of the agent method input. Used by the runtime to
     /// reconstruct the full positional `SchemaValue::Record` from the bound
@@ -640,11 +708,68 @@ pub struct CallAgentBehaviour {
 
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
-pub enum PhantomSelection {
-    Policy { phantom: bool },
-    Original,
-    Path { index: SafeIndex },
-    Query { name: String, optional: bool },
+pub enum AgentSelection {
+    Key,
+    Fresh,
+    /// Zero-based capture index, not the segment's position in the full path.
+    Path {
+        index: SafeIndex,
+    },
+    Query {
+        name: String,
+    },
+}
+
+fn capture_count(path: &[PathSegment]) -> usize {
+    path.iter()
+        .filter(|segment| !matches!(segment, PathSegment::Literal { .. }))
+        .count()
+}
+
+impl AgentSelection {
+    fn validate(
+        &self,
+        path: &[PathSegment],
+        parameters: &[ConstructorParameter],
+    ) -> Result<(), String> {
+        let captures = capture_count(path);
+        match self {
+            Self::Key | Self::Fresh => {
+                let mut bound = BTreeSet::new();
+                for ConstructorParameter::Path {
+                    path_segment_index, ..
+                } in parameters
+                {
+                    let index = usize::from(*path_segment_index);
+                    if index >= captures || !bound.insert(index) {
+                        return Err(
+                            "Constructor parameters must bind distinct path captures".into()
+                        );
+                    }
+                }
+            }
+            Self::Path { index } => {
+                if !parameters.is_empty() || usize::from(*index) >= captures {
+                    return Err(
+                        "Agent ID path requires a valid capture and no constructor parameters"
+                            .into(),
+                    );
+                }
+            }
+            Self::Query { name } => {
+                if !parameters.is_empty()
+                    || name.is_empty()
+                    || name.trim() != name
+                    || name.chars().any(char::is_control)
+                {
+                    return Err(
+                        "Agent ID query requires a valid name and no constructor parameters".into(),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
@@ -844,55 +969,62 @@ impl OriginPattern {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, BinaryCodec)]
-/// PromiseId (-component-id) to be base64-url encoded and used as the final segment in a webhook callback.
-/// Includes a checksum that can be used to verify that the webhook was indeed created by the worker executor and
-/// for the correct component_id. The checksum covers the agent's fingerprint, so a webhook of a deleted agent
-/// does not complete a promise of the agent re-created with the same name.
+/// A PromiseId, base64-url encoded as the final segment of a webhook callback URL.
+/// Includes a checksum that verifies that the worker executor created the webhook for an agent
+/// of the route's environment. The checksum covers the agent's fingerprint, so a webhook of a
+/// deleted agent does not complete a promise of the agent re-created with the same ID.
 pub struct AgentWebhookId {
-    pub agent_name: String,
+    pub agent_id: AgentId,
     pub fingerprint: AgentFingerprint,
     pub oplog_idx: OplogIndex,
     pub checksum: [u8; 32],
 }
 
 impl AgentWebhookId {
-    pub fn from_promise_id(promise_id: &PromiseId, hmac_key: &[u8]) -> Self {
+    pub fn from_promise_id(
+        environment_id: EnvironmentId,
+        promise_id: &PromiseId,
+        hmac_key: &[u8],
+    ) -> Self {
         Self {
-            agent_name: promise_id.agent_id.agent_id.clone(),
+            agent_id: promise_id.agent_id,
             fingerprint: promise_id.fingerprint,
             oplog_idx: promise_id.oplog_idx,
-            checksum: Self::checksum(promise_id, hmac_key),
+            checksum: Self::checksum(environment_id, promise_id, hmac_key),
         }
     }
 
-    pub fn into_promise_id(self, component_id: ComponentId) -> PromiseId {
+    pub fn into_promise_id(self) -> PromiseId {
         PromiseId {
-            agent_id: AgentId {
-                component_id,
-                agent_id: self.agent_name,
-            },
+            agent_id: self.agent_id,
             fingerprint: self.fingerprint,
             oplog_idx: self.oplog_idx,
         }
     }
 
-    pub fn verify_checksum(&self, component_id: ComponentId, hmac_key: &[u8]) -> bool {
-        let promise_id = self.clone().into_promise_id(component_id);
-        Self::mac(&promise_id, hmac_key)
+    /// Whether the worker executor created this webhook for an agent of `environment_id`.
+    pub fn verify_checksum(&self, environment_id: EnvironmentId, hmac_key: &[u8]) -> bool {
+        let promise_id = self.clone().into_promise_id();
+        Self::mac(environment_id, &promise_id, hmac_key)
             .verify_slice(&self.checksum)
             .is_ok()
     }
 
-    fn checksum(promise_id: &PromiseId, hmac_key: &[u8]) -> [u8; 32] {
-        Self::mac(promise_id, hmac_key)
+    fn checksum(
+        environment_id: EnvironmentId,
+        promise_id: &PromiseId,
+        hmac_key: &[u8],
+    ) -> [u8; 32] {
+        Self::mac(environment_id, promise_id, hmac_key)
             .finalize()
             .into_bytes()
             .into()
     }
 
-    fn mac(promise_id: &PromiseId, hmac_key: &[u8]) -> Hmac<Sha256> {
+    fn mac(environment_id: EnvironmentId, promise_id: &PromiseId, hmac_key: &[u8]) -> Hmac<Sha256> {
         let mut mac = Hmac::<Sha256>::new_from_slice(hmac_key).unwrap();
-        mac.update(b"agent-webhook-id:v1");
+        mac.update(b"agent-webhook-id:v2");
+        mac.update(environment_id.0.as_bytes());
         let promise_id_bytes = desert_rust::serialize_to_byte_vec(promise_id)
             .expect("PromiseId serialization must not fail");
         mac.update(&promise_id_bytes);
@@ -932,24 +1064,28 @@ mod tests {
     #[test]
     fn webhook_id_checksum_covers_the_fingerprint() {
         let hmac_key = b"webhook-test-key";
-        let component_id = ComponentId(uuid::Uuid::from_u128(1));
+        let environment_id = EnvironmentId(uuid::Uuid::from_u128(1));
         let promise_id = PromiseId {
-            agent_id: AgentId {
-                component_id,
-                agent_id: "approval(\"order-1\")".to_string(),
-            },
+            agent_id: "00000007-0000-8000-8000-000000000001".parse().unwrap(),
             fingerprint: AgentFingerprint(uuid::Uuid::from_u128(2)),
             oplog_idx: OplogIndex::from_u64(7),
         };
-        let webhook_id = AgentWebhookId::from_promise_id(&promise_id, hmac_key);
+        let webhook_id = AgentWebhookId::from_promise_id(environment_id, &promise_id, hmac_key);
 
         let decoded = AgentWebhookId::from_base64_url(&webhook_id.to_base64_url()).unwrap();
-        assert!(decoded.verify_checksum(component_id, hmac_key));
-        assert_eq!(decoded.into_promise_id(component_id), promise_id);
+        assert!(decoded.verify_checksum(environment_id, hmac_key));
+        assert_eq!(decoded.into_promise_id(), promise_id);
 
         let mut of_new_incarnation = webhook_id.clone();
         of_new_incarnation.fingerprint = AgentFingerprint(uuid::Uuid::from_u128(3));
-        assert!(!of_new_incarnation.verify_checksum(component_id, hmac_key));
+        assert!(!of_new_incarnation.verify_checksum(environment_id, hmac_key));
+
+        let other_environment = EnvironmentId(uuid::Uuid::from_u128(4));
+        assert!(!webhook_id.verify_checksum(other_environment, hmac_key));
+
+        let mut of_other_agent = webhook_id.clone();
+        of_other_agent.agent_id = "00000007-0000-8000-8000-000000000002".parse().unwrap();
+        assert!(!of_other_agent.verify_checksum(environment_id, hmac_key));
     }
 
     #[test]

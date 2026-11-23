@@ -24,6 +24,8 @@ tags:
 - name: EnvironmentToolGrants
 - name: EnvironmentToolMiddlewareGrants
 - name: HealthCheck
+- name: Invocation
+  description: API working on the invocations of agents
 - name: Login
   description: The login endpoints are implementing an OAuth2 flow.
 - name: McpDeployment
@@ -64,239 +66,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/VersionInfo'
       operationId: version
-  /v1/components/{component_id}/workers:
-    post:
-      tags:
-      - Worker
-      summary: Launch a new worker.
-      description: |-
-        Creates a new worker. The worker initially is in `Idle`` status, waiting to be invoked.
-
-        The parameters in the request are the following:
-        - `name` is the name of the created worker. This has to be unique, but only for a given component
-        - `args` is a list of strings which appear as command line arguments for the worker
-        - `env` is a list of key-value pairs (represented by arrays) which appear as environment variables for the worker
-      parameters:
-      - name: component_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/AgentCreationRequest'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/WorkerCreationResponse'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '413':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '415':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: A limit was exceeded, or the idempotency key was already used for a different request.
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: launch_new_worker
-    get:
-      tags:
-      - Worker
-      summary: Get metadata of multiple workers
-      description: |-
-        ### Filters
-
-        | Property    | Comparator             | Description                    | Example                         |
-        |-------------|------------------------|--------------------------------|----------------------------------|
-        | name        | StringFilterComparator | Name of worker                 | `name = worker-name`             |
-        | version     | FilterComparator       | Version of worker              | `version >= 0`                   |
-        | status      | FilterComparator       | Status of worker               | `status = Running`               |
-        | env.\[key\] | StringFilterComparator | Environment variable of worker | `env.var1 = value`               |
-        | createdAt   | FilterComparator       | Creation time of worker        | `createdAt > 2024-04-01T12:10:00Z` |
-
-
-        ### Comparators
-
-        - StringFilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `like`, `notlike`
-        - FilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `ge|greaterequal|>=`, `gt|greater|>`, `le|lessequal|<=`, `lt|less|<`
-
-        Returns metadata about an existing component workers:
-        - `workers` list of workers metadata
-        - `cursor` cursor for next request, if cursor is empty/null, there are no other values
-      parameters:
-      - name: component_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: filter
-        schema:
-          type: array
-          items:
-            type: string
-        in: query
-        description: Filter for worker metadata in form of `property op value`. Can be used multiple times (AND condition is applied between them)
-        required: false
-        deprecated: false
-        explode: true
-      - name: cursor
-        schema:
-          type: string
-        in: query
-        description: 'Count of listed values, default: 50'
-        required: false
-        deprecated: false
-        explode: true
-      - name: count
-        schema:
-          type: integer
-          format: uint64
-        in: query
-        description: Position where to start listing, if not provided, starts from the beginning. It is used to get the next page of results. To get next page, use the cursor returned in the response
-        required: false
-        deprecated: false
-        explode: true
-      - name: precise
-        schema:
-          type: boolean
-        in: query
-        description: Precision in relation to worker status, if true, calculate the most up-to-date status for each worker, default is false
-        required: false
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/WorkersMetadataResponse'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '413':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '415':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: A limit was exceeded, or the idempotency key was already used for a different request.
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: get_workers_metadata
-  /v1/components/{component_id}/workers/{agent_name}:
+  /v1/runtime/envs/{environment_id}/agents/{agent_id}:
     delete:
       tags:
       - Worker
-      summary: Delete a worker
-      description: Interrupts and deletes an existing worker.
+      summary: Delete an agent
+      description: Interrupts and deletes an existing agent.
       parameters:
-      - name: component_id
+      - name: environment_id
         schema:
           type: string
           format: uuid
@@ -304,11 +81,20 @@ paths:
         required: true
         deprecated: false
         explode: true
-      - name: agent_name
+      - name: agent_id
         schema:
           type: string
+          format: uuid
         in: path
         required: true
+        deprecated: false
+        explode: true
+      - name: expectedFingerprint
+        schema:
+          type: string
+          format: uuid
+        in: query
+        required: false
         deprecated: false
         explode: true
       responses:
@@ -379,25 +165,24 @@ paths:
     get:
       tags:
       - Worker
-      summary: Get metadata of a worker
+      summary: Get metadata of an agent
       description: |-
-        Returns metadata about an existing worker:
-        - `workerId` is a combination of the used component and the worker's user specified name
-        - `accountId` the account the worker is created by
-        - `args` is the provided command line arguments passed to the worker
-        - `env` is the provided map of environment variables passed to the worker
-        - `componentVersion` is the version of the component used by the worker
-        - `retryCount` is the number of retries the worker did in case of a failure
-        - `status` is the worker's current status, one of the following:
-        - `Running` if the worker is currently executing
-        - `Idle` if the worker is waiting for an invocation
-        - `Suspended` if the worker was running but is now waiting to be resumed by an event (such as end of a sleep, a promise, etc)
-        - `Interrupted` if the worker was interrupted by the user
-        - `Retrying` if the worker failed, and an automatic retry was scheduled for it
-        - `Failed` if the worker failed and there are no more retries scheduled for it
-        - `Exited` if the worker explicitly exited using the exit WASI function
+        Returns metadata about an existing agent:
+        - `agentId` is the ID of the agent
+        - `agentTypeName` is the agent's type
+        - `env` is the provided map of environment variables passed to the agent
+        - `componentRevision` is the revision of the component used by the agent
+        - `retryCount` is the number of retries the agent did in case of a failure
+        - `status` is the agent's current status, one of the following:
+        - `Running` if the agent is currently executing
+        - `Idle` if the agent is waiting for an invocation
+        - `Suspended` if the agent was running but is now waiting to be resumed by an event (such as end of a sleep, a promise, etc)
+        - `Interrupted` if the agent was interrupted by the user
+        - `Retrying` if the agent failed, and an automatic retry was scheduled for it
+        - `Failed` if the agent failed and there are no more retries scheduled for it
+        - `Exited` if the agent explicitly exited using the exit WASI function
       parameters:
-      - name: component_id
+      - name: environment_id
         schema:
           type: string
           format: uuid
@@ -405,11 +190,20 @@ paths:
         required: true
         deprecated: false
         explode: true
-      - name: agent_name
+      - name: agent_id
         schema:
           type: string
+          format: uuid
         in: path
         required: true
+        deprecated: false
+        explode: true
+      - name: expectedFingerprint
+        schema:
+          type: string
+          format: uuid
+        in: query
+        required: false
         deprecated: false
         explode: true
       responses:
@@ -477,17 +271,17 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_worker_metadata
-  /v1/components/{component_id}/workers/{agent_name}/complete:
+  /v1/runtime/envs/{environment_id}/agents/{agent_id}/complete:
     post:
       tags:
       - Worker
       summary: Complete a promise
       description: |-
         Completes a promise with a given custom array of bytes.
-        The promise must be previously created from within the worker, and its identifier (a combination of a worker identifier, the agent's fingerprint and an oplogIdx) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
-        The data field is sent back to the worker, and it has no predefined meaning.
+        The promise must be previously created from within the agent, and its identifier (a combination of an agent ID, the agent's fingerprint and an oplogIdx) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
+        The data field is sent back to the agent, and it has no predefined meaning.
       parameters:
-      - name: component_id
+      - name: environment_id
         schema:
           type: string
           format: uuid
@@ -495,9 +289,10 @@ paths:
         required: true
         deprecated: false
         explode: true
-      - name: agent_name
+      - name: agent_id
         schema:
           type: string
+          format: uuid
         in: path
         required: true
         deprecated: false
@@ -573,18 +368,18 @@ paths:
       - Cookie: []
       - Token: []
       operationId: complete_promise
-  /v1/components/{component_id}/workers/{agent_name}/interrupt:
+  /v1/runtime/envs/{environment_id}/agents/{agent_id}/interrupt:
     post:
       tags:
       - Worker
-      summary: Interrupt a worker
+      summary: Interrupt an agent
       description: |-
-        Interrupts the execution of a worker.
-        The worker's status will be Interrupted unless the recover-immediately parameter was used, in which case it remains as it was.
-        An interrupted worker can be still used, and it is going to be automatically resumed the first time it is used.
+        Interrupts the execution of an agent.
+        The agent's status will be Interrupted unless the recover-immediately parameter was used, in which case it remains as it was.
+        An interrupted agent can be still used, and it is going to be automatically resumed the first time it is used.
         For example in case of a new invocation, the previously interrupted invocation is continued before the new one gets processed.
       parameters:
-      - name: component_id
+      - name: environment_id
         schema:
           type: string
           format: uuid
@@ -592,9 +387,10 @@ paths:
         required: true
         deprecated: false
         explode: true
-      - name: agent_name
+      - name: agent_id
         schema:
           type: string
+          format: uuid
         in: path
         required: true
         deprecated: false
@@ -603,7 +399,15 @@ paths:
         schema:
           type: boolean
         in: query
-        description: if true will simulate a worker recovery. Defaults to false.
+        description: if true will simulate an agent recovery. Defaults to false.
+        required: false
+        deprecated: false
+        explode: true
+      - name: expectedFingerprint
+        schema:
+          type: string
+          format: uuid
+        in: query
         required: false
         deprecated: false
         explode: true
@@ -672,33 +476,13 @@ paths:
       - Cookie: []
       - Token: []
       operationId: interrupt_worker
-  /v1/components/{component_id}/workers/find:
+  /v1/runtime/envs/{environment_id}/agents/{agent_id}/resume:
     post:
       tags:
       - Worker
-      summary: Advanced search for workers
-      description: |-
-        ### Filter types
-        | Type      | Comparator             | Description                    | Example                                                                                       |
-        |-----------|------------------------|--------------------------------|-----------------------------------------------------------------------------------------------|
-        | Name      | StringFilterComparator | Name of worker                 | `{ "type": "Name", "comparator": "Equal", "value": "worker-name" }`                           |
-        | Version   | FilterComparator       | Version of worker              | `{ "type": "Version", "comparator": "GreaterEqual", "value": 0 }`                             |
-        | Status    | FilterComparator       | Status of worker               | `{ "type": "Status", "comparator": "Equal", "value": "Running" }`                             |
-        | Env       | StringFilterComparator | Environment variable of worker | `{ "type": "Env", "name": "var1", "comparator": "Equal", "value": "value" }`                  |
-        | CreatedAt | FilterComparator       | Creation time of worker        | `{ "type": "CreatedAt", "comparator": "Greater", "value": "2024-04-01T12:10:00Z" }`           |
-        | And       |                        | And filter combinator          | `{ "type": "And", "filters": [ ... ] }`                                                       |
-        | Or        |                        | Or filter combinator           | `{ "type": "Or", "filters": [ ... ] }`                                                        |
-        | Not       |                        | Negates the specified filter   | `{ "type": "Not", "filter": { "type": "Version", "comparator": "GreaterEqual", "value": 0 } }`|
-
-        ### Comparators
-        - StringFilterComparator: `Equal`, `NotEqual`, `Like`, `NotLike`
-        - FilterComparator: `Equal`, `NotEqual`, `GreaterEqual`, `Greater`, `LessEqual`, `Less`
-
-        Returns metadata about an existing component workers:
-        - `workers` list of workers metadata
-        - `cursor` cursor for next request, if cursor is empty/null, there are no other values
+      summary: Resume an agent
       parameters:
-      - name: component_id
+      - name: environment_id
         schema:
           type: string
           format: uuid
@@ -706,84 +490,7 @@ paths:
         required: true
         deprecated: false
         explode: true
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/WorkersMetadataRequest'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/WorkersMetadataResponse'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '413':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '415':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: A limit was exceeded, or the idempotency key was already used for a different request.
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: find_workers_metadata
-  /v1/components/{component_id}/workers/{agent_name}/resume:
-    post:
-      tags:
-      - Worker
-      summary: Resume a worker
-      parameters:
-      - name: component_id
+      - name: agent_id
         schema:
           type: string
           format: uuid
@@ -791,11 +498,12 @@ paths:
         required: true
         deprecated: false
         explode: true
-      - name: agent_name
+      - name: expectedFingerprint
         schema:
           type: string
-        in: path
-        required: true
+          format: uuid
+        in: query
+        required: false
         deprecated: false
         explode: true
       responses:
@@ -863,13 +571,13 @@ paths:
       - Cookie: []
       - Token: []
       operationId: resume_worker
-  /v1/components/{component_id}/workers/{agent_name}/update:
+  /v1/runtime/envs/{environment_id}/agents/{agent_id}/update:
     post:
       tags:
       - Worker
-      summary: Update a worker
+      summary: Update an agent
       parameters:
-      - name: component_id
+      - name: environment_id
         schema:
           type: string
           format: uuid
@@ -877,11 +585,20 @@ paths:
         required: true
         deprecated: false
         explode: true
-      - name: agent_name
+      - name: agent_id
         schema:
           type: string
+          format: uuid
         in: path
         required: true
+        deprecated: false
+        explode: true
+      - name: expectedFingerprint
+        schema:
+          type: string
+          format: uuid
+        in: query
+        required: false
         deprecated: false
         explode: true
       requestBody:
@@ -955,13 +672,13 @@ paths:
       - Cookie: []
       - Token: []
       operationId: update_worker
-  /v1/components/{component_id}/workers/{agent_name}/oplog:
+  /v1/runtime/envs/{environment_id}/agents/{agent_id}/oplog:
     get:
       tags:
       - Worker
-      summary: Get the oplog of a worker
+      summary: Get the oplog of an agent
       parameters:
-      - name: component_id
+      - name: environment_id
         schema:
           type: string
           format: uuid
@@ -969,9 +686,10 @@ paths:
         required: true
         deprecated: false
         explode: true
-      - name: agent_name
+      - name: agent_id
         schema:
           type: string
+          format: uuid
         in: path
         required: true
         deprecated: false
@@ -1006,14 +724,20 @@ paths:
         required: false
         deprecated: false
         explode: true
+      - name: expectedFingerprint
+        schema:
+          type: string
+          format: uuid
+        in: query
+        required: false
+        deprecated: false
+        explode: true
       - name: to
         schema:
           type: integer
           format: uint64
         in: query
-        description: |-
-          The last oplog index of a range read, inclusive. A range read reads no entry after
-          it, and the response reports its scan in `scan`. It needs `from`, and no `query`.
+        description: The inclusive last index of a range read. Requires `from` and no `query`.
         required: false
         deprecated: false
         explode: true
@@ -1022,10 +746,7 @@ paths:
           type: integer
           format: uint64
         in: query
-        description: |-
-          The scan allowance that a range read may still spend: the number of oplog entries.
-          It goes with `scanMillis`. Without them, the read gets the configured allowance of
-          the server; the server never grants more than its configured allowance.
+        description: The remaining entry allowance of a range read. Goes with `scanMillis`.
         required: false
         deprecated: false
         explode: true
@@ -1034,9 +755,7 @@ paths:
           type: integer
           format: uint64
         in: query
-        description: |-
-          The scan allowance that a range read may still spend: the time in milliseconds. It
-          goes with `scanEntries`.
+        description: The remaining time allowance of a range read, in milliseconds.
         required: false
         deprecated: false
         explode: true
@@ -1105,18 +824,18 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_oplog
-  /v1/components/{component_id}/workers/{agent_name}/oplog/{oplog_index}:
+  /v1/runtime/envs/{environment_id}/agents/{agent_id}/oplog/{oplog_index}:
     get:
       tags:
       - Worker
-      summary: Get one oplog entry of a worker
+      summary: Get one oplog entry of an agent
       description: |-
         Oplog pages omit entries whose encoded form is larger than a server limit, and describe
         them by their type, timestamp, size and component revision. This endpoint returns such an
         entry in full. Pass the component revision of the description to save the server from
         scanning the oplog for it.
       parameters:
-      - name: component_id
+      - name: environment_id
         schema:
           type: string
           format: uuid
@@ -1124,9 +843,10 @@ paths:
         required: true
         deprecated: false
         explode: true
-      - name: agent_name
+      - name: agent_id
         schema:
           type: string
+          format: uuid
         in: path
         required: true
         deprecated: false
@@ -1143,6 +863,14 @@ paths:
         schema:
           type: integer
           format: uint64
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      - name: expectedFingerprint
+        schema:
+          type: string
+          format: uuid
         in: query
         required: false
         deprecated: false
@@ -1212,13 +940,13 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_oplog_entry
-  /v1/components/{component_id}/workers/{agent_name}/files/{file_name}:
+  /v1/runtime/envs/{environment_id}/agents/{agent_id}/files/{file_name}:
     get:
       tags:
       - Worker
-      summary: List files in a worker
+      summary: List files in an agent
       parameters:
-      - name: component_id
+      - name: environment_id
         schema:
           type: string
           format: uuid
@@ -1226,9 +954,10 @@ paths:
         required: true
         deprecated: false
         explode: true
-      - name: agent_name
+      - name: agent_id
         schema:
           type: string
+          format: uuid
         in: path
         required: true
         deprecated: false
@@ -1238,6 +967,14 @@ paths:
           type: string
         in: path
         required: true
+        deprecated: false
+        explode: true
+      - name: expectedFingerprint
+        schema:
+          type: string
+          format: uuid
+        in: query
+        required: false
         deprecated: false
         explode: true
       responses:
@@ -1305,14 +1042,14 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_files
-  /v1/components/{component_id}/workers/{agent_name}/wallet:
+  /v1/runtime/envs/{environment_id}/agents/{agent_id}/wallet:
     get:
       tags:
       - Worker
-      summary: Get the wallet (active permission cards) of a worker.
-      description: Activates the worker if it is not already active.
+      summary: Get the wallet (active permission cards) of an agent.
+      description: Activates the agent if it is not already active.
       parameters:
-      - name: component_id
+      - name: environment_id
         schema:
           type: string
           format: uuid
@@ -1320,11 +1057,20 @@ paths:
         required: true
         deprecated: false
         explode: true
-      - name: agent_name
+      - name: agent_id
         schema:
           type: string
+          format: uuid
         in: path
         required: true
+        deprecated: false
+        explode: true
+      - name: expectedFingerprint
+        schema:
+          type: string
+          format: uuid
+        in: query
+        required: false
         deprecated: false
         explode: true
       responses:
@@ -1394,13 +1140,13 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_agent_wallet
-  /v1/components/{component_id}/workers/{agent_name}/file-contents/{file_name}:
+  /v1/runtime/envs/{environment_id}/agents/{agent_id}/file-contents/{file_name}:
     get:
       tags:
       - Worker
-      summary: Get contents of a file in a worker
+      summary: Get contents of a file in an agent
       parameters:
-      - name: component_id
+      - name: environment_id
         schema:
           type: string
           format: uuid
@@ -1408,9 +1154,10 @@ paths:
         required: true
         deprecated: false
         explode: true
-      - name: agent_name
+      - name: agent_id
         schema:
           type: string
+          format: uuid
         in: path
         required: true
         deprecated: false
@@ -1420,6 +1167,14 @@ paths:
           type: string
         in: path
         required: true
+        deprecated: false
+        explode: true
+      - name: expectedFingerprint
+        schema:
+          type: string
+          format: uuid
+        in: query
+        required: false
         deprecated: false
         explode: true
       responses:
@@ -1488,14 +1243,14 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_file_content
-  /v1/components/{component_id}/workers/{agent_name}/activate-plugin:
+  /v1/runtime/envs/{environment_id}/agents/{agent_id}/activate-plugin:
     post:
       tags:
       - Worker
       summary: Activate a plugin
-      description: The plugin must be one of the installed plugins for the worker's current component version.
+      description: The plugin must be one of the installed plugins for the agent's current component revision.
       parameters:
-      - name: component_id
+      - name: environment_id
         schema:
           type: string
           format: uuid
@@ -1503,9 +1258,10 @@ paths:
         required: true
         deprecated: false
         explode: true
-      - name: agent_name
+      - name: agent_id
         schema:
           type: string
+          format: uuid
         in: path
         required: true
         deprecated: false
@@ -1519,6 +1275,14 @@ paths:
             There can only be a single plugin with a given priority installed to a component.
         in: query
         required: true
+        deprecated: false
+        explode: true
+      - name: expectedFingerprint
+        schema:
+          type: string
+          format: uuid
+        in: query
+        required: false
         deprecated: false
         explode: true
       responses:
@@ -1586,14 +1350,14 @@ paths:
       - Cookie: []
       - Token: []
       operationId: activate_plugin
-  /v1/components/{component_id}/workers/{agent_name}/deactivate-plugin:
+  /v1/runtime/envs/{environment_id}/agents/{agent_id}/deactivate-plugin:
     post:
       tags:
       - Worker
       summary: Deactivate a plugin
-      description: The plugin must be one of the installed plugins for the worker's current component version.
+      description: The plugin must be one of the installed plugins for the agent's current component revision.
       parameters:
-      - name: component_id
+      - name: environment_id
         schema:
           type: string
           format: uuid
@@ -1601,9 +1365,10 @@ paths:
         required: true
         deprecated: false
         explode: true
-      - name: agent_name
+      - name: agent_id
         schema:
           type: string
+          format: uuid
         in: path
         required: true
         deprecated: false
@@ -1617,6 +1382,14 @@ paths:
             There can only be a single plugin with a given priority installed to a component.
         in: query
         required: true
+        deprecated: false
+        explode: true
+      - name: expectedFingerprint
+        schema:
+          type: string
+          format: uuid
+        in: query
+        required: false
         deprecated: false
         explode: true
       responses:
@@ -1684,14 +1457,14 @@ paths:
       - Cookie: []
       - Token: []
       operationId: deactivate_plugin
-  /v1/components/{component_id}/workers/{agent_name}/revert:
+  /v1/runtime/envs/{environment_id}/agents/{agent_id}/revert:
     post:
       tags:
       - Worker
-      summary: Revert a worker
-      description: Reverts a worker by undoing either the last few invocations or the last few recorded oplog entries.
+      summary: Revert an agent
+      description: Reverts an agent by undoing either the last few invocations or the last few recorded oplog entries.
       parameters:
-      - name: component_id
+      - name: environment_id
         schema:
           type: string
           format: uuid
@@ -1699,11 +1472,20 @@ paths:
         required: true
         deprecated: false
         explode: true
-      - name: agent_name
+      - name: agent_id
         schema:
           type: string
+          format: uuid
         in: path
         required: true
+        deprecated: false
+        explode: true
+      - name: expectedFingerprint
+        schema:
+          type: string
+          format: uuid
+        in: query
+        required: false
         deprecated: false
         explode: true
       requestBody:
@@ -1777,14 +1559,16 @@ paths:
       - Cookie: []
       - Token: []
       operationId: revert_worker
-  /v1/components/{component_id}/workers/{agent_name}/fork:
+  /v1/runtime/envs/{environment_id}/agents/{agent_id}/fork:
     post:
       tags:
       - Worker
-      summary: Fork a worker
-      description: Fork a worker by creating a new worker with the oplog up to the provided index
+      summary: Fork an agent
+      description: |-
+        Creates a new agent of the same type with the oplog of this agent up to the provided
+        index, and returns the ID of the new agent.
       parameters:
-      - name: component_id
+      - name: environment_id
         schema:
           type: string
           format: uuid
@@ -1792,11 +1576,20 @@ paths:
         required: true
         deprecated: false
         explode: true
-      - name: agent_name
+      - name: agent_id
         schema:
           type: string
+          format: uuid
         in: path
         required: true
+        deprecated: false
+        explode: true
+      - name: expectedFingerprint
+        schema:
+          type: string
+          format: uuid
+        in: query
+        required: false
         deprecated: false
         explode: true
       requestBody:
@@ -1870,109 +1663,13 @@ paths:
       - Cookie: []
       - Token: []
       operationId: fork_worker
-  /v1/components/{component_id}/workers/{agent_name}/invocations/{idempotency_key}:
-    delete:
-      tags:
-      - Worker
-      summary: Cancels a pending invocation if it has not started yet
-      description: |-
-        The invocation to be cancelled is identified by the idempotency key returned when the
-        invoke API accepted it.
-      parameters:
-      - name: component_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: agent_name
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: idempotency_key
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/CancelInvocationResponse'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '413':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '415':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: A limit was exceeded, or the idempotency key was already used for a different request.
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: cancel_invocation
-  /v1/components/{component_id}/workers/{agent_name}/connect:
+  /v1/runtime/envs/{environment_id}/agents/{agent_id}/connect:
     get:
       tags:
       - Worker
-      summary: Connect to a worker using a websocket and stream events
+      summary: Connect to an agent using a websocket and stream events
       parameters:
-      - name: component_id
+      - name: environment_id
         schema:
           type: string
           format: uuid
@@ -1980,11 +1677,20 @@ paths:
         required: true
         deprecated: false
         explode: true
-      - name: agent_name
+      - name: agent_id
         schema:
           type: string
+          format: uuid
         in: path
         required: true
+        deprecated: false
+        explode: true
+      - name: expectedFingerprint
+        schema:
+          type: string
+          format: uuid
+        in: query
+        required: false
         deprecated: false
         explode: true
       responses:
@@ -2045,11 +1751,588 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       operationId: worker_connect
-  /v1/agents/invoke-agent:
+  /v1/runtime/envs/{environment_id}/agent-types/{agent_type_name}/agents:
     post:
       tags:
       - Agent
+      summary: Create an agent
+      description: |-
+        Creates an agent of the agent type from its constructor parameters. A keyed create makes
+        the keyed agent of the parameters and fails with 409 when that key is current. A create
+        without a key makes a new agent each time; with an `Idempotency-Key` from a caller with a
+        caller scope, a retry returns the agent of the first attempt, and the same key with a
+        changed request fails with 422.
       parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: agent_type_name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: Idempotency-Key
+        schema:
+          type: string
+        in: header
+        required: false
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/CreateAgentRequest'
+        required: true
+      responses:
+        '201':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/AgentReference'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: create_agent
+    get:
+      tags:
+      - Agent
+      summary: List the agents of an agent type
+      description: |-
+        ### Filters
+
+        | Property    | Comparator             | Description                   | Example                            |
+        |-------------|------------------------|-------------------------------|------------------------------------|
+        | key         | StringFilterComparator | Canonical key of the agent    | `key == Counter("a")`              |
+        | id          | FilterComparator       | Full UUID of the agent        | `id == 00000007-0000-8000-8000-000000000001` |
+        | version     | FilterComparator       | Component revision            | `version >= 0`                     |
+        | status      | FilterComparator       | Status of the agent           | `status = Running`                 |
+        | env.\[key\] | StringFilterComparator | Environment variable          | `env.var1 = value`                 |
+        | createdAt   | FilterComparator       | Creation time of the agent    | `createdAt > 2024-04-01T12:10:00Z` |
+
+        ### Comparators
+
+        - StringFilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `like`, `notlike`
+        - FilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `ge|greaterequal|>=`, `gt|greater|>`, `le|lessequal|<=`, `lt|less|<`
+
+        Returns the metadata of the agents, and a cursor for the next page when there are more.
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: agent_type_name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: component_name
+        schema:
+          type: string
+        in: query
+        description: Restrict results to agents whose recorded component has this name, not the type's current implementer.
+        required: false
+        deprecated: false
+        explode: true
+      - name: filter
+        schema:
+          type: array
+          items:
+            type: string
+        in: query
+        description: Filter in the form `property op value`. When it is given more than once, every filter must match.
+        required: false
+        deprecated: false
+        explode: true
+      - name: cursor
+        schema:
+          type: string
+        in: query
+        description: Position where to start listing. To get the next page, pass the cursor of the previous response.
+        required: false
+        deprecated: false
+        explode: true
+      - name: count
+        schema:
+          type: integer
+          format: uint64
+        in: query
+        description: 'Count of listed values, default: 50'
+        required: false
+        deprecated: false
+        explode: true
+      - name: precise
+        schema:
+          type: boolean
+        in: query
+        description: If true, calculate the most up-to-date status for each agent, default is false
+        required: false
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkersMetadataResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_agents_metadata
+  /v1/runtime/envs/{environment_id}/agent-types/{agent_type_name}/agents/upsert:
+    post:
+      tags:
+      - Agent
+      summary: Upsert an agent
+      description: Returns the keyed agent of the constructor parameters, and creates it when it is missing.
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: agent_type_name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/AgentKeyRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/AgentReference'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: upsert_agent
+  /v1/runtime/envs/{environment_id}/agent-types/{agent_type_name}/agents/lookup:
+    post:
+      tags:
+      - Agent
+      summary: Look up an agent by its key
+      description: |-
+        Returns the keyed agent of the constructor parameters, or 404 when it does not exist.
+        It never creates the agent.
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: agent_type_name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/AgentKeyRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/AgentReference'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: lookup_agent
+  /v1/runtime/envs/{environment_id}/agent-types/{agent_type_name}/agents/find:
+    post:
+      tags:
+      - Agent
+      summary: Find the agents of an agent type
+      description: |-
+        ### Filter types
+        | Type      | Comparator             | Description                  | Example                                                                             |
+        |-----------|------------------------|------------------------------|-------------------------------------------------------------------------------------|
+        | Key       | StringFilterComparator | Canonical key of the agent   | `{ "type": "Key", "comparator": "Equal", "value": "Counter(\"a\")" }`              |
+        | Id        | FilterComparator       | Full UUID of the agent       | `{ "type": "Id", "comparator": "Equal", "value": "00000007-0000-8000-8000-000000000001" }` |
+        | Version   | FilterComparator       | Component revision           | `{ "type": "Version", "comparator": "GreaterEqual", "value": 0 }`                  |
+        | Status    | FilterComparator       | Status of the agent          | `{ "type": "Status", "comparator": "Equal", "value": "Running" }`                  |
+        | Env       | StringFilterComparator | Environment variable         | `{ "type": "Env", "name": "var1", "comparator": "Equal", "value": "value" }`       |
+        | CreatedAt | FilterComparator       | Creation time of the agent   | `{ "type": "CreatedAt", "comparator": "Greater", "value": "2024-04-01T12:10:00Z" }`|
+        | And       |                        | And filter combinator        | `{ "type": "And", "filters": [ ... ] }`                                            |
+        | Or        |                        | Or filter combinator         | `{ "type": "Or", "filters": [ ... ] }`                                             |
+        | Not       |                        | Negates the specified filter | `{ "type": "Not", "filter": { ... } }`                                             |
+
+        ### Comparators
+        - StringFilterComparator: `Equal`, `NotEqual`, `Like`, `NotLike`
+        - FilterComparator: `Equal`, `NotEqual`, `GreaterEqual`, `Greater`, `LessEqual`, `Less`
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: agent_type_name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: component_name
+        schema:
+          type: string
+        in: query
+        description: Restrict results to agents whose recorded component has this name, not the type's current implementer.
+        required: false
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/WorkersMetadataRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkersMetadataResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: find_agents_metadata
+  /v1/runtime/envs/{environment_id}/agent-types/{agent_type_name}/invoke:
+    post:
+      tags:
+      - Agent
+      summary: Invoke an agent method
+      description: |-
+        Names the agent by exactly one of `agentId` or `parameters`. With `parameters`, a durable
+        agent is upserted, and an ephemeral invocation runs on an instance of its own. With
+        `expectedFingerprint`, a missing agent or another incarnation fails with 404 before
+        anything runs. The idempotency key comes from the `Idempotency-Key` header.
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: agent_type_name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
       - name: Idempotency-Key
         schema:
           type: string
@@ -2065,11 +2348,26 @@ paths:
         required: true
       responses:
         '200':
-          description: ''
+          description: |-
+            The invocation was accepted. `Golem-Invocation-Id` is its invocation ID, as in the REST
+            paths of invocations, and `Golem-Environment-Id` the environment in which the ID
+            resolves. An awaited invocation that is accepted and then fails answers an error, which
+            carries neither header.
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/AgentInvocationResult'
+          headers:
+            GOLEM-INVOCATION-ID:
+              required: true
+              deprecated: false
+              schema:
+                type: string
+            GOLEM-ENVIRONMENT-ID:
+              required: true
+              deprecated: false
+              schema:
+                type: string
         '400':
           description: ''
           content:
@@ -2128,7 +2426,7 @@ paths:
       - Cookie: []
       - Token: []
       operationId: invoke_agent
-  /v1/agents/invoke-tool:
+  /v1/runtime/envs/{environment_id}/invoke-tool:
     post:
       tags:
       - Agent
@@ -2137,6 +2435,14 @@ paths:
         Uses normal invocation permissions, queueing and idempotency. Byte stdin, stdout and stderr
         require an attached invocation session rather than this scalar endpoint.
       parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
       - name: Idempotency-Key
         schema:
           type: string
@@ -2152,11 +2458,24 @@ paths:
         required: true
       responses:
         '200':
-          description: ''
+          description: |-
+            An accepted invocation carries `Golem-Invocation-Id`, its invocation ID as in the REST
+            paths of invocations, and `Golem-Environment-Id`, the environment in which the ID
+            resolves. A lookup carries neither. The ID of a standalone tool invocation, which runs on
+            a fresh owner, cannot be read through the invocation endpoints.
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/NativeToolInvocationResponse'
+          headers:
+            GOLEM-INVOCATION-ID:
+              deprecated: false
+              schema:
+                type: string
+            GOLEM-ENVIRONMENT-ID:
+              deprecated: false
+              schema:
+                type: string
         '400':
           description: ''
           content:
@@ -2215,11 +2534,20 @@ paths:
       - Cookie: []
       - Token: []
       operationId: invoke_tool
-  /v1/agents/describe-tool:
+  /v1/runtime/envs/{environment_id}/describe-tool:
     post:
       tags:
       - Agent
       summary: Return the effective definition of a tool bound to an existing agent or component baseline.
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -2291,7 +2619,7 @@ paths:
       - Cookie: []
       - Token: []
       operationId: describe_tool
-  /v1/agents/invoke-agent-session:
+  /v1/runtime/envs/{environment_id}/invoke-agent-session:
     get:
       tags:
       - Agent
@@ -2302,6 +2630,14 @@ paths:
         binary frames carry the public v1 binary envelope. The bearer token is
         authenticated before the upgrade and authorizes both start and resume.
       parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
       - name: Sec-WebSocket-Protocol
         schema:
           type: string
@@ -2370,23 +2706,98 @@ paths:
       - Cookie: []
       - Token: []
       operationId: invoke_agent_session
-  /v1/agents/create-agent:
-    post:
+  /v1/runtime/envs/{environment_id}/invocations:
+    get:
       tags:
-      - Agent
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/CreateAgentRequest'
+      - Invocation
+      summary: List the invocations of one agent
+      description: |-
+        Newest change first, with the invocation ID as tie-breaker. Pass `nextCursor` of a page as
+        `cursor` to get the next one; an invocation that changes while paging appears at most once.
+        `since` and `until` are inclusive bounds on the last change.
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
         required: true
+        deprecated: false
+        explode: true
+      - name: agent
+        schema:
+          type: string
+          format: uuid
+        in: query
+        description: The agent ID
+        required: true
+        deprecated: false
+        explode: true
+      - name: operation
+        schema:
+          type: string
+        in: query
+        description: Only invocations of this method name or `tool:<tool>/<command path>`
+        required: false
+        deprecated: false
+        explode: true
+      - name: state
+        schema:
+          type: array
+          default: []
+          items:
+            $ref: '#/components/schemas/InvocationState'
+        in: query
+        description: Only invocations in one of these states
+        required: false
+        deprecated: false
+        explode: true
+      - name: kind
+        schema:
+          $ref: '#/components/schemas/InvocationKind'
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      - name: since
+        schema:
+          type: string
+          format: date-time
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      - name: until
+        schema:
+          type: string
+          format: date-time
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      - name: pageSize
+        schema:
+          type: integer
+          format: uint32
+        in: query
+        description: At most 1000; the default is 100
+        required: false
+        deprecated: false
+        explode: true
+      - name: cursor
+        schema:
+          type: string
+        in: query
+        required: false
+        deprecated: false
+        explode: true
       responses:
         '200':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/CreateAgentResponse'
+                $ref: '#/components/schemas/InvocationPage'
         '400':
           description: ''
           content:
@@ -2444,7 +2855,293 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: create_agent
+      operationId: list_invocations
+  /v1/runtime/envs/{environment_id}/invocations/lookup:
+    get:
+      tags:
+      - Invocation
+      summary: Find the invocations that the caller started on an agent with an idempotency key
+      description: |-
+        The key is matched in the caller's own idempotency scope, against every method and tool
+        command the agent ran, including those a later revision removed. A removed method is
+        found only while one of its invocations has the method name outside an external payload;
+        otherwise pass `operation`. A caller without a scope, and a key used through an HTTP
+        route, find nothing. No match is `404`.
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: agent
+        schema:
+          type: string
+          format: uuid
+        in: query
+        description: The agent ID
+        required: true
+        deprecated: false
+        explode: true
+      - name: operation
+        schema:
+          type: string
+        in: query
+        description: Only the invocation of this method name or `tool:<tool>/<command path>`
+        required: false
+        deprecated: false
+        explode: true
+      - name: Idempotency-Key
+        schema:
+          type: string
+        in: header
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/InvocationLookupResult'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: lookup_invocations
+  /v1/runtime/envs/{environment_id}/invocations/{invocation_id}:
+    get:
+      tags:
+      - Invocation
+      summary: Get an invocation, with its result once it is terminal
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: invocation_id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Invocation'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_invocation
+  /v1/runtime/envs/{environment_id}/invocations/{invocation_id}/cancel:
+    post:
+      tags:
+      - Invocation
+      summary: Cancel an invocation
+      description: |-
+        A `pending` or `scheduled` invocation becomes `cancelled` at once and never runs. A
+        terminal invocation keeps its state. Both answer `200` with the invocation's state.
+        Cancelling an invocation that already started is not supported yet and answers `409`
+        with the code `CANNOT_CANCEL_RUNNING_INVOCATION`.
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: invocation_id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/InvocationSummary'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: cancel_invocation
 components:
   schemas:
     AccountCardHolder:
@@ -2473,10 +3170,15 @@ components:
       type: object
       title: AgentCardHolder
       required:
+      - environmentId
       - agentId
       properties:
+        environmentId:
+          type: string
+          format: uuid
         agentId:
-          $ref: '#/components/schemas/AgentId'
+          type: string
+          format: uuid
     AgentConfigEntryDto:
       type: object
       title: AgentConfigEntryDto
@@ -2516,24 +3218,6 @@ components:
         value:
           type: string
           format: date-time
-    AgentCreationRequest:
-      type: object
-      title: AgentCreationRequest
-      required:
-      - name
-      - env
-      properties:
-        name:
-          type: string
-        env:
-          type: object
-          additionalProperties:
-            type: string
-        config:
-          type: array
-          default: []
-          items:
-            $ref: '#/components/schemas/AgentConfigEntryDto'
     AgentEnvFilter:
       type: object
       title: AgentEnvFilter
@@ -2581,7 +3265,8 @@ components:
     AgentFilter:
       type: object
       oneOf:
-      - $ref: '#/components/schemas/AgentFilter_AgentNameFilter'
+      - $ref: '#/components/schemas/AgentFilter_AgentKeyFilter'
+      - $ref: '#/components/schemas/AgentFilter_AgentIdFilter'
       - $ref: '#/components/schemas/AgentFilter_AgentStatusFilter'
       - $ref: '#/components/schemas/AgentFilter_AgentRevisionFilter'
       - $ref: '#/components/schemas/AgentFilter_AgentCreatedAtFilter'
@@ -2594,7 +3279,8 @@ components:
       discriminator:
         propertyName: type
         mapping:
-          Name: '#/components/schemas/AgentFilter_AgentNameFilter'
+          Key: '#/components/schemas/AgentFilter_AgentKeyFilter'
+          Id: '#/components/schemas/AgentFilter_AgentIdFilter'
           Status: '#/components/schemas/AgentFilter_AgentStatusFilter'
           Revision: '#/components/schemas/AgentFilter_AgentRevisionFilter'
           CreatedAt: '#/components/schemas/AgentFilter_AgentCreatedAtFilter'
@@ -2652,6 +3338,30 @@ components:
             - Env
             example: Env
       - $ref: '#/components/schemas/AgentEnvFilter'
+    AgentFilter_AgentIdFilter:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Id
+            example: Id
+      - $ref: '#/components/schemas/AgentIdFilter'
+    AgentFilter_AgentKeyFilter:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Key
+            example: Key
+      - $ref: '#/components/schemas/AgentKeyFilter'
     AgentFilter_AgentModeFilter:
       allOf:
       - type: object
@@ -2664,18 +3374,6 @@ components:
             - Mode
             example: Mode
       - $ref: '#/components/schemas/AgentModeFilter'
-    AgentFilter_AgentNameFilter:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Name
-            example: Name
-      - $ref: '#/components/schemas/AgentNameFilter'
     AgentFilter_AgentNotFilter:
       allOf:
       - type: object
@@ -2724,18 +3422,18 @@ components:
             - Status
             example: Status
       - $ref: '#/components/schemas/AgentStatusFilter'
-    AgentId:
+    AgentIdFilter:
       type: object
-      title: AgentId
+      title: AgentIdFilter
       required:
-      - componentId
-      - agentId
+      - comparator
+      - value
       properties:
-        componentId:
+        comparator:
+          $ref: '#/components/schemas/FilterComparator'
+        value:
           type: string
           format: uuid
-        agentId:
-          type: string
     AgentInitializationParameters:
       type: object
       title: AgentInitializationParameters
@@ -2779,32 +3477,18 @@ components:
     AgentInvocationRequest:
       type: object
       title: AgentInvocationRequest
+      description: Names the agent by exactly one of `agentId` or `parameters`.
       required:
-      - appName
-      - envName
-      - agentTypeName
-      - parameters
-      - methodName
+      - method
       - methodParameters
       - mode
       properties:
-        appName:
-          type: string
-        envName:
-          type: string
-        agentTypeName:
-          type: string
-        parameters:
-          $ref: '#/components/schemas/ExternalSchemaValue'
-        phantomId:
+        agentId:
           type: string
           format: uuid
-        config:
-          type: array
-          default: []
-          items:
-            $ref: '#/components/schemas/AgentConfigEntryDto'
-        methodName:
+        parameters:
+          $ref: '#/components/schemas/ExternalSchemaValue'
+        method:
           type: string
         methodParameters:
           $ref: '#/components/schemas/ExternalSchemaValue'
@@ -2813,13 +3497,9 @@ components:
         scheduleAt:
           type: string
           format: date-time
-        idempotencyKey:
+        expectedFingerprint:
           type: string
-        deploymentRevision:
-          type: integer
-          format: int64
-        ownerAccountEmail:
-          type: string
+          format: uuid
     AgentInvocationResult:
       type: object
       title: AgentInvocationResult
@@ -2828,7 +3508,8 @@ components:
       - idempotencyKey
       properties:
         agentId:
-          $ref: '#/components/schemas/AgentId'
+          type: string
+          format: uuid
         idempotencyKey:
           type: string
           format: uuid
@@ -2837,6 +3518,29 @@ components:
         componentRevision:
           type: integer
           format: uint64
+    AgentKeyFilter:
+      type: object
+      title: AgentKeyFilter
+      description: |-
+        Matches the canonical key text, `Type(params)`, of keyed agents. An agent created
+        without a key never matches.
+      required:
+      - comparator
+      - value
+      properties:
+        comparator:
+          $ref: '#/components/schemas/StringFilterComparator'
+        value:
+          type: string
+    AgentKeyRequest:
+      type: object
+      title: AgentKeyRequest
+      description: The constructor parameters of a keyed agent.
+      required:
+      - parameters
+      properties:
+        parameters:
+          $ref: '#/components/schemas/ExternalSchemaValue'
     AgentMetadataDto:
       type: object
       title: AgentMetadataDto
@@ -2862,9 +3566,21 @@ components:
       - fingerprint
       properties:
         agentId:
-          $ref: '#/components/schemas/AgentId'
+          type: string
+          format: uuid
         ownerKind:
           $ref: '#/components/schemas/OwnerKind'
+        agentTypeName:
+          type: string
+          description: The name of the agent's type. Owners without an agent type have none.
+        canonicalKey:
+          type: string
+          description: The canonical key text of a keyed agent. An agent without a key has none.
+        constructorParameters:
+          type: string
+          description: |-
+            The canonical constructor parameter text of a component agent, without its type
+            name. Agents without a key have it too.
         environmentId:
           type: string
           format: uuid
@@ -2995,17 +3711,6 @@ components:
           $ref: '#/components/schemas/FilterComparator'
         value:
           $ref: '#/components/schemas/AgentMode'
-    AgentNameFilter:
-      type: object
-      title: AgentNameFilter
-      required:
-      - comparator
-      - value
-      properties:
-        comparator:
-          $ref: '#/components/schemas/StringFilterComparator'
-        value:
-          type: string
     AgentNotFilter:
       type: object
       title: AgentNotFilter
@@ -3024,6 +3729,19 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AgentFilter'
+    AgentReference:
+      type: object
+      title: AgentReference
+      required:
+      - agentId
+      - agentFingerprint
+      properties:
+        agentId:
+          type: string
+          format: uuid
+        agentFingerprint:
+          type: string
+          format: uuid
     AgentResourceDescription:
       type: object
       title: AgentResourceDescription
@@ -3757,14 +4475,6 @@ components:
           type: boolean
         negatable:
           type: boolean
-    CancelInvocationResponse:
-      type: object
-      title: CancelInvocationResponse
-      required:
-      - canceled
-      properties:
-        canceled:
-          type: boolean
     Card:
       type: object
       title: Card
@@ -3954,7 +4664,8 @@ components:
           type: string
           format: uuid
         agentId:
-          $ref: '#/components/schemas/AgentId'
+          type: string
+          format: uuid
         invocationKey:
           type: string
           format: uuid
@@ -4270,39 +4981,24 @@ components:
       type: object
       title: CreateAgentRequest
       required:
-      - appName
-      - envName
-      - agentTypeName
       - parameters
       properties:
-        appName:
-          type: string
-        envName:
-          type: string
-        agentTypeName:
-          type: string
         parameters:
           $ref: '#/components/schemas/ExternalSchemaValue'
-        phantomId:
-          type: string
-          format: uuid
         config:
           type: array
           default: []
           items:
             $ref: '#/components/schemas/AgentConfigEntryDto'
-    CreateAgentResponse:
-      type: object
-      title: CreateAgentResponse
-      required:
-      - agentId
-      - componentRevision
-      properties:
-        agentId:
-          $ref: '#/components/schemas/AgentId'
-        componentRevision:
-          type: integer
-          format: uint64
+        env:
+          type: object
+          default: {}
+          additionalProperties:
+            type: string
+        keyed:
+          type: boolean
+          description: Creates the keyed agent of the parameters, which fails when the key is current.
+          default: false
     CustomHttpMethod:
       type: object
       required:
@@ -4868,7 +5564,9 @@ components:
             enum:
             - char
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
       - type: object
         required:
         - kind
@@ -5396,17 +6094,20 @@ components:
       type: object
       title: ForkWorkerRequest
       required:
-      - targetAgentId
       - oplogIndexCutoff
       properties:
-        targetAgentId:
-          $ref: '#/components/schemas/AgentId'
         oplogIndexCutoff:
           type: integer
           format: uint64
     ForkWorkerResponse:
       type: object
       title: ForkWorkerResponse
+      required:
+      - agentId
+      properties:
+        agentId:
+          type: string
+          format: uuid
     Formatter:
       type: object
       required:
@@ -5624,6 +6325,125 @@ components:
     InterruptResponse:
       type: object
       title: InterruptResponse
+    Invocation:
+      type: object
+      title: Invocation
+      description: |-
+        An invocation with its result. `result` is present once the invocation is `completed` or
+        `failed`; a completed constructor run has no result.
+      required:
+      - summary
+      properties:
+        summary:
+          $ref: '#/components/schemas/InvocationSummary'
+        result:
+          $ref: '#/components/schemas/InvocationOutcome'
+    InvocationFailure:
+      type: object
+      title: InvocationFailure
+      required:
+      - error
+      properties:
+        error:
+          type: string
+    InvocationKind:
+      type: string
+      enum:
+      - method
+      - constructor
+      - tool
+    InvocationLookupResult:
+      type: object
+      title: InvocationLookupResult
+      required:
+      - invocations
+      properties:
+        invocations:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvocationSummary'
+    InvocationMethodResult:
+      type: object
+      title: InvocationMethodResult
+      required:
+      - value
+      properties:
+        value:
+          $ref: '#/components/schemas/ExternalTypedSchemaValue'
+    InvocationOutcome:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/InvocationOutcome_InvocationMethodResult'
+      - $ref: '#/components/schemas/InvocationOutcome_InvocationToolResult'
+      - $ref: '#/components/schemas/InvocationOutcome_InvocationFailure'
+      discriminator:
+        propertyName: type
+        mapping:
+          Method: '#/components/schemas/InvocationOutcome_InvocationMethodResult'
+          Tool: '#/components/schemas/InvocationOutcome_InvocationToolResult'
+          Failure: '#/components/schemas/InvocationOutcome_InvocationFailure'
+    InvocationOutcome_InvocationFailure:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Failure
+            example: Failure
+      - $ref: '#/components/schemas/InvocationFailure'
+    InvocationOutcome_InvocationMethodResult:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Method
+            example: Method
+      - $ref: '#/components/schemas/InvocationMethodResult'
+    InvocationOutcome_InvocationToolResult:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Tool
+            example: Tool
+      - $ref: '#/components/schemas/InvocationToolResult'
+    InvocationPage:
+      type: object
+      title: InvocationPage
+      required:
+      - invocations
+      properties:
+        invocations:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvocationSummary'
+        nextCursor:
+          type: string
+          description: Present when more invocations may follow
+    InvocationState:
+      type: string
+      description: The lifecycle state of an invocation.
+      enum:
+      - scheduled
+      - pending
+      - running
+      - waiting
+      - retrying
+      - interrupted
+      - completed
+      - failed
+      - cancelled
     InvocationStatus:
       type: string
       description: Status of an idempotency key lookup on a worker.
@@ -5631,6 +6451,50 @@ components:
       - unknown
       - pending
       - complete
+      - cancelled
+    InvocationSummary:
+      type: object
+      title: InvocationSummary
+      description: |-
+        One invocation of an agent. `kind` and `operation` are absent when the invocation's request
+        is not known.
+      required:
+      - invocationId
+      - agentId
+      - environmentId
+      - state
+      - changedAt
+      properties:
+        invocationId:
+          type: string
+          description: '`<agent ID>.<UUID>`'
+        agentId:
+          type: string
+          format: uuid
+        environmentId:
+          type: string
+          format: uuid
+        state:
+          $ref: '#/components/schemas/InvocationState'
+        kind:
+          $ref: '#/components/schemas/InvocationKind'
+        operation:
+          type: string
+          description: The method name, or `tool:<tool>/<command path>`. Absent for the constructor run.
+        acceptedAt:
+          type: string
+          format: date-time
+        changedAt:
+          type: string
+          format: date-time
+    InvocationToolResult:
+      type: object
+      title: InvocationToolResult
+      required:
+      - result
+      properties:
+        result:
+          $ref: '#/components/schemas/NativeToolResult'
     JsonSnapshotData:
       type: object
       title: JsonSnapshotData
@@ -5800,16 +6664,11 @@ components:
       type: object
       title: NativeToolDescribeRequest
       required:
-      - appName
-      - envName
       - toolName
       properties:
-        appName:
-          type: string
-        envName:
-          type: string
         agentId:
-          $ref: '#/components/schemas/AgentId'
+          type: string
+          format: uuid
         componentId:
           type: string
           format: uuid
@@ -5837,18 +6696,13 @@ components:
         for a fresh ephemeral owner using that deployed component's baseline without constructing an agent.
         Input is required for await and schedule, and forbidden for lookup.
       required:
-      - appName
-      - envName
       - toolName
       - commandPath
       - mode
       properties:
-        appName:
-          type: string
-        envName:
-          type: string
         agentId:
-          $ref: '#/components/schemas/AgentId'
+          type: string
+          format: uuid
         componentId:
           type: string
           format: uuid
@@ -5865,8 +6719,6 @@ components:
         scheduleAt:
           type: string
           format: date-time
-        idempotencyKey:
-          type: string
     NativeToolInvocationResponse:
       type: object
       title: NativeToolInvocationResponse
@@ -5875,7 +6727,8 @@ components:
       - idempotencyKey
       properties:
         agentId:
-          $ref: '#/components/schemas/AgentId'
+          type: string
+          format: uuid
         idempotencyKey:
           type: string
           format: uuid
@@ -6190,8 +7043,8 @@ components:
       description: |-
         Authoritative kind of an execution owner.
 
-        This is persisted at creation time. In particular, an instance name that
-        happens to use a reserved owner namespace never grants that authority.
+        This is persisted at creation time. Owners other than component agents have the
+        reserved type tag, which tells no kind apart, so only this value grants their authority.
       enum:
       - component-agent
       - ephemeral-external-tool
@@ -8558,7 +9411,9 @@ components:
             enum:
             - delimited
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
       - type: object
         required:
         - kind
@@ -8569,7 +9424,9 @@ components:
             enum:
             - either
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
     ReplayDivergence:
       type: object
       title: ReplayDivergence
@@ -9715,7 +10572,9 @@ components:
             enum:
             - char
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
       - type: object
         required:
         - kind
@@ -10756,18 +11615,6 @@ components:
         generation:
           type: integer
           format: uint64
-    WorkerCreationResponse:
-      type: object
-      title: WorkerCreationResponse
-      required:
-      - agentId
-      - componentRevision
-      properties:
-        agentId:
-          $ref: '#/components/schemas/AgentId'
-        componentRevision:
-          type: integer
-          format: uint64
     WorkerErrorDetails:
       type: object
       title: WorkerErrorDetails
@@ -11199,7 +12046,10 @@ components:
           type: string
           format: date-time
         agentId:
-          $ref: '#/components/schemas/AgentId'
+          type: string
+          format: uuid
+        agentTypeName:
+          type: string
         ownerKind:
           $ref: '#/components/schemas/OwnerKind'
         agentMode:
@@ -11218,7 +12068,8 @@ components:
           type: string
           format: uuid
         parent:
-          $ref: '#/components/schemas/AgentId'
+          type: string
+          format: uuid
         componentSize:
           type: integer
           format: uint64
@@ -11233,9 +12084,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PublicTypedAgentConfigEntry'
-        originalPhantomId:
-          type: string
-          format: uuid
         instanceId:
           type: string
           format: uuid
@@ -11484,7 +12332,8 @@ components:
           type: integer
           format: uint64
         targetAgentId:
-          $ref: '#/components/schemas/AgentId'
+          type: string
+          format: uuid
         confirmedUpTo:
           type: integer
           format: uint64

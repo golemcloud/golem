@@ -41,10 +41,7 @@ fn revision(value: u64) -> ComponentRevision {
 }
 
 fn agent_id() -> AgentId {
-    AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "start-outcome".to_string(),
-    }
+    AgentId::from_parts(7, 1)
 }
 
 fn head(kind: PendingUpdateKind, oplog_index: u64, admission_index: u64) -> PendingUpdateRef {
@@ -1690,7 +1687,7 @@ fn a_baseline_on_an_executor_without_snapshots_fails_a_pending_update_or_the_sta
         format!(
             "{:?}",
             StartAction::Error(WorkerExecutorError::failed_to_resume_worker(
-                agent_id.clone(),
+                agent_id,
                 WorkerExecutorError::invalid_request(SnapshotsDisabled.to_string())
             ))
         )

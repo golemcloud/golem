@@ -242,8 +242,7 @@ object StreamSession {
     parameters: () => SchemaValue,
     constructorCodec: PublicValueCodec.Codec,
     inputCodec: PublicValueCodec.Codec,
-    outputCodec: Option[PublicValueCodec.Codec],
-    configCodecs: List[(List[String], PublicValueCodec.Codec)]
+    outputCodec: Option[PublicValueCodec.Codec]
   ): (Future[AgentInvocationResult], CancellationToken) = {
     implicit val ec: ExecutionContext = resolved.configuration.executionContext
     val session = new Session(resolved)
@@ -841,12 +840,13 @@ object StreamSession {
       }
     }
     val base = resolved.configuration.server.url.stripSuffix("/").replaceFirst("^http", "ws")
-    val selector = Json.obj("agentType" -> Json.string(resolved.agentTypeName), "application" -> Json.string(resolved.configuration.appName), "constructorParameters" -> constructorCodec.encode(resolved.parameters), "environment" -> Json.string(resolved.configuration.envName), "method" -> Json.string(method))
-    val codecsByPath = configCodecs.toMap
-    val config = Json.arr(resolved.config.map { e =>
-      codecsByPath.getOrElse(e.path, throw BridgeException(s"missing public config codec for ${e.path.mkString(".")}"))
-      Json.obj("path" -> Json.arr(e.path.map(Json.string).toVector), "value" -> e.value)
-    }.toVector)
+    val target = resolved.target match {
+      case Some(reference) => Json.obj("kind" -> Json.string("id"), "agentId" -> Json.string(reference.agentId.uuid), "expectedFingerprint" -> Json.string(reference.agentFingerprint))
+      case None => Json.obj("kind" -> Json.string("key"), "constructorParameters" -> constructorCodec.encode(resolved.keyedParameters))
+    }
+    val selector = Json.obj("agentType" -> Json.string(resolved.agentTypeName), "application" -> Json.string(resolved.configuration.appName), "target" -> target, "environment" -> Json.string(resolved.configuration.envName), "method" -> Json.string(method))
+    // The selected agent carries its own configuration, so a session never overrides it.
+    val config = Json.arr(Vector.empty)
     var startParameters = inputCodec.encode(encodedParameters)
     def freezeStart(): Unit = {
       pendingAttempt = UUID.randomUUID.toString
@@ -866,9 +866,34 @@ object StreamSession {
     }
     renewStartAction.set(() => renewStart())
     freezeStart()
-    val endpoint = s"$base/v1/agents/${StreamSessionProtocol.Endpoint}"
+    // The endpoint that errors name: the server until the environment lookup succeeds, then the
+    // session endpoint of the environment.
+    @volatile var endpoint = s"${resolved.configuration.server.url.stripSuffix("/")}/"
 
+    // Resolves the environment ID of the endpoint before the first connection. A lookup that
+    // fails to reach the server, has not got its whole answer within the attempt, or gets HTTP
+    // 429 or 5xx fails the attempt like a failed connection. Any other answer of the server,
+    // such as an environment that does not exist, fails the call.
     def connect(timeoutMillis: Long): Future[Unit] =
+      lookupWithin(timeoutMillis).flatMap { environmentId =>
+        endpoint = s"$base/v1/runtime/envs/$environmentId/${StreamSessionProtocol.Endpoint}"
+        openSocket(timeoutMillis)
+      }
+    // The request timeout of the lookup ends once the headers arrive, so the attempt deadline
+    // also bounds the body.
+    def lookupWithin(timeoutMillis: Long): Future[String] = {
+      val lookup = Promise[String]()
+      val deadline = answerTimers.schedule((() =>
+        lookup.tryFailure(new java.util.concurrent.TimeoutException(
+          s"no answer to the environment lookup within $timeoutMillis ms"))
+      ): Runnable, timeoutMillis, TimeUnit.MILLISECONDS)
+      Bridge.environmentId(resolved.configuration, Some(timeoutMillis)).onComplete { result =>
+        deadline.cancel(false)
+        lookup.tryComplete(result)
+      }
+      lookup.future
+    }
+    def openSocket(timeoutMillis: Long): Future[Unit] =
       try {
         val builder = HttpClient.newHttpClient().newWebSocketBuilder()
           .subprotocols(StreamSessionProtocol.Subprotocol)
@@ -910,6 +935,7 @@ object StreamSession {
       case handshake: WebSocketHandshakeException =>
         val status = handshake.getResponse.statusCode()
         status == 429 || status >= 500
+      case lookup: BridgeHttpException => lookup.status == 429 || lookup.status >= 500
       case _: IOException => true
       case _: java.util.concurrent.TimeoutException => true
       case _ => false

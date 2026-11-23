@@ -15,7 +15,7 @@
 //! The Go SDK's `invocation` package against the real host invocation context.
 
 use crate::Tracing;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
@@ -50,7 +50,7 @@ async fn go_custom_span_attributes_read_back_through_the_context(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!("HttpAgent", "go-span-1");
+    let agent_id = agent_key!("HttpAgent", "go-span-1");
     executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;

@@ -35,7 +35,7 @@ impl InvocationContext for InvocationContextImpl {
     async fn test1(&self) {
         broadcast_current_invocation_context("test1a");
 
-        let other = InvocationContextClient::get("w2".to_string());
+        let other = InvocationContextClient::upsert("w2".to_string());
         other.test2().await;
     }
 
@@ -49,7 +49,7 @@ impl InvocationContext for InvocationContextImpl {
         let _span2 = start_span("custom2");
         _span2.set_attribute("z", &AttributeValue::String("3".to_string()));
 
-        let other = InvocationContextClient::get("w1".to_string());
+        let other = InvocationContextClient::upsert("w1".to_string());
         other.trigger_test3();
     }
 

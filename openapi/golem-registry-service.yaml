@@ -24,6 +24,8 @@ tags:
 - name: EnvironmentToolGrants
 - name: EnvironmentToolMiddlewareGrants
 - name: HealthCheck
+- name: Invocation
+  description: API working on the invocations of agents
 - name: Login
   description: The login endpoints are implementing an OAuth2 flow.
 - name: McpDeployment
@@ -12622,17 +12624,19 @@ components:
             - Any
           value:
             $ref: '#/components/schemas/Empty'
-    AgentId:
+    AgentIdBinding:
       type: object
-      title: AgentId
+      title: AgentIdBinding
       required:
-      - componentId
-      - agentId
+      - type
+      - name
       properties:
-        componentId:
+        type:
           type: string
-          format: uuid
-        agentId:
+          enum:
+          - Path
+          - Query
+        name:
           type: string
     AgentMethodSchema:
       type: object
@@ -13857,7 +13861,8 @@ components:
           type: string
           format: uuid
         agentId:
-          $ref: '#/components/schemas/AgentId'
+          type: string
+          format: uuid
         invocationKey:
           type: string
           format: uuid
@@ -16300,7 +16305,9 @@ components:
             enum:
             - char
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
       - type: object
         required:
         - kind
@@ -17152,8 +17159,12 @@ components:
           $ref: '#/components/schemas/AgentHttpAuthDetails'
         phantomAgent:
           type: boolean
-        phantomIdBinding:
-          $ref: '#/components/schemas/PhantomIdBinding'
+        agentIdBinding:
+          $ref: '#/components/schemas/AgentIdBinding'
+        createRoute:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentPathSegment'
         corsOptions:
           $ref: '#/components/schemas/CorsOptions'
         webhookSuffix:
@@ -18706,23 +18717,6 @@ components:
           type: string
         data:
           $ref: '#/components/schemas/PermissionShareData'
-    PhantomIdBinding:
-      type: object
-      title: PhantomIdBinding
-      required:
-      - type
-      - name
-      - optional
-      properties:
-        type:
-          type: string
-          enum:
-          - Path
-          - Query
-        name:
-          type: string
-        optional:
-          type: boolean
     Plan:
       type: object
       title: Plan
@@ -19457,7 +19451,9 @@ components:
             enum:
             - delimited
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
       - type: object
         required:
         - kind
@@ -19468,7 +19464,9 @@ components:
             enum:
             - either
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
     ResourceCapacityLimit:
       type: object
       title: ResourceCapacityLimit
@@ -20676,7 +20674,9 @@ components:
             enum:
             - char
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
       - type: object
         required:
         - kind

@@ -155,20 +155,43 @@ const SCOPE_CARD_LABEL : String = "scope_card"
 const SET_DEFAULT_SCOPE_CARD : String = "set_default_scope_card"
 
 ///|
+/// The generated method of durable clients that returns the agent ID. An agent
+/// method with this name would produce a duplicate definition.
+const AGENT_ID_METHOD : String = "agent_id"
+
+///|
+/// The optional labels of the generated `create`. They share the scope of the
+/// constructor parameters.
+let create_labels : Array[String] = ["keyed", "config", "env"]
+
+///|
 /// Renames a positional parameter named like the `scope_card` label to a name
 /// that no other parameter of the method uses. Positional parameters are not
 /// part of the call syntax, so renaming them does not affect callers.
 fn rename_scope_card_param(
   params : Array[(String, ParamType)],
 ) -> Array[(String, ParamType)] {
+  rename_label_params(params, [SCOPE_CARD_LABEL])
+}
+
+///|
+/// Renames every positional parameter named like one of `labels` to a name
+/// that no other parameter and no label uses.
+fn rename_label_params(
+  params : Array[(String, ParamType)],
+  labels : Array[String],
+) -> Array[(String, ParamType)] {
+  let taken : Array[String] = params.map(p => p.0)
+  taken.append(labels)
   params.map(fn(p) {
-    if p.0 != SCOPE_CARD_LABEL {
+    if !labels.contains(p.0) {
       return p
     }
-    let mut candidate = SCOPE_CARD_LABEL + "_"
-    while params.iter().any(other => other.0 == candidate) {
+    let mut candidate = p.0 + "_"
+    while taken.contains(candidate) {
       candidate = candidate + "_"
     }
+    taken.push(candidate)
     (candidate, p.1)
   })
 }
@@ -196,6 +219,11 @@ pub fn generate_client_code(
           "Cannot generate native client for agent '\{agent.name}': method name 'bind_self' is reserved for the generated self-binding method",
         )
       }
+      if meth.name == AGENT_ID_METHOD && agent.mode is Durable {
+        raise AgentParseError(
+          "Cannot generate native client for agent '\{agent.name}': method name '\{AGENT_ID_METHOD}' is reserved for the generated method that returns the agent ID",
+        )
+      }
       if meth.name == SET_DEFAULT_SCOPE_CARD {
         raise AgentParseError(
           "Cannot generate native client for agent '\{agent.name}': method name '\{SET_DEFAULT_SCOPE_CARD}' is reserved for the generated client method that sets the default scope card",
@@ -219,6 +247,14 @@ pub fn generate_client_code(
 }
 
 ///|
+/// The config override carrier of a durable agent's generated `create`: the
+/// generated `*Override` type and the walker that collects its leaf values.
+priv struct ConfigOverride {
+  type_name : String
+  walker : String
+}
+
+///|
 /// Emits the full client surface for a single agent.
 fn emit_client(
   buf : StringBuilder,
@@ -228,69 +264,73 @@ fn emit_client(
   agent_package : String,
 ) -> Unit {
   let client = agent.name + "Client"
+  let type_name = escape_string_lit(agent.name)
   let vis = visible_params(agent.constructor_params)
   let ctor_sig = params_sig(vis)
   let ctor_input = encode_input_expr(vis)
-  let comma_sig = if ctor_sig.is_empty() { "" } else { ctor_sig + ",\n  " }
+  let durable = match agent.mode {
+    Durable => true
+    Ephemeral => false
+  }
   // struct
   buf.write_string("///|\n")
   buf.write_string(
     "pub(all) struct \{client} {\n  client : @rpc.AgentClient\n}\n\n",
   )
-  // get (durable only)
-  let durable = match agent.mode {
-    Durable => true
-    Ephemeral => false
-  }
   if durable {
     buf.write_string("///|\n")
     buf.write_string(
-      "/// Binds the current durable incarnation without creating it or waiting for initialization.\n///\n/// Use this to schedule work on self from inside the constructor. Normal `get` reuses\n/// an initialized agent without rerunning its constructor, but waits for an unfinished\n/// constructor. Calling `get` on self from that constructor would therefore deadlock.\n///\n/// Scheduled work runs after construction finishes. This does not make awaited\n/// self-calls reentrant or bypass method permissions. A different client type raises\n/// an error. Replay preserves the recorded incarnation.\n",
+      "/// Binds the current durable incarnation without creating it or waiting for initialization.\n///\n/// Use this to schedule work on self from inside the constructor. `upsert` reuses\n/// an initialized agent without rerunning its constructor, but waits for an unfinished\n/// constructor. Calling `upsert` on self from that constructor would therefore deadlock.\n///\n/// Scheduled work runs after construction finishes. This does not make awaited\n/// self-calls reentrant or bypass method permissions. A different client type raises\n/// an error. Replay preserves the recorded incarnation.\n",
     )
     buf.write_string(
-      "pub fn \{client}::bind_self() -> \{client} raise {\n  { client: @rpc.AgentClient::bind_self(\"\{escape_string_lit(agent.name)}\"), }\n}\n\n",
+      "pub fn \{client}::bind_self() -> \{client} raise {\n  { client: @rpc.AgentClient::bind_self(\"\{type_name}\"), }\n}\n\n",
     )
+  }
+  // upsert
+  buf.write_string("///|\n")
+  if durable {
+    buf.write_string(
+      "/// Connects to the agent that the constructor parameters key. The host creates\n/// the agent when it is missing and reuses it otherwise.\n",
+    )
+  } else {
+    buf.write_string(
+      "/// Addresses the ephemeral agent type. Every invocation runs on a new one-shot\n/// instance, whose ID the invocation metadata returns.\n",
+    )
+  }
+  buf.write_string(
+    "pub fn \{client}::upsert(\{ctor_sig}) -> \{client} raise {\n",
+  )
+  buf.write_string("  let constructor_input = \{ctor_input}\n")
+  buf.write_string(
+    "  let client = @rpc.AgentClient::upsert(\"\{type_name}\", constructor_input)\n",
+  )
+  buf.write_string("  { client, }\n}\n\n")
+  let config = if durable {
+    resolve_config_override(agent, config_types, agent_package)
+  } else {
+    None
+  }
+  if durable {
+    // get_by_id
     buf.write_string("///|\n")
     buf.write_string(
-      "pub fn \{client}::get(\n  \{comma_sig}) -> \{client} raise @common.AgentError {\n",
+      "/// Connects to the existing agent with the given ID. Never creates an agent: an\n/// unknown ID, or the ID of an agent of another type, raises `RpcError::NotFound`.\n",
     )
-    buf.write_string("  let constructor_input = \{ctor_input}\n")
     buf.write_string(
-      "  let client = @rpc.AgentClient::get(\"\{escape_string_lit(agent.name)}\", constructor_input)\n",
+      "pub fn \{client}::get_by_id(agent_id : @schema.AgentId) -> \{client} raise @agentHost.RpcError {\n",
+    )
+    buf.write_string(
+      "  let client = @rpc.AgentClient::get_by_id(\"\{type_name}\", agent_id)\n",
     )
     buf.write_string("  { client, }\n}\n\n")
-  }
-  // new_phantom
-  buf.write_string("///|\n")
-  buf.write_string(
-    "pub fn \{client}::new_phantom(\n  \{comma_sig}) -> \{client} raise @common.AgentError {\n",
-  )
-  buf.write_string("  let constructor_input = \{ctor_input}\n")
-  let migration_ctor = if durable { "new_phantom" } else { "ephemeral" }
-  buf.write_string(
-    "  let client = @rpc.AgentClient::\{migration_ctor}(\"\{escape_string_lit(agent.name)}\", constructor_input)\n",
-  )
-  buf.write_string("  { client, }\n}\n\n")
-  // Known phantom identities are valid for both durable and ephemeral agents.
-  buf.write_string("///|\n")
-  buf.write_string(
-    "pub fn \{client}::get_phantom(\n  \{comma_sig}phantom_id : @schema.Uuid,\n) -> \{client} raise @common.AgentError {\n",
-  )
-  buf.write_string("  let constructor_input = \{ctor_input}\n")
-  buf.write_string(
-    "  let client = @rpc.AgentClient::get_phantom(\"\{escape_string_lit(agent.name)}\", constructor_input, phantom_id)\n",
-  )
-  buf.write_string("  { client, }\n}\n\n")
-  // get_agent_id
-  if durable {
+    emit_client_create(buf, client, type_name, vis, config)
+    // agent_id
     buf.write_string("///|\n")
     buf.write_string(
-      "pub fn \{client}::get_agent_id(self : \{client}) -> String raise @common.AgentError {\n  self.client.get_agent_id()\n}\n\n",
+      "/// The ID of the agent. On a client of `upsert`, the host creates the agent when\n/// it is missing, without invoking a method.\n",
     )
-    // phantom_id
-    buf.write_string("///|\n")
     buf.write_string(
-      "pub fn \{client}::phantom_id(self : \{client}) -> @schema.Uuid? {\n  self.client.phantom_id()\n}\n\n",
+      "pub async fn \{client}::\{AGENT_ID_METHOD}(self : \{client}) -> @schema.AgentId {\n  self.client.agent_id()\n}\n\n",
     )
   }
   // drop
@@ -303,75 +343,139 @@ fn emit_client(
   buf.write_string(
     "pub fn \{client}::\{SET_DEFAULT_SCOPE_CARD}(self : \{client}, card : @permissions.ScopeCard?) -> Unit {\n  self.client.set_default_scope_card(card)\n}\n\n",
   )
-  // scoped (durable only)
+  emit_client_scoped(
+    buf,
+    client,
+    "scoped_upsert",
+    vis.map(p => "\{p.0} : \{param_type_to_type_string(p.1)}"),
+    "\{client}::upsert(\{vis.map(p => p.0).join(", ")})",
+  )
   if durable {
-    emit_client_scoped(buf, client, "scoped", "get", vis, [])
+    emit_client_scoped(
+      buf,
+      client,
+      "scoped_get_by_id",
+      ["agent_id : @schema.AgentId"],
+      "\{client}::get_by_id(agent_id)",
+    )
+    let create_params = rename_label_params(vis, create_labels)
+    let sig = create_params.map(p => {
+      "\{p.0} : \{param_type_to_type_string(p.1)}"
+    })
+    sig.append(create_option_params(config))
+    let args = create_params.map(p => p.0)
+    args.push("keyed~")
+    if config is Some(_) {
+      args.push("config?")
+    }
+    args.push("env~")
+    emit_client_scoped(
+      buf,
+      client,
+      "scoped_create",
+      sig,
+      "\{client}::create(\{args.join(", ")})",
+    )
   }
-  emit_client_scoped(buf, client, "scoped_new_phantom", "new_phantom", vis, [])
-  emit_client_scoped(buf, client, "scoped_get_phantom", "get_phantom", vis, [
-    ("phantom_id", "@schema.Uuid"),
-  ])
   // methods
   for meth in agent.methods {
     let contains_stream = method_contains_agent_stream(meth, value_types)
     emit_client_method(buf, agent, meth, client, durable, contains_stream)
   }
-  // _with_config variants
-  match resolve_config_type(agent, config_types, agent_package) {
-    Some(ct) => {
-      // Use the same recursive "has overridable leaves" predicate as the
-      // config emitter, so we only emit `_with_config` variants when an
-      // `*Override` type + walker were actually generated for `ct`.
-      let by_name : Map[String, ConfigTypeInfo] = Map([])
-      for c in config_types {
-        by_name[c.name] = c
-      }
-      if config_has_overridable_fields(ct, by_name) {
-        let override_name = ct.name + "Override"
-        let walker = "collect_" + pascal_to_snake(ct.name) + "_overrides"
-        emit_client_config_variants(
-          buf, agent, client, vis, override_name, walker, durable,
-        )
-      }
-    }
-    None => ()
-  }
 }
 
 ///|
-/// Emits a `scoped*` convenience method that acquires a client, defers `drop`,
-/// and runs the callback. `extra` are additional parameters (e.g. `phantom_id`)
-/// passed through to the underlying constructor.
+/// Resolves the config override carrier of an agent. It exists only when the
+/// config emitter generated an `*Override` type and walker for the agent's
+/// config type, which the same recursive "has overridable leaves" predicate
+/// decides.
+fn resolve_config_override(
+  agent : AgentInfo,
+  config_types : Array[ConfigTypeInfo],
+  agent_package : String,
+) -> ConfigOverride? {
+  guard resolve_config_type(agent, config_types, agent_package) is Some(ct) else {
+    return None
+  }
+  let by_name : Map[String, ConfigTypeInfo] = Map([])
+  for c in config_types {
+    by_name[c.name] = c
+  }
+  if !config_has_overridable_fields(ct, by_name) {
+    return None
+  }
+  Some({
+    type_name: ct.name + "Override",
+    walker: "collect_" + pascal_to_snake(ct.name) + "_overrides",
+  })
+}
+
+///|
+/// The optional parameters of the generated `create`.
+fn create_option_params(config : ConfigOverride?) -> Array[String] {
+  let params = ["keyed? : Bool = false"]
+  if config is Some(config) {
+    params.push("config? : \{config.type_name}")
+  }
+  params.push("env? : Array[(String, String)] = []")
+  params
+}
+
+///|
+/// Emits the `create` of a durable client.
+fn emit_client_create(
+  buf : StringBuilder,
+  client : String,
+  type_name : String,
+  vis : Array[(String, ParamType)],
+  config : ConfigOverride?,
+) -> Unit {
+  let params = rename_label_params(vis, create_labels)
+  let sig = params.map(p => "\{p.0} : \{param_type_to_type_string(p.1)}")
+  sig.append(create_option_params(config))
+  buf.write_string("///|\n")
+  buf.write_string(
+    "/// Creates a new agent and returns after its initialization. With `keyed`, the new\n/// agent is the agent that the constructor parameters key, and the creation raises\n/// `RpcError::Conflict` when that agent already exists; otherwise the new agent has\n/// no key and a new ID. `env` adds environment variables to the ones the manifest\n/// defines.\n",
+  )
+  buf.write_string(
+    "pub async fn \{client}::create(\n  \{sig.join(",\n  ")},\n) -> \{client} {\n",
+  )
+  buf.write_string("  let constructor_input = \{encode_input_expr(params)}\n")
+  match config {
+    Some(config) => {
+      buf.write_string("  let agent_config = match config {\n")
+      buf.write_string("    Some(config) => \{config.walker}(config, [])\n")
+      buf.write_string("    None => []\n  }\n")
+      buf.write_string(
+        "  let client = @rpc.AgentClient::create(\"\{type_name}\", constructor_input, keyed~, config=agent_config, env~)\n",
+      )
+    }
+    None =>
+      buf.write_string(
+        "  let client = @rpc.AgentClient::create(\"\{type_name}\", constructor_input, keyed~, env~)\n",
+      )
+  }
+  buf.write_string("  { client, }\n}\n\n")
+}
+
+///|
+/// Emits a `scoped*` convenience method that acquires a client with `acquire`,
+/// defers `drop`, and runs the callback.
 fn emit_client_scoped(
   buf : StringBuilder,
   client : String,
   fn_name : String,
-  ctor_name : String,
-  vis : Array[(String, ParamType)],
-  extra : Array[(String, String)],
+  params : Array[String],
+  acquire : String,
 ) -> Unit {
-  let sig_parts : Array[String] = []
-  for p in vis {
-    sig_parts.push("\{p.0} : \{param_type_to_type_string(p.1)}")
-  }
-  for e in extra {
-    sig_parts.push("\{e.0} : \{e.1}")
-  }
+  let sig_parts = params.copy()
   sig_parts.push("f : async (\{client}) -> T")
-  let call_args : Array[String] = []
-  for p in vis {
-    call_args.push(p.0)
-  }
-  for e in extra {
-    call_args.push(e.0)
-  }
   let sig = sig_parts.join(",\n  ")
-  let call = call_args.join(", ")
   buf.write_string("///|\n")
   buf.write_string(
     "pub async fn[T] \{client}::\{fn_name}(\n  \{sig},\n) -> T {\n",
   )
-  buf.write_string("  let client = \{client}::\{ctor_name}(\{call})\n")
+  buf.write_string("  let client = \{acquire}\n")
   buf.write_string("  defer client.drop()\n")
   buf.write_string("  f(client)\n}\n\n")
 }
@@ -477,131 +581,6 @@ fn emit_client_method(
   buf.write_string(
     "  \{if durable { "self.client.schedule_cancelable_invocation(scheduled_at, \"" + escape_string_lit(meth.name) + "\", input).cancellation_token" } else { "self.client.schedule_cancelable_invocation(scheduled_at, \"" + escape_string_lit(meth.name) + "\", input)" }}\n}\n\n",
   )
-}
-
-///|
-/// Emits the `*_with_config` client variants for agents with overridable config.
-fn emit_client_config_variants(
-  buf : StringBuilder,
-  agent : AgentInfo,
-  client : String,
-  vis : Array[(String, ParamType)],
-  override_name : String,
-  walker : String,
-  durable : Bool,
-) -> Unit {
-  let ctor_input = encode_input_expr(vis)
-  let ctor_sig = params_sig(vis)
-  let comma_sig = if ctor_sig.is_empty() { "" } else { ctor_sig + ",\n  " }
-  // get_with_config (durable only)
-  if durable {
-    buf.write_string("///|\n")
-    buf.write_string(
-      "pub fn \{client}::get_with_config(\n  \{comma_sig}config : \{override_name},\n) -> \{client} raise @common.AgentError {\n",
-    )
-    buf.write_string("  let constructor_input = \{ctor_input}\n")
-    buf.write_string("  let agent_config = \{walker}(config, [])\n")
-    buf.write_string(
-      "  let client = @rpc.AgentClient::get_with_config(\"\{escape_string_lit(agent.name)}\", constructor_input, agent_config)\n",
-    )
-    buf.write_string("  { client, }\n}\n\n")
-  }
-  // new_phantom_with_config
-  buf.write_string("///|\n")
-  buf.write_string(
-    "pub fn \{client}::new_phantom_with_config(\n  \{comma_sig}config : \{override_name},\n) -> \{client} raise @common.AgentError {\n",
-  )
-  buf.write_string("  let constructor_input = \{ctor_input}\n")
-  buf.write_string("  let agent_config = \{walker}(config, [])\n")
-  let config_ctor = if durable {
-    "new_phantom_with_config"
-  } else {
-    "ephemeral_with_config"
-  }
-  buf.write_string(
-    "  let client = @rpc.AgentClient::\{config_ctor}(\"\{escape_string_lit(agent.name)}\", constructor_input, agent_config)\n",
-  )
-  buf.write_string("  { client, }\n}\n\n")
-  // get_phantom_with_config
-  buf.write_string("///|\n")
-  buf.write_string(
-    "pub fn \{client}::get_phantom_with_config(\n  \{comma_sig}phantom_id : @schema.Uuid,\n  config : \{override_name},\n) -> \{client} raise @common.AgentError {\n",
-  )
-  buf.write_string("  let constructor_input = \{ctor_input}\n")
-  buf.write_string("  let agent_config = \{walker}(config, [])\n")
-  buf.write_string(
-    "  let client = @rpc.AgentClient::get_phantom_with_config(\"\{escape_string_lit(agent.name)}\", constructor_input, phantom_id, agent_config)\n",
-  )
-  buf.write_string("  { client, }\n}\n\n")
-  // scoped variants
-  if durable {
-    emit_client_scoped_with_config(
-      buf,
-      client,
-      "scoped_with_config",
-      "get_with_config",
-      vis,
-      [],
-      override_name,
-    )
-  }
-  emit_client_scoped_with_config(
-    buf,
-    client,
-    "scoped_new_phantom_with_config",
-    "new_phantom_with_config",
-    vis,
-    [],
-    override_name,
-  )
-  emit_client_scoped_with_config(
-    buf,
-    client,
-    "scoped_get_phantom_with_config",
-    "get_phantom_with_config",
-    vis,
-    [("phantom_id", "@schema.Uuid")],
-    override_name,
-  )
-}
-
-///|
-/// Emits a `scoped*_with_config` convenience method.
-fn emit_client_scoped_with_config(
-  buf : StringBuilder,
-  client : String,
-  fn_name : String,
-  ctor_name : String,
-  vis : Array[(String, ParamType)],
-  extra : Array[(String, String)],
-  override_name : String,
-) -> Unit {
-  let sig_parts : Array[String] = []
-  for p in vis {
-    sig_parts.push("\{p.0} : \{param_type_to_type_string(p.1)}")
-  }
-  for e in extra {
-    sig_parts.push("\{e.0} : \{e.1}")
-  }
-  sig_parts.push("config : \{override_name}")
-  sig_parts.push("f : async (\{client}) -> T")
-  let call_args : Array[String] = []
-  for p in vis {
-    call_args.push(p.0)
-  }
-  for e in extra {
-    call_args.push(e.0)
-  }
-  call_args.push("config")
-  let sig = sig_parts.join(",\n  ")
-  let call = call_args.join(", ")
-  buf.write_string("///|\n")
-  buf.write_string(
-    "pub async fn[T] \{client}::\{fn_name}(\n  \{sig},\n) -> T {\n",
-  )
-  buf.write_string("  let client = \{client}::\{ctor_name}(\{call})\n")
-  buf.write_string("  defer client.drop()\n")
-  buf.write_string("  f(client)\n}\n\n")
 }
 
 ///|

@@ -10,8 +10,8 @@ another agent, not shell invocation.
 golem agent invoke <AGENT_ID> <FUNCTION_NAME> [ARGUMENTS...]
 ```
 
-This invokes a method on a deployed agent and **waits for the result**. The agent is automatically
-created on first invocation if it does not exist yet. Standard output, error, and log streams from
+This invokes a method on a deployed agent and **waits for the result**. Addressed by its key, the
+agent is automatically created on first invocation if it does not exist yet. Standard output, error, and log streams from
 the agent are streamed live to the terminal by default.
 
 For an Effect agent definition:
@@ -79,19 +79,24 @@ current transport without cancelling the invocation. The CLI does not retry auto
 `--save-session <PATH>` on the initial invocation, then `--resume-session <PATH>` after a detach or
 `--takeover-session <PATH>` to fence an attached transport explicitly.
 
-## Agent ID Format
+## Agent Addresses
 
-The agent ID identifies the agent type and its agent id fields:
+`AgentTypeName(params)` is the agent's key: it addresses the keyed agent of the agent type and its
+agent id fields:
 
 ```
 AgentTypeName(param1, param2, ...)
 ```
 
-The agent ID can optionally be prefixed with environment or application paths:
+`AgentTypeName[<agent-id>]` and a bare `<agent-id>` address an agent by its agent ID, a UUID that
+Golem issues. An agent created without a key (for example by `golem agent create` without
+`--keyed`) is reached only by its ID. Every form can optionally be prefixed with environment or
+application paths:
 
 | Format | Description |
 |--------|-------------|
-| `AgentTypeName(params)` | Standalone agent name |
+| `AgentTypeName(params)` | Keyed agent |
+| `AgentTypeName[<agent-id>]` or `<agent-id>` | Agent by its ID |
 | `env/AgentTypeName(params)` | Environment-specific |
 | `app/env/AgentTypeName(params)` | Application and environment-specific |
 | `account/app/env/AgentTypeName(params)` | Account, application, and environment-specific |
@@ -132,6 +137,7 @@ golem agent invoke 'staging/MyAgent("user-123")' getStatus
 | `-i, --idempotency-key <KEY>` | Set a specific idempotency key; use `"-"` for auto-generated |
 | `--no-stream` | Disable live streaming of agent stdout/stderr/log |
 | `--schedule-at <DATETIME>` | Schedule the invocation at a specific time (requires `--trigger`; ISO 8601 format) |
+| `--expected-fingerprint <UUID>` | Fail, and run nothing, unless the agent is the incarnation with this fingerprint |
 
 ## Idempotency
 
@@ -150,7 +156,7 @@ directory, `golem agent invoke` will automatically build and deploy the componen
 
 ## Value Syntax
 
-Effect agent IDs, method arguments, and text results use **TypeScript syntax**:
+Effect agent keys (constructor values), method arguments, and text results use **TypeScript syntax**:
 
 - Field names use `camelCase`
 - Options: raw value or `undefined`

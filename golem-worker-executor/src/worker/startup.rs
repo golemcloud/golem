@@ -67,7 +67,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let status = this.state_actor.status().await;
                 if this.agent_mode() == AgentMode::Durable
                     && status.status == AgentStatus::Interrupted
-                    && status.current_idempotency_key.is_some()
+                    && status.current_idempotency_key().is_some()
                 {
                     this.add_and_commit_oplog_internal(
                         unloaded.lifecycle(),
@@ -522,7 +522,7 @@ impl WaitingWorker {
 
             let phase_start = std::time::Instant::now();
             let mut concurrent_agent_permit = registered_concurrent_account
-                .acquire(agent_id.clone())
+                .acquire(agent_id)
                 .instrument(related_span!(
                     worker_trace.startup_origin,
                     Level::INFO,

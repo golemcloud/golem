@@ -39,41 +39,63 @@ object HttpDispatchSpec extends ZIOSpecDefault {
   def spec = suite("HttpDispatchSpec")(
     test("compiled metadata encodes path/query selectors in the guest bridge") {
       val selectors = List(
-        PhantomIdBinding.Path("instance"),
-        PhantomIdBinding.Path("instance", true),
-        PhantomIdBinding.Query("instance"),
-        PhantomIdBinding.Query("instance", true)
+        AgentIdBinding.Path("instance"),
+        AgentIdBinding.Query("instance")
       )
       val actual = selectors.map { selector =>
-        val mount = HttpMountDetails(Nil, false, true, Nil, Nil, Nil, Nil, None, phantomIdBinding = Some(selector))
+        val path = selector match {
+          case AgentIdBinding.Path(name) => List(PathSegment.PathVariable(name))
+          case _                         => Nil
+        }
+        val mount = HttpMountDetails(
+          path,
+          false,
+          false,
+          Nil,
+          Nil,
+          Nil,
+          Nil,
+          None,
+          agentIdBinding = Some(selector),
+          createRoute = Some(List(PathSegment.Literal("create")))
+        )
         val agent = AgentMetadata(
           "Selected",
           AgentTypeKind.Regular,
           None,
           Some("durable"),
           Nil,
-          ConstructorMetadata(None, "", None),
+          ConstructorMetadata(
+            None,
+            "",
+            None,
+            InputMetadata(
+              List(
+                ParameterMetadata("customer", FieldSource.UserSupplied, SchemaBuilder.graphOf(_ => t.string))
+              )
+            )
+          ),
           Some(mount)
         )
-        val encoded = AgentRequestBuilder
+        val encodedMount = AgentRequestBuilder
           .fromWire(WireAgentMetadata.fromModel(agent), "durable")
           .httpMount
           .get
-          .phantomIdBinding
-          .get
+        val encoded = encodedMount.agentIdBinding.get
           .asInstanceOf[scala.scalajs.js.Dynamic]
+        val runtimeMount = AgentRequestBuilder.fromMetadata(agent, "durable").httpMount.get
         (
           encoded.tag.asInstanceOf[String],
           encoded.`val`.name.asInstanceOf[String],
-          encoded.`val`.optional.asInstanceOf[Boolean]
+          scala.scalajs.js.isUndefined(encoded.`val`.optional),
+          encodedMount.createRoute.get.head.asInstanceOf[scala.scalajs.js.Dynamic].tag.asInstanceOf[String],
+          scala.scalajs.js.JSON.stringify(runtimeMount) == scala.scalajs.js.JSON.stringify(encodedMount)
         )
       }
       assertTrue(
         actual == List(
-          ("path", "instance", false),
-          ("path", "instance", true),
-          ("query", "instance", false),
-          ("query", "instance", true)
+          ("path", "instance", true, "segment", true),
+          ("query", "instance", true, "segment", true)
         )
       )
     },

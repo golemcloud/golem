@@ -342,16 +342,11 @@ impl RenderFragment for ComponentOwnerPattern {
     }
 }
 
-/// Gives the owner text of an agent leaf. For a concrete agent name, the function writes `%`, `/`
-/// and `?` as `%25`, `%2F` and `%3F`. So the name is one owner segment and holds no slot variable.
-/// The function replaces `%` before the other two characters, so that it does not change the `%`
-/// of an escape that it wrote. `AgentOwnerLeafPattern::parse` decodes the name.
+/// Gives the owner text of an agent leaf: the agent ID, or `Type(*)`. The type name of a
+/// concrete leaf is not part of the text.
 fn render_agent_leaf(agent: &AgentOwnerLeafPattern) -> String {
     match agent {
-        AgentOwnerLeafPattern::Agent(agent) => agent
-            .replace('%', "%25")
-            .replace('/', "%2F")
-            .replace('?', "%3F"),
+        AgentOwnerLeafPattern::Agent(agent) => agent.agent_id.to_string(),
         AgentOwnerLeafPattern::AgentTypeWildcard(agent_type) => format!("{}(*)", agent_type.0),
     }
 }
@@ -717,6 +712,7 @@ impl RenderFragment for NetworkResourcePattern {
             Self::SocketAddress { host, port, .. } => {
                 format!("{}:{port}", render_network_host(host))
             }
+            Self::Lookup { host } => render_network_host(host),
         })
     }
 }

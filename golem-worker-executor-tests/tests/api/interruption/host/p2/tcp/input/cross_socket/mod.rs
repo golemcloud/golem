@@ -6,7 +6,7 @@ use test_r::test;
 
 macro_rules! cross_case {
     ($name:ident, Storage, $mode:ident) => {
-        cross_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
+        cross_case!(#[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
     };
     ($(#[$attr:meta])* $name:ident, $resource:ident, $mode:ident) => {
         $(#[$attr])*
@@ -46,16 +46,22 @@ cross_case!(
     Compute,
     Ephemeral
 );
-cross_case!(
-    durable_p2_cross_socket_splice_managed_xfs_storage_quota,
-    Storage,
-    Durable
-);
-cross_case!(
-    ephemeral_p2_cross_socket_splice_managed_xfs_storage_quota,
-    Storage,
-    Ephemeral
-);
+#[cfg(target_os = "linux")]
+mod storage {
+    use super::*;
+    use test_r::test;
+
+    cross_case!(
+        durable_p2_cross_socket_splice_managed_xfs_storage_quota,
+        Storage,
+        Durable
+    );
+    cross_case!(
+        ephemeral_p2_cross_socket_splice_managed_xfs_storage_quota,
+        Storage,
+        Ephemeral
+    );
+}
 
 const METHOD: &str = "tcp_cross_socket_blocking_splice_p2";
 
@@ -130,15 +136,15 @@ async fn cross_socket_pending(
     let seed_id = executor
         .start_agent(
             &component.id,
-            agent_id!("Networking", "p2-cross-splice-seed"),
+            agent_key!("Networking", "p2-cross-splice-seed"),
         )
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id.clone())
         .await
         .unwrap()
         .primary();
-    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
@@ -160,21 +166,21 @@ async fn cross_socket_pending(
     let baseline_updates = registry.applied_updates().len();
     let durable = mode == AgentMode::Durable;
     let name = if durable {
-        agent_id!("Networking", "p2-cross-socket-splice")
+        agent_key!("Networking", "p2-cross-socket-splice")
     } else {
-        agent_id!("EphemeralNetworking", "p2-cross-socket-splice")
+        agent_key!("EphemeralNetworking", "p2-cross-socket-splice")
     };
     let key = IdempotencyKey::fresh();
-    let physical = if durable {
-        name.clone()
-    } else {
-        name.clone()
-            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(&executor, &key, METHOD))
-            .unwrap()
-    };
-    let id = AgentId::from_agent_id(component.id, &physical).unwrap();
+    let id = invocation_agent_id(
+        &executor,
+        component.environment_id,
+        &name,
+        durable,
+        &key,
+        METHOD,
+    );
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
-    let worker = Worker::get_or_create_suspended(
+    let worker = Worker::get_or_create_suspended_with_freshness(
         seed.all(),
         &owned,
         None,
@@ -183,6 +189,8 @@ async fn cross_socket_pending(
         None,
         &InvocationContextStack::fresh(),
         callers::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        invocation_create_intent(&executor, component.id, &name, durable, &key, METHOD),
     )
     .await?;
     let source = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -219,8 +227,10 @@ async fn cross_socket_pending(
         let (entries, starts) = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 executor.commit_oplog(&id).await?;
-                let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-                if let Ok(starts) = cross_setup(&entries, 2) {
+                let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
+                if let Ok(starts) = cross_setup(&entries, 2)
+                    && starts_of(&entries, INPUT).len() == 1
+                {
                     break Ok::<_, anyhow::Error>((entries, starts));
                 }
                 ensure!(!request_is_finished(&invocation));
@@ -229,6 +239,11 @@ async fn cross_socket_pending(
         })
         .await??;
         ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
+        let input_start = starts_of(&entries, INPUT)[0];
+        ensure!(
+            terminal_count(&entries, input_start) == 0,
+            "the read of A is pending"
+        );
         let initial = worker
             .owner_runtime_resources()
             .with_monthly_capacity(mode, |capacity| capacity);
@@ -296,8 +311,12 @@ async fn cross_socket_pending(
         if refresh.is_some() {
             join_request(&mut refresh, "stop refresh").await?;
         }
-        let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let stopped = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         ensure!(cross_setup(&stopped, 2)? == starts);
+        ensure!(
+            terminal_count(&stopped, input_start) == 0,
+            "interruption cannot invent an input terminal"
+        );
         let entries = worker
             .oplog()
             .read_exact(
@@ -371,17 +390,23 @@ async fn cross_socket_pending(
             registry.set_policy(grant);
             start_refresh(&limits, &registry, context.account_id, &mut refresh).await?;
             join_request(&mut refresh, "policy refresh").await?;
-            executor.resume(&id, false).await?;
+            executor.resume(&owned, false).await?;
+            // The pending read fails with the lost connection, and the fixture reconnects both.
             let (mut input, mut output) = peers(&source, &destination).await?;
             echo(&mut input, &mut output).await?;
             ensure!(
                 join_request(&mut invocation, "invocation result")
                     .await??
-                    .into_typed::<Result<u64, String>>()?
-                    == Ok(1)
+                    .into_typed::<Result<(u32, u64), String>>()?
+                    == Ok((1, 1))
             );
-            let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-            ensure!(cross_setup(&recovered, 2)? == starts);
+            let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
+            ensure!(cross_setup(&recovered, 4)?[..2] == starts[..]);
+            ensure!(
+                terminal_count(&recovered, input_start) == 1
+                    && ends_with_connection_loss(&recovered, input_start),
+                "the pending read completes with the lost connection"
+            );
             assert_settled_history(&recovered)?;
             ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
             ensure!(
@@ -394,8 +419,8 @@ async fn cross_socket_pending(
                         data_value!(source_port, destination_port)
                     )
                     .await?
-                    .into_typed::<Result<u64, String>>()?
-                    == Ok(1)
+                    .into_typed::<Result<(u32, u64), String>>()?
+                    == Ok((1, 1))
             );
             ensure!(
                 tokio::time::timeout(Duration::from_millis(100), source.accept())
@@ -424,7 +449,7 @@ async fn cross_socket_pending(
                 tokio::try_join!(fresh, fresh_peers)
             })
             .await??;
-            ensure!(fresh.into_typed::<Result<u64, String>>()? == Ok(1));
+            ensure!(fresh.into_typed::<Result<(u32, u64), String>>()? == Ok((0, 1)));
             ensure!(
                 tokio::time::timeout(Duration::from_millis(100), source.accept())
                     .await
@@ -435,9 +460,9 @@ async fn cross_socket_pending(
                     .await
                     .is_err()
             );
-            let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let history = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (3, 3));
-            ensure!(cross_setup(&history, 4)?.len() == 4);
+            ensure!(cross_setup(&history, 6)?.len() == 6);
             assert_settled_history(&history)?;
         } else {
             let mut grant = policy;
@@ -469,7 +494,7 @@ async fn cross_socket_pending(
                     .await
                     .is_err()
             );
-            let probe_name = agent_id!("EphemeralNetworking", "p2-cross-socket-splice-probe");
+            let probe_name = agent_key!("EphemeralNetworking", "p2-cross-socket-splice-probe");
             let probe_key = IdempotencyKey::fresh();
             let probe = executor.invoke_and_await_agent_with_key(
                 &component,
@@ -486,7 +511,7 @@ async fn cross_socket_pending(
                 tokio::try_join!(probe, probe_peers)
             })
             .await??;
-            ensure!(probe.into_typed::<Result<u64, String>>()? == Ok(1));
+            ensure!(probe.into_typed::<Result<(u32, u64), String>>()? == Ok((0, 1)));
         }
         Ok::<_, anyhow::Error>(())
     }
@@ -504,6 +529,10 @@ async fn cross_socket_pending(
     .await
 }
 
+const INPUT: &str = "sockets::tcp::input_stream::blocking_read";
+
+/// The connect polls of the history. Every Start has its terminal, except that a read of A may
+/// be pending.
 fn cross_setup(
     entries: &[PublicOplogEntryWithIndex],
     expected: usize,
@@ -517,11 +546,8 @@ fn cross_setup(
         ensure!(!matches!(entry.entry, PublicOplogEntry::Cancelled(_)));
         if let PublicOplogEntry::Start(start) = &entry.entry {
             ensure!(start.parent_start_index.is_none() && start.observational_owner.is_none());
-            ensure!(
-                !start.function_name.contains("streams"),
-                "raw splice has no stream Start"
-            );
-            ensure!(terminal_count(entries, entry.oplog_index) == 1);
+            let terminals = terminal_count(entries, entry.oplog_index);
+            ensure!(terminals == 1 || (start.function_name == INPUT && terminals == 0));
         }
     }
     Ok(polls)

@@ -2,7 +2,7 @@ package golem:agent@2.0.0;
 
 interface common {
   use golem:core/types@2.0.0.{schema-graph, type-node-index, typed-schema-value,
-    metadata-envelope, agent-id, account-id, component-id, environment-id, uuid, datetime};
+    metadata-envelope, agent-id, account-id, environment-id, uuid, datetime};
   use golem:core/http@2.0.0.{http-route-mode, durable-stream-route-options,
     http-method as concrete-http-method, path-segment as neutral-path-segment,
     header-variable, query-variable, file-mapping, file-response-header};
@@ -39,10 +39,9 @@ interface common {
     http-router,
   }
 
-  /// Associates an agent type with a component that implements it
+  /// An agent type deployed in the current environment
   record registered-agent-type {
     agent-type: agent-type,
-    implemented-by: component-id
   }
 
   /// Dependent agent type. All schema roots inside it resolve against its own
@@ -103,7 +102,8 @@ interface common {
     path-prefix:    list<path-segment>,
     auth-details:   option<auth-details>,
     phantom-agent:  bool,
-    phantom-id-binding: option<phantom-id-binding>,
+    agent-id-binding: option<agent-id-binding>,
+    create-route: option<list<path-segment>>,
     cors-options:   cors-options,
     webhook-suffix: list<path-segment>,
     static-bindings: list<file-mapping>,
@@ -114,14 +114,13 @@ interface common {
     openapi-provider-method: option<string>,
   }
 
-  variant phantom-id-binding {
-    path(phantom-id-binding-details),
-    query(phantom-id-binding-details),
+  variant agent-id-binding {
+    path(agent-id-binding-details),
+    query(agent-id-binding-details),
   }
 
-  record phantom-id-binding-details {
+  record agent-id-binding-details {
     name: string,
-    optional: bool,
   }
 
   record cors-options {

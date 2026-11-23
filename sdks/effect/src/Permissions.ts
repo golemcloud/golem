@@ -32,9 +32,9 @@ import type * as CoreTypes from "golem:core/types@2.0.0"
 import { parseUuid } from "golem:core/types@2.0.0"
 import type * as KernelHost from "golem:permissions/kernel-introspection@0.1.0"
 import type * as TypesHost from "golem:permissions/types@0.1.0"
-import type { Identity } from "./AgentIdentity.js"
-import { AgentHostClient } from "./host/AgentHostClient.js"
+import type { AgentId } from "./AgentId.js"
 import { PermissionsClient } from "./host/PermissionsClient.js"
+import { agentIdToWit } from "./internal/agentId.js"
 import { assertCapabilityReady } from "./internal/schema-model/capabilityTransaction.js"
 import {
   createGuestPermissionCardHandle,
@@ -316,7 +316,7 @@ const makeCardId = (raw: TypesHost.CardId): CardId => {
 export type Holder =
   | { readonly _tag: "Account"; readonly accountId: string }
   | { readonly _tag: "App"; readonly appId: string }
-  | { readonly _tag: "Agent"; readonly agentId: CoreTypes.AgentId }
+  | { readonly _tag: "Agent"; readonly agentId: AgentId }
 
 const holderTags = {
   account: "Account",
@@ -336,7 +336,7 @@ export const Holder = {
   /** An application holder, identified by its canonical UUID string. */
   app: (appId: string): Holder => ({ _tag: holderTags.app, appId }),
   /** An agent holder, such as the value of `SelfAgentId.SelfAgentId`. */
-  agent: (agentId: CoreTypes.AgentId): Holder => ({ _tag: holderTags.agent, agentId }),
+  agent: (agentId: AgentId): Holder => ({ _tag: holderTags.agent, agentId }),
 }
 
 /**
@@ -533,7 +533,7 @@ const toWitHolder = (holder: Holder): TypesHost.Holder => {
     case "App":
       return { tag: "app", val: parseUuid(holder.appId) }
     case "Agent":
-      return { tag: "agent", val: holder.agentId }
+      return { tag: "agent", val: agentIdToWit(holder.agentId) }
   }
 }
 
@@ -854,28 +854,6 @@ export const walletVersion: Effect.Effect<
     catch: hostFailure("walletVersion"),
   })
 })
-
-/**
- * The agent holder for a parsed agent identity, resolved through the registered agent type.
- *
- * @since 1.6.0
- * @category constructors
- */
-export const agentHolder = (
-  identity: Identity,
-): Effect.Effect<Holder, PermissionsHostError, AgentHostClient> =>
-  Effect.gen(function* () {
-    const host = yield* AgentHostClient
-    return yield* Effect.try({
-      try: () => {
-        const registered = host.getAgentType(identity.typeName)
-        if (registered === undefined)
-          throw new Error(`agent type '${identity.typeName}' is not registered`)
-        return Holder.agent({ componentId: registered.implementedBy, agentId: identity.encoded })
-      },
-      catch: hostFailure("agentHolder"),
-    })
-  })
 
 /**
  * Every resource class the permission kernel knows, with its verbs.

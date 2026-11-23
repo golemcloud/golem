@@ -66,8 +66,9 @@ globalConfig({
   environment: 'local',
 });
 
-// Get or create an agent instance
-const agent = await MyAgent.get('my-instance');
+// Address the keyed agent of these constructor parameters; the server creates it on the
+// first invocation when it is missing
+const agent = MyAgent.upsert('my-instance');
 
 // Call methods — fully typed parameters and return values
 const result = await agent.doSomething('input');
@@ -104,32 +105,47 @@ configure({ server: { type: 'local' }, application: 'my-app', environment: 'loca
 Past the window the call rejects with `StreamingUnreachableError` (from
 `@golemcloud/golem-ts-bridge`), with `endpoint`, `reconnectWindowMs` and `lastCause`.
 
-## Phantom Agents
+## Creating Agents and Addressing Them by ID
 
-To create multiple agent instances that share the same identity (`id`) field values, use phantom agents:
-
-```typescript
-import { v4 as uuidv4 } from 'uuid';
-
-const agent = await MyAgent.getPhantom(uuidv4(), 'shared-name');
-```
-
-Or generate a random phantom ID automatically:
+A durable agent type also has `create` and `getById`. `create` creates a new agent with a new
+agent ID (a UUID) and no key, even when other agents have the same constructor parameters:
 
 ```typescript
-const agent = await MyAgent.newPhantom('shared-name');
+const agent = await MyAgent.create('shared-name');
+const agentId = await agent.agentId(); // save it to reach this agent again
+
+const same = await MyAgent.getById(agentId);
 ```
 
-## Agent Configuration
+`getById` never creates an agent: an unknown ID, or the ID of an agent of another type, rejects
+with a `GolemServiceError` of status 404.
 
-If the agent has local configuration fields, use the `WithConfig` variants:
+## Agent Configuration and Environment
+
+Pass local configuration values and environment variables in the options of `create`. With
+`keyed: true` it creates the keyed agent of the constructor parameters instead, and rejects with
+a `GolemConflictError` when that agent exists. This subclass of `GolemServiceError` has status 409
+and can be inspected in a catch block:
 
 ```typescript
-const agent = await MyAgent.getWithConfig(
-  'my-instance',
-  someConfigValue,    // config parameter (optional)
-);
+import { GolemConflictError } from '@golemcloud/golem-ts-bridge';
+
+try {
+  const agent = await MyAgent.create('my-instance', {
+    keyed: true,
+    config: { someConfigField: someConfigValue },
+    env: { LOG_LEVEL: 'debug' },
+  });
+} catch (error) {
+  if (error instanceof GolemConflictError) {
+    console.error('Keyed agent already exists:', error.status, error.body);
+  } else {
+    throw error;
+  }
+}
 ```
+
+`upsert` takes no configuration or environment.
 
 ## Generated Package Dependencies
 

@@ -17,11 +17,11 @@ use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::resource_usage_metering::close_window;
 use futures::FutureExt;
+use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::{AgentFilePath, AgentFilePermissions, ComponentId};
+use golem_common::model::component::{AgentFilePath, AgentFilePermissions};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{AgentId, OwnedAgentId};
 use golem_common::widen_infallible;
 use golem_service_base::replayable_stream::ReplayableStream as _;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
@@ -58,6 +58,7 @@ impl ScriptedWriteRecovery {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl FilesystemWriteRecoveryAuthority for ScriptedWriteRecovery {
     async fn recover_write(&self, _deadline: Instant) -> FilesystemWriteRecoveryOutcome {
         self.calls.fetch_add(1, Ordering::AcqRel);
@@ -94,6 +95,7 @@ impl BlockingWriteRecovery {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl FilesystemWriteRecoveryAuthority for BlockingWriteRecovery {
     async fn recover_write(&self, _deadline: Instant) -> FilesystemWriteRecoveryOutcome {
         self.calls.fetch_add(1, Ordering::AcqRel);
@@ -104,17 +106,14 @@ impl FilesystemWriteRecoveryAuthority for BlockingWriteRecovery {
 }
 
 fn agent_id() -> OwnedAgentId {
-    OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId::from_agent_name_string(ComponentId::new(), "lifecycle").unwrap(),
-    )
+    OwnedAgentId::new(EnvironmentId::new(), &crate::test_agent_id("lifecycle"))
 }
 
 pub(super) async fn native_resident(parent: &Path) -> (ResidentFilesystem, PathBuf) {
     let id = agent_id();
     let root = parent
         .join(id.environment_id.to_string())
-        .join(id.agent_id.component_id.to_string())
+        .join(format!("{:08x}", id.agent_id.type_tag()))
         .join(agent_path_segment(&id.agent_id));
     let created = create_fresh(
         sandbox_provisioning(&FilesystemStorageConfig {
@@ -3190,15 +3189,11 @@ async fn hard_link_collision_preserves_non_directory_and_nonterminal_proof_resul
 async fn a_terminal_source_probe_after_hard_link_collision_invalidates_the_generation() {
     use futures::StreamExt as _;
 
-    let errors: Box<[_]> = Box::new([
-        sandbox_error("source proof", std::io::ErrorKind::PermissionDenied),
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        FilesystemStorageError::io(
-            "source proof",
-            Some(Path::new("source")),
-            std::io::Error::from_raw_os_error(libc::EIO),
-        ),
-    ]);
+    let errors = std::iter::once(sandbox_error(
+        "source proof",
+        std::io::ErrorKind::PermissionDenied,
+    ))
+    .chain(source_probe_error::raw_error());
     futures::stream::iter(errors)
         .for_each(|probe_error| async move {
             let (filesystem, control, window) = metered_resident().await;
@@ -3502,57 +3497,62 @@ async fn a_hard_link_permission_refusal_is_guest_policy_only_for_a_known_directo
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-async fn terminal_raw_namespace_error_invalidates_despite_no_effect_postcondition() {
-    let (filesystem, control, window) = metered_resident().await;
-    let generation_handle = resident_generation_handle(&filesystem);
-    let directory = open_directory(&generation_handle, &control, 40).await;
-    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
-    control.push_hard_link(Err(FilesystemStorageError::io(
-        "terminal hard link",
-        None,
-        std::io::Error::from_raw_os_error(libc::EIO),
-    )));
-    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+mod native_namespace_errors {
+    use super::*;
+    use test_r::test;
 
-    assert!(matches!(
-        edit_namespace(
-            &generation_handle,
-            NamespaceEdit::Link {
-                source: PathTarget::at(&directory, "source"),
-                destination: PathTarget::at(&directory, "existing"),
-            },
-        )
-        .unwrap()
-        .await,
-        Err(Error::RuntimeInvalidated)
-    ));
-    assert_eq!(
-        control
-            .calls()
-            .iter()
-            .filter(|call| call.starts_with("hard_link("))
-            .count(),
-        1
-    );
-    assert!(matches!(
-        edit_namespace(
-            &generation_handle,
-            NamespaceEdit::Remove {
-                target: PathTarget::at(&directory, "after-terminal"),
-                expected: ObjectKind::File,
-            },
-        ),
-        Err(AccessError::Revoked)
-    ));
+    #[test]
+    async fn terminal_raw_namespace_error_invalidates_despite_no_effect_postcondition() {
+        let (filesystem, control, window) = metered_resident().await;
+        let generation_handle = resident_generation_handle(&filesystem);
+        let directory = open_directory(&generation_handle, &control, 40).await;
+        control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+        control.push_hard_link(Err(FilesystemStorageError::io(
+            "terminal hard link",
+            None,
+            std::io::Error::from_raw_os_error(libc::EIO),
+        )));
+        control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
 
-    close_window(window, Instant::now() + Duration::from_secs(1))
-        .await
-        .unwrap();
-    control.push_close(Ok(()));
-    close(OpenNode::Directory(directory)).await.unwrap();
-    control.push_delete_and_verify(Ok(()));
-    delete(seal(filesystem)).await.unwrap();
+        assert!(matches!(
+            edit_namespace(
+                &generation_handle,
+                NamespaceEdit::Link {
+                    source: PathTarget::at(&directory, "source"),
+                    destination: PathTarget::at(&directory, "existing"),
+                },
+            )
+            .unwrap()
+            .await,
+            Err(Error::RuntimeInvalidated)
+        ));
+        assert_eq!(
+            control
+                .calls()
+                .iter()
+                .filter(|call| call.starts_with("hard_link("))
+                .count(),
+            1
+        );
+        assert!(matches!(
+            edit_namespace(
+                &generation_handle,
+                NamespaceEdit::Remove {
+                    target: PathTarget::at(&directory, "after-terminal"),
+                    expected: ObjectKind::File,
+                },
+            ),
+            Err(AccessError::Revoked)
+        ));
+
+        close_window(window, Instant::now() + Duration::from_secs(1))
+            .await
+            .unwrap();
+        control.push_close(Ok(()));
+        close(OpenNode::Directory(directory)).await.unwrap();
+        control.push_delete_and_verify(Ok(()));
+        delete(seal(filesystem)).await.unwrap();
+    }
 }
 
 #[test]
@@ -6579,7 +6579,7 @@ async fn finite_limits_fail_on_unmanaged_production_storage_and_cleanup() {
     let root = parent
         .path()
         .join(id.environment_id.to_string())
-        .join(id.agent_id.component_id.to_string())
+        .join(format!("{:08x}", id.agent_id.type_tag()))
         .join(agent_path_segment(&id.agent_id));
 
     let provisioning = sandbox_provisioning(&profile).unwrap();
@@ -6597,48 +6597,6 @@ async fn finite_limits_fail_on_unmanaged_production_storage_and_cleanup() {
 }
 
 #[test]
-async fn an_agent_name_of_500_bytes_gets_a_sandbox() {
-    // A file name can have 255 bytes. The agent name has 500 bytes and holds `/` and `..`
-    // segments, so the name of the sandbox directory is the path segment of the agent.
-    let parent = tempfile::tempdir().unwrap();
-    let profile = FilesystemStorageConfig {
-        mode: FilesystemStorageMode::Directory {
-            root: parent.path().into(),
-        },
-        ..FilesystemStorageConfig::default()
-    };
-    let id = OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: format!("counter(\"{}\")", "../".repeat(163)),
-        },
-    );
-    let root = parent
-        .path()
-        .join(id.environment_id.to_string())
-        .join(id.agent_id.component_id.to_string())
-        .join(agent_path_segment(&id.agent_id));
-    let name_bytes = id.agent_id.agent_id.len();
-
-    let created = create_fresh(
-        sandbox_provisioning(&profile).unwrap(),
-        scratch_directory().await,
-        id,
-        ResolvedStorageLimits::Unlimited,
-    )
-    .await
-    .unwrap();
-    let created_root = root.is_dir();
-    delete_created(created).await.unwrap();
-
-    assert_eq!(
-        (name_bytes, created_root, root.exists()),
-        (500, true, false)
-    );
-}
-
-#[test]
 async fn shared_provisioning_creates_distinct_typed_filesystems_with_independent_deletion() {
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
@@ -6653,12 +6611,12 @@ async fn shared_provisioning_creates_distinct_typed_filesystems_with_independent
     let first_root = parent
         .path()
         .join(first_id.environment_id.to_string())
-        .join(first_id.agent_id.component_id.to_string())
+        .join(format!("{:08x}", first_id.agent_id.type_tag()))
         .join(agent_path_segment(&first_id.agent_id));
     let second_root = parent
         .path()
         .join(second_id.environment_id.to_string())
-        .join(second_id.agent_id.component_id.to_string())
+        .join(format!("{:08x}", second_id.agent_id.type_tag()))
         .join(agent_path_segment(&second_id.agent_id));
 
     let first = create_fresh(
@@ -6700,7 +6658,7 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
     let root = parent
         .path()
         .join(id.environment_id.to_string())
-        .join(id.agent_id.component_id.to_string())
+        .join(format!("{:08x}", id.agent_id.type_tag()))
         .join(agent_path_segment(&id.agent_id));
     let service = Arc::new(InitialAgentFilesService::new(Arc::new(
         InMemoryBlobStorage::new(),
@@ -6775,27 +6733,7 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
             .unwrap();
     assert_eq!(std::fs::read(root.join("read-only")).unwrap(), read_only);
     assert_eq!(std::fs::read(root.join("read-write")).unwrap(), read_write);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        assert_eq!(
-            std::fs::metadata(root.join("read-only"))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o222,
-            0
-        );
-        assert_ne!(
-            std::fs::metadata(root.join("read-write"))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o200,
-            0
-        );
-    }
+    native_permissions::assert_initial_modes(&root);
 
     let reconstructing = finish_replay(reconstructing).await.unwrap();
     let resident = finish_reconstruction(reconstructing).await.unwrap();
@@ -6913,7 +6851,7 @@ async fn a_truncating_open_empties_a_writable_file_and_keeps_the_bytes_of_a_read
     let root = parent
         .path()
         .join(id.environment_id.to_string())
-        .join(id.agent_id.component_id.to_string())
+        .join(format!("{:08x}", id.agent_id.type_tag()))
         .join(agent_path_segment(&id.agent_id));
     let service = Arc::new(InitialAgentFilesService::new(Arc::new(
         InMemoryBlobStorage::new(),
@@ -7037,130 +6975,138 @@ async fn a_truncating_open_empties_a_writable_file_and_keeps_the_bytes_of_a_read
 }
 
 #[cfg(target_os = "linux")]
-#[test]
-#[ignore = "requires the privileged managed XFS test runner"]
-#[timeout("60s")]
-async fn managed_xfs_lifecycle_installs_limits_and_deletes_verified() {
-    let root = std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
-        .map(PathBuf::from)
-        .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
-    let profile = FilesystemStorageConfig {
-        mode: FilesystemStorageMode::ManagedXfs {
-            xfs_quotad_socket: crate::filesystem::volume::in_process_xfs_quotad(&root),
-            root: root.into(),
-        },
-        ..FilesystemStorageConfig::default()
-    };
-    let initial_limits = limits(128 * 1024 * 1024, 8192);
-    let provisioning = sandbox_provisioning(&profile).unwrap();
-    let created = create_fresh(
-        provisioning,
-        scratch_directory().await,
-        agent_id(),
-        ResolvedStorageLimits::Finite(initial_limits),
-    )
-    .await
-    .unwrap();
-    let (account, _) = account();
-    let reconstructing = bind_resource_usage_metering(created, account).unwrap();
-    let reconstructing = materialize_baseline(
-        reconstructing,
-        no_initial_files().await,
-        None::<std::convert::Infallible>,
-    )
-    .await
-    .unwrap();
-    let reconstructing = finish_replay(reconstructing).await.unwrap();
-    let resident = finish_reconstruction(reconstructing).await.unwrap();
-    let lowered_limits = limits(64 * 1024 * 1024, 4096);
-    let resident = match set_limits(resident, ResolvedStorageLimits::Finite(lowered_limits))
-        .await
-        .unwrap()
-    {
-        LimitTransition::Resident(resident) => resident,
-        LimitTransition::MustUnload(filesystem) => {
-            delete(filesystem).await.unwrap();
-            panic!("fresh managed filesystem exceeded its lowered limits")
-        }
-    };
-    delete(seal(resident)).await.unwrap();
-}
+mod managed_xfs {
+    use super::*;
+    use test_r::{test, timeout};
 
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "requires the privileged managed XFS test runner"]
-#[timeout("60s")]
-async fn managed_xfs_allocated_bytes_flow_through_resource_billing() {
-    let root = std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
-        .map(PathBuf::from)
-        .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
-    let profile = FilesystemStorageConfig {
-        mode: FilesystemStorageMode::ManagedXfs {
-            xfs_quotad_socket: crate::filesystem::volume::in_process_xfs_quotad(&root),
-            root: root.into(),
-        },
-        ..FilesystemStorageConfig::default()
-    };
-    let provisioning = sandbox_provisioning(&profile).unwrap();
-    let created = create_fresh(
-        provisioning,
-        scratch_directory().await,
-        agent_id(),
-        ResolvedStorageLimits::Finite(limits(16 * 1024 * 1024, 1024)),
-    )
-    .await
-    .unwrap();
-    let (account, entry) = account();
-    let reconstructing = bind_resource_usage_metering(created, account).unwrap();
-    let reconstructing = materialize_baseline(
-        reconstructing,
-        no_initial_files().await,
-        None::<std::convert::Infallible>,
-    )
-    .await
-    .unwrap();
-    let reconstructing = finish_replay(reconstructing).await.unwrap();
-    let resident = finish_reconstruction(reconstructing).await.unwrap();
-    let window = open_resource_usage_window(&resident, permit(&entry).await)
+    #[test]
+    #[ignore = "requires the privileged managed XFS test runner"]
+    #[timeout("60s")]
+    async fn managed_xfs_lifecycle_installs_limits_and_deletes_verified() {
+        let root = std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
+            .map(PathBuf::from)
+            .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
+        let profile = FilesystemStorageConfig {
+            mode: FilesystemStorageMode::ManagedXfs {
+                xfs_quotad_socket: crate::filesystem::volume::platform::in_process_xfs_quotad(
+                    &root,
+                ),
+                root: root.into(),
+            },
+            ..FilesystemStorageConfig::default()
+        };
+        let initial_limits = limits(128 * 1024 * 1024, 8192);
+        let provisioning = sandbox_provisioning(&profile).unwrap();
+        let created = create_fresh(
+            provisioning,
+            scratch_directory().await,
+            agent_id(),
+            ResolvedStorageLimits::Finite(initial_limits),
+        )
         .await
         .unwrap();
-    let generation_handle = resident_generation_handle(&resident);
-    let opened = open(
-        &generation_handle,
-        PathTarget::at_root(&generation_handle, "billing-allocation").unwrap(),
-        OpenOptions::File {
-            access: AccessMode::ReadWrite,
-            disposition: FileDisposition::CreateOrTruncate,
-            follow: Follow::Yes,
-        },
-    )
-    .unwrap()
-    .await
-    .unwrap();
-    let OpenNode::File(file) = opened.node else {
-        panic!("managed XFS file open returned a directory")
-    };
-    let payload = Bytes::from(vec![0xa5; 128 * 1024]);
-    assert_eq!(
-        write(&generation_handle, &file, WritePlacement::At(0), payload)
-            .unwrap()
+        let (account, _) = account();
+        let reconstructing = bind_resource_usage_metering(created, account).unwrap();
+        let reconstructing = materialize_baseline(
+            reconstructing,
+            no_initial_files().await,
+            None::<std::convert::Infallible>,
+        )
+        .await
+        .unwrap();
+        let reconstructing = finish_replay(reconstructing).await.unwrap();
+        let resident = finish_reconstruction(reconstructing).await.unwrap();
+        let lowered_limits = limits(64 * 1024 * 1024, 4096);
+        let resident = match set_limits(resident, ResolvedStorageLimits::Finite(lowered_limits))
             .await
-            .unwrap(),
-        WriteResult {
-            written: 128 * 1024
-        }
-    );
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    close_window(window, Instant::now() + Duration::from_secs(5))
+            .unwrap()
+        {
+            LimitTransition::Resident(resident) => resident,
+            LimitTransition::MustUnload(filesystem) => {
+                delete(filesystem).await.unwrap();
+                panic!("fresh managed filesystem exceeded its lowered limits")
+            }
+        };
+        delete(seal(resident)).await.unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires the privileged managed XFS test runner"]
+    #[timeout("60s")]
+    async fn managed_xfs_allocated_bytes_flow_through_resource_billing() {
+        let root = std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
+            .map(PathBuf::from)
+            .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
+        let profile = FilesystemStorageConfig {
+            mode: FilesystemStorageMode::ManagedXfs {
+                xfs_quotad_socket: crate::filesystem::volume::platform::in_process_xfs_quotad(
+                    &root,
+                ),
+                root: root.into(),
+            },
+            ..FilesystemStorageConfig::default()
+        };
+        let provisioning = sandbox_provisioning(&profile).unwrap();
+        let created = create_fresh(
+            provisioning,
+            scratch_directory().await,
+            agent_id(),
+            ResolvedStorageLimits::Finite(limits(16 * 1024 * 1024, 1024)),
+        )
         .await
         .unwrap();
+        let (account, entry) = account();
+        let reconstructing = bind_resource_usage_metering(created, account).unwrap();
+        let reconstructing = materialize_baseline(
+            reconstructing,
+            no_initial_files().await,
+            None::<std::convert::Infallible>,
+        )
+        .await
+        .unwrap();
+        let reconstructing = finish_replay(reconstructing).await.unwrap();
+        let resident = finish_reconstruction(reconstructing).await.unwrap();
+        let window = open_resource_usage_window(&resident, permit(&entry).await)
+            .await
+            .unwrap();
+        let generation_handle = resident_generation_handle(&resident);
+        let opened = open(
+            &generation_handle,
+            PathTarget::at_root(&generation_handle, "billing-allocation").unwrap(),
+            OpenOptions::File {
+                access: AccessMode::ReadWrite,
+                disposition: FileDisposition::CreateOrTruncate,
+                follow: Follow::Yes,
+            },
+        )
+        .unwrap()
+        .await
+        .unwrap();
+        let OpenNode::File(file) = opened.node else {
+            panic!("managed XFS file open returned a directory")
+        };
+        let payload = Bytes::from(vec![0xa5; 128 * 1024]);
+        assert_eq!(
+            write(&generation_handle, &file, WritePlacement::At(0), payload)
+                .unwrap()
+                .await
+                .unwrap(),
+            WriteResult {
+                written: 128 * 1024
+            }
+        );
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        close_window(window, Instant::now() + Duration::from_secs(5))
+            .await
+            .unwrap();
 
-    assert!(
-        entry.durable_byte_seconds_delta() > 0,
-        "authoritative managed-XFS allocation produced no durable storage charge"
-    );
-    close(OpenNode::File(file)).await.unwrap();
-    delete(seal(resident)).await.unwrap();
+        assert!(
+            entry.durable_byte_seconds_delta() > 0,
+            "authoritative managed-XFS allocation produced no durable storage charge"
+        );
+        close(OpenNode::File(file)).await.unwrap();
+        delete(seal(resident)).await.unwrap();
+    }
 }
 
 #[test]
@@ -8931,99 +8877,104 @@ async fn failed_deletion_retains_cleanup_ownership_until_verified_retry() {
 }
 
 #[cfg(unix)]
-#[test]
-#[timeout("10s")]
-async fn native_failed_cleanup_retry_cannot_delete_recreated_filesystem() {
-    let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
-    let parent = tempfile::tempdir().unwrap();
-    let provisioning = SandboxFilesystemProvisioning::new(
-        &FilesystemStorageMode::Directory {
-            root: parent.path().into(),
-        },
-        golem_common::model::RetryConfig {
-            max_attempts: 1,
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    let agent = agent_id();
-    let filesystem = create_fresh(
-        provisioning.clone(),
-        scratch_directory().await,
-        agent.clone(),
-        ResolvedStorageLimits::Unlimited,
-    )
-    .await
-    .unwrap();
-    filesystem.set_release_metrics_for_test(metrics.scope());
-    let root = filesystem
-        .generation
-        .as_ref()
-        .unwrap()
-        .sandbox
-        .read()
+mod unix_cleanup {
+    use super::*;
+    use test_r::{test, timeout};
+
+    #[test]
+    #[timeout("10s")]
+    async fn native_failed_cleanup_retry_cannot_delete_recreated_filesystem() {
+        let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
+        let parent = tempfile::tempdir().unwrap();
+        let provisioning = SandboxFilesystemProvisioning::new(
+            &FilesystemStorageMode::Directory {
+                root: parent.path().into(),
+            },
+            golem_common::model::RetryConfig {
+                max_attempts: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let agent = agent_id();
+        let filesystem = create_fresh(
+            provisioning.clone(),
+            scratch_directory().await,
+            agent.clone(),
+            ResolvedStorageLimits::Unlimited,
+        )
         .await
-        .as_ref()
-        .unwrap()
-        .root_for_test()
-        .to_path_buf();
-    let component = root.parent().unwrap();
-    let moved = component.with_extension("moved");
-    std::fs::rename(component, &moved).unwrap();
-    std::fs::write(component, b"block directory traversal").unwrap();
+        .unwrap();
+        filesystem.set_release_metrics_for_test(metrics.scope());
+        let root = filesystem
+            .generation
+            .as_ref()
+            .unwrap()
+            .sandbox
+            .read()
+            .await
+            .as_ref()
+            .unwrap()
+            .root_for_test()
+            .to_path_buf();
+        let component = root.parent().unwrap();
+        let moved = component.with_extension("moved");
+        std::fs::rename(component, &moved).unwrap();
+        std::fs::write(component, b"block directory traversal").unwrap();
 
-    let failure = delete_created(filesystem).await.unwrap_err();
-    assert_eq!(
-        failure.source.io_kind(),
-        Some(std::io::ErrorKind::NotADirectory)
-    );
-    assert_eq!(
-        failure.retry().await.unwrap_err().source.io_kind(),
-        Some(std::io::ErrorKind::NotADirectory)
-    );
+        let failure = delete_created(filesystem).await.unwrap_err();
+        assert_eq!(
+            failure.source.io_kind(),
+            Some(std::io::ErrorKind::NotADirectory)
+        );
+        assert_eq!(
+            failure.retry().await.unwrap_err().source.io_kind(),
+            Some(std::io::ErrorKind::NotADirectory)
+        );
 
-    std::fs::remove_file(component).unwrap();
-    std::fs::rename(&moved, component).unwrap();
-    failure.retry().await.unwrap();
-    assert!(!root.exists());
+        std::fs::remove_file(component).unwrap();
+        std::fs::rename(&moved, component).unwrap();
+        failure.retry().await.unwrap();
+        assert!(!root.exists());
 
-    let replacement = create_fresh(
-        provisioning,
-        scratch_directory().await,
-        agent,
-        ResolvedStorageLimits::Unlimited,
-    )
-    .await
-    .unwrap();
-    std::fs::write(root.join("replacement"), b"new generation").unwrap();
-    failure.retry().await.unwrap();
-    drop(failure);
-    assert_eq!(
-        std::fs::read(root.join("replacement")).unwrap(),
-        b"new generation"
-    );
-    delete_created(replacement).await.unwrap();
-    assert_eq!(
-        metrics.pending("filesystem_delete", "filesystem_deleted"),
-        0.0
-    );
-    assert_eq!(
-        metrics.value(
-            "golem_agent_filesystem_lifecycle_seconds",
-            &[("outcome", "success_after_failure")]
-        ),
-        1.0
-    );
-    assert_eq!(
-        metrics.value(
-            "golem_agent_resource_cleanup_failures_total",
-            &[
-                ("stage", "filesystem_deleted"),
-                ("reason", "filesystem_delete")
-            ]
-        ),
-        1.0
-    );
+        let replacement = create_fresh(
+            provisioning,
+            scratch_directory().await,
+            agent,
+            ResolvedStorageLimits::Unlimited,
+        )
+        .await
+        .unwrap();
+        std::fs::write(root.join("replacement"), b"new generation").unwrap();
+        failure.retry().await.unwrap();
+        drop(failure);
+        assert_eq!(
+            std::fs::read(root.join("replacement")).unwrap(),
+            b"new generation"
+        );
+        delete_created(replacement).await.unwrap();
+        assert_eq!(
+            metrics.pending("filesystem_delete", "filesystem_deleted"),
+            0.0
+        );
+        assert_eq!(
+            metrics.value(
+                "golem_agent_filesystem_lifecycle_seconds",
+                &[("outcome", "success_after_failure")]
+            ),
+            1.0
+        );
+        assert_eq!(
+            metrics.value(
+                "golem_agent_resource_cleanup_failures_total",
+                &[
+                    ("stage", "filesystem_deleted"),
+                    ("reason", "filesystem_delete")
+                ]
+            ),
+            1.0
+        );
+    }
 }
 
 #[test]
@@ -9923,8 +9874,73 @@ fn native_permission_errors_and_broken_storage_are_terminal() {
         "refused",
         std::io::ErrorKind::PermissionDenied
     )));
-    #[cfg(unix)]
-    {
+    assert_eq!(
+        decide_effect(
+            FailureCause::TerminalInfrastructure,
+            EffectEvidence::NoEffect,
+            RetryBudget::new(2),
+        ),
+        EffectDecision::Invalidate
+    );
+    assert!(matches!(
+        classified_error(FailureCause::Guest, missing("guest error")),
+        Error::Sandbox(_)
+    ));
+    assert!(invalidates_generation(&sandbox_error(
+        "remount",
+        std::io::ErrorKind::ReadOnlyFilesystem
+    )));
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod source_probe_error {
+    use super::*;
+
+    pub(super) fn raw_error() -> Option<FilesystemStorageError> {
+        Some(FilesystemStorageError::io(
+            "source proof",
+            Some(Path::new("source")),
+            std::io::Error::from_raw_os_error(libc::EIO),
+        ))
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+mod source_probe_error {
+    use super::FilesystemStorageError;
+
+    pub(super) fn raw_error() -> Option<FilesystemStorageError> {
+        None
+    }
+}
+
+#[cfg(unix)]
+mod native_permissions {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
+    use test_r::test;
+
+    pub(super) fn assert_initial_modes(root: &Path) {
+        assert_eq!(
+            std::fs::metadata(root.join("read-only"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o222,
+            0
+        );
+        assert_ne!(
+            std::fs::metadata(root.join("read-write"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o200,
+            0
+        );
+    }
+
+    #[test]
+    fn native_permission_errno_invalidates_the_generation_and_proves_no_effect() {
         [libc::EACCES, libc::EPERM].into_iter().for_each(|errno| {
             let refused = || {
                 FilesystemStorageError::io(
@@ -9951,21 +9967,20 @@ fn native_permission_errors_and_broken_storage_are_terminal() {
             );
         });
     }
-    assert_eq!(
-        decide_effect(
-            FailureCause::TerminalInfrastructure,
-            EffectEvidence::NoEffect,
-            RetryBudget::new(2),
-        ),
-        EffectDecision::Invalidate
-    );
-    assert!(matches!(
-        classified_error(FailureCause::Guest, missing("guest error")),
-        Error::Sandbox(_)
-    ));
-    // Broken storage invalidates the generation.
-    #[cfg(target_os = "linux")]
-    {
+}
+
+#[cfg(not(unix))]
+mod native_permissions {
+    pub(super) fn assert_initial_modes(_root: &std::path::Path) {}
+}
+
+#[cfg(target_os = "linux")]
+mod broken_storage {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn broken_storage_errno_invalidates_the_generation() {
         [libc::EIO, libc::ESTALE, libc::ENODEV]
             .into_iter()
             .for_each(|errno| {
@@ -9979,10 +9994,6 @@ fn native_permission_errors_and_broken_storage_are_terminal() {
                 );
             });
     }
-    assert!(invalidates_generation(&sandbox_error(
-        "remount",
-        std::io::ErrorKind::ReadOnlyFilesystem
-    )));
 }
 
 #[test]

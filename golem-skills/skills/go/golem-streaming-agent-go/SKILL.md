@@ -100,7 +100,7 @@ A stream is affine: once returned, passed to a call or sent as an item, reading 
 Same-component calls use the method descriptors as usual:
 
 ```go
-target := pipe.Agent.Get(pipe.ID{Name: "main"})
+target := pipe.Agent.Upsert(pipe.ID{Name: "main"})
 out := pipe.Doubled.MustCall(target, pipe.ValuesIn{Values: golem.StreamOf[int32](1, 2, 3)})
 for v, err := range out.All() {
 	golem.Must0(err)
@@ -115,7 +115,7 @@ Guest clients that `golem build` generates for `dependencies.agents` (see `golem
 ```go
 import provider "golem.local/bridge/stream-provider-guest-client"
 
-remote := provider.MustGetStreamProvider(provider.StreamProviderID{Name: "main"})
+remote := provider.MustUpsertStreamProvider(provider.StreamProviderID{Name: "main"})
 total := remote.MustSum(golem.StreamOf[int32](1, 2, 3))
 doubled := remote.MustDoubled(golem.ProduceStream(func(w *golem.AgentStreamWriter[int32]) error {
 	return w.WriteAll(1, 2, 3)

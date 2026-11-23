@@ -55,7 +55,11 @@ async fn unauthenticated_requests_get_json_unauthorized(_tracing: &Tracing) {
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     for path in [
         "/v1/me/token".to_string(),
-        format!("/v1/components/{}/workers/agent", uuid::Uuid::new_v4()),
+        format!(
+            "/v1/runtime/envs/{}/agents/{}",
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4()
+        ),
     ] {
         let response = client
             .get(format!("http://127.0.0.1:{}{path}", ctx.router_port()))

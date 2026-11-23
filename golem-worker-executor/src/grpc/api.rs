@@ -15,7 +15,7 @@
 use super::{
     ActivatePluginRequest, ActivatePluginResponse, AppendToStreamSlotRequest,
     AppendToStreamSlotResponse, AuthCtx, CancelInvocationRequest, CancelInvocationResponse,
-    ComponentId, DeactivatePluginRequest, DeactivatePluginResponse, DeliverCardTransferRequest,
+    DeactivatePluginRequest, DeactivatePluginResponse, DeliverCardTransferRequest,
     DeliverCardTransferResponse, DurableStreamAttachmentControlRequest,
     DurableStreamAttachmentControlResponse, DurableStreamRemoteError,
     DurableStreamSegmentReadRequest, DurableStreamSegmentReadResponse, ForkStreamSlotRequest,
@@ -37,6 +37,7 @@ use super::{
 };
 
 #[tonic::async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutor for WorkerExecutorImpl<Ctx, Svcs>
 {
@@ -47,7 +48,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "create_worker",
-            agent_id = proto_agent_id_string(&request.agent_id),
+            agent_type = request
+                .constructor
+                .as_ref()
+                .map(|key| key.agent_type_name.clone())
+                .unwrap_or_default(),
+            agent_id = proto_agent_id_string(&request.unkeyed_id),
         );
 
         match self
@@ -55,12 +61,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .instrument(record.span.clone())
             .await
         {
-            Ok(fingerprint) => record.succeed(Ok(Response::new(
+            Ok((fingerprint, agent_id)) => record.succeed(Ok(Response::new(
                 golem::workerexecutor::v1::CreateWorkerResponse {
                     result: Some(
                         golem::workerexecutor::v1::create_worker_response::Result::Success(
                             golem::workerexecutor::v1::CreateWorkerSuccessResponse {
                                 instance_id: Some(fingerprint.0.into()),
+                                agent_id: Some(agent_id.into()),
                             },
                         ),
                     ),
@@ -88,7 +95,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "prepare_worker",
-            agent_id = proto_agent_id_string(&request.agent_id),
+            agent_type = request
+                .constructor
+                .as_ref()
+                .map(|key| key.agent_type_name.clone())
+                .unwrap_or_default(),
+            agent_id = proto_agent_id_string(&request.unkeyed_id),
         );
 
         match self
@@ -96,12 +108,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .instrument(record.span.clone())
             .await
         {
-            Ok(fingerprint) => record.succeed(Ok(Response::new(
+            Ok((fingerprint, agent_id)) => record.succeed(Ok(Response::new(
                 golem::workerexecutor::v1::CreateWorkerResponse {
                     result: Some(
                         golem::workerexecutor::v1::create_worker_response::Result::Success(
                             golem::workerexecutor::v1::CreateWorkerSuccessResponse {
                                 instance_id: Some(fingerprint.0.into()),
+                                agent_id: Some(agent_id.into()),
                             },
                         ),
                     ),
@@ -382,6 +395,50 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
+    async fn lookup_agent(
+        &self,
+        request: Request<golem::workerexecutor::v1::LookupAgentRequest>,
+    ) -> Result<Response<golem::workerexecutor::v1::LookupAgentResponse>, Status> {
+        let request = request.into_inner();
+
+        let record = recorded_grpc_api_request!(
+            "lookup_agent",
+            agent_type = request
+                .key
+                .as_ref()
+                .map(|key| key.agent_type_name.clone())
+                .unwrap_or_default(),
+        );
+
+        let result = self
+            .lookup_agent_internal(request)
+            .instrument(record.span.clone())
+            .await;
+        match result {
+            Ok(agent) => record.succeed(Ok(Response::new(
+                golem::workerexecutor::v1::LookupAgentResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::lookup_agent_response::Result::Success(
+                            golem::workerexecutor::v1::LookupAgentSuccessResponse { agent },
+                        ),
+                    ),
+                },
+            ))),
+            Err(mut err) => record.fail(
+                Ok(Response::new(
+                    golem::workerexecutor::v1::LookupAgentResponse {
+                        result: Some(
+                            golem::workerexecutor::v1::lookup_agent_response::Result::Failure(
+                                err.clone().into(),
+                            ),
+                        ),
+                    },
+                )),
+                &mut err,
+            ),
+        }
+    }
+
     async fn resume_worker(
         &self,
         request: Request<golem::workerexecutor::v1::ResumeWorkerRequest>,
@@ -426,10 +483,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<GetRunningWorkersMetadataRequest>,
     ) -> Result<Response<GetRunningWorkersMetadataResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "get_running_workers_metadata",
-            component_id = ComponentId::render_proto(request.component_id),
-        );
+        let record =
+            recorded_grpc_api_request!("get_running_workers_metadata", type_id = request.type_id,);
 
         let result = self
             .get_running_workers_metadata_internal(request)
@@ -467,10 +522,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<GetWorkersMetadataRequest>,
     ) -> Result<Response<GetWorkersMetadataResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "get_workers_metadata",
-            component_id = ComponentId::render_proto(request.component_id),
-        );
+        let record = recorded_grpc_api_request!("get_workers_metadata", type_id = request.type_id,);
 
         let result = self
             .get_workers_metadata_internal(request)
@@ -786,6 +838,102 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
+    async fn get_invocation(
+        &self,
+        request: Request<golem::workerexecutor::v1::GetInvocationRequest>,
+    ) -> Result<Response<golem::workerexecutor::v1::GetInvocationResponse>, Status> {
+        use golem::workerexecutor::v1::{
+            GetInvocationResponse, GetInvocationSuccess, get_invocation_response,
+        };
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_invocation",
+            agent_id = proto_agent_id_string(&request.agent_id),
+            invocation_id = request
+                .invocation_id
+                .map(|id| uuid::Uuid::from(id).to_string()),
+        );
+        let result = self
+            .get_invocation_internal(request)
+            .instrument(record.span.clone())
+            .await;
+        match result {
+            Ok(invocation) => record.succeed(Ok(Response::new(GetInvocationResponse {
+                result: Some(get_invocation_response::Result::Success(
+                    GetInvocationSuccess { invocation },
+                )),
+            }))),
+            Err(mut err) => record.fail(
+                Ok(Response::new(GetInvocationResponse {
+                    result: Some(get_invocation_response::Result::Failure(err.clone().into())),
+                })),
+                &mut err,
+            ),
+        }
+    }
+
+    async fn list_invocations(
+        &self,
+        request: Request<golem::workerexecutor::v1::ListInvocationsRequest>,
+    ) -> Result<Response<golem::workerexecutor::v1::ListInvocationsResponse>, Status> {
+        use golem::workerexecutor::v1::{ListInvocationsResponse, list_invocations_response};
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "list_invocations",
+            agent_id = proto_agent_id_string(&request.agent_id),
+        );
+        let result = self
+            .list_invocations_internal(request)
+            .instrument(record.span.clone())
+            .await;
+        match result {
+            Ok(success) => record.succeed(Ok(Response::new(ListInvocationsResponse {
+                result: Some(list_invocations_response::Result::Success(success)),
+            }))),
+            Err(mut err) => record.fail(
+                Ok(Response::new(ListInvocationsResponse {
+                    result: Some(list_invocations_response::Result::Failure(
+                        err.clone().into(),
+                    )),
+                })),
+                &mut err,
+            ),
+        }
+    }
+
+    async fn lookup_invocations(
+        &self,
+        request: Request<golem::workerexecutor::v1::LookupInvocationsRequest>,
+    ) -> Result<Response<golem::workerexecutor::v1::LookupInvocationsResponse>, Status> {
+        use golem::workerexecutor::v1::{
+            LookupInvocationsResponse, LookupInvocationsSuccess, lookup_invocations_response,
+        };
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "lookup_invocations",
+            agent_id = proto_agent_id_string(&request.agent_id),
+        );
+        let result = self
+            .lookup_invocations_internal(request)
+            .instrument(record.span.clone())
+            .await;
+        match result {
+            Ok(invocations) => record.succeed(Ok(Response::new(LookupInvocationsResponse {
+                result: Some(lookup_invocations_response::Result::Success(
+                    LookupInvocationsSuccess { invocations },
+                )),
+            }))),
+            Err(mut err) => record.fail(
+                Ok(Response::new(LookupInvocationsResponse {
+                    result: Some(lookup_invocations_response::Result::Failure(
+                        err.clone().into(),
+                    )),
+                })),
+                &mut err,
+            ),
+        }
+    }
+
     async fn get_file_system_node(
         &self,
         request: Request<GetFileSystemNodeRequest>,
@@ -853,10 +1001,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<GetFileContentsRequest>,
     ) -> ResponseResult<Self::GetFileContentsStream> {
         let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "get_file_contents",
-            agent_id = proto_agent_id_string(&request.agent_id),
-        );
+        let record = recorded_grpc_api_request!("get_file_contents",);
 
         let result = self
             .get_file_contents_internal(request)

@@ -9,7 +9,6 @@ fn configured_reflected_type() -> AgentType {
     description: "",
     source_language: "moonbit",
     mode: Durable,
-    implemented_by: { uuid: { high_bits: 0UL, low_bits: 1UL, }, },
     constructor_input: string_schema,
     methods: [],
     config: [

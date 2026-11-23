@@ -30,11 +30,10 @@ pub fn history_file(
     server: &str,
     application: &str,
     environment: &str,
-    component: &str,
     agent: &str,
 ) -> PathBuf {
     let mut hasher = blake3::Hasher::new();
-    for part in [server, application, environment, component, agent] {
+    for part in [server, application, environment, agent] {
         hasher.update(part.as_bytes());
         hasher.update(&[0]);
     }
@@ -71,11 +70,9 @@ impl SessionHistory {
         if let Some(directory) = path.parent() {
             let mut builder = std::fs::DirBuilder::new();
             builder.recursive(true);
-            #[cfg(unix)]
-            std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+            permissions::directory_mode(&mut builder);
             builder.create(directory)?;
-            #[cfg(unix)]
-            owner_only(directory, 0o700)?;
+            permissions::owner_only(directory, 0o700)?;
         }
         // A link here would send every command typed to whatever file it points at.
         if path
@@ -86,11 +83,9 @@ impl SessionHistory {
         }
         let mut options = std::fs::OpenOptions::new();
         options.create(true).append(true);
-        #[cfg(unix)]
-        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        permissions::file_mode(&mut options);
         options.open(path)?;
-        #[cfg(unix)]
-        owner_only(path, 0o600)?;
+        permissions::owner_only(path, 0o600)?;
         let inner = FileBackedHistory::with_file(CAPACITY, path.to_path_buf())
             .map_err(|error| std::io::Error::other(error.to_string()))?;
         Ok(Self { inner })
@@ -104,14 +99,35 @@ impl SessionHistory {
     }
 }
 
-/// Takes away what group and others may do with `path`, when they may do anything.
 #[cfg(unix)]
-fn owner_only(path: &Path, mode: u32) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    if std::fs::metadata(path)?.permissions().mode() & 0o077 != 0 {
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+mod permissions {
+    use std::path::Path;
+
+    pub(super) fn directory_mode(builder: &mut std::fs::DirBuilder) {
+        std::os::unix::fs::DirBuilderExt::mode(builder, 0o700);
     }
-    Ok(())
+
+    pub(super) fn file_mode(options: &mut std::fs::OpenOptions) {
+        std::os::unix::fs::OpenOptionsExt::mode(options, 0o600);
+    }
+
+    /// Takes away what group and others may do with `path`, when they may do anything.
+    pub(super) fn owner_only(path: &Path, mode: u32) -> std::io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        if std::fs::metadata(path)?.permissions().mode() & 0o077 != 0 {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(unix))]
+mod permissions {
+    pub(super) fn directory_mode(_builder: &mut std::fs::DirBuilder) {}
+    pub(super) fn file_mode(_options: &mut std::fs::OpenOptions) {}
+    pub(super) fn owner_only(_path: &std::path::Path, _mode: u32) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 impl History for SessionHistory {
@@ -168,16 +184,9 @@ mod tests {
     use test_r::test;
 
     fn file(server: &str, environment: &str, agent: &str) -> String {
-        history_file(
-            Path::new("/cfg"),
-            server,
-            "app",
-            environment,
-            "component-1",
-            agent,
-        )
-        .display()
-        .to_string()
+        history_file(Path::new("/cfg"), server, "app", environment, agent)
+            .display()
+            .to_string()
     }
 
     #[test]
@@ -270,56 +279,59 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn the_history_file_is_private_to_its_owner() {
-        use std::os::unix::fs::PermissionsExt;
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ssh-history").join("agent.txt");
-        let mut history = SessionHistory::open(&path).unwrap();
-        history
-            .save(HistoryItem::from_command_line("echo one"))
-            .unwrap();
-        history.sync().unwrap();
-        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(&path), 0o600);
-        assert_eq!(mode(path.parent().unwrap()), 0o700);
-    }
+    mod unix {
+        use super::*;
+        use test_r::test;
 
-    #[cfg(unix)]
-    #[test]
-    fn a_history_file_that_others_could_read_is_closed_to_them() {
-        use std::os::unix::fs::PermissionsExt;
-        let directory = tempfile::tempdir().unwrap();
-        let folder = directory.path().join("ssh-history");
-        let path = folder.join("agent.txt");
-        std::fs::create_dir(&folder).unwrap();
-        std::fs::write(&path, "echo earlier\n").unwrap();
-        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        #[test]
+        fn the_history_file_is_private_to_its_owner() {
+            use std::os::unix::fs::PermissionsExt;
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("ssh-history").join("agent.txt");
+            let mut history = SessionHistory::open(&path).unwrap();
+            history
+                .save(HistoryItem::from_command_line("echo one"))
+                .unwrap();
+            history.sync().unwrap();
+            let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&path), 0o600);
+            assert_eq!(mode(path.parent().unwrap()), 0o700);
+        }
 
-        let history = SessionHistory::open(&path).unwrap();
-        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(&path), 0o600);
-        assert_eq!(mode(&folder), 0o700);
-        assert_eq!(recalled(&history), vec!["echo earlier"]);
-    }
+        #[test]
+        fn a_history_file_that_others_could_read_is_closed_to_them() {
+            use std::os::unix::fs::PermissionsExt;
+            let directory = tempfile::tempdir().unwrap();
+            let folder = directory.path().join("ssh-history");
+            let path = folder.join("agent.txt");
+            std::fs::create_dir(&folder).unwrap();
+            std::fs::write(&path, "echo earlier\n").unwrap();
+            std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
 
-    #[cfg(unix)]
-    #[test]
-    fn a_link_in_place_of_the_history_file_is_not_followed() {
-        let directory = tempfile::tempdir().unwrap();
-        let target = directory.path().join("somewhere-else.txt");
-        std::fs::write(&target, "untouched\n").unwrap();
-        let folder = directory.path().join("ssh-history");
-        let path = folder.join("agent.txt");
-        std::fs::create_dir(&folder).unwrap();
-        std::os::unix::fs::symlink(&target, &path).unwrap();
+            let history = SessionHistory::open(&path).unwrap();
+            let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&path), 0o600);
+            assert_eq!(mode(&folder), 0o700);
+            assert_eq!(recalled(&history), vec!["echo earlier"]);
+        }
 
-        let error = SessionHistory::open(&path)
-            .err()
-            .expect("a link is refused");
-        assert!(error.to_string().contains("symbolic link"), "{error}");
-        assert_eq!(std::fs::read_to_string(&target).unwrap(), "untouched\n");
+        #[test]
+        fn a_link_in_place_of_the_history_file_is_not_followed() {
+            let directory = tempfile::tempdir().unwrap();
+            let target = directory.path().join("somewhere-else.txt");
+            std::fs::write(&target, "untouched\n").unwrap();
+            let folder = directory.path().join("ssh-history");
+            let path = folder.join("agent.txt");
+            std::fs::create_dir(&folder).unwrap();
+            std::os::unix::fs::symlink(&target, &path).unwrap();
+
+            let error = SessionHistory::open(&path)
+                .err()
+                .expect("a link is refused");
+            assert!(error.to_string().contains("symbolic link"), "{error}");
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), "untouched\n");
+        }
     }
 
     #[test]

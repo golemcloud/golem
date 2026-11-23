@@ -364,7 +364,6 @@ fn shard_lease_expired_error() -> WorkerExecutorError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::component::ComponentId;
     use std::time::{Duration, Instant};
     use test_r::test;
     use uuid::Uuid;
@@ -395,12 +394,8 @@ mod tests {
     /// An agent id that routes to `shard`, found by search because
     /// `ShardId::from_agent_id` is a hash.
     fn agent_on_shard(shard: i64) -> AgentId {
-        let component_id = ComponentId(Uuid::nil());
         for candidate in 0..10_000 {
-            let agent_id = AgentId {
-                component_id,
-                agent_id: format!("agent-{candidate}"),
-            };
+            let agent_id = crate::test_agent_id(&format!("agent-{candidate}"));
             if ShardId::from_agent_id(&agent_id, SHARDS) == ShardId::new(shard) {
                 return agent_id;
             }

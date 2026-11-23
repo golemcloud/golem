@@ -38,9 +38,11 @@ use golem_common::model::oplog::{
     HostResponsePermissionCheck, OplogEntry, OplogIndex, PublicOplogEntry,
     PublicOplogEntryWithIndex, PublicQueuedCardEvent,
 };
-use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, PendingCardEventRef, PromiseId};
+use golem_common::model::{
+    AgentId, AgentStatus, IdempotencyKey, OwnedAgentId, PendingCardEventRef, PromiseId,
+};
 use golem_common::schema::{FromSchema, SchemaGraph, SchemaType, SchemaValue};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_schema::model::CardId as SchemaCardId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::agent_secret::AgentSecret;
@@ -661,9 +663,9 @@ async fn scope_cards_are_delivered_by_both_await_variants_and_removed_at_end(
         })
         .store()
         .await?;
-    let caller = agent_id!("ScopeCardAgent", "await-caller");
+    let caller = agent_key!("ScopeCardAgent", "await-caller");
     let target_name = "await-target";
-    let target = agent_id!("ScopeCardAgent", target_name);
+    let target = agent_key!("ScopeCardAgent", target_name);
     configure_scope_card_root(&authority, &component, &caller)?;
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
     let target_worker = executor.start_agent(&component.id, target.clone()).await?;
@@ -731,11 +733,11 @@ async fn lent_scope_card_is_listed_only_to_a_callee_that_may_inspect_cards(
         })
         .store()
         .await?;
-    let caller = agent_id!("ScopeCardAgent", "lent-env-caller");
+    let caller = agent_key!("ScopeCardAgent", "lent-env-caller");
     let sealed_target_name = "sealed-target";
-    let sealed_target = agent_id!("SealedScopeAgent", sealed_target_name);
+    let sealed_target = agent_key!("SealedScopeAgent", sealed_target_name);
     let inspecting_target_name = "inspecting-target";
-    let inspecting_target = agent_id!("ScopeCardAgent", inspecting_target_name);
+    let inspecting_target = agent_key!("ScopeCardAgent", inspecting_target_name);
     configure_scope_card_root(&authority, &component, &caller)?;
     executor.start_agent(&component.id, caller.clone()).await?;
     let sealed_worker = executor
@@ -811,9 +813,9 @@ async fn scope_card_revoked_at_the_wallet_boundary_is_not_listed_to_an_inspectin
         })
         .store()
         .await?;
-    let caller = agent_id!("ScopeCardAgent", "revoked-lent-caller");
+    let caller = agent_key!("ScopeCardAgent", "revoked-lent-caller");
     let target_name = "revoked-lent-target";
-    let target = agent_id!("SealedScopeAgent", target_name);
+    let target = agent_key!("SealedScopeAgent", target_name);
     let root_card_id = configure_scope_card_root(&authority, &component, &caller)?;
     // The callee may inspect cards through its own card, which the revocation
     // of the scope card's root does not touch.
@@ -853,7 +855,7 @@ async fn scope_card_revoked_at_the_wallet_boundary_is_not_listed_to_an_inspectin
         gate.release();
     };
     let (queued, ()) = tokio::join!(
-        executor.queue_card_revocation(&target_worker, root_card_id),
+        executor.queue_card_revocation(&target_worker.agent_id, root_card_id),
         release
     );
     queued?;
@@ -1010,13 +1012,13 @@ async fn wallet_reads_survive_reconstruction(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let caller = agent_id!("ScopeCardAgent", agent_name);
+    let caller = agent_key!("ScopeCardAgent", agent_name);
     let root_card_id = configure_scope_card_root(&authority, &component, &caller)?;
     let worker = executor.start_agent(&component.id, caller.clone()).await?;
     let extra = registry_test_card();
     let extra_id = extra.card_id();
     authority.add_card(extra.clone());
-    executor.queue_card_install(&worker, extra).await?;
+    executor.queue_card_install(&worker.agent_id, extra).await?;
     assert_eq!(
         executor
             .invoke_and_await_agent(&component, &caller, "wallet_card_count", data_value!())
@@ -1054,12 +1056,15 @@ async fn wallet_reads_survive_reconstruction(
     );
 
     let owner = executor
-        .active_agent(&OwnedAgentId::new(context.default_environment_id, &worker))
+        .active_agent(&OwnedAgentId::new(
+            context.default_environment_id,
+            &worker.agent_id,
+        ))
         .await
         .ok_or_else(|| anyhow::anyhow!("the reconstructed agent is not active"))?;
     let key = IdempotencyKey::fresh();
     let stored_key = executor
-        .external_invocation_key(&worker, &key, read.method())
+        .external_invocation_key(&worker.agent_id, &key, read.method())
         .await?;
     let wallet_ids = vec![root_card_id, extra_id];
     let mut gate = authority.gate_check_cards(wallet_ids.clone());
@@ -1413,32 +1418,33 @@ async fn card_decisions_survive_reconstruction(
         })
         .store()
         .await?;
-    let caller = agent_id!("ScopeCardAgent", agent_name);
+    let caller = agent_key!("ScopeCardAgent", agent_name);
     let root_card_id = configure_scope_card_root(&authority, &component, &caller)?;
     let worker = executor.start_agent(&component.id, caller.clone()).await?;
-    let target = agent_id!("ScopeCardAgent", format!("{agent_name}-target"));
+    let target = agent_key!("ScopeCardAgent", format!("{agent_name}-target"));
+    // An installation reaches only an existing agent, so the target exists before the call.
+    let target_worker = executor.start_agent(&component.id, target.clone()).await?;
 
     let owner = executor
-        .active_agent(&OwnedAgentId::new(context.default_environment_id, &worker))
+        .active_agent(&OwnedAgentId::new(
+            context.default_environment_id,
+            &worker.agent_id,
+        ))
         .await
         .ok_or_else(|| anyhow::anyhow!("the agent is not active"))?;
     let key = IdempotencyKey::fresh();
     let stored_key = executor
-        .external_invocation_key(&worker, &key, "remember_card_decisions_around_gap")
+        .external_invocation_key(&worker.agent_id, &key, "remember_card_decisions_around_gap")
         .await?;
     let mut gap = executor
-        .gate_after_next_append(&worker, is_card_decision_gap_marker)
+        .gate_after_next_append(&worker.agent_id, is_card_decision_gap_marker)
         .await;
     let live_call = executor.invoke_and_await_agent_with_key(
         &component,
         &caller,
         &key,
         "remember_card_decisions_around_gap",
-        data_value!(
-            decision.operation().to_string(),
-            component.id,
-            target.to_string()
-        ),
+        data_value!(decision.operation().to_string(), target_worker.agent_id),
     );
     let change_wallet_in_gap = async {
         tokio::time::timeout(Duration::from_secs(60), gap.entered()).await?;
@@ -1452,7 +1458,7 @@ async fn card_decisions_survive_reconstruction(
             Some(verb) => {
                 let card = concrete_card_granting(root_card_id, verb);
                 authority.add_card(card.clone());
-                executor.queue_card_install(&worker, card).await?;
+                executor.queue_card_install(&worker.agent_id, card).await?;
             }
         }
         drop(gap);
@@ -1744,9 +1750,9 @@ async fn self_wallet_labels_concrete_template_and_lent_scope_cards(
         })
         .store()
         .await?;
-    let caller = agent_id!("ScopeCardAgent", "labelled-wallet-caller");
+    let caller = agent_key!("ScopeCardAgent", "labelled-wallet-caller");
     let target_name = "labelled-wallet-target";
-    let target = agent_id!("ScopeCardAgent", target_name);
+    let target = agent_key!("ScopeCardAgent", target_name);
     let root_card = configure_scope_card_root(&authority, &component, &caller)?;
     let root_card_id = SchemaCardId::from(root_card.0);
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
@@ -1756,7 +1762,7 @@ async fn self_wallet_labels_concrete_template_and_lent_scope_cards(
     let concrete_card_id = SchemaCardId::from(concrete_card.card_id().0);
     authority.add_card(concrete_card.clone());
     executor
-        .queue_card_install(&caller_worker, concrete_card)
+        .queue_card_install(&caller_worker.agent_id, concrete_card)
         .await?;
 
     // The initial card is a template card; the installed card is concrete.
@@ -1825,9 +1831,9 @@ async fn scope_card_reports_the_earliest_root_expiry_to_its_deriver_and_callee(
         })
         .store()
         .await?;
-    let caller = agent_id!("ScopeCardAgent", "expiring-scope-caller");
+    let caller = agent_key!("ScopeCardAgent", "expiring-scope-caller");
     let target_name = "expiring-scope-target";
-    let target = agent_id!("ScopeCardAgent", target_name);
+    let target = agent_key!("ScopeCardAgent", target_name);
     let root_card = configure_scope_card_root(&authority, &component, &caller)?;
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
     executor.start_agent(&component.id, target.clone()).await?;
@@ -1848,7 +1854,9 @@ async fn scope_card_reports_the_earliest_root_expiry_to_its_deriver_and_callee(
     for expires_at in parent_expiries {
         let card = concrete_inspect_card(root_card, Some(expires_at));
         authority.add_card(card.clone());
-        executor.queue_card_install(&caller_worker, card).await?;
+        executor
+            .queue_card_install(&caller_worker.agent_id, card)
+            .await?;
     }
     let parent_expiries = parent_expiries
         .iter()
@@ -1914,7 +1922,7 @@ async fn scope_cards_reject_non_await_and_persistent_arguments(
         })
         .store()
         .await?;
-    let caller = agent_id!("ScopeCardAgent", "rejection-caller");
+    let caller = agent_key!("ScopeCardAgent", "rejection-caller");
     configure_scope_card_root(&authority, &component, &caller)?;
     executor.start_agent(&component.id, caller.clone()).await?;
 
@@ -1972,7 +1980,7 @@ async fn scope_cards_reject_non_await_and_persistent_arguments(
         ("schedule_scope", "schedule-caller"),
         ("schedule_cancelable_scope", "cancelable-schedule-caller"),
     ] {
-        let schedule_caller = agent_id!("ScopeCardAgent", caller_name);
+        let schedule_caller = agent_key!("ScopeCardAgent", caller_name);
         executor
             .start_agent(&component.id, schedule_caller.clone())
             .await?;
@@ -2017,9 +2025,9 @@ async fn scope_card_revocation_removes_authority_at_the_next_boundary(
         })
         .store()
         .await?;
-    let caller = agent_id!("ScopeCardAgent", "revocation-caller");
+    let caller = agent_key!("ScopeCardAgent", "revocation-caller");
     let target_name = "revocation-target";
-    let target = agent_id!("ScopeCardAgent", target_name);
+    let target = agent_key!("ScopeCardAgent", target_name);
     let root_card_id = configure_scope_card_root(&authority, &component, &caller)?;
     let target_worker = executor.start_agent(&component.id, target.clone()).await?;
     executor.start_agent(&component.id, caller.clone()).await?;
@@ -2047,7 +2055,9 @@ async fn scope_card_revocation_removes_authority_at_the_next_boundary(
         )
         .await?;
     authority.revoke();
-    executor.complete_promise(&release, vec![1]).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &release, vec![1])
+        .await?;
 
     let (before, after, scope_card_id) = executor
         .invoke_and_await_agent_with_key(
@@ -2096,9 +2106,9 @@ async fn scope_card_delivery_and_cleanup_survive_crash_replay(
         })
         .store()
         .await?;
-    let caller = agent_id!("ScopeCardAgent", "replay-caller");
+    let caller = agent_key!("ScopeCardAgent", "replay-caller");
     let target_name = "replay-target";
-    let target = agent_id!("ScopeCardAgent", target_name);
+    let target = agent_key!("ScopeCardAgent", target_name);
     configure_scope_card_root(&authority, &component, &caller)?;
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
     let target_worker = executor.start_agent(&component.id, target.clone()).await?;
@@ -2132,7 +2142,7 @@ async fn scope_card_delivery_and_cleanup_survive_crash_replay(
         .iter()
         .find_map(|entry| match &entry.entry {
             PublicOplogEntry::Start(params)
-                if params.function_name == "golem::rpc::wasm-rpc::new" =>
+                if params.function_name == "golem::rpc::wasm-rpc::upsert" =>
             {
                 Some(entry.oplog_index)
             }
@@ -2165,7 +2175,9 @@ async fn scope_card_delivery_and_cleanup_survive_crash_replay(
             Duration::from_secs(10),
         )
         .await?;
-    executor.complete_promise(&release, vec![1]).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &release, vec![1])
+        .await?;
     let (before, after, scope_card_id) = executor
         .invoke_and_await_agent_with_key(
             &component,
@@ -2202,7 +2214,7 @@ async fn scope_card_delivery_and_cleanup_survive_crash_replay(
             .filter(|entry| matches!(
                 &entry.entry,
                 PublicOplogEntry::Start(params)
-                    if params.function_name == "golem::rpc::wasm-rpc::new"
+                    if params.function_name == "golem::rpc::wasm-rpc::upsert"
             ))
             .count(),
         1,
@@ -2224,6 +2236,10 @@ async fn outbound_rpc_create_requires_whole_agent_authority_for_the_concrete_chi
         let context = TestContext::new(last_unique_id);
         let authority = Arc::new(ScopeCardAuthority::default());
         let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+        let allowed_child = crate::agent::keyed_agent_id(
+            context.default_environment_id,
+            &agent_key!("GolemHostApi", "allowed-child"),
+        );
         let component = executor
             .component_dep(&context.default_environment_id, host_api_tests)
             .unique()
@@ -2233,24 +2249,29 @@ async fn outbound_rpc_create_requires_whole_agent_authority_for_the_concrete_chi
                     .initial_permissions
                     .lower_bound
                     .positive
-                    .retain(|permission| !matches!(permission, PolymorphicPermissionPattern::Agent(_)));
+                    .retain(|permission| {
+                        !matches!(permission, PolymorphicPermissionPattern::Agent(_))
+                    });
                 config.initial_permissions.lower_bound.positive.extend([
                     parse_polymorphic_permission("agent(?agent) @ * : view : *")
                         .expect("valid self-view permission"),
                     parse_polymorphic_permission(&format!(
-                        "agent(?component/GolemHostApi(\"allowed-child\")) @ * : invoke : {resource}"
+                        "agent(?component/{}) @ * : invoke : {resource}",
+                        allowed_child.agent_id
                     ))
                     .expect("valid concrete-child invocation permission"),
                 ]);
             })
             .store()
             .await?;
-        let caller = agent_id!("GolemHostApi", "concrete-create-caller");
+        let caller = agent_key!("GolemHostApi", "concrete-create-caller");
         configure_scope_card_root(&authority, &component, &caller)?;
         executor.start_agent(&component.id, caller.clone()).await?;
         for name in ["allowed-child", "other-child"] {
-            let child = AgentId::from_agent_id(component.id, &agent_id!("GolemHostApi", name))
-                .map_err(anyhow::Error::msg)?;
+            let child = crate::agent::keyed_agent_id(
+                component.environment_id,
+                &agent_key!("GolemHostApi", name),
+            );
             let result = executor
                 .invoke_and_await_agent(
                     &component,
@@ -2264,7 +2285,7 @@ async fn outbound_rpc_create_requires_whole_agent_authority_for_the_concrete_chi
             if allowed {
                 assert_eq!(result, Ok(()));
                 assert!(executor.get_worker_metadata_opt(&child).await?.is_some());
-                let history = executor.stored_oplog(&child).await;
+                let history = executor.stored_oplog(&child.agent_id).await;
                 assert_eq!(
                     history
                         .iter()
@@ -2314,12 +2335,9 @@ async fn outbound_rpc_denial_replays_without_activating_the_target(
         })
         .store()
         .await?;
-    let caller = agent_id!("GolemHostApi", "durable-rpc-denial-caller");
-    let target = agent_id!("GolemHostApi", "durable-rpc-denial-target");
-    let target_id = golem_common::base_model::AgentId {
-        component_id: component.id,
-        agent_id: target.to_string(),
-    };
+    let caller = agent_key!("GolemHostApi", "durable-rpc-denial-caller");
+    let target = agent_key!("GolemHostApi", "durable-rpc-denial-target");
+    let target_id = crate::agent::keyed_agent_id(component.environment_id, &target);
     configure_scope_card_root(&authority, &component, &caller)?;
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
     let invocation_key = IdempotencyKey::fresh();
@@ -2354,7 +2372,7 @@ async fn outbound_rpc_denial_replays_without_activating_the_target(
         .iter()
         .filter_map(|entry| match &entry.entry {
             PublicOplogEntry::Start(params)
-                if params.function_name == "golem::rpc::wasm-rpc::new" =>
+                if params.function_name == "golem::rpc::wasm-rpc::upsert" =>
             {
                 Some((entry.oplog_index, params.request.clone()))
             }
@@ -2367,7 +2385,7 @@ async fn outbound_rpc_denial_replays_without_activating_the_target(
         .as_ref()
         .expect("creation Start must persist its target");
     let creation_request = HostRequestGolemRpcCreate::from_value(creation_request.value())?;
-    assert_eq!(creation_request.remote_agent_id, target_id);
+    assert_eq!(creation_request.remote_agent_id, target_id.agent_id);
     let creation_response = caller_oplog
         .iter()
         .find_map(|entry| match &entry.entry {
@@ -2421,7 +2439,7 @@ async fn outbound_rpc_denial_replays_without_activating_the_target(
             .filter(|entry| matches!(
                 &entry.entry,
                 PublicOplogEntry::Start(params)
-                    if params.function_name == "golem::rpc::wasm-rpc::new"
+                    if params.function_name == "golem::rpc::wasm-rpc::upsert"
             ))
             .count(),
         1,
@@ -2453,7 +2471,7 @@ async fn queued_wallet_revocation_updates_cached_authorization_at_boundary(
         })
         .store()
         .await?;
-    let caller = agent_id!("ScopeCardAgent", "wallet-revocation-caller");
+    let caller = agent_key!("ScopeCardAgent", "wallet-revocation-caller");
     let root_card_id = configure_scope_card_root(&authority, &component, &caller)?;
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
 
@@ -2473,7 +2491,7 @@ async fn queued_wallet_revocation_updates_cached_authorization_at_boundary(
 
     authority.revoke();
     executor
-        .queue_card_revocation(&caller_worker, root_card_id)
+        .queue_card_revocation(&caller_worker.agent_id, root_card_id)
         .await?;
 
     let denial = executor
@@ -2491,11 +2509,9 @@ async fn queued_wallet_revocation_updates_cached_authorization_at_boundary(
         "unexpected wallet derivation denial: {denial}"
     );
 
-    drop(caller_worker);
     drop(executor);
     let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
-    let caller_worker =
-        AgentId::from_agent_id(component.id, &caller).map_err(anyhow::Error::msg)?;
+    let caller_worker = crate::agent::keyed_agent_id(component.environment_id, &caller);
     let replayed_denial = executor
         .invoke_and_await_agent(
             &component,
@@ -2549,14 +2565,14 @@ async fn revoke_does_not_use_authority_revoked_before_its_boundary(
         })
         .store()
         .await?;
-    let caller = agent_id!("ScopeCardAgent", "stale-revoke-authority-caller");
+    let caller = agent_key!("ScopeCardAgent", "stale-revoke-authority-caller");
     let authority_card_id = configure_scope_card_root(&authority, &component, &caller)?;
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
     let target_card = registry_test_card();
     let target_card_id = target_card.card_id();
     authority.add_card(target_card.clone());
     executor
-        .queue_card_install(&caller_worker, target_card)
+        .queue_card_install(&caller_worker.agent_id, target_card)
         .await?;
     let release = executor
         .invoke_and_await_agent(&component, &caller, "create_release_promise", data_value!())
@@ -2585,9 +2601,11 @@ async fn revoke_does_not_use_authority_revoked_before_its_boundary(
     authority.reset_check_cards_count();
     authority.revoke();
     executor
-        .queue_card_revocation(&caller_worker, authority_card_id)
+        .queue_card_revocation(&caller_worker.agent_id, authority_card_id)
         .await?;
-    executor.complete_promise(&release, vec![1]).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &release, vec![1])
+        .await?;
 
     assert!(
         executor
@@ -2659,19 +2677,17 @@ async fn ephemeral_guest_revoke_publishes_its_cascade_before_the_revoke_complete
         })
         .store()
         .await?;
-    let logical_agent = agent_id!("EphemeralScopeCardAgent", "guest-revoke-publication");
+    let logical_agent = agent_key!("EphemeralScopeCardAgent", "guest-revoke-publication");
     let root_card_id = configure_scope_card_root(&authority, &component, &logical_agent)?;
     let key = IdempotencyKey::fresh();
-    let agent = logical_agent
-        .with_ephemeral_invocation_phantom(
-            &golem_common::model::InvocationRequestKey::external(
-                executor.auth_ctx().idempotency_scope(),
-                Some(&key),
-            )
-            .owner_key("revoke_card_by_id"),
-        )
-        .map_err(anyhow::Error::msg)?;
-    let worker = AgentId::from_agent_id(component.id, &agent).map_err(anyhow::Error::msg)?;
+    let agent = logical_agent;
+    let worker = crate::agent::ephemeral_agent_id(
+        &executor,
+        component.environment_id,
+        &agent,
+        &key,
+        "revoke_card_by_id",
+    );
 
     let is_pending_root_revocation = |pending: &PendingCardEventRef| {
         matches!(
@@ -2689,7 +2705,7 @@ async fn ephemeral_guest_revoke_publishes_its_cascade_before_the_revoke_complete
         data_value!(SchemaCardId::from(root_card_id.0)),
     );
     let executor = &executor;
-    let worker = &worker;
+    let worker = &worker.agent_id;
     // Owning the gate handles releases both paused calls when the observation ends early.
     let observation = async move {
         // The registry revocation of the root card reaches the agent while its own revoke of the
@@ -2755,18 +2771,20 @@ async fn queued_wallet_revocation_precedes_the_next_accessor_start(
         })
         .store()
         .await?;
-    let caller = agent_id!("ScopeCardAgent", "accessor-revocation-caller");
+    let caller = agent_key!("ScopeCardAgent", "accessor-revocation-caller");
     let root_card_id = configure_scope_card_root(&authority, &component, &caller)?;
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
     let release = executor
         .invoke_and_await_agent(&component, &caller, "create_release_promise", data_value!())
         .await?
         .into_typed::<PromiseId>()?;
-    executor.complete_promise(&release, vec![1]).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &release, vec![1])
+        .await?;
 
     authority.revoke();
     executor
-        .queue_card_revocation(&caller_worker, root_card_id)
+        .queue_card_revocation(&caller_worker.agent_id, root_card_id)
         .await?;
     assert!(
         executor
@@ -2840,22 +2858,24 @@ async fn accessor_boundary_preserves_install_before_revoke_order(
         })
         .store()
         .await?;
-    let caller = agent_id!("ScopeCardAgent", "accessor-install-revoke-order");
+    let caller = agent_key!("ScopeCardAgent", "accessor-install-revoke-order");
     configure_scope_card_root(&authority, &component, &caller)?;
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
     let release = executor
         .invoke_and_await_agent(&component, &caller, "create_release_promise", data_value!())
         .await?
         .into_typed::<PromiseId>()?;
-    executor.complete_promise(&release, vec![1]).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &release, vec![1])
+        .await?;
 
     let root_card = authority.root_card().expect("root card must be configured");
     let root_card_id = root_card.card_id();
     executor
-        .queue_card_install(&caller_worker, root_card)
+        .queue_card_install(&caller_worker.agent_id, root_card)
         .await?;
     executor
-        .queue_card_revocation(&caller_worker, root_card_id)
+        .queue_card_revocation(&caller_worker.agent_id, root_card_id)
         .await?;
 
     assert!(
@@ -2899,7 +2919,7 @@ async fn runtime_card_audit_recovers_after_unrelated_committed_hint(
         })
         .store()
         .await?;
-    let caller = agent_id!("ScopeCardAgent", "audit-recovery-after-hint");
+    let caller = agent_key!("ScopeCardAgent", "audit-recovery-after-hint");
     configure_scope_card_root(&authority, &component, &caller)?;
     let worker = executor.start_agent(&component.id, caller.clone()).await?;
     let release = executor
@@ -2907,7 +2927,7 @@ async fn runtime_card_audit_recovers_after_unrelated_committed_hint(
         .await?
         .into_typed::<PromiseId>()?;
     let key = IdempotencyKey::fresh();
-    let mut gate = executor.gate_next_call_end(&worker, true).await;
+    let mut gate = executor.gate_next_call_end(&worker.agent_id, true).await;
     executor
         .invoke_agent_with_key(
             &component,
@@ -2928,7 +2948,7 @@ async fn runtime_card_audit_recovers_after_unrelated_committed_hint(
         }) {
             break start;
         }
-        let next = executor.gate_next_call_end(&worker, true).await;
+        let next = executor.gate_next_call_end(&worker.agent_id, true).await;
         drop(gate);
         gate = next;
     };
@@ -2962,7 +2982,9 @@ async fn runtime_card_audit_recovers_after_unrelated_committed_hint(
     drop(executor);
 
     let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
-    executor.complete_promise(&release, vec![1]).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &release, vec![1])
+        .await?;
     executor
         .invoke_and_await_agent_with_key(
             &component,
@@ -3032,7 +3054,7 @@ async fn replayed_wallet_authorization_uses_pinned_cards_until_live_transition(
         })
         .store()
         .await?;
-    let caller = agent_id!("ScopeCardAgent", "wallet-replay-caller");
+    let caller = agent_key!("ScopeCardAgent", "wallet-replay-caller");
     configure_scope_card_root(&authority, &component, &caller)?;
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
     let release = executor
@@ -3063,7 +3085,9 @@ async fn replayed_wallet_authorization_uses_pinned_cards_until_live_transition(
     authority.revoke();
     let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
     authority.reset_check_cards_count();
-    executor.complete_promise(&release, vec![1]).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &release, vec![1])
+        .await?;
     let _derived_card_id = executor
         .invoke_and_await_agent_with_key(&component, &caller, &key, "derive_before_promise", params)
         .await?
@@ -3178,7 +3202,7 @@ async fn tool_card_derivations_freeze_aliases_across_reconstruction(
         component.revision,
         Some(state(1, "path")),
     );
-    let caller = agent_id!("ScopeCardAgent", "tool-cards");
+    let caller = agent_key!("ScopeCardAgent", "tool-cards");
     configure_scope_card_root(&authority, &component, &caller)?;
     let worker = executor.start_agent(&component.id, caller.clone()).await?;
     let release = executor
@@ -3218,7 +3242,9 @@ async fn tool_card_derivations_freeze_aliases_across_reconstruction(
         Some(state(2, "output")),
     );
     let executor = start_with_overrides(deps, &context, overrides).await?;
-    executor.complete_promise(&release, vec![1]).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &release, vec![1])
+        .await?;
     let resources = executor
         .invoke_and_await_agent_with_key(
             &component,
@@ -3276,9 +3302,9 @@ async fn repeated_authorization_does_not_revalidate_wallet_or_scope_roots(
         })
         .store()
         .await?;
-    let caller = agent_id!("ScopeCardAgent", "authorization-cost-caller");
+    let caller = agent_key!("ScopeCardAgent", "authorization-cost-caller");
     let target_name = "authorization-cost-target";
-    let target = agent_id!("ScopeCardAgent", target_name);
+    let target = agent_key!("ScopeCardAgent", target_name);
     configure_scope_card_root(&authority, &component, &caller)?;
     executor.start_agent(&component.id, caller.clone()).await?;
     executor.start_agent(&component.id, target).await?;
@@ -3365,7 +3391,7 @@ async fn p3_tcp_default_denial_is_durable_and_does_not_reach_the_backend(
         .without_default_host_permissions("Networking")
         .store()
         .await?;
-    let caller = agent_id!("Networking", "permission-denial");
+    let caller = agent_key!("Networking", "permission-denial");
     configure_scope_card_root(&authority, &component, &caller)?;
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -3488,7 +3514,7 @@ async fn p3_tcp_denial_survives_recovery_before_start_and_before_end(
     });
 
     for retain_start in [false, true] {
-        let caller = agent_id!(
+        let caller = agent_key!(
             "Networking",
             format!("denied-connect-prefix-{retain_start}")
         );
@@ -3639,7 +3665,7 @@ async fn p2_tcp_connect_denial_is_recorded_and_does_not_reach_the_backend_on_rep
         .without_default_host_permissions("Networking")
         .store()
         .await?;
-    let caller = agent_id!("Networking", "p2-tcp-permission-denial");
+    let caller = agent_key!("Networking", "p2-tcp-permission-denial");
     configure_scope_card_root(&authority, &component, &caller)?;
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -3752,7 +3778,7 @@ async fn p2_udp_denials_survive_reconstruction(
         .without_default_host_permissions("Networking")
         .store()
         .await?;
-    let caller = agent_id!("Networking", "udp-permission-replay");
+    let caller = agent_key!("Networking", "udp-permission-replay");
     configure_scope_card_root(&authority, &component, &caller)?;
     let worker = executor.start_agent(&component.id, caller.clone()).await?;
     let receiver = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
@@ -3852,7 +3878,7 @@ async fn p3_tcp_replay_keeps_an_admitted_result_after_revocation_and_denies_new_
         })
         .store()
         .await?;
-    let caller = agent_id!("Networking", "permission-replay");
+    let caller = agent_key!("Networking", "permission-replay");
     let root_card_id = configure_scope_card_root(&authority, &component, &caller)?;
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
     let invocation_key = IdempotencyKey::fresh();
@@ -3946,7 +3972,7 @@ async fn p3_tcp_expiration_is_enforced_at_the_first_due_live_boundary(
         .without_default_host_permissions("Networking")
         .store()
         .await?;
-    let caller = agent_id!("Networking", "permission-expiration");
+    let caller = agent_key!("Networking", "permission-expiration");
     configure_scope_card_root(&authority, &component, &caller)?;
     let expiration = Utc::now() + chrono::Duration::seconds(30);
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
@@ -3963,7 +3989,7 @@ async fn p3_tcp_expiration_is_enforced_at_the_first_due_live_boundary(
     });
     authority.add_card(expiring_card.clone());
     executor
-        .queue_card_install(&caller_worker, expiring_card)
+        .queue_card_install(&caller_worker.agent_id, expiring_card)
         .await?;
 
     let first = executor
@@ -4024,7 +4050,7 @@ async fn filesystem_admitted_write_stream_survives_revocation_and_crash_replay(
         })
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "admitted-stream-replay");
+    let agent_id = agent_key!("FileSystem", "admitted-stream-replay");
     configure_scope_card_root(&authority, &component, &agent_id)?;
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
@@ -4058,7 +4084,9 @@ async fn filesystem_admitted_write_stream_survives_revocation_and_crash_replay(
     authority.revoke();
     let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
     authority.reset_check_cards_count();
-    executor.complete_promise(&release, vec![1]).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &release, vec![1])
+        .await?;
     let replayed = executor
         .invoke_and_await_agent_with_key(&component, &agent_id, &key, "write_after_promise", params)
         .await?
@@ -4128,7 +4156,7 @@ async fn cache_vacancy_admission_survives_revocation_and_denies_new_work(
         })
         .store()
         .await?;
-    let agent = agent_id!("KeyValue", "admitted-cache-vacancy");
+    let agent = agent_key!("KeyValue", "admitted-cache-vacancy");
     let root_card_id = configure_scope_card_root(&authority, &component, &agent)?;
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
     let release = executor
@@ -4152,9 +4180,11 @@ async fn cache_vacancy_admission_survives_revocation_and_denies_new_work(
         .await?;
     authority.revoke();
     executor
-        .queue_card_revocation(&worker_id, root_card_id)
+        .queue_card_revocation(&worker_id.agent_id, root_card_id)
         .await?;
-    executor.complete_promise(&release, vec![1]).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &release, vec![1])
+        .await?;
 
     let admitted = executor
         .invoke_and_await_agent_with_key(
@@ -4211,7 +4241,7 @@ async fn blob_read_stream_admission_survives_revocation_and_denies_new_work(
         })
         .store()
         .await?;
-    let agent = agent_id!("BlobStore", "admitted-blob-read-stream");
+    let agent = agent_key!("BlobStore", "admitted-blob-read-stream");
     let root_card_id = configure_scope_card_root(&authority, &component, &agent)?;
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
     assert_eq!(
@@ -4260,9 +4290,11 @@ async fn blob_read_stream_admission_survives_revocation_and_denies_new_work(
         .await?;
     authority.revoke();
     executor
-        .queue_card_revocation(&worker_id, root_card_id)
+        .queue_card_revocation(&worker_id.agent_id, root_card_id)
         .await?;
-    executor.complete_promise(&release, vec![1]).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &release, vec![1])
+        .await?;
 
     let admitted = executor
         .invoke_and_await_agent_with_key(
@@ -4316,7 +4348,7 @@ async fn filesystem_rename_preflights_both_paths_before_mutating_source(
         })
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "rename-preflight");
+    let agent_id = agent_key!("FileSystem", "rename-preflight");
     configure_scope_card_root(&authority, &component, &agent_id)?;
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
@@ -4406,7 +4438,7 @@ async fn every_protected_p2_and_p3_filesystem_import_enforces_permissions(
         .without_default_host_permissions("FileSystem")
         .store()
         .await?;
-    let agent = agent_id!("FileSystem", "every-protected-filesystem-import");
+    let agent = agent_key!("FileSystem", "every-protected-filesystem-import");
     configure_scope_card_root(&authority, &component, &agent)?;
     executor.start_agent(&component.id, agent.clone()).await?;
 
@@ -4460,7 +4492,7 @@ async fn every_protected_p2_and_p3_filesystem_import_enforces_permissions(
         })
         .store()
         .await?;
-    let list_agent = agent_id!("FileSystem", "open-list-denied");
+    let list_agent = agent_key!("FileSystem", "open-list-denied");
     configure_scope_card_root(&authority, &list_component, &list_agent)?;
     executor
         .start_agent(&list_component.id, list_agent.clone())
@@ -4511,7 +4543,7 @@ async fn denied_filesystem_imports_are_recorded_and_replayed_after_restart(
         })
         .store()
         .await?;
-    let agent = agent_id!("FileSystem", "denials-replay-after-restart");
+    let agent = agent_key!("FileSystem", "denials-replay-after-restart");
     configure_scope_card_root(&authority, &component, &agent)?;
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
 
@@ -4659,7 +4691,7 @@ async fn recovery_completes_a_denied_call_without_its_end_as_denied(
         })
         .store()
         .await?;
-    let agent = agent_id!("KeyValue", "denied-call-without-end");
+    let agent = agent_key!("KeyValue", "denied-call-without-end");
     configure_scope_card_root(&authority, &component, &agent)?;
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
 
@@ -4780,7 +4812,7 @@ fn is_not_permitted_error<T, E: std::fmt::Debug>(result: Result<T, E>) -> bool {
 
 async fn root_names(
     executor: &TestWorkerExecutor,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
 ) -> anyhow::Result<BTreeSet<String>> {
     Ok(executor
         .get_file_system_node(worker_id, "/")
@@ -4819,7 +4851,7 @@ async fn p2_read_stream_requires_read_capability(
         })
         .store()
         .await?;
-    let agent = agent_id!("FileSystem", "p2-read-capabilities");
+    let agent = agent_key!("FileSystem", "p2-read-capabilities");
     configure_scope_card_root(&authority, &component, &agent)?;
     executor.start_agent(&component.id, agent.clone()).await?;
     let result = executor
@@ -4872,7 +4904,7 @@ async fn mutable_directory_requires_delete_policy_but_not_write_policy(
             .store()
             .await?;
         for preview in ["probe_p2", "probe_p3"] {
-            let agent = agent_id!("FileSystem", format!("mutable-{allow_delete}-{preview}"));
+            let agent = agent_key!("FileSystem", format!("mutable-{allow_delete}-{preview}"));
             configure_scope_card_root(&authority, &component, &agent)?;
             let worker = executor.start_agent(&component.id, agent.clone()).await?;
             let write = executor
@@ -4953,7 +4985,7 @@ async fn filesystem_permissions_isolate_resource_owners(
         })?
         .store()
         .await?;
-    let agent = agent_id!("FileSystem", "owner-isolation");
+    let agent = agent_key!("FileSystem", "owner-isolation");
     configure_scope_card_root(&authority, &component, &agent)?;
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
 
@@ -5034,7 +5066,7 @@ async fn concurrent_p3_operations_authorize_independently_before_backend_access(
         })
         .store()
         .await?;
-    let agent = agent_id!("Networking", "concurrent-permissions");
+    let agent = agent_key!("Networking", "concurrent-permissions");
     configure_scope_card_root(&authority, &component, &agent)?;
     executor.start_agent(&component.id, agent.clone()).await?;
 
@@ -5084,7 +5116,7 @@ async fn every_protected_network_http_and_websocket_import_enforces_permissions(
         .store()
         .await?;
 
-    let networking = agent_id!("Networking", "every-protected-network-import");
+    let networking = agent_key!("Networking", "every-protected-network-import");
     configure_scope_card_root(&authority, &component, &networking)?;
     executor
         .start_agent(&component.id, networking.clone())
@@ -5154,7 +5186,7 @@ async fn every_protected_network_http_and_websocket_import_enforces_permissions(
         );
     }
 
-    let http = agent_id!("RawWasiHttp", "every-protected-http-import");
+    let http = agent_key!("RawWasiHttp", "every-protected-http-import");
     configure_scope_card_root(&authority, &component, &http)?;
     executor.start_agent(&component.id, http.clone()).await?;
     let p3_http_denied = executor
@@ -5173,7 +5205,7 @@ async fn every_protected_network_http_and_websocket_import_enforces_permissions(
         "P3 HTTP send must return HttpRequestDenied, got {p3_http_denied:?}"
     );
 
-    let websocket = agent_id!("WebsocketTest", "every-protected-websocket-import");
+    let websocket = agent_key!("WebsocketTest", "every-protected-websocket-import");
     configure_scope_card_root(&authority, &component, &websocket)?;
     executor
         .start_agent(&component.id, websocket.clone())
@@ -5256,7 +5288,7 @@ async fn every_protected_storage_config_and_secret_import_enforces_permissions(
         .store()
         .await?;
 
-    let key_value = agent_id!("KeyValue", "every-protected-keyvalue-import");
+    let key_value = agent_key!("KeyValue", "every-protected-keyvalue-import");
     configure_scope_card_root(&authority, &component, &key_value)?;
     executor
         .start_agent(&component.id, key_value.clone())
@@ -5316,7 +5348,7 @@ async fn every_protected_storage_config_and_secret_import_enforces_permissions(
         })
         .store()
         .await?;
-    let partial_kv = agent_id!("KeyValue", "keyvalue-batch-preflight");
+    let partial_kv = agent_key!("KeyValue", "keyvalue-batch-preflight");
     configure_scope_card_root(&authority, &partial_kv_component, &partial_kv)?;
     executor
         .start_agent(&partial_kv_component.id, partial_kv.clone())
@@ -5354,7 +5386,7 @@ async fn every_protected_storage_config_and_secret_import_enforces_permissions(
         "the admitted key must not be written when another batch key is denied"
     );
 
-    let blobstore = agent_id!("BlobStore", "every-protected-blobstore-import");
+    let blobstore = agent_key!("BlobStore", "every-protected-blobstore-import");
     configure_scope_card_root(&authority, &component, &blobstore)?;
     executor
         .start_agent(&component.id, blobstore.clone())
@@ -5399,7 +5431,7 @@ async fn every_protected_storage_config_and_secret_import_enforces_permissions(
         })
         .store()
         .await?;
-    let write_agent = agent_id!("BlobStore", "blob-container-read-list-denied");
+    let write_agent = agent_key!("BlobStore", "blob-container-read-list-denied");
     configure_scope_card_root(&authority, &write_component, &write_agent)?;
     executor
         .start_agent(&write_component.id, write_agent.clone())
@@ -5447,7 +5479,7 @@ async fn every_protected_storage_config_and_secret_import_enforces_permissions(
         })
         .store()
         .await?;
-    let read_agent = agent_id!("BlobStore", "blob-container-write-delete-denied");
+    let read_agent = agent_key!("BlobStore", "blob-container-write-delete-denied");
     configure_scope_card_root(&authority, &read_component, &read_agent)?;
     executor
         .start_agent(&read_component.id, read_agent.clone())
@@ -5484,7 +5516,7 @@ async fn every_protected_storage_config_and_secret_import_enforces_permissions(
         })
         .store()
         .await?;
-    let seeded_blob = agent_id!("BlobStore", "blob-delete-batch-preflight-seed");
+    let seeded_blob = agent_key!("BlobStore", "blob-delete-batch-preflight-seed");
     configure_scope_card_root(&authority, &seeded_blob_component, &seeded_blob)?;
     executor
         .start_agent(&seeded_blob_component.id, seeded_blob.clone())
@@ -5529,7 +5561,7 @@ async fn every_protected_storage_config_and_secret_import_enforces_permissions(
         })
         .store()
         .await?;
-    let partial_blob = agent_id!("BlobStore", "blob-delete-batch-preflight");
+    let partial_blob = agent_key!("BlobStore", "blob-delete-batch-preflight");
     configure_scope_card_root(&authority, &partial_blob_component, &partial_blob)?;
     executor
         .start_agent(&partial_blob_component.id, partial_blob.clone())
@@ -5569,7 +5601,7 @@ async fn every_protected_storage_config_and_secret_import_enforces_permissions(
         );
     }
 
-    let config = agent_id!("WasiConfig", "every-protected-config-import");
+    let config = agent_key!("WasiConfig", "every-protected-config-import");
     configure_scope_card_root(&authority, &component, &config)?;
     executor.start_agent(&component.id, config.clone()).await?;
     let get_denied = executor
@@ -5596,7 +5628,7 @@ async fn every_protected_storage_config_and_secret_import_enforces_permissions(
         })
         .store()
         .await?;
-    let secret = agent_id!("SecretHandleAgent", "every-protected-secret-import");
+    let secret = agent_key!("SecretHandleAgent", "every-protected-secret-import");
     configure_scope_card_root(&authority, &secret_component, &secret)?;
     executor
         .start_agent(&secret_component.id, secret.clone())
@@ -5635,7 +5667,7 @@ async fn start_oplog_enrichment_grant_agent(
 ) -> anyhow::Result<(
     golem_common::model::component::ComponentDto,
     golem_common::model::agent::ParsedAgentKey,
-    AgentId,
+    OwnedAgentId,
 )> {
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
@@ -5656,7 +5688,7 @@ async fn start_oplog_enrichment_grant_agent(
         })?
         .store()
         .await?;
-    let agent = agent_id!("GolemHostApi", agent_name);
+    let agent = agent_key!("GolemHostApi", agent_name);
     configure_scope_card_root(authority, &component, &agent)?;
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
     Ok((component, agent, worker))
@@ -5733,7 +5765,7 @@ async fn an_incomplete_oplog_enrichment_checks_the_grant_again_when_repaired(
     for revoke in [false, true] {
         // Lose the End of an allowed call, so that the retry repairs it from its Start alone.
         let (entered, release) = executor.gate_next_oplog_function_end(
-            &worker,
+            &worker.agent_id,
             HostFunctionName::GolemApiEnrichOplogEntries,
             true,
         );
@@ -5841,7 +5873,7 @@ async fn every_protected_rdbms_agent_rpc_tool_and_oplog_import_enforces_permissi
         .store()
         .await?;
 
-    let rdbms = agent_id!("RelationalDatabases", "every-protected-rdbms-import");
+    let rdbms = agent_key!("RelationalDatabases", "every-protected-rdbms-import");
     configure_scope_card_root(&authority, &component, &rdbms)?;
     executor.start_agent(&component.id, rdbms.clone()).await?;
     for (method, address) in [
@@ -5881,24 +5913,18 @@ async fn every_protected_rdbms_agent_rpc_tool_and_oplog_import_enforces_permissi
         }
     }
 
-    let caller = agent_id!("GolemHostApi", "every-protected-agent-import");
+    let caller = agent_key!("GolemHostApi", "every-protected-agent-import");
     configure_scope_card_root(&authority, &component, &caller)?;
     executor.start_agent(&component.id, caller.clone()).await?;
-    let target = agent_id!("GolemHostApi", "protected-target");
-    let target_id = golem_common::base_model::AgentId {
-        component_id: component.id,
-        agent_id: target.to_string(),
-    };
-    let caller_id = golem_common::base_model::AgentId {
-        component_id: component.id,
-        agent_id: caller.to_string(),
-    };
+    let target = agent_key!("GolemHostApi", "protected-target");
+    let target_id = crate::agent::keyed_agent_id(component.environment_id, &target).agent_id;
+    let caller_id = crate::agent::keyed_agent_id(component.environment_id, &caller).agent_id;
     let denied_agents = executor
         .invoke_and_await_agent(
             &component,
             &caller,
             "get_agents_next_result",
-            data_value!(component.id),
+            data_value!("GolemHostApi"),
         )
         .await?
         .into_typed::<Result<u64, String>>()?;
@@ -5912,20 +5938,21 @@ async fn every_protected_rdbms_agent_rpc_tool_and_oplog_import_enforces_permissi
         )
         .await?
         .into_typed::<Result<String, String>>()?;
-    assert_eq!(denied_self, Ok(caller.to_string()));
-    let denied_strict = executor
+    assert_eq!(denied_self, Ok(caller_id.to_string()));
+    let denied_lookup = executor
         .invoke_and_await_agent(
             &component,
             &caller,
-            "resolve_agent_id_strict_result",
-            data_value!("every-protected-agent-imports", target.to_string()),
+            "lookup_agent_id_result",
+            data_value!("GolemHostApi", "protected-target"),
         )
         .await?
         .into_typed::<Result<bool, String>>()?;
-    assert_eq!(
-        denied_strict,
-        Ok(false),
-        "legacy strict agent resolution must map denial to none"
+    assert!(
+        denied_lookup
+            .as_ref()
+            .is_err_and(|error| error.contains("Denied")),
+        "agent ID lookup must return a typed denial, got {denied_lookup:?}"
     );
     let denied_metadata = executor
         .invoke_and_await_agent(
@@ -5948,10 +5975,7 @@ async fn every_protected_rdbms_agent_rpc_tool_and_oplog_import_enforces_permissi
     assert!(denied_self_fork.is_err(), "self fork must be denied");
     for (method, params) in [
         ("update_agent_result", data_value!(target_id.clone(), 1u64)),
-        (
-            "fork_agent_result",
-            data_value!(caller_id.clone(), target_id.clone(), 0u64),
-        ),
+        ("fork_agent_result", data_value!(caller_id.clone(), 0u64)),
         ("revert_agent_result", data_value!(target_id.clone(), 0u64)),
     ] {
         let denied = executor
@@ -6159,7 +6183,7 @@ async fn rdbms_migrations_use_table_grants_and_unanalyzed_sql_requires_explicit_
                 })?
                 .store()
                 .await?;
-        let agent = agent_id!("RelationalDatabases", case);
+        let agent = agent_key!("RelationalDatabases", case);
         configure_scope_card_root(&authority, &component, &agent)?;
         executor.start_agent(&component.id, agent.clone()).await?;
         let table = format!(
@@ -6413,7 +6437,7 @@ async fn rdbms_default_schema_ignores_search_path_and_temporary_tables(
         })?
         .store()
         .await?;
-    let agent = agent_id!("RelationalDatabases", "default-schema");
+    let agent = agent_key!("RelationalDatabases", "default-schema");
     configure_scope_card_root(&authority, &component, &agent)?;
     executor
         .start_agent_with(
@@ -6736,7 +6760,7 @@ async fn rdbms_explicit_expression_dispatch_requires_broad_authority(
             })?
             .store()
             .await?;
-        let agent = agent_id!("RelationalDatabases", case);
+        let agent = agent_key!("RelationalDatabases", case);
         configure_scope_card_root(&authority, &component, &agent)?;
         executor.start_agent(&component.id, agent.clone()).await?;
         for operation in ["connection-query", "connection-query-stream"] {
@@ -6901,7 +6925,7 @@ async fn every_protected_rdbms_transaction_import_enforces_permissions(
         })?
         .store()
         .await?;
-    let agent = agent_id!(
+    let agent = agent_key!(
         "RelationalDatabases",
         "every-protected-rdbms-transaction-import"
     );
@@ -6959,7 +6983,8 @@ async fn every_protected_rdbms_transaction_import_enforces_permissions(
         .zip(functions)
         {
             // Lose the denial's End and reconstruct from its immutable Start alone.
-            let (entered, release) = executor.gate_next_oplog_function_end(&worker, function, true);
+            let (entered, release) =
+                executor.gate_next_oplog_function_end(&worker.agent_id, function, true);
             let args = data_value!(operation, address.clone(), statement);
             let invocation = executor.invoke_and_await_agent(&component, &agent, method, args);
             let fail_end = async {
@@ -7031,7 +7056,7 @@ async fn blobstore_authorization_preserves_valid_utf8_container_names(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent = agent_id!("BlobStore", "utf8-container-name");
+    let agent = agent_key!("BlobStore", "utf8-container-name");
     configure_scope_card_root(&authority, &component, &agent)?;
     executor.start_agent(&component.id, agent.clone()).await?;
 
@@ -7143,7 +7168,7 @@ async fn remaining_host_facing_permission_classes_allow_their_backends(
         .store()
         .await?;
 
-    let environment = agent_id!("Environment", "allowed-environment");
+    let environment = agent_key!("Environment", "allowed-environment");
     configure_scope_card_root(&authority, &component, &environment)?;
     executor
         .start_agent(&component.id, environment.clone())
@@ -7162,7 +7187,7 @@ async fn remaining_host_facing_permission_classes_allow_their_backends(
         assert!(visible.iter().all(|(name, _)| name != "DENIED_ENV"));
     }
 
-    let key_value = agent_id!("KeyValue", "allowed-key-value");
+    let key_value = agent_key!("KeyValue", "allowed-key-value");
     configure_scope_card_root(&authority, &component, &key_value)?;
     executor
         .start_agent(&component.id, key_value.clone())
@@ -7192,7 +7217,7 @@ async fn remaining_host_facing_permission_classes_allow_their_backends(
         Ok(Some(vec![1, 2, 3]))
     );
 
-    let config = agent_id!("WasiConfig", "allowed-config");
+    let config = agent_key!("WasiConfig", "allowed-config");
     configure_scope_card_root(&authority, &component, &config)?;
     executor.start_agent(&component.id, config.clone()).await?;
     assert_eq!(
@@ -7203,7 +7228,7 @@ async fn remaining_host_facing_permission_classes_allow_their_backends(
         Ok(Some("visible".to_string()))
     );
 
-    let host = agent_id!("GolemHostApi", "allowed-oplog-and-tool");
+    let host = agent_key!("GolemHostApi", "allowed-oplog-and-tool");
     configure_scope_card_root(&authority, &component, &host)?;
     executor.start_agent(&component.id, host.clone()).await?;
     assert_eq!(
@@ -7316,7 +7341,7 @@ async fn protected_host_families_return_typed_default_denials(
         .store()
         .await?;
 
-    let key_value = agent_id!("KeyValue", "typed-denial-kv");
+    let key_value = agent_key!("KeyValue", "typed-denial-kv");
     configure_scope_card_root(&authority, &component, &key_value)?;
     executor
         .start_agent(&component.id, key_value.clone())
@@ -7345,7 +7370,7 @@ async fn protected_host_families_return_typed_default_denials(
         "cache KV denial must be a typed error"
     );
 
-    let blobstore = agent_id!("BlobStore", "typed-denial-blob");
+    let blobstore = agent_key!("BlobStore", "typed-denial-blob");
     configure_scope_card_root(&authority, &component, &blobstore)?;
     executor
         .start_agent(&component.id, blobstore.clone())
@@ -7361,7 +7386,7 @@ async fn protected_host_families_return_typed_default_denials(
         .into_typed::<Result<bool, String>>()?;
     assert!(blob_denied.is_err(), "blob denial must be a typed error");
 
-    let config = agent_id!("WasiConfig", "typed-denial-config");
+    let config = agent_key!("WasiConfig", "typed-denial-config");
     configure_scope_card_root(&authority, &component, &config)?;
     executor.start_agent(&component.id, config.clone()).await?;
     let config_denied = executor
@@ -7373,7 +7398,7 @@ async fn protected_host_families_return_typed_default_denials(
         "config denial must be a typed error"
     );
 
-    let environment = agent_id!("Environment", "filtered-environment");
+    let environment = agent_key!("Environment", "filtered-environment");
     configure_scope_card_root(&authority, &component, &environment)?;
     executor
         .start_agent(&component.id, environment.clone())
@@ -7387,7 +7412,7 @@ async fn protected_host_families_return_typed_default_denials(
         assert!(visible.iter().all(|(name, _)| name != "PRIVATE_ENV"));
     }
 
-    let networking = agent_id!("Networking", "typed-denial-network");
+    let networking = agent_key!("Networking", "typed-denial-network");
     configure_scope_card_root(&authority, &component, &networking)?;
     executor
         .start_agent(&component.id, networking.clone())
@@ -7413,7 +7438,7 @@ async fn protected_host_families_return_typed_default_denials(
         .into_typed::<Result<(), String>>()?;
     assert!(udp_denied.is_err(), "UDP denial must be a typed error");
 
-    let http = agent_id!("RawWasiHttp", "typed-denial-http");
+    let http = agent_key!("RawWasiHttp", "typed-denial-http");
     configure_scope_card_root(&authority, &component, &http)?;
     executor.start_agent(&component.id, http.clone()).await?;
     let http_denied = executor
@@ -7427,7 +7452,7 @@ async fn protected_host_families_return_typed_default_denials(
         .into_typed::<Result<u16, String>>()?;
     assert!(http_denied.is_err(), "HTTP denial must be a typed error");
 
-    let websocket = agent_id!("WebsocketTest", "typed-denial-websocket");
+    let websocket = agent_key!("WebsocketTest", "typed-denial-websocket");
     configure_scope_card_root(&authority, &component, &websocket)?;
     executor
         .start_agent(&component.id, websocket.clone())
@@ -7446,7 +7471,7 @@ async fn protected_host_families_return_typed_default_denials(
         "WebSocket denial must be a typed error"
     );
 
-    let rdbms = agent_id!("RelationalDatabases", "typed-denial-rdbms");
+    let rdbms = agent_key!("RelationalDatabases", "typed-denial-rdbms");
     configure_scope_card_root(&authority, &component, &rdbms)?;
     executor.start_agent(&component.id, rdbms.clone()).await?;
     let rdbms_denied = executor
@@ -7495,7 +7520,7 @@ async fn protected_host_families_return_typed_default_denials(
         "Ignite denial must be a typed error"
     );
 
-    let rpc = agent_id!("GolemHostApi", "typed-denial-rpc");
+    let rpc = agent_key!("GolemHostApi", "typed-denial-rpc");
     configure_scope_card_root(&authority, &component, &rpc)?;
     executor.start_agent(&component.id, rpc.clone()).await?;
     let rpc_denied = executor
@@ -7574,16 +7599,24 @@ async fn denied_tool_invocation_does_not_start_the_tool_component(
             &[(tool_name, tool_component_id, true)],
         )),
     );
-    let agent = agent_id!("GolemHostApi", "denied-tool-invocation");
+    let agent = agent_key!("GolemHostApi", "denied-tool-invocation");
     configure_scope_card_root(&authority, &component, &agent)?;
     executor.start_agent(&component.id, agent.clone()).await?;
 
-    assert!(
+    // An owner of a component tool has no agent type, so the executor's active agents are
+    // searched for one that runs the tool component.
+    let tool_owner_count = || async {
         executor
-            .get_running_workers_metadata(&tool_component_id, None)
-            .await?
-            .is_empty()
-    );
+            .active_agents()
+            .snapshot()
+            .await
+            .into_iter()
+            .filter(|(_, worker)| {
+                worker.get_initial_worker_metadata().component_id == tool_component_id
+            })
+            .count()
+    };
+    assert_eq!(tool_owner_count().await, 0);
     let denied = executor
         .invoke_and_await_agent(
             &component,
@@ -7597,11 +7630,9 @@ async fn denied_tool_invocation_does_not_start_the_tool_component(
         denied.as_ref().is_err_and(|error| error.contains("Denied")),
         "unexpected tool invocation result: {denied:?}"
     );
-    assert!(
-        executor
-            .get_running_workers_metadata(&tool_component_id, None)
-            .await?
-            .is_empty(),
+    assert_eq!(
+        tool_owner_count().await,
+        0,
         "denied tool invocation must not activate the tool component"
     );
     assert_eq!(authority.check_cards_count(), 1);
@@ -7661,7 +7692,7 @@ async fn secret_reveal_authorizes_before_secret_revision_lookup(
         })
         .store()
         .await?;
-    let denied_agent = agent_id!("SecretHandleAgent", "denied-secret-reveal");
+    let denied_agent = agent_key!("SecretHandleAgent", "denied-secret-reveal");
     configure_scope_card_root(&authority, &denied_component, &denied_agent)?;
     executor
         .start_agent(&denied_component.id, denied_agent.clone())
@@ -7703,7 +7734,7 @@ async fn secret_reveal_authorizes_before_secret_revision_lookup(
         })
         .store()
         .await?;
-    let allowed_agent = agent_id!("SecretHandleAgent", "allowed-secret-reveal");
+    let allowed_agent = agent_key!("SecretHandleAgent", "allowed-secret-reveal");
     configure_scope_card_root(&authority, &allowed_component, &allowed_agent)?;
     executor
         .start_agent(&allowed_component.id, allowed_agent.clone())
@@ -7780,7 +7811,7 @@ async fn capabilities_round_trip_between_agents_and_codec_rejects_reuse(
         .store()
         .await?;
 
-    let sender = agent_id!("CapabilityRpcSender", "capability-round-trip");
+    let sender = agent_key!("CapabilityRpcSender", "capability-round-trip");
     configure_scope_card_root(&authority, &component, &sender)?;
     executor.start_agent(&component.id, sender.clone()).await?;
     let observations = executor
@@ -7825,7 +7856,7 @@ async fn capabilities_round_trip_between_agents_and_codec_rejects_reuse(
         "unexpected refusal of a template card: {mismatched_kind_error}"
     );
 
-    let codec_sender = agent_id!("CapabilityRpcSender", "capability-codec-rejections");
+    let codec_sender = agent_key!("CapabilityRpcSender", "capability-codec-rejections");
     configure_scope_card_root(&authority, &component, &codec_sender)?;
     executor
         .start_agent(&component.id, codec_sender.clone())
@@ -7904,7 +7935,7 @@ async fn snapshot_restores_admitted_secret_handle_without_reauthorization(
         })
         .store()
         .await?;
-    let agent = agent_id!("SecretHandleAgent", "snapshot-secret-handle");
+    let agent = agent_key!("SecretHandleAgent", "snapshot-secret-handle");
     configure_scope_card_root(&authority, &component, &agent)?;
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
     authority.reset_check_cards_count();
@@ -7931,7 +7962,7 @@ async fn snapshot_restores_admitted_secret_handle_without_reauthorization(
         crate::hot_update::wait_for_snapshot_after(&executor, &worker_id, constructor_snapshot)
             .await?;
     executor
-        .reject_automatic_snapshots(&worker_id, [reveal_snapshot])
+        .reject_automatic_snapshots(&worker_id.agent_id, [reveal_snapshot])
         .await?;
 
     drop(executor);
@@ -7988,9 +8019,9 @@ async fn golem_host_agent_operations_are_typed_default_deny_and_allow_when_grant
         })
         .store()
         .await?;
-    let denied_agent = agent_id!("GolemHostApi", "host-operation-denied");
+    let denied_agent = agent_key!("GolemHostApi", "host-operation-denied");
     configure_scope_card_root(&authority, &denied_component, &denied_agent)?;
-    executor
+    let denied_agent_id = executor
         .start_agent(&denied_component.id, denied_agent.clone())
         .await?;
 
@@ -7999,7 +8030,7 @@ async fn golem_host_agent_operations_are_typed_default_deny_and_allow_when_grant
             &denied_component,
             &denied_agent,
             "get_agents_next_result",
-            data_value!(denied_component.id),
+            data_value!("GolemHostApi"),
         )
         .await?
         .into_typed::<Result<u64, String>>()?;
@@ -8016,23 +8047,28 @@ async fn golem_host_agent_operations_are_typed_default_deny_and_allow_when_grant
         )
         .await?
         .into_typed::<Result<String, String>>()?;
-    assert_eq!(denied_self_metadata, Ok(denied_agent.to_string()));
-    let denied_strict = executor
+    assert_eq!(
+        denied_self_metadata,
+        Ok(denied_agent_id.agent_id.to_string())
+    );
+    let denied_lookup = executor
         .invoke_and_await_agent(
             &denied_component,
             &denied_agent,
-            "resolve_agent_id_strict_result",
-            data_value!("gated-host-api-denied", "GolemHostApi(\"other\")"),
+            "lookup_agent_id_result",
+            data_value!("GolemHostApi", "other"),
         )
         .await?
         .into_typed::<Result<bool, String>>()?;
-    assert_eq!(
-        denied_strict,
-        Ok(false),
-        "legacy strict resolution must map denial to none"
+    assert!(
+        denied_lookup
+            .as_ref()
+            .is_err_and(|error| error.contains("Denied")),
+        "agent ID lookup must return a typed denial, got {denied_lookup:?}"
     );
+    let agent_type = AgentTypeName("GolemHostApi".to_string());
     let workers_before_denied_fork = executor
-        .get_running_workers_metadata(&denied_component.id, None)
+        .get_running_workers_metadata(&denied_component.environment_id, &agent_type, None)
         .await?
         .len();
     let denied_fork = executor
@@ -8047,7 +8083,7 @@ async fn golem_host_agent_operations_are_typed_default_deny_and_allow_when_grant
     assert!(denied_fork.is_err(), "fork must return a typed denial");
     assert_eq!(
         executor
-            .get_running_workers_metadata(&denied_component.id, None)
+            .get_running_workers_metadata(&denied_component.environment_id, &agent_type, None)
             .await?
             .len(),
         workers_before_denied_fork,
@@ -8074,9 +8110,9 @@ async fn golem_host_agent_operations_are_typed_default_deny_and_allow_when_grant
         })?
         .store()
         .await?;
-    let allowed_agent = agent_id!("GolemHostApi", "host-operation-allowed");
+    let allowed_agent = agent_key!("GolemHostApi", "host-operation-allowed");
     configure_scope_card_root(&authority, &allowed_component, &allowed_agent)?;
-    executor
+    let allowed_agent_id = executor
         .start_agent(&allowed_component.id, allowed_agent.clone())
         .await?;
 
@@ -8086,7 +8122,7 @@ async fn golem_host_agent_operations_are_typed_default_deny_and_allow_when_grant
                 &allowed_component,
                 &allowed_agent,
                 "get_agents_next_result",
-                data_value!(allowed_component.id),
+                data_value!("GolemHostApi"),
             )
             .await?
             .into_typed::<Result<u64, String>>()?
@@ -8102,19 +8138,19 @@ async fn golem_host_agent_operations_are_typed_default_deny_and_allow_when_grant
             )
             .await?
             .into_typed::<Result<String, String>>()?,
-        Ok(allowed_agent.to_string())
+        Ok(allowed_agent_id.agent_id.to_string())
     );
     assert_eq!(
         executor
             .invoke_and_await_agent(
                 &allowed_component,
                 &allowed_agent,
-                "resolve_agent_id_strict_result",
-                data_value!("gated-host-api-allowed", allowed_agent.to_string()),
+                "lookup_agent_id_result",
+                data_value!("GolemHostApi", "host-operation-allowed"),
             )
             .await?
             .into_typed::<Result<bool, String>>()?,
-        Ok(false)
+        Ok(true)
     );
     let allowed_fork = executor
         .invoke_and_await_agent(
@@ -8148,7 +8184,7 @@ async fn assert_environment_observes_revocation_at_the_next_host_boundary(
         .without_default_host_permissions("Environment")
         .store()
         .await?;
-    let agent = agent_id!(
+    let agent = agent_key!(
         "Environment",
         if p3 {
             "p3-revocation-boundary"
@@ -8179,9 +8215,11 @@ async fn assert_environment_observes_revocation_at_the_next_host_boundary(
         .await?;
     authority.revoke();
     executor
-        .queue_card_revocation(&worker, root_card_id)
+        .queue_card_revocation(&worker.agent_id, root_card_id)
         .await?;
-    executor.complete_promise(&release, vec![1]).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &release, vec![1])
+        .await?;
 
     let environment = executor
         .invoke_and_await_agent_with_key(
@@ -8196,9 +8234,8 @@ async fn assert_environment_observes_revocation_at_the_next_host_boundary(
         .map_err(anyhow::Error::msg)?;
     for metadata_name in [
         "GOLEM_AGENT_ID",
+        "GOLEM_AGENT_KEY",
         "GOLEM_AGENT_TYPE",
-        "GOLEM_WORKER_NAME",
-        "GOLEM_COMPONENT_ID",
         "GOLEM_COMPONENT_REVISION",
     ] {
         assert!(
@@ -8248,7 +8285,7 @@ async fn assert_environment_replay_uses_the_recorded_filtered_result(
         .without_default_host_permissions("Environment")
         .store()
         .await?;
-    let agent = agent_id!(
+    let agent = agent_key!(
         "Environment",
         if p3 {
             "p3-environment-replay"
@@ -8282,7 +8319,9 @@ async fn assert_environment_replay_uses_the_recorded_filtered_result(
     drop(executor);
 
     let executor = start_scope_card_executor(deps, &context, authority).await?;
-    executor.complete_promise(&release, vec![1]).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &release, vec![1])
+        .await?;
     let environment = executor
         .invoke_and_await_agent_with_key(
             &component,
@@ -8296,9 +8335,8 @@ async fn assert_environment_replay_uses_the_recorded_filtered_result(
         .map_err(anyhow::Error::msg)?;
     for metadata_name in [
         "GOLEM_AGENT_ID",
+        "GOLEM_AGENT_KEY",
         "GOLEM_AGENT_TYPE",
-        "GOLEM_WORKER_NAME",
-        "GOLEM_COMPONENT_ID",
         "GOLEM_COMPONENT_REVISION",
     ] {
         assert!(
@@ -8309,7 +8347,7 @@ async fn assert_environment_replay_uses_the_recorded_filtered_result(
     assert!(
         environment
             .iter()
-            .any(|(name, value)| { name == "GOLEM_AGENT_ID" && value == &agent.to_string() }),
+            .any(|(name, value)| name == "GOLEM_AGENT_ID" && value == &worker.agent_id.to_string()),
         "replay must return the expected GOLEM_AGENT_ID value"
     );
     Ok(())
@@ -8355,7 +8393,7 @@ async fn start_card_handle_agent(
 ) -> anyhow::Result<(
     golem_common::model::component::ComponentDto,
     golem_common::model::agent::ParsedAgentKey,
-    AgentId,
+    OwnedAgentId,
 )> {
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
@@ -8367,7 +8405,7 @@ async fn start_card_handle_agent(
         })
         .store()
         .await?;
-    let agent = agent_id!("ScopeCardAgent", agent_name);
+    let agent = agent_key!("ScopeCardAgent", agent_name);
     configure_scope_card_root(authority, &component, &agent)?;
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
     Ok((component, agent, worker))
@@ -8453,13 +8491,16 @@ async fn cached_child_handle_reports_its_self_revoked_card_before_and_after_repl
         "the recreated handle must keep reporting its revoked card after replay"
     );
 
-    let target = agent_id!("ScopeCardAgent", "self-revoked-handle-target");
+    let target = crate::agent::keyed_agent_id(
+        component.environment_id,
+        &agent_key!("ScopeCardAgent", "self-revoked-handle-target"),
+    );
     let install = executor
         .invoke_and_await_agent(
             &component,
             &holder,
             "install_kept_child",
-            data_value!(component.id, target.to_string()),
+            data_value!(target.agent_id),
         )
         .await?
         .into_typed::<String>()?;
@@ -8505,7 +8546,7 @@ async fn received_card_replays_its_recorded_liveness_after_an_external_revocatio
     )
     .await?;
     let receiver_name = "received-card-receiver";
-    let receiver = agent_id!("ScopeCardAgent", receiver_name);
+    let receiver = agent_key!("ScopeCardAgent", receiver_name);
     let receiver_worker = executor
         .start_agent(&component.id, receiver.clone())
         .await?;
@@ -8745,8 +8786,6 @@ async fn a_refused_repair_that_fails_after_revoking_its_card_settles_with_card_r
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::model::OwnedAgentId;
-
     let context = TestContext::new(last_unique_id);
     let authority = Arc::new(ScopeCardAuthority::default());
     let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
@@ -8766,7 +8805,9 @@ async fn a_refused_repair_that_fails_after_revoking_its_card_settles_with_card_r
     let parent = unparented_card("inspect");
     let parent_id = parent.card_id();
     authority.add_card(parent.clone());
-    executor.queue_card_install(&holder_worker, parent).await?;
+    executor
+        .queue_card_install(&holder_worker.agent_id, parent)
+        .await?;
     assert!(
         executor
             .invoke_and_await_agent(
@@ -8779,10 +8820,7 @@ async fn a_refused_repair_that_fails_after_revoking_its_card_settles_with_card_r
             .into_typed::<bool>()?
     );
     let owner = executor
-        .active_agent(&OwnedAgentId::new(
-            context.default_environment_id,
-            &holder_worker,
-        ))
+        .active_agent(&holder_worker)
         .await
         .ok_or_else(|| anyhow::anyhow!("the holder is not active"))?;
     let created_before = authority.create_card_count.load(Ordering::SeqCst);
@@ -8815,7 +8853,7 @@ async fn a_refused_repair_that_fails_after_revoking_its_card_settles_with_card_r
         let derive_authority = unparented_card("derive");
         authority.add_card(derive_authority.clone());
         executor
-            .queue_card_install(&holder_worker, derive_authority)
+            .queue_card_install(&holder_worker.agent_id, derive_authority)
             .await?;
         revoke_gate.release();
         Ok::<_, anyhow::Error>(())
@@ -8954,8 +8992,8 @@ async fn derived_templates_bind_to_the_install_target_and_survive_reconstruction
         })
         .store()
         .await?;
-    let caller = agent_id!("ScopeCardAgent", "template-deriver");
-    let target = agent_id!("ScopeCardAgent", "template-recipient");
+    let caller = agent_key!("ScopeCardAgent", "template-deriver");
+    let target = agent_key!("ScopeCardAgent", "template-recipient");
     configure_scope_card_root(&authority, &component, &caller)?;
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
     let target_worker = executor.start_agent(&component.id, target.clone()).await?;
@@ -8968,7 +9006,7 @@ async fn derived_templates_bind_to_the_install_target_and_survive_reconstruction
                 &caller,
                 &key,
                 "derive_and_install_template",
-                data_value!(component.id, target.to_string(), source.to_string()),
+                data_value!(target_worker.agent_id, source.to_string()),
             )
             .await?
             .into_typed::<(SchemaCardId, SchemaCardId, Vec<(String, bool)>)>()?;
@@ -8994,11 +9032,11 @@ async fn derived_templates_bind_to_the_install_target_and_survive_reconstruction
             .expect("installation creates a concrete child of the derived template");
         assert_eq!(parents, &vec![template_id.clone()]);
         assert!(
-            owner.ends_with(&target.to_string()),
+            owner.ends_with(&format!("/{}", target_worker.agent_id)),
             "slot did not bind to B: {owner}"
         );
         assert!(
-            !owner.ends_with(&caller.to_string()),
+            !owner.ends_with(&format!("/{}", caller_worker.agent_id)),
             "slot bound to caller A"
         );
     }
@@ -9028,7 +9066,7 @@ async fn derived_templates_bind_to_the_install_target_and_survive_reconstruction
                 &caller,
                 &key,
                 "derive_and_install_template",
-                data_value!(component.id, target.to_string(), source),
+                data_value!(target_worker.agent_id, source),
             )
             .await?
             .into_typed::<(SchemaCardId, SchemaCardId, Vec<(String, bool)>)>()?;
@@ -9101,17 +9139,17 @@ async fn template_transfer_repaired_after_its_derived_child_reuses_the_child(
         })
         .store()
         .await?;
-    let caller = agent_id!("ScopeCardAgent", "repaired-template-deriver");
-    let target = agent_id!("ScopeCardAgent", "repaired-template-recipient");
+    let caller = agent_key!("ScopeCardAgent", "repaired-template-deriver");
+    let target = agent_key!("ScopeCardAgent", "repaired-template-recipient");
     configure_scope_card_root(&authority, &component, &caller)?;
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
-    executor.start_agent(&component.id, target.clone()).await?;
+    let target_worker = executor.start_agent(&component.id, target.clone()).await?;
 
     // The transfer commits the CardDerived of its installed child, and the crash comes before
     // its queued retry payload is appended.
     let key = IdempotencyKey::fresh();
     let mut gate = executor
-        .gate_next_source_transfer_queued_append(&caller_worker)
+        .gate_next_source_transfer_queued_append(&caller_worker.agent_id)
         .await;
     executor
         .invoke_agent_with_key(
@@ -9119,7 +9157,7 @@ async fn template_transfer_repaired_after_its_derived_child_reuses_the_child(
             &caller,
             &key,
             "derive_and_install_template",
-            data_value!(component.id, target.to_string(), "template".to_string()),
+            data_value!(target_worker.agent_id, "template".to_string()),
         )
         .await?;
     tokio::time::timeout(Duration::from_secs(30), gate.entered()).await?;
@@ -9137,7 +9175,7 @@ async fn template_transfer_repaired_after_its_derived_child_reuses_the_child(
             &caller,
             &key,
             "derive_and_install_template",
-            data_value!(component.id, target.to_string(), "template".to_string()),
+            data_value!(target_worker.agent_id, "template".to_string()),
         )
         .await?
         .into_typed::<(SchemaCardId, SchemaCardId, Vec<(String, bool)>)>()?;

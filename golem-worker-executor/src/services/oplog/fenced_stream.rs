@@ -24,9 +24,9 @@ use crate::storage::indexed::{
 };
 use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogIndex;
+use golem_common::model::type_id::TypeId;
 use golem_common::model::{AgentId, OwnedAgentId, RetryConfig, ScanCursor, ShardEpoch};
 use golem_common::retries::get_delay;
 use golem_common::serialization::DecodeError;
@@ -113,15 +113,15 @@ impl FencedIndexedStream {
     /// A stream that asserts no epoch, for reads, deletion and executors without a shard
     /// assignment.
     pub fn new(
-        agent_id: AgentId,
+        owned_agent_id: OwnedAgentId,
         namespace: IndexedStorageNamespace,
         labels: StreamLabels,
         indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
         retry_config: RetryConfig,
     ) -> Self {
-        let key = agent_id.to_redis_key();
+        let key = owned_agent_id.storage_key();
         Self {
-            agent_id,
+            agent_id: owned_agent_id.agent_id,
             namespace,
             key,
             labels,
@@ -137,14 +137,20 @@ impl FencedIndexedStream {
     /// owner's record refuses the open, and the stream is returned already fenced. A record that
     /// fails for another reason, after the retries, fails the open.
     pub async fn opened(
-        agent_id: AgentId,
+        owned_agent_id: OwnedAgentId,
         namespace: IndexedStorageNamespace,
         labels: StreamLabels,
         indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
         retry_config: RetryConfig,
         shard_epoch: Option<ShardEpoch>,
     ) -> Result<Self, IndexedStorageError> {
-        let mut stream = Self::new(agent_id, namespace, labels, indexed_storage, retry_config);
+        let mut stream = Self::new(
+            owned_agent_id,
+            namespace,
+            labels,
+            indexed_storage,
+            retry_config,
+        );
         let Some(shard_epoch) = shard_epoch else {
             return Ok(stream);
         };
@@ -478,7 +484,7 @@ impl FencedIndexedStream {
 
     /// Latches the fence a refused storage call reported, and returns it as the write's error.
     fn latch(&self, error: IndexedStorageError) -> OplogError {
-        let fence = OplogFence::refused(self.agent_id.clone(), error);
+        let fence = OplogFence::refused(self.agent_id, error);
         if self.fence.set(fence.clone()).is_ok() {
             warn!(
                 agent_id = %self.agent_id,
@@ -493,14 +499,14 @@ impl FencedIndexedStream {
 }
 
 /// A page of the agents of one component that hold a stream in `meta(mode)`, for the archive
-/// services' `scan_for_component`.
+/// services' `scan_for_type`.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn scan_component_streams(
+pub(crate) async fn scan_type_streams(
     indexed_storage: &Arc<dyn IndexedStorage + Send + Sync>,
     retry_config: &RetryConfig,
     labels: StreamLabels,
     environment_id: &EnvironmentId,
-    component_id: &ComponentId,
+    type_id: TypeId,
     modes: Option<AgentMode>,
     cursor: ScanCursor,
     count: u64,
@@ -508,7 +514,7 @@ pub(crate) async fn scan_component_streams(
 ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
     let state = decode_scan_cursor(&cursor, modes)?;
     let namespace = meta(state.mode);
-    let prefix = PrimaryOplogService::key_prefix(component_id);
+    let prefix = OwnedAgentId::type_storage_key_prefix(*environment_id, type_id);
     let resume = state.resume.clone();
     let (next_resume, keys) = retry_scan_storage_op(
         retry_config,
@@ -531,11 +537,6 @@ pub(crate) async fn scan_component_streams(
     let next_cursor = next_scan_cursor(state, modes, next_resume)?;
     Ok((
         next_cursor,
-        keys.into_iter()
-            .map(|key| OwnedAgentId {
-                agent_id: PrimaryOplogService::get_agent_id_from_key(&key, component_id),
-                environment_id: *environment_id,
-            })
-            .collect(),
+        PrimaryOplogService::owned_agent_ids_of_keys(environment_id, keys),
     ))
 }

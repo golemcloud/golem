@@ -415,13 +415,10 @@ async fn accounting_reset_joins_prior_commit_without_blocking_a_new_store() {
 /// with the cause. Only a fence is a lost shard, whose waiters are sent to the new owner.
 #[test]
 fn only_a_fenced_terminal_write_is_a_lost_shard() {
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "terminal-write".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 1);
     assert!(matches!(
         terminal_write_failure(OplogError::ArchiveWrite(crate::services::oplog::ArchiveWriteFailure {
-            agent_id: agent_id.clone(),
+            agent_id,
             level: 0,
             details: "injected archive failure".to_string(),
         })),
@@ -590,10 +587,7 @@ fn a_revert_checks_only_a_head_whose_strategy_is_chosen() {
 /// between must be refused, not handed an oplog that asserts nothing.
 #[test]
 fn an_agent_whose_shard_left_the_assignment_is_refused_an_epoch() {
-    let agent = AgentId {
-        component_id: ComponentId(Uuid::new_v4()),
-        agent_id: "fenced".to_string(),
-    };
+    let agent = AgentId::from_parts(7, 2);
 
     assert!(matches!(shard_epoch_to_assert(None, &agent), Ok(None)));
     assert!(matches!(
@@ -621,10 +615,7 @@ fn a_kept_shard_supersedes_an_agent_only_when_its_epoch_rose() {
 
 #[test]
 fn a_delivery_gives_up_agents_off_its_shards_or_behind_their_shards_epoch() {
-    let agent = AgentId {
-        component_id: ComponentId(Uuid::new_v4()),
-        agent_id: "swept".to_string(),
-    };
+    let agent = AgentId::from_parts(7, 3);
     let at_epoch = |epoch: u64| ShardAssignment {
         shard_epochs: HashMap::from([(ShardId::new(0), ShardEpoch(epoch))]),
         ..ShardAssignment::unexpiring(1, [])
@@ -808,10 +799,7 @@ fn recovery_error_classification_keeps_only_transient_failures_retryable() {
 #[test]
 fn recovery_error_classification_unwraps_failed_resume() {
     let error = WorkerExecutorError::failed_to_resume_worker(
-        AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "agent".to_string(),
-        },
+        AgentId::from_parts(7, 4),
         WorkerExecutorError::InvocationFailed {
             error: AgentError::TransientError("retry me".to_string()),
             stderr: String::new(),
@@ -841,12 +829,9 @@ fn recovery_error_classification_preserves_read_only_violation() {
 /// the shapes one of them recognises are recognised by all.
 #[test]
 fn a_failure_that_is_a_lost_shard_is_given_up_on_every_path() {
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "fenced".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 5);
     let fence = OplogFence {
-        agent_id: agent_id.clone(),
+        agent_id,
         expected_epoch: ShardEpoch(2),
         actual_epoch: Some(ShardEpoch(3)),
     };
@@ -1555,10 +1540,13 @@ fn hydrated_invocation_results_share_payloads_but_reject_deleted_branches() {
 }
 
 #[test]
-fn ephemeral_invocation_requires_a_final_phantom_id_even_when_it_may_exist() {
+fn ephemeral_invocation_rejects_a_key_even_when_it_may_exist() {
+    let environment_id = golem_common::base_model::environment::EnvironmentId(Uuid::from_u128(1));
     let result = validate_resolved_invocation_identity(
         AgentMode::Ephemeral,
-        None,
+        environment_id,
+        &AgentId::from_parts(7, 1),
+        true,
         &IdempotencyKey::new("raw-ephemeral-owner-key".to_string()),
         InvocationFreshnessDisposition::MayExist,
     );
@@ -1566,19 +1554,24 @@ fn ephemeral_invocation_requires_a_final_phantom_id_even_when_it_may_exist() {
     assert!(matches!(
         result,
         Err(WorkerExecutorError::InvalidRequest { details })
-            if details == "An ephemeral invocation requires a final phantom agent ID"
+            if details == "An ephemeral agent has no key: address it by ID"
     ));
 }
 
 #[test]
-fn known_fresh_ephemeral_invocation_requires_key_derived_phantom_id() {
+fn known_fresh_ephemeral_invocation_requires_key_derived_agent_id() {
+    let environment_id = golem_common::base_model::environment::EnvironmentId(Uuid::from_u128(1));
+    let type_id = golem_common::model::type_id::TypeId::try_from(7u32).unwrap();
     let idempotency_key = IdempotencyKey::new("raw-ephemeral-owner-key".to_string());
-    let expected_phantom_id = ephemeral_invocation_phantom_id(&idempotency_key);
+    let expected_agent_id =
+        AgentId::ephemeral_invocation(environment_id, type_id, &idempotency_key);
 
     assert!(
         validate_resolved_invocation_identity(
             AgentMode::Ephemeral,
-            Some(expected_phantom_id),
+            environment_id,
+            &expected_agent_id,
+            false,
             &idempotency_key,
             InvocationFreshnessDisposition::KnownFresh,
         )
@@ -1587,7 +1580,9 @@ fn known_fresh_ephemeral_invocation_requires_key_derived_phantom_id() {
     assert!(
         validate_resolved_invocation_identity(
             AgentMode::Ephemeral,
-            Some(Uuid::new_v4()),
+            environment_id,
+            &AgentId::from_parts(7, 1),
+            false,
             &idempotency_key,
             InvocationFreshnessDisposition::KnownFresh,
         )
@@ -1600,7 +1595,9 @@ fn durable_may_exist_invocation_identity_is_unchanged() {
     assert!(
         validate_resolved_invocation_identity(
             AgentMode::Durable,
-            None,
+            golem_common::base_model::environment::EnvironmentId(Uuid::from_u128(1)),
+            &AgentId::from_parts(7, 1),
+            true,
             &IdempotencyKey::new("raw-durable-owner-key".to_string()),
             InvocationFreshnessDisposition::MayExist,
         )
@@ -1613,14 +1610,11 @@ fn start_attempt_exact_duplicate_matches_and_mismatch_does_not() {
     use golem_common::model::durable_stream::{DurableStreamHandle, StreamId};
 
     let environment_id = golem_common::base_model::environment::EnvironmentId(Uuid::from_u128(1));
-    let agent_id = AgentId {
-        component_id: golem_common::base_model::component::ComponentId(Uuid::from_u128(2)),
-        agent_id: "callee".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 6);
     let fingerprint = AgentFingerprint(Uuid::from_u128(3));
     let session_key = golem_common::base_model::durable_stream::StreamInvocationId {
         callee_environment_id: environment_id,
-        callee: agent_id.clone(),
+        callee: agent_id,
         callee_fingerprint: fingerprint,
         idempotency_key: InvocationId(Uuid::from_u128(4)),
     };
@@ -1694,8 +1688,7 @@ fn start_attempt_exact_duplicate_matches_and_mismatch_does_not() {
                 &agent_id,
                 fingerprint,
                 OplogIndex::INITIAL,
-            )
-            .unwrap(),
+            ),
             producer_environment_id: environment_id,
             producer: agent_id,
             expected_producer_fingerprint: fingerprint,
@@ -1713,7 +1706,16 @@ fn start_attempt_exact_duplicate_matches_and_mismatch_does_not() {
 fn status_with_current_key(status: AgentStatus, key: &InvocationId) -> AgentStatusRecord {
     AgentStatusRecord {
         status,
-        current_idempotency_key: Some(*key),
+        running: Some(golem_common::model::RunningInvocation {
+            key: *key,
+            request: golem_common::model::InvocationRequestRef {
+                index: OplogIndex::INITIAL,
+                accepted_at: Timestamp::from(0),
+                operation: None,
+            },
+            last_change: OplogIndex::INITIAL,
+            last_change_at: Timestamp::from(0),
+        }),
         ..AgentStatusRecord::default()
     }
 }
@@ -1854,6 +1856,21 @@ fn reconstructed_permission_denial_keeps_its_executor_error_type() {
 }
 
 #[test]
+fn cancelled_result_is_a_typed_cancellation_and_not_an_invalid_request() {
+    let key = InvocationId(Uuid::new_v4());
+    let lookup = lookup_result_from_cached_result(
+        &AgentStatusRecord::default(),
+        &key,
+        InvocationResult::Cancelled,
+    );
+
+    assert!(matches!(
+        lookup,
+        LookupResult::Complete(Err(WorkerExecutorError::InvocationCancelled))
+    ));
+}
+
+#[test]
 fn invocation_rejection_fails_only_the_rejected_pending_key() {
     let rejected = InvocationId(Uuid::new_v4());
     let still_pending = InvocationId(Uuid::new_v4());
@@ -1864,6 +1881,7 @@ fn invocation_rejection_fails_only_the_rejected_pending_key() {
             oplog_index: OplogIndex::from_u64(2),
             idempotency_key: Some(still_pending),
             manual_update_target_revision: None,
+            operation: None,
         }],
         ..AgentStatusRecord::default()
     };
@@ -2171,12 +2189,14 @@ fn create_admission_decides_exclusivity_and_compares_retry_fields_as_maps() {
             Some(CreateIdentity {
                 request: &request,
                 canonical_key: Some("Counter(17)"),
+                constructor_parameters: Some("17"),
                 env: &env,
                 config: &config,
             }),
             CreateIdentity {
                 request: incoming_request,
                 canonical_key: key,
+                constructor_parameters: Some("17"),
                 env: incoming_env,
                 config: incoming_config,
             },
@@ -2189,6 +2209,7 @@ fn create_admission_decides_exclusivity_and_compares_retry_fields_as_maps() {
             CreateIdentity {
                 request: &request,
                 canonical_key: Some("Counter(17)"),
+                constructor_parameters: Some("17"),
                 env: &env,
                 config: &config,
             },
@@ -2206,6 +2227,29 @@ fn create_admission_decides_exclusivity_and_compares_retry_fields_as_maps() {
         decide(&retry, Some("Counter(17)"), &env, &config, true),
         CreateDecision::IdempotentRetry
     );
+    // An agent without a key gets its ID from the request alone, so a retry with other
+    // constructor parameters reaches the same ID and must conflict.
+    let unkeyed = |parameters| {
+        decide_create(
+            Some(CreateIdentity {
+                request: &request,
+                canonical_key: None,
+                constructor_parameters: Some("17"),
+                env: &env,
+                config: &config,
+            }),
+            CreateIdentity {
+                request: &retry,
+                canonical_key: None,
+                constructor_parameters: Some(parameters),
+                env: &env,
+                config: &config,
+            },
+            true,
+        )
+    };
+    assert_eq!(unkeyed("17"), CreateDecision::IdempotentRetry);
+    assert_eq!(unkeyed("18"), CreateDecision::IdempotencyKeyConflict);
     let reversed_env: Vec<_> = env.iter().cloned().rev().collect();
     let reversed_config: Vec<_> = config.iter().cloned().rev().collect();
     assert_eq!(
@@ -2282,12 +2326,14 @@ fn create_admission_compares_callers_as_records() {
             Some(CreateIdentity {
                 request: &stored,
                 canonical_key: Some("Counter(17)"),
+                constructor_parameters: None,
                 env: &[],
                 config: &[],
             }),
             CreateIdentity {
                 request: incoming,
                 canonical_key: Some("Counter(17)"),
+                constructor_parameters: None,
                 env: &[],
                 config: &[],
             },
@@ -2315,53 +2361,56 @@ fn create_intent_records_the_kind_and_only_the_key_that_identifies_the_create() 
     let key = IdempotencyKey::new("create-key".to_string());
     let caller = Caller::anonymous();
     let context = InvocationContextStack::fresh();
-    let derived_phantom = Some(ephemeral_invocation_phantom_id(&key));
-    let chosen_phantom = Some(Uuid::new_v4());
-    let recorded = |intent: CreateIntent, phantom_id: Option<Uuid>| {
-        let request = intent.request(phantom_id, caller.clone(), &context);
+    let component_id = ComponentId(Uuid::from_u128(1));
+    let keyed = NewOwner {
+        component_id,
+        constructor: None,
+        keyed: true,
+    };
+    let unkeyed = NewOwner::untyped(component_id);
+    let recorded = |intent: CreateIntent| {
+        let request = intent.request(caller.clone(), &context);
         (request.kind, request.idempotency_key)
     };
-    let invocation = CreateIntent::Invocation {
+    let invocation = |owner: &NewOwner| CreateIntent::Invocation {
+        owner: owner.clone(),
         idempotency_key: Some(key.clone()),
     };
-    let create = |exclusive| CreateIntent::Create {
+    let create = |owner: &NewOwner, exclusive| CreateIntent::Create {
+        owner: owner.clone(),
         exclusive,
         idempotency_key: Some(key.clone()),
     };
 
     assert_eq!(
-        recorded(invocation.clone(), None),
+        recorded(CreateIntent::Existing),
         (CreateRequestKind::GetOrCreate, None)
     );
+    // A keyed owner's ID derives from its key, not from the invocation's idempotency key.
     assert_eq!(
-        recorded(invocation.clone(), derived_phantom),
-        (CreateRequestKind::Phantom, Some(key.clone()))
+        recorded(invocation(&keyed)),
+        (CreateRequestKind::GetOrCreate, None)
     );
-    // A phantom ID that the invocation's key did not produce, such as a durable phantom chosen by
-    // its creator, is not identified by that key.
+    // An owner without a key may have an ID that the caller derived from the invocation's key.
     assert_eq!(
-        recorded(invocation, chosen_phantom),
-        (CreateRequestKind::Phantom, None)
+        recorded(invocation(&unkeyed)),
+        (CreateRequestKind::Unkeyed, Some(key.clone()))
     );
     assert_eq!(
-        recorded(create(true), None),
+        recorded(create(&keyed, true)),
         (CreateRequestKind::Exclusive, Some(key.clone()))
     );
     assert_eq!(
-        recorded(create(false), None),
+        recorded(create(&keyed, false)),
         (CreateRequestKind::GetOrCreate, Some(key.clone()))
     );
     assert_eq!(
-        recorded(create(false), chosen_phantom),
-        (CreateRequestKind::Phantom, Some(key.clone()))
+        recorded(create(&unkeyed, false)),
+        (CreateRequestKind::Unkeyed, Some(key.clone()))
     );
     assert_eq!(
-        recorded(create(true), chosen_phantom),
-        (CreateRequestKind::Phantom, Some(key))
-    );
-    assert_eq!(
-        recorded(CreateIntent::UNKEYED_INVOCATION, derived_phantom),
-        (CreateRequestKind::Phantom, None)
+        recorded(create(&unkeyed, true)),
+        (CreateRequestKind::Unkeyed, Some(key))
     );
 }
 
@@ -2372,6 +2421,7 @@ fn pending(key: &InvocationId, not_before: Option<Timestamp>) -> PendingInvocati
         oplog_index: OplogIndex::from_u64(2),
         idempotency_key: Some(*key),
         manual_update_target_revision: None,
+        operation: None,
     }
 }
 

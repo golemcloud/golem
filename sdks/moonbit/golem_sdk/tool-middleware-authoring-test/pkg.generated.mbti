@@ -78,7 +78,10 @@ pub(all) enum RunError {
   Broken(String)
 }
 pub impl @schema.FromSchema for RunError
+pub impl @schema.FromWire for RunError
 pub impl @schema.IntoSchema for RunError
+pub impl @schema.IntoWire for RunError
+pub impl @schema.WireSchema for RunError
 pub impl @tool-core.ToolErrorSchema for RunError
 
 type Storage

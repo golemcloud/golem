@@ -19,7 +19,7 @@ use axum::routing::{get, post};
 use axum::{BoxError, Router};
 use bytes::Bytes;
 use futures::stream;
-use golem_common::agent_id;
+use golem_common::agent_key;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::agent::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind, RevertToOplogIndex,
@@ -29,8 +29,7 @@ use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::ResultValuePayload;
-#[cfg(target_os = "linux")]
-use golem_service_base::storage::blob::agent_path_segment;
+
 use golem_test_framework::dsl::{
     TestDsl, count_agent_invocation_pair_since, drain_connection, stderr_events,
 };
@@ -40,17 +39,7 @@ use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start, start_with_overrides,
 };
-#[cfg(target_os = "linux")]
-use golem_worker_executor_test_utils::{
-    start_with_agent_storage_quota_and_pressure_without_metering_on_managed_xfs,
-    start_with_agent_storage_quota_on_managed_xfs,
-    start_with_agent_storage_quota_without_metering_on_managed_xfs,
-};
-#[cfg(target_os = "linux")]
-use golem_worker_executor_test_utils::{
-    start_with_mutable_agent_storage_quota_on_managed_xfs,
-    start_with_mutable_agent_storage_quota_without_metering_on_managed_xfs,
-};
+
 use http::{HeaderMap, StatusCode};
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, HashMap};
@@ -111,20 +100,6 @@ fn schema_string_list(result: SchemaValue) -> Vec<String> {
         .collect()
 }
 
-#[cfg(target_os = "linux")]
-fn schema_u64_list(result: SchemaValue) -> Vec<u64> {
-    let SchemaValue::List { elements } = result else {
-        panic!("expected list, got {result:?}")
-    };
-    elements
-        .into_iter()
-        .map(|element| match element {
-            SchemaValue::U64(entry) => entry,
-            other => panic!("expected u64, got {other:?}"),
-        })
-        .collect()
-}
-
 async fn assert_reconstructed_writable_file(
     executor: &TestWorkerExecutor,
     component: &golem_common::base_model::component::ComponentDto,
@@ -155,58 +130,6 @@ fn full_replay_config(config: &mut golem_worker_executor::services::golem_config
     config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
 }
 
-#[cfg(target_os = "linux")]
-fn reflink_xfs_test_root() -> PathBuf {
-    std::env::var_os("GOLEM_REFLINK_XFS_TEST_ROOT")
-        .map(PathBuf::from)
-        .expect("GOLEM_REFLINK_XFS_TEST_ROOT must name the mounted XFS test root without quotas")
-}
-
-#[cfg(target_os = "linux")]
-fn managed_xfs_test_root() -> PathBuf {
-    std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
-        .map(PathBuf::from)
-        .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root")
-}
-
-#[cfg(target_os = "linux")]
-fn filesystem_available_bytes(path: &std::path::Path) -> anyhow::Result<u64> {
-    let capacity = rustix::fs::statvfs(path)?;
-    capacity
-        .f_bavail
-        .checked_mul(capacity.f_frsize)
-        .ok_or_else(|| anyhow!("filesystem available capacity exceeds u64"))
-}
-
-#[cfg(target_os = "linux")]
-fn filesystem_fragment_size(path: &std::path::Path) -> anyhow::Result<u64> {
-    let fragment_size = rustix::fs::statvfs(path)?.f_frsize;
-    if fragment_size == 0 {
-        Err(anyhow!("filesystem reported a zero fragment size"))
-    } else {
-        Ok(fragment_size)
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn filesystem_tree_allocated_bytes(path: &std::path::Path) -> anyhow::Result<u64> {
-    use std::os::unix::fs::MetadataExt;
-
-    let metadata = std::fs::symlink_metadata(path)?;
-    let mut allocated_bytes = metadata
-        .blocks()
-        .checked_mul(512)
-        .ok_or_else(|| anyhow!("filesystem tree allocation exceeds u64"))?;
-    if metadata.is_dir() {
-        for entry in std::fs::read_dir(path)? {
-            allocated_bytes = allocated_bytes
-                .checked_add(filesystem_tree_allocated_bytes(&entry?.path())?)
-                .ok_or_else(|| anyhow!("filesystem tree allocation exceeds u64"))?;
-        }
-    }
-    Ok(allocated_bytes)
-}
-
 #[test]
 #[tracing::instrument]
 async fn write_stdout(
@@ -215,7 +138,7 @@ async fn write_stdout(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -224,7 +147,7 @@ async fn write_stdout(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Logging", "write-stdout-1");
+    let agent_id = agent_key!("Logging", "write-stdout-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -296,7 +219,7 @@ async fn write_stderr(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -305,7 +228,7 @@ async fn write_stderr(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Logging", "write-stderr-1");
+    let agent_id = agent_key!("Logging", "write-stderr-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -344,7 +267,7 @@ async fn read_stdin(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -353,7 +276,7 @@ async fn read_stdin(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Io", "read-stdin-1");
+    let agent_id = agent_key!("Io", "read-stdin-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -376,7 +299,7 @@ async fn clocks(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -385,7 +308,7 @@ async fn clocks(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clocks", "clocks-1");
+    let agent_id = agent_key!("Clocks", "clocks-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -437,7 +360,7 @@ async fn file_write_read_delete(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -450,7 +373,7 @@ async fn file_write_read_delete(
         )
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-write-read-delete-1");
+    let agent_id = agent_key!("FileSystem", "file-write-read-delete-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -492,7 +415,7 @@ async fn initial_file_read_write(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -519,7 +442,7 @@ async fn initial_file_read_write(
 
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
-    let agent_id = agent_id!("FileReadWrite", "initial-file-read-write-1");
+    let agent_id = agent_key!("FileReadWrite", "initial-file-read-write-1");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -573,7 +496,7 @@ async fn initial_file_directory_hard_link_gives_not_permitted_through_p2_and_p3(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -581,7 +504,7 @@ async fn initial_file_directory_hard_link_gives_not_permitted_through_p2_and_p3(
         .component_dep(&context.default_environment_id, initial_file_system)
         .store()
         .await?;
-    let agent_id = agent_id!("P3FileSystem", "directory-hard-link");
+    let agent_id = agent_key!("P3FileSystem", "directory-hard-link");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -634,865 +557,12 @@ async fn initial_file_directory_hard_link_gives_not_permitted_through_p2_and_p3(
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "requires the privileged managed XFS test runner"]
-#[timeout("2m")]
-#[tracing::instrument]
-async fn p2_p3_quota_classification_on_managed_xfs(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
-
-    let root = managed_xfs_test_root();
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_agent_storage_quota_without_metering_on_managed_xfs(
-        deps,
-        &context,
-        1024 * 1024,
-        root,
-    )
-    .await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, initial_file_system)
-        .store()
-        .await?;
-
-    let p2_exhaustion_agent = agent_id!("P3FileSystem", "managed-quota-p2-exhaustion");
-    let p2_exhaustion = schema_string_list(
-        executor
-            .invoke_and_await_agent(
-                &component,
-                &p2_exhaustion_agent,
-                "exhaust_p2_quota",
-                data_value!(),
-            )
-            .await?
-            .into_return_value()
-            .ok_or_else(|| anyhow!("expected P2 exhaustion result"))?,
-    );
-    assert_eq!(
-        p2_exhaustion.first().map(String::as_str),
-        Some("completion=err:quota"),
-        "P2 growth must fail specifically because the project quota is exhausted"
-    );
-    assert_eq!(
-        p2_exhaustion.get(1).map(String::as_str),
-        Some("prefix-persisted=true")
-    );
-    let persisted_p2_prefix = schema_string_list(
-        executor
-            .invoke_and_await_agent(
-                &component,
-                &p2_exhaustion_agent,
-                "inspect_p2_exhaustion",
-                data_value!(),
-            )
-            .await?
-            .into_return_value()
-            .ok_or_else(|| anyhow!("expected persisted P2 failure prefix"))?,
-    );
-    let p2_size = persisted_p2_prefix
-        .first()
-        .and_then(|size| size.strip_prefix("size="))
-        .and_then(|size| size.parse::<u64>().ok())
-        .expect("P2 exhaustion inspection must report a numeric size");
-    assert!((4096..=1024 * 1024).contains(&p2_size));
-    assert_eq!(
-        &persisted_p2_prefix[1..],
-        ["prefix-complete=true", "suffix-bytes=0"]
-    );
-
-    let p3_exhaustion_agent = agent_id!("P3FileSystem", "managed-quota-p3-exhaustion");
-    let p3_exhaustion = executor
-        .invoke_and_await_agent(
-            &component,
-            &p3_exhaustion_agent,
-            "exhaust_p3_quota",
-            data_value!(),
-        )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected P3 exhaustion result"))?;
-    let p3_exhaustion = schema_string_list(p3_exhaustion);
-    assert_eq!(
-        p3_exhaustion.first().map(String::as_str),
-        Some("completion=err:quota"),
-        "P3 growth must fail specifically because the project quota is exhausted"
-    );
-    let unwritten_bytes = p3_exhaustion
-        .get(2)
-        .and_then(|value| value.strip_prefix("unwritten-bytes="))
-        .ok_or_else(|| anyhow!("P3 stream input result was not reported: {p3_exhaustion:?}"))?
-        .parse::<usize>()?;
-    assert_eq!(
-        p3_exhaustion.get(1).map(String::as_str),
-        Some("prefix-persisted=true"),
-        "P3 stream must acknowledge data persisted before quota denial"
-    );
-    assert!(
-        unwritten_bytes > 0,
-        "P3 quota failure must return the input suffix that was not persisted"
-    );
-    let persisted_prefix = executor
-        .invoke_and_await_agent(
-            &component,
-            &p3_exhaustion_agent,
-            "inspect_p3_exhaustion",
-            data_value!(),
-        )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected persisted P3 failure prefix"))?;
-    let persisted_prefix = schema_string_list(persisted_prefix);
-    assert_eq!(
-        persisted_prefix.get(1).map(String::as_str),
-        Some("prefix-complete=true")
-    );
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn fill_filesystem_leaving(path: &std::path::Path, reserve_bytes: u64) -> anyhow::Result<()> {
-    use std::io::{Seek, SeekFrom, Write};
-
-    let mut filler = std::fs::File::create(path)?;
-    let coarse_block = vec![0x7f; 1024 * 1024];
-    let fragment_size = filesystem_fragment_size(path)?;
-    let fragment_block = vec![0x7f; usize::try_from(fragment_size)?];
-    let mut committed_length = 0u64;
-    let mut consecutive_interrupts = 0;
-
-    loop {
-        match filler.write(&coarse_block) {
-            Ok(0) => return Err(std::io::Error::from(std::io::ErrorKind::WriteZero).into()),
-            Ok(written) => {
-                consecutive_interrupts = 0;
-                let candidate_length = committed_length
-                    .checked_add(written as u64)
-                    .ok_or_else(|| anyhow!("filesystem filler length exceeds u64"))?;
-                match filler.sync_all() {
-                    Ok(()) => committed_length = candidate_length,
-                    Err(error) if error.raw_os_error() == Some(libc::ENOSPC) => {
-                        filler.set_len(committed_length)?;
-                        filler.seek(SeekFrom::Start(committed_length))?;
-                        filler.sync_all()?;
-                        break;
-                    }
-                    Err(error) => return Err(error.into()),
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
-                consecutive_interrupts += 1;
-                if consecutive_interrupts >= 8 {
-                    return Err(error.into());
-                }
-                continue;
-            }
-            Err(error) if error.raw_os_error() == Some(libc::ENOSPC) => break,
-            Err(error) => return Err(error.into()),
-        }
-    }
-
-    filler.seek(SeekFrom::Start(committed_length))?;
-    let fine_start_available = filesystem_available_bytes(path)?;
-    let max_fine_attempts = fine_start_available
-        .checked_div(fragment_size)
-        .and_then(|fragments| fragments.checked_add(2))
-        .ok_or_else(|| anyhow!("filesystem filler refinement bound exceeds u64"))?;
-    for _ in 0..max_fine_attempts {
-        if filesystem_available_bytes(path)? < fragment_size {
-            break;
-        }
-        match filler.write(&fragment_block) {
-            Ok(0) => return Err(std::io::Error::from(std::io::ErrorKind::WriteZero).into()),
-            Ok(written) => {
-                let candidate_length = committed_length
-                    .checked_add(written as u64)
-                    .ok_or_else(|| anyhow!("filesystem filler length exceeds u64"))?;
-                match filler.sync_all() {
-                    Ok(()) => committed_length = candidate_length,
-                    Err(error) if error.raw_os_error() == Some(libc::ENOSPC) => {
-                        filler.set_len(committed_length)?;
-                        filler.seek(SeekFrom::Start(committed_length))?;
-                        filler.sync_all()?;
-                        break;
-                    }
-                    Err(error) => return Err(error.into()),
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) if error.raw_os_error() == Some(libc::ENOSPC) => break,
-            Err(error) => return Err(error.into()),
-        }
-    }
-    if reserve_bytes > 0 {
-        let rounded_reserve = reserve_bytes
-            .checked_add(fragment_size - 1)
-            .and_then(|bytes| bytes.checked_div(fragment_size))
-            .and_then(|fragments| fragments.checked_mul(fragment_size))
-            .ok_or_else(|| anyhow!("filesystem filler reserve exceeds u64"))?;
-        filler.set_len(committed_length.saturating_sub(rounded_reserve))?;
-    }
-    filler.sync_all()?;
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn create_allocated_file(path: &std::path::Path, length: u64, fill_byte: u8) -> anyhow::Result<()> {
-    use std::io::Write;
-
-    let mut file = std::fs::File::create(path)?;
-    let block = vec![fill_byte; 1024 * 1024];
-    let mut remaining = length;
-    while remaining > 0 {
-        let write_size = usize::try_from(remaining.min(block.len() as u64))?;
-        file.write_all(&block[..write_size])?;
-        remaining -= write_size as u64;
-    }
-    file.sync_all()?;
-    assert_eq!(file.metadata()?.len(), length);
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "requires the privileged managed XFS test runner"]
-#[timeout("2m")]
-#[tracing::instrument]
-async fn filesystem_downgrade_blocks_guest_until_limit_recovers(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
-
-    let root = managed_xfs_test_root();
-    let context = TestContext::new(last_unique_id);
-    let (executor, quota) = start_with_mutable_agent_storage_quota_without_metering_on_managed_xfs(
-        deps,
-        &context,
-        1024 * 1024,
-        root.clone(),
-    )
-    .await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, initial_file_system)
-        .with_files(
-            "P3FileSystem",
-            &[
-                IFSEntry {
-                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
-                    target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
-                    permissions: AgentFilePermissions::ReadOnly,
-                },
-                IFSEntry {
-                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
-                    target_path: CanonicalFilePath::from_abs_str("/foo-copy.txt").unwrap(),
-                    permissions: AgentFilePermissions::ReadOnly,
-                },
-                IFSEntry {
-                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
-                    target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-                    permissions: AgentFilePermissions::ReadWrite,
-                },
-            ],
-        )
-        .store()
-        .await?;
-    let agent = agent_id!("P3FileSystem", "managed-quota-downgrade");
-    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
-    let initial_result = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent,
-            "confirm_invocation_started",
-            data_value!(),
-        )
-        .await?;
-    assert_eq!(
-        initial_result.into_return_value(),
-        Some(SchemaValue::String("executed".to_string()))
-    );
-    let runtime_path = root
-        .join(context.default_environment_id.to_string())
-        .join(component.id.to_string())
-        .join(agent_path_segment(&worker_id));
-    assert!(runtime_path.exists());
-
-    quota.set_limit(4096).await?;
-    executor
-        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10))
-        .await?;
-    tokio::time::timeout(Duration::from_secs(30), async {
-        while runtime_path.exists() {
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .expect("over-limit runtime filesystem was not deleted");
-
-    let before_blocked_invocation = executor.oplog_max_index(&worker_id).await?;
-    let blocked_key = IdempotencyKey::fresh();
-    executor
-        .invoke_agent_with_key(
-            &component,
-            &agent,
-            &blocked_key,
-            "confirm_invocation_started",
-            data_value!(),
-        )
-        .await?;
-    let blocked = tokio::time::timeout(
-        Duration::from_secs(1),
-        executor.invoke_and_await_agent_with_key(
-            &component,
-            &agent,
-            &blocked_key,
-            "confirm_invocation_started",
-            data_value!(),
-        ),
-    )
-    .await;
-    assert!(
-        !matches!(blocked, Ok(Ok(_))),
-        "pending invocation completed while reconstruction exceeded its installed quota"
-    );
-    let blocked_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_eq!(
-        count_agent_invocation_pair_since(&blocked_oplog, before_blocked_invocation),
-        (0, 0),
-        "over-limit reconstruction must not start the pending guest invocation"
-    );
-
-    quota.set_limit(1024 * 1024).await?;
-    executor.resume(&worker_id, false).await?;
-    let recovered = tokio::time::timeout(
-        Duration::from_secs(20),
-        executor.invoke_and_await_agent_with_key(
-            &component,
-            &agent,
-            &blocked_key,
-            "confirm_invocation_started",
-            data_value!(),
-        ),
-    )
-    .await
-    .expect("pending invocation did not recover after raising the limit")?;
-    assert_eq!(
-        recovered.into_return_value(),
-        Some(SchemaValue::String("executed".to_string()))
-    );
-    executor
-        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
-        .await?;
-    assert!(runtime_path.exists());
-    let recovered_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_eq!(
-        count_agent_invocation_pair_since(&recovered_oplog, before_blocked_invocation),
-        (1, 1)
-    );
-    assert_eq!(
-        quota.flush_durable_storage_byte_seconds(),
-        0,
-        "managed XFS quota enforcement must not accumulate storage usage when metering is disabled"
-    );
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "requires the privileged managed XFS test runner"]
-#[timeout("2m")]
-#[tracing::instrument]
-async fn managed_xfs_resource_billing_survives_idle_and_replay(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
-
-    let context = TestContext::new(last_unique_id);
-    let (executor, billing) = start_with_mutable_agent_storage_quota_on_managed_xfs(
-        deps,
-        &context,
-        1024 * 1024,
-        managed_xfs_test_root(),
-    )
-    .await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, initial_file_system)
-        .store()
-        .await?;
-    let agent = agent_id!("P3FileSystem", "managed-xfs-resource-billing");
-    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
-
-    let mutation = executor
-        .invoke_and_await_agent(&component, &agent, "run_writable", data_value!())
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected run_writable return value"))?;
-    assert_eq!(
-        schema_string_list(mutation),
-        vec![
-            "p2_write_p3_read=p2-to-p3".to_string(),
-            "p3_write_p2_read=p3-to-p2".to_string(),
-        ]
-    );
-    executor
-        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
-        .await?;
-
-    let after_mutation = billing.flush_durable_storage_byte_seconds();
-    let mut after_active_window = after_mutation;
-    for _ in 0..32 {
-        assert_reconstructed_writable_file(&executor, &component, &agent).await?;
-        executor
-            .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
-            .await?;
-        after_active_window = billing.flush_durable_storage_byte_seconds();
-        if after_active_window > after_mutation {
-            break;
-        }
-    }
-    assert!(
-        after_active_window > after_mutation,
-        "authoritative managed-XFS allocation remained zero-billed across active windows"
-    );
-
-    let mut idle_start = billing.flush_durable_storage_byte_seconds();
-    let mut stable_samples = 0;
-    while stable_samples < 3 {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let current = billing.flush_durable_storage_byte_seconds();
-        if current == idle_start {
-            stable_samples += 1;
-        } else {
-            idle_start = current;
-            stable_samples = 0;
-        }
-    }
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    let idle_end = billing.flush_durable_storage_byte_seconds();
-    assert_eq!(
-        idle_end, idle_start,
-        "loaded-idle managed-XFS storage continued billing"
-    );
-
-    executor.simulated_crash(&worker_id).await?;
-    assert_reconstructed_writable_file(&executor, &component, &agent).await?;
-    executor
-        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
-        .await?;
-    let after_replay = billing.flush_durable_storage_byte_seconds();
-    assert!(
-        after_replay > idle_end,
-        "replay and its following invocation produced no managed-XFS storage billing"
-    );
-
-    let before_delete = billing.flush_durable_storage_byte_seconds();
-    executor.delete_worker(&worker_id).await?;
-    let after_delete = billing.flush_durable_storage_byte_seconds();
-    assert!(after_delete >= before_delete);
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(
-        billing.flush_durable_storage_byte_seconds(),
-        after_delete,
-        "deleted managed-XFS storage continued billing"
-    );
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-const PRESSURE_MINIMUM_AVAILABLE_BYTES: u64 = 64 * 1024 * 1024;
-#[cfg(target_os = "linux")]
-const PRESSURE_TARGET_AVAILABLE_BYTES: u64 = 384 * 1024 * 1024;
-#[cfg(target_os = "linux")]
-const PRESSURE_PROJECT_QUOTA_BYTES: u64 = 256 * 1024 * 1024;
-#[cfg(target_os = "linux")]
-const PRESSURE_VICTIM_ALLOCATION_BYTES: u64 = 224 * 1024 * 1024;
-#[cfg(target_os = "linux")]
-const PRESSURE_GATE_BYTES: u64 = 224 * 1024 * 1024;
-#[cfg(target_os = "linux")]
-const PRESSURE_POST_GATE_TARGET_MARGIN_BYTES: u64 = 32 * 1024 * 1024;
-#[cfg(target_os = "linux")]
-const PRESSURE_OBSERVATION_DELAY: Duration = Duration::from_millis(25);
-
-/// The pressure settings of the physical-pressure tests: recovery starts below 64 MiB and stops at
-/// 384 MiB of free space, with fresh observations 25 ms apart.
-#[cfg(target_os = "linux")]
-fn physical_pressure_config()
--> golem_worker_executor::services::golem_config::FilesystemPressureConfig {
-    let default_pressure =
-        golem_worker_executor::services::golem_config::FilesystemPressureConfig::default();
-    golem_worker_executor::services::golem_config::FilesystemPressureConfig::new(
-        PRESSURE_MINIMUM_AVAILABLE_BYTES,
-        PRESSURE_TARGET_AVAILABLE_BYTES,
-        default_pressure.minimum_available_filesystem_objects(),
-        default_pressure.target_available_filesystem_objects(),
-        200,
-        PRESSURE_OBSERVATION_DELAY,
-    )
-    .unwrap()
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "requires the privileged managed XFS test runner"]
-#[timeout("2m")]
-#[tracing::instrument]
-async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_write(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    const {
-        assert!(
-            PRESSURE_PROJECT_QUOTA_BYTES - PRESSURE_VICTIM_ALLOCATION_BYTES == 32 * 1024 * 1024,
-            "the victim allocation must remain safely below its project quota"
-        );
-    }
-    let root = managed_xfs_test_root();
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_agent_storage_quota_and_pressure_without_metering_on_managed_xfs(
-        deps,
-        &context,
-        PRESSURE_PROJECT_QUOTA_BYTES,
-        root.clone(),
-        physical_pressure_config(),
-    )
-    .await?;
-    physical_pressure_unloads_loaded_idle_and_retries_safe_write(
-        executor,
-        &context,
-        host_api_tests,
-        root,
-        Some(PRESSURE_PROJECT_QUOTA_BYTES),
-    )
-    .await
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "requires the unprivileged reflink XFS test runner"]
-#[timeout("2m")]
-#[tracing::instrument]
-async fn reflink_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_write(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    use golem_worker_executor_test_utils::start_with_pressure_on_reflink_xfs;
-
-    let root = reflink_xfs_test_root();
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_pressure_on_reflink_xfs(
-        deps,
-        &context,
-        root.clone(),
-        physical_pressure_config(),
-    )
-    .await?;
-    physical_pressure_unloads_loaded_idle_and_retries_safe_write(
-        executor,
-        &context,
-        host_api_tests,
-        root,
-        None,
-    )
-    .await
-}
-
-/// Fills the XFS volume at `root` until a write of an agent on `executor` finds no space, and
-/// checks that pressure recovery unloads an idle loaded agent and retries the write once the
-/// volume reaches its target. With `project_quota`, the agents have that project quota, and the
-/// write must fail for lack of space and not for the quota.
-#[cfg(target_os = "linux")]
-async fn physical_pressure_unloads_loaded_idle_and_retries_safe_write(
-    executor: TestWorkerExecutor,
-    context: &TestContext,
-    host_api_tests: &PrecompiledComponent,
-    root: PathBuf,
-    project_quota: Option<u64>,
-) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
-    use std::io::{Seek, SeekFrom, Write};
-
-    const {
-        assert!(PRESSURE_VICTIM_ALLOCATION_BYTES < PRESSURE_TARGET_AVAILABLE_BYTES);
-        assert!(
-            PRESSURE_VICTIM_ALLOCATION_BYTES + PRESSURE_GATE_BYTES
-                - PRESSURE_TARGET_AVAILABLE_BYTES
-                == 64 * 1024 * 1024,
-            "victim and gate reclamation must retain margin above the recovery target"
-        );
-    }
-    let allocation_unit = filesystem_fragment_size(&root)?;
-    let retry_contents = "r".repeat(usize::try_from(allocation_unit)?);
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let victim = agent_id!("FileSystem", "physical-pressure-victim");
-    let victim_worker = executor.start_agent(&component.id, victim.clone()).await?;
-    executor
-        .invoke_and_await_agent(
-            &component,
-            &victim,
-            "write_file_direct",
-            data_value!("victim-marker", "loaded-idle"),
-        )
-        .await?;
-    executor
-        .wait_for_status(&victim_worker, AgentStatus::Idle, Duration::from_secs(10))
-        .await?;
-    let victim_path = root
-        .join(context.default_environment_id.to_string())
-        .join(component.id.to_string())
-        .join(agent_path_segment(&victim_worker));
-    assert!(victim_path.is_dir(), "the victim did not use the XFS root");
-    create_allocated_file(
-        &victim_path.join("pressure-allocation"),
-        PRESSURE_VICTIM_ALLOCATION_BYTES,
-        0x5a,
-    )?;
-
-    let trigger = agent_id!("FileSystem", "physical-pressure-trigger");
-    let trigger_worker = executor.start_agent(&component.id, trigger.clone()).await?;
-    executor
-        .invoke_and_await_agent(
-            &component,
-            &trigger,
-            "write_file_direct",
-            data_value!("pressure-target", "seed"),
-        )
-        .await?;
-    executor
-        .wait_for_status(&trigger_worker, AgentStatus::Idle, Duration::from_secs(10))
-        .await?;
-    let trigger_path = root
-        .join(context.default_environment_id.to_string())
-        .join(component.id.to_string())
-        .join(agent_path_segment(&trigger_worker));
-    assert!(
-        trigger_path.is_dir(),
-        "the trigger did not use the XFS root"
-    );
-
-    let observation_gate = root.join(format!("pressure-target-gate-{}", uuid::Uuid::new_v4()));
-    create_allocated_file(&observation_gate, PRESSURE_GATE_BYTES, 0x6b)?;
-    let residual_probe_path = trigger_path.join("pressure-residual-probe");
-    let mut residual_probe = std::fs::File::create(&residual_probe_path)?;
-    assert_eq!(residual_probe.metadata()?.len(), 0);
-    let volume_filler = root.join(format!("pressure-volume-filler-{}", uuid::Uuid::new_v4()));
-    fill_filesystem_leaving(&volume_filler, 0)?;
-    assert_eq!(
-        residual_probe.metadata()?.len(),
-        0,
-        "pressure residual probe changed before its data-allocation proof"
-    );
-    let probe_start_available = filesystem_available_bytes(&root)?;
-    assert!(
-        probe_start_available < PRESSURE_MINIMUM_AVAILABLE_BYTES,
-        "global filler did not cross the configured physical-pressure watermark: available={probe_start_available}"
-    );
-    let probe_fragment = vec![0x4d; usize::try_from(allocation_unit)?];
-    let max_probe_attempts = probe_start_available
-        .checked_div(allocation_unit)
-        .and_then(|fragments| fragments.checked_add(8))
-        .ok_or_else(|| anyhow!("pressure residual-probe bound exceeds u64"))?;
-    let mut probe_committed_bytes = 0u64;
-    let mut probe_failure = None;
-    let rollback_probe = |probe: &mut std::fs::File, committed_bytes: u64| -> anyhow::Result<()> {
-        probe.set_len(committed_bytes)?;
-        probe.seek(SeekFrom::Start(committed_bytes))?;
-        match probe.sync_all() {
-            Ok(()) => Ok(()),
-            Err(error) if error.raw_os_error() == Some(libc::ENOSPC) => {
-                probe.sync_all()?;
-                Ok(())
-            }
-            Err(error) => Err(error.into()),
-        }
-    };
-    for _ in 0..max_probe_attempts {
-        residual_probe.seek(SeekFrom::Start(probe_committed_bytes))?;
-        match residual_probe.write_all(&probe_fragment) {
-            Ok(()) => match residual_probe.sync_all() {
-                Ok(()) => {
-                    probe_committed_bytes = probe_committed_bytes
-                        .checked_add(allocation_unit)
-                        .ok_or_else(|| anyhow!("pressure residual-probe length exceeds u64"))?;
-                }
-                Err(error) if error.raw_os_error() == Some(libc::ENOSPC) => {
-                    rollback_probe(&mut residual_probe, probe_committed_bytes)?;
-                    probe_failure = Some(error);
-                    break;
-                }
-                Err(error) => return Err(error.into()),
-            },
-            Err(error) if error.raw_os_error() == Some(libc::ENOSPC) => {
-                rollback_probe(&mut residual_probe, probe_committed_bytes)?;
-                probe_failure = Some(error);
-                break;
-            }
-            Err(error) if error.raw_os_error() == Some(libc::EDQUOT) => {
-                return Err(anyhow!(
-                    "pressure residual probe hit the trigger project quota instead of physical ENOSPC"
-                ));
-            }
-            Err(error) => return Err(error.into()),
-        }
-    }
-    let probe_failure = probe_failure.ok_or_else(|| {
-        anyhow!("pressure residual probe never reached physical ENOSPC within its bounded attempts")
-    })?;
-    assert_eq!(probe_failure.raw_os_error(), Some(libc::ENOSPC));
-    if let Some(project_quota) = project_quota {
-        let trigger_project_allocated_bytes = filesystem_tree_allocated_bytes(&trigger_path)?;
-        assert!(
-            trigger_project_allocated_bytes < project_quota / 2,
-            "pressure residual probe approached the trigger project quota: allocated={trigger_project_allocated_bytes}, quota={project_quota}"
-        );
-    }
-
-    let before_invocation = filesystem_available_bytes(&root)?;
-    assert!(
-        before_invocation < PRESSURE_MINIMUM_AVAILABLE_BYTES,
-        "test setup did not cross the configured physical-pressure watermark"
-    );
-    assert_eq!(
-        std::fs::read(trigger_path.join("pressure-target"))?,
-        b"seed",
-        "pressure target changed before the exhausting invocation"
-    );
-
-    let invocation = executor.invoke_and_await_agent(
-        &component,
-        &trigger,
-        "pwrite_file",
-        data_value!("/pressure-target", allocation_unit, retry_contents.clone()),
-    );
-    let observation_barrier = async {
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while victim_path.exists() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .map_err(|_| anyhow!("pressure victim was not deleted"))?;
-        let before_gate_release = filesystem_available_bytes(&root)?;
-        assert!(
-            before_gate_release > before_invocation,
-            "verified victim deletion did not increase fresh available capacity"
-        );
-        assert!(
-            before_gate_release < PRESSURE_TARGET_AVAILABLE_BYTES,
-            "victim deletion unexpectedly reached the configured target before the observation gate was released: available={before_gate_release}"
-        );
-        let minimum_margin_setup = PRESSURE_TARGET_AVAILABLE_BYTES
-            .saturating_sub(PRESSURE_GATE_BYTES)
-            .saturating_add(PRESSURE_POST_GATE_TARGET_MARGIN_BYTES);
-        assert!(
-            before_gate_release >= minimum_margin_setup,
-            "victim deletion left insufficient gate-release margin: available={before_gate_release}, required={minimum_margin_setup}"
-        );
-        // Allow recovery polling while leaving budget for verified unloading and
-        // a target-reaching observation within the 250 ms recovery deadline.
-        tokio::time::sleep(PRESSURE_OBSERVATION_DELAY * 2).await;
-        assert_eq!(
-            std::fs::read(trigger_path.join("pressure-target"))?,
-            b"seed",
-            "safe write retried before a fresh observation could reach the configured target"
-        );
-
-        std::fs::remove_file(&observation_gate)?;
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let available = filesystem_available_bytes(&root)?;
-                if available >= PRESSURE_TARGET_AVAILABLE_BYTES {
-                    return Ok::<(u64, u64), anyhow::Error>((before_gate_release, available));
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .map_err(|_| anyhow!("fresh statvfs observation did not reach the configured target"))?
-    };
-    let (retried, observed_target) = tokio::time::timeout(Duration::from_secs(30), async {
-        tokio::join!(invocation, observation_barrier)
-    })
-    .await
-    .expect("physical-pressure recovery did not finish");
-    let retried = retried?;
-    let (before_gate_release, observed_target) = observed_target?;
-    assert!(observed_target >= PRESSURE_TARGET_AVAILABLE_BYTES);
-    assert!(
-        observed_target > before_gate_release,
-        "removing the observation gate did not increase fresh available capacity"
-    );
-    assert!(matches!(
-        retried.into_return_value(),
-        Some(SchemaValue::Result(ResultValuePayload::Ok { .. }))
-    ));
-
-    assert!(
-        !victim_path.exists(),
-        "pressure recovery reported success before verified victim deletion"
-    );
-    assert!(
-        trigger_path.is_dir(),
-        "pressure recovery unloaded the running trigger"
-    );
-    let contents = executor
-        .invoke_and_await_agent(
-            &component,
-            &trigger,
-            "read_file",
-            data_value!("/pressure-target"),
-        )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected pressure target contents"))?;
-    let SchemaValue::Result(ResultValuePayload::Ok { value: Some(value) }) = contents else {
-        panic!("expected successful pressure target read, got {contents:?}")
-    };
-    let SchemaValue::String(contents) = *value else {
-        panic!("expected pressure target string contents")
-    };
-    assert_eq!(contents.len() as u64, allocation_unit * 2);
-    assert_eq!(&contents.as_bytes()[..4], b"seed");
-    assert!(
-        contents.as_bytes()[4..allocation_unit as usize]
-            .iter()
-            .all(|byte| *byte == 0)
-    );
-    assert_eq!(
-        &contents.as_bytes()[allocation_unit as usize..],
-        retry_contents.as_bytes()
-    );
-
-    drop(residual_probe);
-    std::fs::remove_file(residual_probe_path)?;
-    std::fs::remove_file(volume_filler)?;
-    executor.delete_worker(&trigger_worker).await?;
-    Ok(())
-}
-
 async fn initial_file_p3_parity_impl(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     initial_file_system: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -1539,7 +609,7 @@ async fn initial_file_p3_parity_impl(
         .store()
         .await?;
 
-    let agent_id = agent_id!("P3FileSystem", "initial-file-p3-parity-1");
+    let agent_id = agent_key!("P3FileSystem", "initial-file-p3-parity-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1758,7 +828,7 @@ async fn full_replay_on_an_empty_root_rebuilds_the_tree_after_initial_file_opera
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::agent_id;
+    use golem_common::agent_key;
     use golem_common::model::oplog::PublicOplogEntry;
 
     let context = TestContext::new(last_unique_id);
@@ -1798,7 +868,7 @@ async fn full_replay_on_an_empty_root_rebuilds_the_tree_after_initial_file_opera
         )
         .store()
         .await?;
-    let agent = agent_id!("FilesystemTree", "full-replay");
+    let agent = agent_key!("FilesystemTree", "full-replay");
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
     let ok = Some(SchemaValue::String("ok".to_string()));
 
@@ -1923,239 +993,6 @@ async fn full_replay_on_an_empty_root_rebuilds_the_tree_after_initial_file_opera
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "run with integration-tests/scripts/managed-filesystem/run-lima.sh --filesystem-benchmark"]
-#[timeout("30m")]
-async fn filesystem_guest_latency_benchmark(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
-) -> anyhow::Result<()> {
-    use golem_common::data_value;
-    use std::fs;
-
-    fn percentile(sorted: &[u64], percentile: usize) -> u64 {
-        sorted[(sorted.len() - 1) * percentile / 100]
-    }
-
-    let mode = std::env::var("GOLEM_FILESYSTEM_BENCH_MODE").map_err(|_| {
-        anyhow!("GOLEM_FILESYSTEM_BENCH_MODE must be managed, managed-unmetered, or unmanaged")
-    })?;
-    let root = std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
-        .map(PathBuf::from)
-        .ok_or_else(|| anyhow!("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS root"))?;
-    let context = TestContext::new(last_unique_id);
-    let executor = match mode.as_str() {
-        "managed" => {
-            start_with_agent_storage_quota_on_managed_xfs(deps, &context, 128 * 1024 * 1024, root)
-                .await?
-        }
-        "managed-unmetered" => {
-            start_with_agent_storage_quota_without_metering_on_managed_xfs(
-                deps,
-                &context,
-                128 * 1024 * 1024,
-                root,
-            )
-            .await?
-        }
-        "unmanaged" => {
-            let unmanaged_root = root.join("unmanaged-benchmark");
-            fs::create_dir_all(&unmanaged_root)?;
-            start_with_overrides(
-                deps,
-                &context,
-                TestExecutorOverrides {
-                    configure: Some(Arc::new(move |config| {
-                        config.filesystem_storage.mode = FilesystemStorageMode::Directory {
-                            root: unmanaged_root.clone().into(),
-                        };
-                        config.resource_usage_metering = Default::default();
-                        config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
-                        config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
-                    })),
-                    ..TestExecutorOverrides::default()
-                },
-            )
-            .await?
-        }
-        other => return Err(anyhow!("unsupported filesystem benchmark mode: {other}")),
-    };
-    let component = executor
-        .component_dep(&context.default_environment_id, initial_file_system)
-        .store()
-        .await?;
-
-    let quick = std::env::var("GOLEM_FILESYSTEM_BENCH_QUICK").is_ok_and(|value| value == "1");
-    let concurrencies: &[usize] = if quick { &[1] } else { &[1, 4, 16, 64] };
-    let payloads: &[u32] = if quick {
-        &[4 * 1024]
-    } else {
-        &[4 * 1024, 64 * 1024, 1024 * 1024]
-    };
-    let max_concurrency = *concurrencies.last().unwrap();
-    let agent_ids = (0..max_concurrency)
-        .map(|index| {
-            agent_id!(
-                "P3FileSystem",
-                format!("filesystem-benchmark-{mode}-{index}")
-            )
-        })
-        .collect::<Vec<_>>();
-    let starts = agent_ids
-        .iter()
-        .map(|agent_id| executor.start_agent(&component.id, agent_id.clone()));
-    for started in futures::future::join_all(starts).await {
-        started?;
-    }
-
-    let operations = [
-        "p2-read",
-        "p2-write",
-        "p2-read-stream",
-        "p2-write-stream",
-        "p3-read-stream",
-        "p3-write-stream",
-    ];
-    for &concurrency in concurrencies {
-        let clock_samples: u32 = if quick { 8 } else { 128 };
-        println!(
-            "FILESYSTEM_BENCHMARK_PHASE {}",
-            serde_json::json!({
-                "state": "start",
-                "mode": mode,
-                "operation": "clock",
-                "payload_bytes": 0,
-                "concurrency": concurrency,
-            })
-        );
-        let clock_calls = agent_ids[..concurrency].iter().map(|agent_id| {
-            executor.invoke_and_await_agent(
-                &component,
-                agent_id,
-                "benchmark_filesystem",
-                data_value!("clock".to_string(), 0u32, clock_samples, 1u32),
-            )
-        });
-        let mut clock_durations = Vec::new();
-        for result in futures::future::join_all(clock_calls).await {
-            let value = result?
-                .into_return_value()
-                .ok_or_else(|| anyhow!("clock benchmark did not return samples"))?;
-            clock_durations.extend(schema_u64_list(value));
-        }
-        clock_durations.sort_unstable();
-        println!(
-            "FILESYSTEM_BENCHMARK_PHASE {}",
-            serde_json::json!({
-                "state": "end",
-                "mode": mode,
-                "operation": "clock",
-                "payload_bytes": 0,
-                "concurrency": concurrency,
-            })
-        );
-        println!(
-            "FILESYSTEM_BENCHMARK {}",
-            serde_json::json!({
-                "mode": mode,
-                "operation": "clock",
-                "payload_bytes": 0,
-                "concurrency": concurrency,
-                "batch_size": 1,
-                "sample_count": clock_durations.len(),
-                "p50_ns": percentile(&clock_durations, 50),
-                "p95_ns": percentile(&clock_durations, 95),
-                "p99_ns": percentile(&clock_durations, 99),
-            })
-        );
-
-        for &payload_size in payloads {
-            let samples: u32 = if quick {
-                8
-            } else if payload_size <= 4 * 1024 {
-                128
-            } else if payload_size <= 64 * 1024 {
-                64
-            } else {
-                16
-            };
-            for operation in operations {
-                let batch_size: u32 = match (operation, payload_size) {
-                    ("p2-read" | "p2-write" | "p2-read-stream" | "p2-write-stream", size)
-                        if size <= 4 * 1024 =>
-                    {
-                        4
-                    }
-                    ("p2-read" | "p2-write" | "p2-read-stream" | "p2-write-stream", size)
-                        if size <= 64 * 1024 =>
-                    {
-                        2
-                    }
-                    _ => 1,
-                };
-                println!(
-                    "FILESYSTEM_BENCHMARK_PHASE {}",
-                    serde_json::json!({
-                        "state": "start",
-                        "mode": mode,
-                        "operation": operation,
-                        "payload_bytes": payload_size,
-                        "concurrency": concurrency,
-                    })
-                );
-                let calls = agent_ids[..concurrency].iter().map(|agent_id| {
-                    executor.invoke_and_await_agent(
-                        &component,
-                        agent_id,
-                        "benchmark_filesystem",
-                        data_value!(operation.to_string(), payload_size, samples, batch_size),
-                    )
-                });
-                let mut durations = Vec::new();
-                for result in futures::future::join_all(calls).await {
-                    let value = result?
-                        .into_return_value()
-                        .ok_or_else(|| anyhow!("filesystem benchmark did not return samples"))?;
-                    durations.extend(schema_u64_list(value));
-                }
-                durations.sort_unstable();
-                println!(
-                    "FILESYSTEM_BENCHMARK_PHASE {}",
-                    serde_json::json!({
-                        "state": "end",
-                        "mode": mode,
-                        "operation": operation,
-                        "payload_bytes": payload_size,
-                        "concurrency": concurrency,
-                    })
-                );
-                let total = durations
-                    .iter()
-                    .fold(0u128, |total, duration| total + u128::from(*duration));
-                println!(
-                    "FILESYSTEM_BENCHMARK {}",
-                    serde_json::json!({
-                        "mode": mode,
-                        "operation": operation,
-                        "payload_bytes": payload_size,
-                        "concurrency": concurrency,
-                        "batch_size": batch_size,
-                        "sample_count": durations.len(),
-                        "mean_ns": total / durations.len() as u128,
-                        "p50_ns": percentile(&durations, 50),
-                        "p95_ns": percentile(&durations, 95),
-                        "p99_ns": percentile(&durations, 99),
-                    })
-                );
-            }
-        }
-    }
-
-    Ok(())
-}
-
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
@@ -2177,7 +1014,7 @@ async fn cross_preview_append_coordination_survives_replay(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -2185,7 +1022,7 @@ async fn cross_preview_append_coordination_survives_replay(
         .component_dep(&context.default_environment_id, initial_file_system)
         .store()
         .await?;
-    let agent_id = agent_id!("P3FileSystem", "cross-preview-append");
+    let agent_id = agent_key!("P3FileSystem", "cross-preview-append");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2220,7 +1057,7 @@ async fn filesystem_mutation_histories_reconstruct_impl(
     deps: &WorkerExecutorTestDependencies,
     initial_file_system: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start_with_overrides(
@@ -2236,7 +1073,7 @@ async fn filesystem_mutation_histories_reconstruct_impl(
         .component_dep(&context.default_environment_id, initial_file_system)
         .store()
         .await?;
-    let agent_id = agent_id!("P3FileSystem", "filesystem-reconstruction-matrix");
+    let agent_id = agent_key!("P3FileSystem", "filesystem-reconstruction-matrix");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2316,7 +1153,7 @@ async fn filesystem_reconstruction_stops_at_exact_revert_target_impl(
     deps: &WorkerExecutorTestDependencies,
     initial_file_system: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start_with_overrides(
@@ -2332,7 +1169,7 @@ async fn filesystem_reconstruction_stops_at_exact_revert_target_impl(
         .component_dep(&context.default_environment_id, initial_file_system)
         .store()
         .await?;
-    let agent_id = agent_id!("P3FileSystem", "filesystem-exact-replay-target");
+    let agent_id = agent_key!("P3FileSystem", "filesystem-exact-replay-target");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2402,7 +1239,7 @@ async fn filesystem_reconstruction_uses_updated_initial_files_impl(
     deps: &WorkerExecutorTestDependencies,
     initial_file_system: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start_with_overrides(
@@ -2426,7 +1263,7 @@ async fn filesystem_reconstruction_uses_updated_initial_files_impl(
         )
         .store()
         .await?;
-    let agent_id = agent_id!("P3FileSystem", "filesystem-updated-initial-files");
+    let agent_id = agent_key!("P3FileSystem", "filesystem-updated-initial-files");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2512,7 +1349,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
         AssignShardsRequest, RevokeShardsRequest, assign_shards_response, revoke_shards_response,
     };
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let first_root = tempfile::tempdir()?;
@@ -2538,11 +1375,11 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
         .component_dep(&context.default_environment_id, initial_file_system)
         .store()
         .await?;
-    let agent_id = agent_id!("P3FileSystem", "filesystem-full-replay-lifecycles");
+    let agent_id = agent_key!("P3FileSystem", "filesystem-full-replay-lifecycles");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
 
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "run_writable", data_value!())
@@ -2648,7 +1485,7 @@ async fn initial_file_listing_through_api(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::agent_id;
+    use golem_common::agent_key;
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -2678,7 +1515,7 @@ async fn initial_file_listing_through_api(
         .store()
         .await?;
 
-    let agent_id = agent_id!("FileReadWrite", "initial-file-listing-1");
+    let agent_id = agent_key!("FileReadWrite", "initial-file-listing-1");
     let worker_id = executor.start_agent(&component.id, agent_id).await?;
 
     let result = executor.get_file_system_node(&worker_id, "/").await?;
@@ -2782,7 +1619,7 @@ async fn initial_file_reading_through_api(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -2809,7 +1646,7 @@ async fn initial_file_reading_through_api(
 
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
-    let agent_id = agent_id!("FileReadWrite", "initial-file-read-write-3");
+    let agent_id = agent_key!("FileReadWrite", "initial-file-read-write-3");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -2834,7 +1671,7 @@ async fn initial_file_reading_through_api(
 
     // Retain the lookup result across unload: intake must restore through this handle,
     // replaying writable contents without starting a new invocation.
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
     let worker = executor
         .active_agent(&owned_agent_id)
         .await
@@ -2910,7 +1747,7 @@ async fn directories(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -2919,7 +1756,7 @@ async fn directories(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "directories-1");
+    let agent_id = agent_key!("FileSystem", "directories-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2990,7 +1827,7 @@ async fn directories_replay(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -2999,7 +1836,7 @@ async fn directories_replay(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "directories-1");
+    let agent_id = agent_key!("FileSystem", "directories-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3081,7 +1918,7 @@ async fn file_write_read(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -3090,7 +1927,7 @@ async fn file_write_read(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-1");
+    let agent_id = agent_key!("FileSystem", "file-service-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3138,7 +1975,7 @@ async fn file_update_1(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -3156,7 +1993,7 @@ async fn file_update_1(
         .store()
         .await?;
 
-    let agent_id = agent_id!("IfsUpdate", "ifs-update-1");
+    let agent_id = agent_key!("IfsUpdate", "ifs-update-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3302,7 +2139,7 @@ async fn file_update_in_the_middle_of_exported_function(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -3354,7 +2191,7 @@ async fn file_update_in_the_middle_of_exported_function(
         .store()
         .await?;
 
-    let agent_id = agent_id!("IfsUpdateInsideExportedFunction", "ifs-update-1");
+    let agent_id = agent_key!("IfsUpdateInsideExportedFunction", "ifs-update-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3428,7 +2265,7 @@ async fn environment_variables(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -3437,7 +2274,7 @@ async fn environment_variables(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Environment", "environment-service-1");
+    let agent_id = agent_key!("Environment", "environment-service-1");
     let mut env = HashMap::new();
     env.insert("TEST_ENV".to_string(), "test-value".to_string());
     let worker_id = executor
@@ -3462,7 +2299,7 @@ async fn environment_variables(
 
     assert_eq!(result_p3, result);
 
-    let worker_name = agent_id.to_string();
+    let agent_key = agent_id.to_string();
     assert_eq!(
         result,
         SchemaValue::Result(ResultValuePayload::Ok {
@@ -3477,19 +2314,13 @@ async fn environment_variables(
                     SchemaValue::Tuple {
                         elements: vec![
                             SchemaValue::String("GOLEM_AGENT_ID".to_string()),
-                            SchemaValue::String(worker_name.clone())
+                            SchemaValue::String(worker_id.agent_id.to_string())
                         ]
                     },
                     SchemaValue::Tuple {
                         elements: vec![
-                            SchemaValue::String("GOLEM_WORKER_NAME".to_string()),
-                            SchemaValue::String(worker_name)
-                        ]
-                    },
-                    SchemaValue::Tuple {
-                        elements: vec![
-                            SchemaValue::String("GOLEM_COMPONENT_ID".to_string()),
-                            SchemaValue::String(component.id.to_string())
+                            SchemaValue::String("GOLEM_AGENT_KEY".to_string()),
+                            SchemaValue::String(agent_key)
                         ]
                     },
                     SchemaValue::Tuple {
@@ -3520,7 +2351,7 @@ async fn http_client_response_persisted_between_invocations(
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -3554,7 +2385,7 @@ async fn http_client_response_persisted_between_invocations(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("HttpClient");
+    let agent_id = agent_key!("HttpClient");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -3596,7 +2427,7 @@ async fn http_client_interrupting_response_stream(
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -3646,7 +2477,7 @@ async fn http_client_interrupting_response_stream(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("HttpClient2");
+    let agent_id = agent_key!("HttpClient2");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -3722,7 +2553,7 @@ async fn http_client_interrupting_response_stream_async(
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -3772,7 +2603,7 @@ async fn http_client_interrupting_response_stream_async(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("HttpClient3");
+    let agent_id = agent_key!("HttpClient3");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -3840,6 +2671,7 @@ async fn http_client_interrupting_response_stream_async(
 }
 
 #[test]
+#[test_r::tag(latency)]
 #[tracing::instrument]
 async fn sleep(
     last_unique_id: &LastUniqueId,
@@ -3847,7 +2679,7 @@ async fn sleep(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -3856,7 +2688,7 @@ async fn sleep(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-1");
+    let agent_id = agent_key!("Clock", "clock-service-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3888,7 +2720,7 @@ async fn sleep_less_than_suspend_threshold(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -3897,7 +2729,7 @@ async fn sleep_less_than_suspend_threshold(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-2");
+    let agent_id = agent_key!("Clock", "clock-service-2");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3931,7 +2763,7 @@ async fn sleep_longer_than_suspend_threshold(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -3940,11 +2772,11 @@ async fn sleep_longer_than_suspend_threshold(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-3");
+    let agent_id = agent_key!("Clock", "clock-service-3");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
 
     let start = Instant::now();
     let sleep = executor.invoke_and_await_agent(&component, &agent_id, "sleep", data_value!(12u64));
@@ -3994,7 +2826,7 @@ async fn assert_short_p3_timer_wins_without_suspension(
     executor: &TestWorkerExecutor,
     component: &golem_common::model::component::ComponentDto,
     agent_id: &golem_common::model::agent::ParsedAgentKey,
-    worker_id: &golem_common::model::AgentId,
+    worker_id: &golem_common::model::OwnedAgentId,
     timers: Vec<u64>,
 ) -> anyhow::Result<()> {
     use golem_common::data_value;
@@ -4065,7 +2897,7 @@ async fn p3_short_timer_blocks_suspension(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", format!("p3-short-timer-{timers:?}"));
+    let agent_id = agent_key!("Clock", format!("p3-short-timer-{timers:?}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -4092,7 +2924,7 @@ async fn p3_polling_loop_completes_without_watchdog_suspension(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "p3-polling-loop");
+    let agent_id = agent_key!("Clock", "p3-polling-loop");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -4146,11 +2978,11 @@ async fn p3_all_long_timers_suspend_and_resume_at_earliest_deadline(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "p3-all-long-timers");
+    let agent_id = agent_key!("Clock", "p3-all-long-timers");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
     let started = Instant::now();
     let invocation = executor.invoke_and_await_agent(
         &component,
@@ -4180,6 +3012,7 @@ async fn p3_all_long_timers_suspend_and_resume_at_earliest_deadline(
 }
 
 #[test]
+#[test_r::tag(latency)]
 #[timeout("120s")]
 #[tracing::instrument]
 async fn p3_repeated_short_timer_races_preserve_shared_scheduler_wakeups(
@@ -4198,7 +3031,7 @@ async fn p3_repeated_short_timer_races_preserve_shared_scheduler_wakeups(
         .await?;
 
     for index in 0..20 {
-        let agent_id = agent_id!("Clock", format!("p3-shared-scheduler-short-{index}"));
+        let agent_id = agent_key!("Clock", format!("p3-shared-scheduler-short-{index}"));
         let worker_id = executor
             .start_agent(&component.id, agent_id.clone())
             .await?;
@@ -4222,13 +3055,12 @@ async fn p3_repeated_short_timer_races_preserve_shared_scheduler_wakeups(
     let run_long_race = |index| {
         let executor = &executor;
         let component = &component;
-        let context = &context;
         async move {
-            let agent_id = agent_id!("Clock", format!("p3-shared-scheduler-long-{index}"));
+            let agent_id = agent_key!("Clock", format!("p3-shared-scheduler-long-{index}"));
             let worker_id = executor
                 .start_agent(&component.id, agent_id.clone())
                 .await?;
-            let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
+            let owner = worker_id.clone();
             let started = Instant::now();
             let invocation = executor.invoke_and_await_agent(
                 component,
@@ -4271,7 +3103,7 @@ async fn p3_short_timer_blocks_suspension_while_promise_is_pending(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "p3-promise-short-timer");
+    let agent_id = agent_key!("Clock", "p3-promise-short-timer");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -4317,7 +3149,7 @@ async fn p3_sleep_suspends_and_resumes(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -4326,7 +3158,7 @@ async fn p3_sleep_suspends_and_resumes(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "p3-sleep-suspends-and-resumes");
+    let agent_id = agent_key!("Clock", "p3-sleep-suspends-and-resumes");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -4405,7 +3237,7 @@ async fn interrupt_while_parked_in_p3_sleep(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "interrupt-while-parked-in-p3-sleep");
+    let agent_id = agent_key!("Clock", "interrupt-while-parked-in-p3-sleep");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -4677,7 +3509,7 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Networking", "interrupt-while-parked-in-p3-tcp-receive");
+    let agent_id = agent_key!("Networking", "interrupt-while-parked-in-p3-tcp-receive");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -4691,7 +3523,7 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
     let key = IdempotencyKey::fresh();
     let invocation_key = key.clone();
     let stored_key = executor
-        .external_invocation_key(&worker_id, &key, "tcp_collect_p3")
+        .external_invocation_key(&worker_id.agent_id, &key, "tcp_collect_p3")
         .await?;
     let method_counts = |oplog: &[PublicOplogEntryWithIndex]| {
         let mut current_is_method = false;
@@ -4744,7 +3576,7 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
     let mut pending_summary = String::from("no oplog sample");
     let (receive_start, chunk_start) = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            executor.commit_oplog(&worker_id).await?;
+            executor.commit_oplog(&worker_id.agent_id).await?;
             let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
             let terminal_starts = oplog
                 .iter()
@@ -4805,7 +3637,7 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
     .await
     .with_context(|| format!("P3 TCP open receive parent and chunk Starts with one unfinished invocation: {pending_summary}"))??;
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
-    let committed_prefix = executor.stored_oplog(&worker_id).await;
+    let committed_prefix = executor.stored_oplog(&worker_id.agent_id).await;
 
     executor
         .interrupt(&worker_id)
@@ -4873,7 +3705,7 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
         .await
         .context("P3 TCP retained invocation reaches Idle after resume")?;
     let after_resume = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let raw_after_resume = executor.stored_oplog(&worker_id).await;
+    let raw_after_resume = executor.stored_oplog(&worker_id.agent_id).await;
     assert!(raw_after_resume.len() >= committed_prefix.len());
     assert_eq!(
         &raw_after_resume[..committed_prefix.len()],
@@ -5004,7 +3836,7 @@ async fn incomplete_p3_udp_receive_repairs_original_start_and_replays_completed_
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Networking", "incomplete-p3-udp-receive");
+    let agent_id = agent_key!("Networking", "incomplete-p3-udp-receive");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5175,7 +4007,7 @@ async fn synchronous_clock_overlaps_http_and_replays_offline(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "synchronous-clock-concurrent-http");
+    let agent_id = agent_key!("Clock", "synchronous-clock-concurrent-http");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5307,7 +4139,7 @@ async fn sleep_less_than_suspend_threshold_while_awaiting_response(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -5319,7 +4151,7 @@ async fn sleep_less_than_suspend_threshold_while_awaiting_response(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-4");
+    let agent_id = agent_key!("Clock", "clock-service-4");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5357,7 +4189,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -5369,7 +4201,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-5");
+    let agent_id = agent_key!("Clock", "clock-service-5");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5407,7 +4239,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -5419,7 +4251,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-6");
+    let agent_id = agent_key!("Clock", "clock-service-6");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5464,7 +4296,7 @@ async fn p3_request_completes_while_blocked_in_p2_sleep_past_suspend_threshold(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -5476,7 +4308,7 @@ async fn p3_request_completes_while_blocked_in_p2_sleep_past_suspend_threshold(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-p2-sleep-during-request");
+    let agent_id = agent_key!("Clock", "clock-service-p2-sleep-during-request");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5550,7 +4382,7 @@ async fn p2_sleep_completes_while_p3_request_remains_pending(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -5560,7 +4392,7 @@ async fn p2_sleep_completes_while_p3_request_remains_pending(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-p2-first-completion");
+    let agent_id = agent_key!("Clock", "clock-service-p2-first-completion");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5612,7 +4444,7 @@ async fn p2_poll_preserves_duplicate_indices_and_repeated_readiness(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -5620,7 +4452,7 @@ async fn p2_poll_preserves_duplicate_indices_and_repeated_readiness(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-p2-poll-duplicates");
+    let agent_id = agent_key!("Clock", "clock-service-p2-poll-duplicates");
 
     let result = executor
         .invoke_and_await_agent(
@@ -5651,7 +4483,7 @@ async fn p2_file_pollables_ready_and_block_survive_full_replay(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start_with_overrides(
@@ -5667,7 +4499,7 @@ async fn p2_file_pollables_ready_and_block_survive_full_replay(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "p2-file-pollables-replay");
+    let agent_id = agent_key!("Clock", "p2-file-pollables-replay");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5702,7 +4534,7 @@ async fn sleep_and_awaiting_parallel_responses(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -5714,7 +4546,7 @@ async fn sleep_and_awaiting_parallel_responses(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-7");
+    let agent_id = agent_key!("Clock", "clock-service-7");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5766,7 +4598,7 @@ async fn sleep_below_threshold_between_http_responses(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -5778,7 +4610,7 @@ async fn sleep_below_threshold_between_http_responses(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-8");
+    let agent_id = agent_key!("Clock", "clock-service-8");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5829,7 +4661,7 @@ async fn sleep_above_threshold_between_http_responses(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -5841,7 +4673,7 @@ async fn sleep_above_threshold_between_http_responses(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-9");
+    let agent_id = agent_key!("Clock", "clock-service-9");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5888,7 +4720,7 @@ async fn resuming_sleep(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -5897,7 +4729,7 @@ async fn resuming_sleep(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-2");
+    let agent_id = agent_key!("Clock", "clock-service-2");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5952,7 +4784,7 @@ async fn p3_resuming_sleep(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -5961,7 +4793,7 @@ async fn p3_resuming_sleep(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "p3-resuming-sleep");
+    let agent_id = agent_key!("Clock", "p3-resuming-sleep");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6015,7 +4847,7 @@ async fn p3_ready_timers_defer_delivery_before_direct_clock_and_replay(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "ready-timers-before-direct-clock");
+    let agent_id = agent_key!("Clock", "ready-timers-before-direct-clock");
     let worker = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6100,7 +4932,7 @@ async fn p3_wait_for_restart_preserves_recorded_deadline(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "recorded-p3-deadline");
+    let agent_id = agent_key!("Clock", "recorded-p3-deadline");
     let worker = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6109,7 +4941,7 @@ async fn p3_wait_for_restart_preserves_recorded_deadline(
         .await?;
     let boundary = executor.oplog_max_index(&worker).await?;
     let mut read = executor.gate_next_replay_access_admission(
-        &worker,
+        &worker.agent_id,
         "monotonic-clock::now",
         ReplayAdmissionStage::AfterHostInternalTerminal,
     );
@@ -6117,7 +4949,7 @@ async fn p3_wait_for_restart_preserves_recorded_deadline(
         .invoke_agent(&component, &agent_id, "sleep_p3", data_value!(8u64))
         .await?;
     tokio::time::timeout(Duration::from_secs(10), read.entered()).await?;
-    executor.commit_oplog(&worker).await?;
+    executor.commit_oplog(&worker.agent_id).await?;
     let before = executor.get_oplog(&worker, boundary.next()).await?;
     let clock = before
         .iter()
@@ -6195,7 +5027,7 @@ async fn p3_wait_for_cancel_after_internal_end_replays(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "cancel-after-internal-clock-end");
+    let agent_id = agent_key!("Clock", "cancel-after-internal-clock-end");
     let worker = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6206,22 +5038,22 @@ async fn p3_wait_for_cancel_after_internal_end_replays(
     // Each wait starts in its own host task, so the waits reach their gates in any order. The
     // test lets one wait at a time pass its `Start` and tells the waits apart by their requests.
     let mut first_start = executor.gate_next_replay_access_admission(
-        &worker,
+        &worker.agent_id,
         "monotonic-clock::wait-for",
         ReplayAdmissionStage::BeforeLiveStart,
     );
     let mut second_start = executor.gate_next_replay_access_admission(
-        &worker,
+        &worker.agent_id,
         "monotonic-clock::wait-for",
         ReplayAdmissionStage::BeforeLiveStart,
     );
     let mut first_read = executor.gate_next_replay_access_admission(
-        &worker,
+        &worker.agent_id,
         "monotonic-clock::now",
         ReplayAdmissionStage::BeforeDeferredStart,
     );
     let mut second_read = executor.gate_next_replay_access_admission(
-        &worker,
+        &worker.agent_id,
         "monotonic-clock::now",
         ReplayAdmissionStage::BeforeDeferredStart,
     );
@@ -6240,7 +5072,7 @@ async fn p3_wait_for_cancel_after_internal_end_replays(
         tokio::join!(first_start.entered(), second_start.entered());
         first_start.release();
         first_read.entered().await;
-        executor.commit_oplog(&worker).await?;
+        executor.commit_oplog(&worker.agent_id).await?;
         let first_is_long = executor
             .get_oplog(&worker, boundary.next())
             .await?
@@ -6263,13 +5095,13 @@ async fn p3_wait_for_cancel_after_internal_end_replays(
         };
         // Hold the long wait after the End of its clock read, so the short wait cancels it there.
         let mut read = executor.gate_next_replay_access_admission(
-            &worker,
+            &worker.agent_id,
             "monotonic-clock::now",
             ReplayAdmissionStage::AfterHostInternalTerminal,
         );
         long_read.release();
         read.entered().await;
-        executor.commit_oplog(&worker).await?;
+        executor.commit_oplog(&worker.agent_id).await?;
         let entries = executor.get_oplog(&worker, boundary.next()).await?;
         let clock = entries
             .iter()
@@ -6371,7 +5203,7 @@ async fn failing_worker(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("FailingCounter", "failing-worker-1");
+    let agent_id = agent_key!("FailingCounter", "failing-worker-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6424,7 +5256,7 @@ async fn file_service_write_direct(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -6433,7 +5265,7 @@ async fn file_service_write_direct(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-2");
+    let agent_id = agent_key!("FileSystem", "file-service-2");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6481,7 +5313,7 @@ async fn filesystem_write_replay_restores_file_times(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -6490,7 +5322,7 @@ async fn filesystem_write_replay_restores_file_times(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-3");
+    let agent_id = agent_key!("FileSystem", "file-service-3");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6544,7 +5376,7 @@ async fn filesystem_create_dir_replay_restores_file_times(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -6553,7 +5385,7 @@ async fn filesystem_create_dir_replay_restores_file_times(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-4");
+    let agent_id = agent_key!("FileSystem", "file-service-4");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6597,7 +5429,7 @@ async fn file_hard_link(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -6606,7 +5438,7 @@ async fn file_hard_link(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-5");
+    let agent_id = agent_key!("FileSystem", "file-service-5");
     let _worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6653,7 +5485,7 @@ async fn filesystem_link_replay_restores_file_times(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -6662,7 +5494,7 @@ async fn filesystem_link_replay_restores_file_times(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-6");
+    let agent_id = agent_key!("FileSystem", "file-service-6");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6756,7 +5588,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -6765,7 +5597,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-7");
+    let agent_id = agent_key!("FileSystem", "file-service-7");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6829,7 +5661,7 @@ async fn filesystem_escaping_relative_symlink_is_a_guest_error(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::model::PromiseId;
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -6842,7 +5674,7 @@ async fn filesystem_escaping_relative_symlink_is_a_guest_error(
         ("root", "../etc", "/esc"),
         ("nested", "../../etc", "/d/esc"),
     ] {
-        let agent_id = agent_id!("FileSystem", format!("escaping-symlink-{case}"));
+        let agent_id = agent_key!("FileSystem", format!("escaping-symlink-{case}"));
         let worker_id = executor
             .start_agent(&component.id, agent_id.clone())
             .await?;
@@ -6916,7 +5748,7 @@ async fn filesystem_escaping_relative_symlink_is_a_guest_error(
             )
             .await?
             .into_typed::<PromiseId>()?;
-        assert_eq!(promise.agent_id, worker_id);
+        assert_eq!(promise.agent_id, worker_id.agent_id);
 
         let ordinary_read = executor
             .invoke_and_await_agent(&component, &agent_id, "read_file", data_value!("/control"))
@@ -6941,7 +5773,7 @@ async fn filesystem_symlink_replay_restores_file_times(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -6950,7 +5782,7 @@ async fn filesystem_symlink_replay_restores_file_times(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-8");
+    let agent_id = agent_key!("FileSystem", "file-service-8");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7044,7 +5876,7 @@ async fn filesystem_rename_replay_restores_file_times(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -7053,7 +5885,7 @@ async fn filesystem_rename_replay_restores_file_times(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-9");
+    let agent_id = agent_key!("FileSystem", "file-service-9");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7160,7 +5992,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -7169,7 +6001,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-10");
+    let agent_id = agent_key!("FileSystem", "file-service-10");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7249,7 +6081,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -7258,7 +6090,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-3");
+    let agent_id = agent_key!("FileSystem", "file-service-3");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7318,7 +6150,7 @@ async fn filesystem_metadata_hash(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -7327,7 +6159,7 @@ async fn filesystem_metadata_hash(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-3");
+    let agent_id = agent_key!("FileSystem", "file-service-3");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7371,7 +6203,7 @@ async fn ip_address_resolve(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start_with_overrides(
@@ -7385,7 +6217,7 @@ async fn ip_address_resolve(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Networking", "ip-address-resolve-1");
+    let agent_id = agent_key!("Networking", "ip-address-resolve-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7450,7 +6282,7 @@ async fn p3_ip_address_resolve(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Networking", "p3-ip-address-resolve-1");
+    let agent_id = agent_key!("Networking", "p3-ip-address-resolve-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7545,7 +6377,7 @@ async fn p3_ip_address_resolve_permanent_failure_is_guest_visible_without_retry(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Networking", "p3-ip-address-resolve-failure-1");
+    let agent_id = agent_key!("Networking", "p3-ip-address-resolve-failure-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7595,7 +6427,7 @@ async fn wasi_config_initial_worker_config(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -7604,7 +6436,7 @@ async fn wasi_config_initial_worker_config(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("WasiConfig", "worker-1");
+    let agent_id = agent_key!("WasiConfig", "worker-1");
 
     let worker_id = executor
         .start_agent_with(
@@ -7698,7 +6530,7 @@ async fn wasi_config_component_update(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -7721,7 +6553,7 @@ async fn wasi_config_component_update(
         .store()
         .await?;
 
-    let agent_id = agent_id!("WasiConfig", "worker-1");
+    let agent_id = agent_key!("WasiConfig", "worker-1");
 
     let worker_id = executor
         .start_agent_with(
@@ -7872,7 +6704,7 @@ async fn oplog_replay_after_http_requests_with_suspend(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -7885,7 +6717,7 @@ async fn oplog_replay_after_http_requests_with_suspend(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-oplog-replay-1");
+    let agent_id = agent_key!("Clock", "clock-oplog-replay-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7959,7 +6791,7 @@ async fn oplog_replay_after_parallel_http_requests(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -7972,7 +6804,7 @@ async fn oplog_replay_after_parallel_http_requests(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-oplog-parallel-1");
+    let agent_id = agent_key!("Clock", "clock-oplog-parallel-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -8125,28 +6957,17 @@ async fn http_connection_pool_contention_between_agents(
         .store()
         .await?;
 
-    let agent_id_slow = {
-        use golem_common::phantom_agent_id;
-        phantom_agent_id!("StreamingClient", uuid::Uuid::now_v7())
-    };
-    let agent_id_fast = {
-        use golem_common::phantom_agent_id;
-        phantom_agent_id!("StreamingClient", uuid::Uuid::now_v7())
-    };
+    let agent_id_slow = agent_key!("StreamingClient");
+    let agent_id_fast = agent_key!("StreamingClient");
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id_slow = executor
-        .start_agent_with(
-            &component.id,
-            agent_id_slow.clone(),
-            env.clone(),
-            Vec::new(),
-        )
+        .create_unkeyed_agent(&component.id, None, agent_id_slow.clone(), env.clone())
         .await?;
     let worker_id_fast = executor
-        .start_agent_with(&component.id, agent_id_fast.clone(), env, Vec::new())
+        .create_unkeyed_agent(&component.id, None, agent_id_fast.clone(), env)
         .await?;
 
     executor.log_output(&worker_id_slow).await?;
@@ -8155,13 +6976,14 @@ async fn http_connection_pool_contention_between_agents(
     // Start the slow agent's request (don't await it yet)
     let executor_clone = executor.clone();
     let component_clone = component.clone();
-    let agent_id_slow_clone = agent_id_slow.clone();
+    let worker_id_slow_clone = worker_id_slow.clone();
     let slow_handle = spawn(
         async move {
             executor_clone
-                .invoke_and_await_agent(
+                .invoke_and_await_agent_by_id(
                     &component_clone,
-                    &agent_id_slow_clone,
+                    &worker_id_slow_clone,
+                    None,
                     "slow_body_stream",
                     data_value!(),
                 )
@@ -8179,9 +7001,10 @@ async fn http_connection_pool_contention_between_agents(
     // Now invoke the fast agent — it must wait for the connection pool
     let fast_start = Instant::now();
     let fast_result = executor
-        .invoke_and_await_agent(
+        .invoke_and_await_agent_by_id(
             &component,
-            &agent_id_fast,
+            &worker_id_fast,
+            None,
             "slow_body_stream",
             data_value!(),
         )
@@ -8294,28 +7117,17 @@ async fn http_connection_pool_contention_with_restart(
         .store()
         .await?;
 
-    let agent_id_slow = {
-        use golem_common::phantom_agent_id;
-        phantom_agent_id!("StreamingClient", uuid::Uuid::now_v7())
-    };
-    let agent_id_fast = {
-        use golem_common::phantom_agent_id;
-        phantom_agent_id!("StreamingClient", uuid::Uuid::now_v7())
-    };
+    let agent_id_slow = agent_key!("StreamingClient");
+    let agent_id_fast = agent_key!("StreamingClient");
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id_slow = executor
-        .start_agent_with(
-            &component.id,
-            agent_id_slow.clone(),
-            env.clone(),
-            Vec::new(),
-        )
+        .create_unkeyed_agent(&component.id, None, agent_id_slow.clone(), env.clone())
         .await?;
     let worker_id_fast = executor
-        .start_agent_with(&component.id, agent_id_fast.clone(), env, Vec::new())
+        .create_unkeyed_agent(&component.id, None, agent_id_fast.clone(), env)
         .await?;
 
     executor.log_output(&worker_id_slow).await?;
@@ -8324,13 +7136,14 @@ async fn http_connection_pool_contention_with_restart(
     // Start the slow agent's request (don't await it yet)
     let executor_clone = executor.clone();
     let component_clone = component.clone();
-    let agent_id_slow_clone = agent_id_slow.clone();
+    let worker_id_slow_clone = worker_id_slow.clone();
     let slow_handle = spawn(
         async move {
             executor_clone
-                .invoke_and_await_agent(
+                .invoke_and_await_agent_by_id(
                     &component_clone,
-                    &agent_id_slow_clone,
+                    &worker_id_slow_clone,
+                    None,
                     "slow_body_stream",
                     data_value!(),
                 )
@@ -8349,9 +7162,10 @@ async fn http_connection_pool_contention_with_restart(
     // the HTTP request cannot even start within 2s, causing the timeout to fire.
     let fast_start = Instant::now();
     let fast_result = executor
-        .invoke_and_await_agent(
+        .invoke_and_await_agent_by_id(
             &component,
-            &agent_id_fast,
+            &worker_id_fast,
+            None,
             "slow_body_stream_with_timeout",
             data_value!(2000u64), // 2 second timeout
         )
@@ -8392,9 +7206,10 @@ async fn http_connection_pool_contention_with_restart(
     // After restart, invoke both agents again — triggers oplog replay.
     // The slow agent should still work and get a fast response (server counter > 0).
     let slow_result2 = executor
-        .invoke_and_await_agent(
+        .invoke_and_await_agent_by_id(
             &component,
-            &agent_id_slow,
+            &worker_id_slow,
+            None,
             "slow_body_stream",
             data_value!(),
         )
@@ -8405,9 +7220,10 @@ async fn http_connection_pool_contention_with_restart(
 
     // The fast agent that previously timed out should also be usable after restart
     let fast_result2 = executor
-        .invoke_and_await_agent(
+        .invoke_and_await_agent_by_id(
             &component,
-            &agent_id_fast,
+            &worker_id_fast,
+            None,
             "slow_body_stream",
             data_value!(),
         )
@@ -8472,10 +7288,7 @@ async fn http_timeout_and_restart(
         .store()
         .await?;
 
-    let agent_id = {
-        use golem_common::phantom_agent_id;
-        phantom_agent_id!("StreamingClient", uuid::Uuid::now_v7())
-    };
+    let agent_id = agent_key!("StreamingClient");
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
@@ -8550,7 +7363,7 @@ async fn oplog_replay_after_streaming_http_read(
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -8562,7 +7375,7 @@ async fn oplog_replay_after_streaming_http_read(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("StreamingClient");
+    let agent_id = agent_key!("StreamingClient");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor
@@ -8645,7 +7458,7 @@ async fn http_client_transient_mid_stream_failure_is_retried_and_reissued(
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -8689,7 +7502,7 @@ async fn http_client_transient_mid_stream_failure_is_retried_and_reissued(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("StreamingClient");
+    let agent_id = agent_key!("StreamingClient");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor
@@ -8735,7 +7548,7 @@ async fn http_client_interrupted_mid_response_reissues_recorded_post_body(
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -8787,7 +7600,7 @@ async fn http_client_interrupted_mid_response_reissues_recorded_post_body(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -8897,7 +7710,7 @@ async fn oplog_replay_streaming_http_then_sleep_future_trailers_bug(
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -8909,7 +7722,7 @@ async fn oplog_replay_streaming_http_then_sleep_future_trailers_bug(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("StreamingClient");
+    let agent_id = agent_key!("StreamingClient");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor
@@ -8992,7 +7805,7 @@ async fn oplog_replay_after_parallel_streaming_http_reads(
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -9004,7 +7817,7 @@ async fn oplog_replay_after_parallel_streaming_http_reads(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("StreamingClient");
+    let agent_id = agent_key!("StreamingClient");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor
@@ -9086,7 +7899,7 @@ async fn oplog_replay_after_raw_streaming_http_read(
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -9098,7 +7911,7 @@ async fn oplog_replay_after_raw_streaming_http_read(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("StreamingClient");
+    let agent_id = agent_key!("StreamingClient");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor
@@ -9189,7 +8002,7 @@ async fn oplog_replay_after_parallel_raw_streaming_http_reads(
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -9201,7 +8014,7 @@ async fn oplog_replay_after_parallel_raw_streaming_http_reads(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("StreamingClient");
+    let agent_id = agent_key!("StreamingClient");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor
@@ -9267,3 +8080,6 @@ async fn oplog_replay_after_parallel_raw_streaming_http_reads(
     drop(executor);
     Ok(())
 }
+
+#[cfg(target_os = "linux")]
+mod linux;

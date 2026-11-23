@@ -37,11 +37,13 @@ use golem_client::invocation_session::{
 };
 use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::AgentConfigEntryDto;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_session_public::{
     BinaryMessage, BinaryMessageKind, BinaryMessageMetadata, DecimalU64,
-    INVOCATION_SESSION_VERSION, InvocationSelector, PublicClientMessage, PublicConfigEntry,
-    PublicErrorCode, PublicInvocationOutcome, PublicInvocationResult, PublicResumeOperation,
-    PublicServerMessage, PublicStreamDirection, PublicStreamError, PublicStreamOutcome,
+    INVOCATION_SESSION_VERSION, InvocationSelector, PublicAgentTarget, PublicClientMessage,
+    PublicConfigEntry, PublicErrorCode, PublicInvocationOutcome, PublicInvocationResult,
+    PublicResumeOperation, PublicServerMessage, PublicStreamDirection, PublicStreamError,
+    PublicStreamOutcome,
 };
 use golem_common::schema::agent::{
     AgentMethodSchema, AgentTypeSchema, OutputSchema, ParsedAgentKey,
@@ -126,18 +128,22 @@ struct PendingOperation {
 
 pub(crate) struct CliSessionRequestProvider {
     ctx: Arc<Context>,
+    environment_id: EnvironmentId,
 }
 
 impl CliSessionRequestProvider {
-    pub(crate) fn new(ctx: Arc<Context>) -> Self {
-        Self { ctx }
+    pub(crate) fn new(ctx: Arc<Context>, environment_id: EnvironmentId) -> Self {
+        Self {
+            ctx,
+            environment_id,
+        }
     }
 }
 
 #[async_trait::async_trait]
 impl InvocationSessionRequestProvider for CliSessionRequestProvider {
     async fn request(&self) -> Result<tungstenite::http::Request<()>, SessionTransportError> {
-        websocket_request(&self.ctx)
+        websocket_request(&self.ctx, &self.environment_id)
             .await
             .map_err(|error| SessionTransportError::RequestProvider(error.to_string()))
     }
@@ -232,10 +238,11 @@ struct SessionIdentity {
 }
 
 pub(super) struct InvocationSessionArgs {
+    pub environment_id: EnvironmentId,
     pub application_name: String,
     pub environment_name: String,
     pub agent_type: AgentTypeSchema,
-    pub parsed_agent_id: ParsedAgentKey,
+    pub target: PublicAgentTarget,
     pub method_name: String,
     pub arguments: Vec<String>,
     pub config: Vec<AgentConfigEntryDto>,
@@ -244,8 +251,8 @@ pub(super) struct InvocationSessionArgs {
     pub stdout_format: InvocationStdoutFormat,
     pub selected_agent_name: String,
     pub session_mode: InvocationSessionMode,
-    /// Receives the accepted invocation ID, which ends the live output stream.
-    pub invocation_goal: Option<super::stream::InvocationGoal>,
+    /// Shows the live output of the accepted invocation.
+    pub live_output: Option<Arc<super::stream::LiveOutput>>,
 }
 
 pub(super) fn load_session_idempotency_key(path: &Path) -> anyhow::Result<IdempotencyKey> {
@@ -296,12 +303,13 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 })
         },
     )?;
-    let selector = invocation_selector(
-        &args.application_name,
-        &args.environment_name,
-        &args.parsed_agent_id,
-        &args.method_name,
-    )?;
+    let selector = InvocationSelector {
+        agent_type: args.agent_type.type_name.to_string(),
+        application: args.application_name.clone(),
+        target: args.target.clone(),
+        environment: args.environment_name.clone(),
+        method: args.method_name.clone(),
+    };
     let schema_evidence = schema_evidence(&args.agent_type, &method)?;
     let config = args
         .config
@@ -433,7 +441,10 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         checkpoint: Mutex::new(checkpoint),
         path: checkpoint_path,
     });
-    let request_provider = Arc::new(CliSessionRequestProvider::new(ctx.clone()));
+    let request_provider = Arc::new(CliSessionRequestProvider::new(
+        ctx.clone(),
+        args.environment_id,
+    ));
     let mut session = tokio::select! {
         biased;
         _ = interrupt.cancelled() => bail!(PipedExitCode(130)),
@@ -508,7 +519,10 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
     let (output_result_tx, mut output_result_rx) = oneshot::channel();
     let (writer_done_tx, writer_done) = oneshot::channel::<()>();
     let colorize = ctx.should_colorize();
-    let writer_goal = args.invocation_goal.clone();
+    let writer_goal = args
+        .live_output
+        .as_ref()
+        .and_then(|live_output| live_output.invocation_goal());
     let capture_ticket = crate::log::stdout_capture_ticket();
     std::thread::spawn(move || {
         let _done = writer_done_tx;
@@ -669,14 +683,17 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 let mut frame = frame?;
                 let server_frame = frame.frame().clone();
                 if let ServerFrame::Message(PublicServerMessage::InvocationAccepted {
+                    agent_id,
                     idempotency_key,
                     ..
                 }) = &server_frame
                 {
                     accepted = true;
                     accepted_key = idempotency_key.to_string();
-                    if let Some(goal) = &args.invocation_goal {
-                        goal.set_target(*idempotency_key);
+                    if let Some(live_output) = &args.live_output {
+                        live_output
+                            .accepted(agent_id, &args.selected_agent_name, *idempotency_key)
+                            .await?;
                     }
                     output_streams.clear();
                     if let Some(binding) = input_binding.as_mut() {
@@ -885,6 +902,16 @@ fn invocation_selector(
     parsed_agent_id: &ParsedAgentKey,
     method_name: &str,
 ) -> anyhow::Result<InvocationSelector> {
+    Ok(InvocationSelector {
+        agent_type: parsed_agent_id.agent_type.to_string(),
+        application: application_name.to_string(),
+        target: key_target(parsed_agent_id)?,
+        environment: environment_name.to_string(),
+        method: method_name.to_string(),
+    })
+}
+
+pub(super) fn key_target(parsed_agent_id: &ParsedAgentKey) -> anyhow::Result<PublicAgentTarget> {
     let constructor_parameters = encode_public_schema_value(
         parsed_agent_id.parameters.graph(),
         &parsed_agent_id.parameters.graph().root,
@@ -896,13 +923,8 @@ fn invocation_selector(
             ))
         },
     )?;
-    Ok(InvocationSelector {
-        agent_type: parsed_agent_id.agent_type.to_string(),
-        application: application_name.to_string(),
+    Ok(PublicAgentTarget::Key {
         constructor_parameters,
-        environment: environment_name.to_string(),
-        method: method_name.to_string(),
-        phantom_id: parsed_agent_id.phantom_id,
     })
 }
 
@@ -949,6 +971,7 @@ impl std::fmt::Display for InvocationFailure {
 impl std::error::Error for InvocationFailure {}
 
 pub(super) struct ScalarInvocationArgs {
+    pub environment_id: EnvironmentId,
     pub application_name: String,
     pub environment_name: String,
     pub agent_type: AgentTypeSchema,
@@ -956,8 +979,10 @@ pub(super) struct ScalarInvocationArgs {
     pub method_name: String,
     pub method_parameters: SchemaValue,
     pub idempotency_key: IdempotencyKey,
-    /// Receives the accepted invocation ID, which ends the live output stream.
-    pub invocation_goal: Option<super::stream::InvocationGoal>,
+    /// The agent name that the live output shows.
+    pub selected_agent_name: String,
+    /// Shows the live output of the accepted invocation.
+    pub live_output: Option<Arc<super::stream::LiveOutput>>,
 }
 
 pub(super) struct ScalarInvocation {
@@ -1011,7 +1036,10 @@ pub(super) async fn invoke_scalar(
         None
     };
     let mut session = InvocationSession::open(
-        Arc::new(CliSessionRequestProvider::new(ctx.clone())),
+        Arc::new(CliSessionRequestProvider::new(
+            ctx.clone(),
+            args.environment_id,
+        )),
         connector,
         ReconnectPolicy::Unlimited,
         InvocationSessionStateSnapshot {
@@ -1042,10 +1070,14 @@ pub(super) async fn invoke_scalar(
         };
         match message {
             PublicServerMessage::InvocationAccepted {
-                idempotency_key, ..
+                agent_id,
+                idempotency_key,
+                ..
             } => {
-                if let Some(goal) = &args.invocation_goal {
-                    goal.set_target(idempotency_key);
+                if let Some(live_output) = &args.live_output {
+                    live_output
+                        .accepted(&agent_id, &args.selected_agent_name, idempotency_key)
+                        .await?;
                 }
                 accepted_key = Some(idempotency_key);
             }
@@ -1383,7 +1415,10 @@ fn public_input_graph(
     }
 }
 
-async fn websocket_request(ctx: &Context) -> anyhow::Result<tungstenite::http::Request<()>> {
+async fn websocket_request(
+    ctx: &Context,
+    environment_id: &EnvironmentId,
+) -> anyhow::Result<tungstenite::http::Request<()>> {
     let mut url = ctx.worker_service_url().clone();
     let websocket_scheme = match url.scheme() {
         "http" => "ws",
@@ -1392,7 +1427,9 @@ async fn websocket_request(ctx: &Context) -> anyhow::Result<tungstenite::http::R
     };
     url.set_scheme(websocket_scheme)
         .map_err(|_| anyhow!("failed to derive WebSocket service URL"))?;
-    url.set_path("/v1/agents/invoke-agent-session");
+    url.set_path(&format!(
+        "/v1/runtime/envs/{environment_id}/invoke-agent-session"
+    ));
     url.set_query(None);
     url.set_fragment(None);
     let mut request = url.as_str().into_client_request()?;
@@ -3078,20 +3115,16 @@ mod public_tests {
             selector: InvocationSelector {
                 agent_type: "counter".to_string(),
                 application: "app".to_string(),
-                constructor_parameters: serde_json::json!({}),
+                target: PublicAgentTarget::Key {
+                    constructor_parameters: serde_json::json!({}),
+                },
                 environment: "prod".to_string(),
                 method: "run".to_string(),
-                phantom_id: None,
             },
             idempotency_key: "invocation-key".to_string(),
             session_token: Some("opaque-session-token".to_string()),
             accepted_invocation: Some(golem_common::model::OwnedInvocationId::new(
-                golem_common::model::AgentId {
-                    component_id: golem_common::model::component::ComponentId(
-                        uuid::Uuid::from_u128(4),
-                    ),
-                    agent_id: "counter()".to_string(),
-                },
+                golem_common::model::AgentId::from_parts(7, 4),
                 golem_common::model::InvocationId(uuid::Uuid::from_u128(5)),
             )),
             delivered_output_cursors: BTreeMap::from([(
@@ -3129,6 +3162,14 @@ mod public_tests {
             load_checkpoint(&path).unwrap().delivered_output_cursors,
             BTreeMap::from([("opaque-stream-token".to_string(), "new-cursor".to_string(),)])
         );
+        expected.selector.target = PublicAgentTarget::Id {
+            agent_id: golem_common::model::AgentId::from_parts(7, 4),
+            expected_fingerprint: Some(golem_common::model::AgentFingerprint(
+                uuid::Uuid::from_u128(8),
+            )),
+        };
+        write_checkpoint(&path, &expected).unwrap();
+        assert_eq!(load_checkpoint(&path).unwrap().selector, expected.selector);
         let encoded = std::fs::read_to_string(path).unwrap();
         for private_name in [
             "attachmentId",

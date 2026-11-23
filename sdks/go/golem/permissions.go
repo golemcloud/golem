@@ -336,7 +336,9 @@ type Holder struct {
 }
 
 // AgentHolder is the agent id names.
-func AgentHolder(id AgentID) Holder { return Holder{wit: perm.MakeHolderAgent(id.toWit()), ok: true} }
+func AgentHolder(id AgentID) Holder {
+	return Holder{wit: perm.MakeHolderAgent(agentIDToWit(id)), ok: true}
+}
 
 // AccountHolder is the account id names.
 func AccountHolder(id UUID) Holder {

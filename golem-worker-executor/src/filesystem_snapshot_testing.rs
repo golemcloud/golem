@@ -479,6 +479,7 @@ impl TestFilesystemSnapshotStore {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
     async fn save(
         &self,
@@ -818,10 +819,7 @@ mod tests {
                 &AgentSnapshots::agent(
                     &OwnedAgentId::new(
                         golem_common::model::environment::EnvironmentId::new(),
-                        &golem_common::model::AgentId {
-                            component_id: golem_common::model::component::ComponentId::new(),
-                            agent_id: "failed-runs".to_string(),
-                        },
+                        &golem_common::model::AgentId::from_parts(7, 1),
                     ),
                     AgentFingerprint(uuid::Uuid::new_v4()),
                 ),

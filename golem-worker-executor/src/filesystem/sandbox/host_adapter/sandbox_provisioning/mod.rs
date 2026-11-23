@@ -16,8 +16,6 @@ use super::{NativeNameModeSource, SandboxFilesystem, directory_provisioning};
 use crate::filesystem::errors::OperationContext;
 use crate::filesystem::sandbox::FilesystemStorageError;
 use crate::filesystem::volume::FilesystemVolume;
-#[cfg(all(test, target_os = "linux"))]
-use crate::filesystem::volume::{FilesystemAllocation, project_allocation};
 #[cfg(test)]
 use crate::services::golem_config::FilesystemStorageMode;
 use golem_common::model::RetryConfig;
@@ -26,6 +24,8 @@ use std::path::{Component, Path, PathBuf};
 #[cfg(target_os = "linux")]
 pub(in crate::filesystem::sandbox) mod managed;
 
+use platform::SandboxFilesystemProvisioningMode;
+
 /// Creates fresh isolated trees on storage already opened by the executor.
 #[derive(Clone)]
 pub(crate) struct SandboxFilesystemProvisioning {
@@ -33,33 +33,9 @@ pub(crate) struct SandboxFilesystemProvisioning {
     mode: SandboxFilesystemProvisioningMode,
 }
 
-#[derive(Clone)]
-enum SandboxFilesystemProvisioningMode {
-    Directories(directory_provisioning::DirectoryProvisioning),
-    #[cfg(target_os = "linux")]
-    ProjectQuotas(managed::ManagedSandboxProvisioning),
-}
-
 impl SandboxFilesystemProvisioning {
     pub(crate) fn on_volume(volume: FilesystemVolume, cleanup_retry: RetryConfig) -> Self {
-        #[cfg(target_os = "linux")]
-        if let Some(projects) = volume.project_quotas() {
-            let mode = SandboxFilesystemProvisioningMode::ProjectQuotas(
-                managed::ManagedSandboxProvisioning::new(projects.clone(), cleanup_retry),
-            );
-            return Self { volume, mode };
-        }
-
-        let (root, _) = volume.root_location();
-        let name_mode = NativeNameModeSource::NativeDetection;
-        #[cfg(target_os = "linux")]
-        let name_mode = volume
-            .validated_name_mode()
-            .map(NativeNameModeSource::ValidatedXfs)
-            .unwrap_or(name_mode);
-        let mode = SandboxFilesystemProvisioningMode::Directories(
-            directory_provisioning::DirectoryProvisioning::new(root, cleanup_retry, name_mode),
-        );
+        let mode = SandboxFilesystemProvisioningMode::new(&volume, cleanup_retry);
         Self { volume, mode }
     }
 
@@ -80,23 +56,7 @@ impl SandboxFilesystemProvisioning {
         &self,
         name: SandboxFilesystemName,
     ) -> Result<SandboxFilesystem, FilesystemStorageError> {
-        match &self.mode {
-            SandboxFilesystemProvisioningMode::Directories(directories) => {
-                directories.create_fresh(self.volume.clone(), name).await
-            }
-            #[cfg(target_os = "linux")]
-            SandboxFilesystemProvisioningMode::ProjectQuotas(managed) => {
-                managed.create_fresh(self.volume.clone(), name).await
-            }
-        }
-    }
-
-    #[cfg(all(test, target_os = "linux"))]
-    pub(crate) fn project_allocation_for_test(
-        &self,
-        project_id: std::num::NonZeroU32,
-    ) -> std::io::Result<FilesystemAllocation> {
-        project_allocation(&self.volume, project_id)
+        self.mode.create_fresh(self.volume.clone(), name).await
     }
 }
 
@@ -107,10 +67,10 @@ pub(crate) struct SandboxFilesystemName {
 impl SandboxFilesystemName {
     pub(crate) fn new(
         environment: String,
-        component: String,
+        type_tag: String,
         filesystem: String,
     ) -> Result<Self, FilesystemStorageError> {
-        let components = [environment, component, filesystem];
+        let components = [environment, type_tag, filesystem];
         if components.iter().all(|component| {
             let path = Path::new(component);
             !component.starts_with('.')
@@ -130,10 +90,93 @@ impl SandboxFilesystemName {
     pub(in crate::filesystem::sandbox) fn relative_path(&self) -> PathBuf {
         self.components.iter().collect()
     }
+}
 
-    #[cfg(target_os = "linux")]
-    pub(in crate::filesystem::sandbox) fn components(&self) -> [&str; 3] {
-        self.components.each_ref().map(String::as_str)
+#[cfg(target_os = "linux")]
+mod platform {
+    use super::*;
+
+    #[derive(Clone)]
+    pub(super) enum SandboxFilesystemProvisioningMode {
+        Directories(directory_provisioning::DirectoryProvisioning),
+        ProjectQuotas(managed::ManagedSandboxProvisioning),
+    }
+
+    impl SandboxFilesystemProvisioningMode {
+        pub(super) fn new(volume: &FilesystemVolume, cleanup_retry: RetryConfig) -> Self {
+            if let Some(projects) = volume.project_quotas() {
+                return Self::ProjectQuotas(managed::ManagedSandboxProvisioning::new(
+                    projects.clone(),
+                    cleanup_retry,
+                ));
+            }
+            let (root, _) = volume.root_location();
+            let name_mode = volume
+                .validated_name_mode()
+                .map(NativeNameModeSource::ValidatedXfs)
+                .unwrap_or(NativeNameModeSource::NativeDetection);
+            Self::Directories(directory_provisioning::DirectoryProvisioning::new(
+                root,
+                cleanup_retry,
+                name_mode,
+            ))
+        }
+
+        pub(super) async fn create_fresh(
+            &self,
+            volume: FilesystemVolume,
+            name: SandboxFilesystemName,
+        ) -> Result<SandboxFilesystem, FilesystemStorageError> {
+            match self {
+                Self::Directories(directories) => directories.create_fresh(volume, name).await,
+                Self::ProjectQuotas(managed) => managed.create_fresh(volume, name).await,
+            }
+        }
+    }
+
+    impl SandboxFilesystemName {
+        pub(in crate::filesystem::sandbox) fn components(&self) -> [&str; 3] {
+            self.components.each_ref().map(String::as_str)
+        }
+    }
+
+    #[cfg(test)]
+    impl SandboxFilesystemProvisioning {
+        pub(crate) fn project_allocation_for_test(
+            &self,
+            project_id: std::num::NonZeroU32,
+        ) -> std::io::Result<crate::filesystem::volume::FilesystemAllocation> {
+            crate::filesystem::volume::platform::project_allocation(&self.volume, project_id)
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+mod platform {
+    use super::*;
+
+    #[derive(Clone)]
+    pub(super) struct SandboxFilesystemProvisioningMode(
+        directory_provisioning::DirectoryProvisioning,
+    );
+
+    impl SandboxFilesystemProvisioningMode {
+        pub(super) fn new(volume: &FilesystemVolume, cleanup_retry: RetryConfig) -> Self {
+            let (root, _) = volume.root_location();
+            Self(directory_provisioning::DirectoryProvisioning::new(
+                root,
+                cleanup_retry,
+                NativeNameModeSource::NativeDetection,
+            ))
+        }
+
+        pub(super) async fn create_fresh(
+            &self,
+            volume: FilesystemVolume,
+            name: SandboxFilesystemName,
+        ) -> Result<SandboxFilesystem, FilesystemStorageError> {
+            self.0.create_fresh(volume, name).await
+        }
     }
 }
 

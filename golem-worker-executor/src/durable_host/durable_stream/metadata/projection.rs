@@ -225,7 +225,7 @@ impl Projection<'_> {
         environment: EnvironmentId,
         consumer: AgentId,
     ) -> Result<(), String> {
-        let key = (attachment, stream, environment, consumer.clone());
+        let key = (attachment, stream, environment, consumer);
         self.load(ProducerMetadataKey::AttachmentPosition(
             attachment,
             stream,
@@ -247,7 +247,7 @@ impl Projection<'_> {
                     .attachment_pages
                     .entry(page)
                     .or_default()
-                    .push(key.clone());
+                    .push(key);
                 self.index.attachment_positions.insert(key, Some(position));
                 self.index.active_attachment_count += 1;
             }
@@ -276,10 +276,7 @@ impl Projection<'_> {
                     .ok_or("active attachment catalogue page is missing")?;
                 if position != last {
                     self.load(ProducerMetadataKey::AttachmentPosition(
-                        moved.0,
-                        moved.1,
-                        moved.2,
-                        moved.3.clone(),
+                        moved.0, moved.1, moved.2, moved.3,
                     ))
                     .await?;
                     *self
@@ -287,7 +284,7 @@ impl Projection<'_> {
                         .attachment_pages
                         .get_mut(&(position / ATTACHMENT_PAGE_SIZE))
                         .and_then(|page| page.get_mut((position % ATTACHMENT_PAGE_SIZE) as usize))
-                        .ok_or("active attachment catalogue slot is missing")? = moved.clone();
+                        .ok_or("active attachment catalogue slot is missing")? = moved;
                     self.index
                         .attachment_positions
                         .insert(moved, Some(position));
@@ -341,8 +338,7 @@ impl Projection<'_> {
             &author.agent_id,
             fingerprint,
             oplog_index,
-        )
-        .map_err(|error| error.to_string())?;
+        );
         self.stream(stream_id).await?;
         if let Some(session) = self
             .index
@@ -394,7 +390,7 @@ impl Projection<'_> {
                 key.attachment_id,
                 key.stream_id,
                 key.consumer_environment_id,
-                key.consumer.clone(),
+                key.consumer,
             ))
             .await?;
             self.load(ProducerMetadataKey::ActiveAttachmentCount(

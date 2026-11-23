@@ -35,6 +35,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::PromiseId;
 use golem_common::model::agent::AgentMode;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::DurableFunctionType;
 use golem_common::model::oplog::HostRequestNoInput;
 use golem_common::model::oplog::HostResponseGolemApiPromiseId;
@@ -86,11 +87,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
                 }
             }
         }
-        let (promise_service, agent_id, fingerprint) = accessor.with(|mut access| {
+        let (promise_service, owned_agent_id, fingerprint) = accessor.with(|mut access| {
             let ctx = access.get();
             (
                 ctx.public_state.promise_service.clone(),
-                ctx.agent_id().clone(),
+                ctx.owned_agent_id().clone(),
                 ctx.public_state
                     .worker()
                     .get_initial_worker_metadata()
@@ -99,7 +100,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         });
         // The Start index remains the promise identity across incomplete replay.
         let promise_id = match promise_service
-            .create(&agent_id, fingerprint, handle.start_index())
+            .create(&owned_agent_id, fingerprint, handle.start_index())
             .await
         {
             Ok(promise_id) => promise_id,
@@ -147,7 +148,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostGetPromiseResultWithStore<U>
                 .worker()
                 .get_initial_worker_metadata()
                 .fingerprint;
-            Ok::<_, anyhow::Error>((entry, ctx.agent_id().clone(), fingerprint))
+            Ok::<_, anyhow::Error>((entry, *ctx.agent_id(), fingerprint))
         })?;
 
         drain_dropped_call_events_access(accessor, accessor.getter())
@@ -294,14 +295,21 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostGetPromiseResultWithStore<U>
 
 #[derive(Clone)]
 pub struct GetPromiseResultEntry {
+    environment_id: EnvironmentId,
     promise_id: PromiseId,
     promise_service: Arc<dyn PromiseService>,
     handle: Arc<OnceCell<PromiseHandle>>,
 }
 
 impl GetPromiseResultEntry {
-    pub fn new(promise_id: PromiseId, promise_service: Arc<dyn PromiseService>) -> Self {
+    /// A promise of an agent in `environment_id`, the environment of the agent that polls it.
+    pub fn new(
+        environment_id: EnvironmentId,
+        promise_id: PromiseId,
+        promise_service: Arc<dyn PromiseService>,
+    ) -> Self {
         Self {
+            environment_id,
             promise_id,
             promise_service,
             handle: Arc::new(OnceCell::new()),
@@ -315,7 +323,10 @@ impl GetPromiseResultEntry {
     /// resource's lifetime; every call retries until a handle is resolved.
     pub async fn get_handle(&self) -> Result<&PromiseHandle, WorkerExecutorError> {
         self.handle
-            .get_or_try_init(|| self.promise_service.poll(self.promise_id.clone()))
+            .get_or_try_init(|| {
+                self.promise_service
+                    .poll(self.environment_id, self.promise_id.clone())
+            })
             .await
     }
 
@@ -331,6 +342,7 @@ impl GetPromiseResultEntry {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl wasmtime_wasi::p2::Pollable for GetPromiseResultEntry {
     async fn ready(&mut self) {
         // A failed poll is treated as immediately ready so that the pollable

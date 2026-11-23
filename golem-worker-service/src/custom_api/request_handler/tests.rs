@@ -238,11 +238,13 @@ async fn bound_input_errors_preserve_codes_names_and_protocol_bodies() {
             let RouteBehaviour::CallAgent(call) = &mut route.behavior else {
                 unreachable!()
             };
+            call.component_id = harness.component_id;
+            call.agent_type = harness.agent_type.type_name.clone();
             let map = binding.ends_with("map");
             let input_type = if map {
                 let ty = SchemaType::map(SchemaType::string(), SchemaType::bool());
                 if binding == "optional-map" {
-                    SchemaType::option(SchemaType::option(ty))
+                    SchemaType::option(ty)
                 } else {
                     ty
                 }
@@ -262,6 +264,18 @@ async fn bound_input_errors_preserve_codes_names_and_protocol_bodies() {
                     "amount", input_type,
                 )]),
             };
+            call.method_input.graph = SchemaGraph::anonymous(SchemaType::record(
+                call.method_input
+                    .input_schema
+                    .fields()
+                    .iter()
+                    .map(|field| golem_common::schema::NamedFieldType {
+                        name: field.name.clone(),
+                        body: field.schema.clone(),
+                        metadata: field.metadata.clone(),
+                    })
+                    .collect(),
+            ));
             call.method_parameters = vec![match binding {
                 "map" | "optional-map" => {
                     let ty = QueryOrHeaderType::Map {
@@ -274,11 +288,7 @@ async fn bound_input_errors_preserve_codes_names_and_protocol_bodies() {
                             QueryOrHeaderType::Option {
                                 owner: None,
                                 name: None,
-                                inner: Box::new(QueryOrHeaderType::Option {
-                                    owner: None,
-                                    name: None,
-                                    inner: Box::new(ty),
-                                }),
+                                inner: Box::new(ty),
                             }
                         } else {
                             ty
@@ -379,11 +389,13 @@ async fn bound_input_errors_preserve_codes_names_and_protocol_bodies() {
                     request = request.header("x-wire", *value);
                 }
                 let response = endpoint.execute(request.finish()).await;
-                assert_eq!(
-                    response.status(),
-                    StatusCode::BAD_REQUEST,
-                    "{durable} {binding} {target}"
-                );
+                if response.status() != StatusCode::BAD_REQUEST {
+                    let status = response.status();
+                    panic!(
+                        "{durable} {binding} {target}: expected 400, got {status}: {}",
+                        response.into_body().into_string().await.unwrap()
+                    );
+                }
                 if durable {
                     let has_content_type =
                         response.headers().contains_key(http::header::CONTENT_TYPE);
@@ -643,16 +655,548 @@ async fn unavailable_security_fails_before_route_dispatch() {
 
 struct StaticApiDefinitionsLookup;
 
+fn create_endpoint(
+    harness: &InvocationHarness,
+    kind: &str,
+    authenticated: bool,
+) -> crate::custom_api::poem_endpoint::CustomApiPoemEndpoint {
+    use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
+    use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+    let mut route = test_route(1, "/agents/create", Some("POST"), kind);
+    if authenticated {
+        route.security = RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
+            header_name: "x-golem-session".into(),
+        });
+    }
+    route.cors.allowed_patterns = vec![OriginPattern("https://client.example".into())];
+    let RouteBehaviour::CreateAgent(create) = &mut route.behavior else {
+        unreachable!()
+    };
+    create.agent.component_id = harness.component_id;
+    create.agent.agent_type = harness.agent_type.type_name.clone();
+    CustomApiPoemEndpoint::new(Arc::new(request_handler_with_worker(
+        test_resolver(vec![route]),
+        Arc::new(InitialAgentFilesService::new(Arc::new(
+            golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+        ))),
+        harness.worker_service.clone(),
+    )))
+}
+
+fn create_request(authenticated: bool) -> Request {
+    let mut request = Request::builder()
+        .method(http::Method::POST)
+        .uri("/agents/create".parse().unwrap())
+        .header("host", "example.com")
+        .header("origin", "https://client.example")
+        .header("idempotency-key", "same-create-key")
+        .content_type("application/json");
+    if authenticated {
+        request = request.header("x-golem-session", r#"{"subject":"create-user"}"#);
+    }
+    request.body(r#"{"parameters":{"kind":"record","value":{"fields":[]}}}"#)
+}
+
 #[test]
-async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
+async fn create_dispatch_rejects_array_envelope_required_to_be_object_by_openapi() {
+    let body = r#"[{"kind":"record","value":{"fields":[]}},false]"#;
+    let mut observed = Vec::new();
+    for kind in ["create-path", "create-query"] {
+        for authenticated in [false, true] {
+            let harness = invocation_harness();
+            let endpoint = create_endpoint(&harness, kind, authenticated);
+            harness
+                .creates
+                .responses
+                .lock()
+                .unwrap()
+                .push_back(Box::pin(async {
+                    Ok(golem_common::model::AgentFingerprint::new())
+                }));
+            let mut request = create_request(authenticated);
+            request.set_body(body);
+            let response = endpoint.execute(request).await;
+            observed.push((kind, authenticated, response.status()));
+        }
+    }
+    assert_eq!(
+        observed,
+        vec![
+            ("create-path", false, StatusCode::BAD_REQUEST),
+            ("create-path", true, StatusCode::BAD_REQUEST),
+            ("create-query", false, StatusCode::BAD_REQUEST),
+            ("create-query", true, StatusCode::BAD_REQUEST),
+        ],
+        "OpenAPI requires an object envelope, not a positional array: {body}"
+    );
+}
+
+#[test]
+async fn create_dispatch_rejects_overrides_before_creating_an_agent() {
+    for kind in ["create-path", "create-query"] {
+        for authenticated in [false, true] {
+            let harness = invocation_harness();
+            let endpoint = create_endpoint(&harness, kind, authenticated);
+            for (field, value) in [
+                (
+                    "env",
+                    serde_json::json!({"PAYMENT_API_URL": "https://untrusted.example"}),
+                ),
+                ("env", serde_json::json!({})),
+                ("env", serde_json::Value::Null),
+                (
+                    "config",
+                    serde_json::json!([{"path": ["admin"], "value": true}]),
+                ),
+                ("config", serde_json::json!([])),
+                ("config", serde_json::Value::Null),
+                ("unexpected", serde_json::json!(true)),
+            ] {
+                let mut body = serde_json::json!({
+                    "parameters": {"kind": "record", "value": {"fields": []}}
+                });
+                body[field] = value;
+                harness
+                    .creates
+                    .responses
+                    .lock()
+                    .unwrap()
+                    .push_back(Box::pin(async {
+                        Ok(golem_common::model::AgentFingerprint::new())
+                    }));
+                let mut request = create_request(authenticated);
+                request.set_body(poem::Body::from_json(&body).unwrap());
+                let response = endpoint.execute(request).await;
+                assert_eq!(
+                    response.status(),
+                    StatusCode::BAD_REQUEST,
+                    "{kind}: {authenticated}: {body}"
+                );
+                assert!(!response.headers().contains_key(http::header::LOCATION));
+                let error: serde_json::Value = response.into_body().into_json().await.unwrap();
+                assert!(error.to_string().contains(field), "{error}");
+                assert!(harness.creates.calls.lock().unwrap().is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+async fn create_dispatch_returns_reference_and_selector_location_without_caller_scope() {
+    use crate::api::agents::AgentReference;
+    use golem_common::model::AgentFingerprint;
+    use golem_service_base::model::auth::AuthCtx;
+
+    for kind in ["create-path", "create-query"] {
+        for authenticated in [false, true] {
+            let harness = invocation_harness();
+            let endpoint = create_endpoint(&harness, kind, authenticated);
+            let mut ids = Vec::new();
+            for index in 0..2 {
+                let fingerprint = AgentFingerprint::new();
+                harness
+                    .creates
+                    .responses
+                    .lock()
+                    .unwrap()
+                    .push_back(Box::pin(async move { Ok(fingerprint) }));
+                let mut request = create_request(authenticated);
+                if index == 1 {
+                    request.set_body(
+                        r#"{"parameters":{"kind":"record","value":{"fields":[]}},"keyed":false}"#,
+                    );
+                }
+                let response = endpoint.execute(request).await;
+                assert_eq!(
+                    response.status(),
+                    StatusCode::CREATED,
+                    "{kind}: {authenticated}"
+                );
+                assert_eq!(
+                    response.headers()[http::header::CONTENT_TYPE],
+                    "application/json"
+                );
+                assert_eq!(
+                    response.headers()[http::header::ACCESS_CONTROL_ALLOW_ORIGIN],
+                    "https://client.example"
+                );
+                assert!(
+                    response.headers()[http::header::ACCESS_CONTROL_EXPOSE_HEADERS]
+                        .to_str()
+                        .unwrap()
+                        .split(',')
+                        .any(|name| name.trim().eq_ignore_ascii_case("location"))
+                );
+                let location = response.headers()[http::header::LOCATION]
+                    .to_str()
+                    .unwrap()
+                    .to_owned();
+                let reference: AgentReference = response.into_body().into_json().await.unwrap();
+                assert_eq!(reference.agent_fingerprint, fingerprint);
+                assert_eq!(reference.agent_id.type_tag(), harness.type_id.get());
+                let expected = if kind == "create-path" {
+                    format!("/agents/{}", reference.agent_id)
+                } else {
+                    format!("/agents?instance={}", reference.agent_id)
+                };
+                assert_eq!(location, expected);
+                let calls = harness.creates.calls.lock().unwrap();
+                assert_eq!(calls.len(), index + 1);
+                let call = &calls[index];
+                assert_eq!(call.target.agent_id, reference.agent_id);
+                assert_eq!(call.environment_id, harness.environment_id);
+                assert!(matches!(call.auth, AuthCtx::System));
+                if authenticated {
+                    use golem_common::model::caller::{Pair, Principal};
+                    let Principal::User(user) = &call.caller.original else {
+                        panic!("an authenticated constructor must receive its session user");
+                    };
+                    assert_eq!(user.pair, Pair::new("http://test-idp.com", "create-user"));
+                    assert!(call.caller.original.equals(&call.caller.immediate));
+                } else {
+                    assert_eq!(
+                        call.caller,
+                        golem_common::model::caller::Caller::anonymous()
+                    );
+                }
+                assert!(call.auth.idempotency_scope().is_none());
+                assert!(!call.ignore_already_existing);
+                assert!(call.environment_variables.is_empty());
+                assert!(call.config.is_empty());
+                assert!(call.idempotency_key.is_some());
+                let (target, constructor, _) = call.target.invoke_fields();
+                assert!(matches!(
+                    target.target,
+                    Some(golem_api_grpc::proto::golem::worker::agent_target::Target::Id(_))
+                ));
+                assert!(
+                    constructor.is_some(),
+                    "an unkeyed create carries its constructor"
+                );
+                ids.push(reference.agent_id);
+            }
+            assert_ne!(
+                ids[0], ids[1],
+                "an authenticated HTTP session is not an idempotency scope"
+            );
+            let calls = harness.creates.calls.lock().unwrap();
+            assert_ne!(calls[0].idempotency_key, calls[1].idempotency_key);
+        }
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn create_dispatch_waits_for_worker_completion_and_preserves_worker_failure() {
+    use crate::api::agents::AgentReference;
+    use crate::service::worker::WorkerServiceError;
+    use golem_common::model::AgentFingerprint;
+
+    for kind in ["create-path", "create-query"] {
+        for success in [false, true] {
+            let harness = invocation_harness();
+            let endpoint = Arc::new(create_endpoint(&harness, kind, true));
+            let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+            let (complete_tx, complete_rx) = tokio::sync::oneshot::channel();
+            harness
+                .creates
+                .responses
+                .lock()
+                .unwrap()
+                .push_back(Box::pin(async move {
+                    entered_tx.send(()).unwrap();
+                    complete_rx.await.unwrap()
+                }));
+            let pending = tokio::spawn(async move { endpoint.execute(create_request(true)).await });
+            entered_rx.await.unwrap();
+            assert_eq!(harness.creates.calls.lock().unwrap().len(), 1);
+            assert!(
+                !pending.is_finished(),
+                "201 must await worker create completion"
+            );
+            let fingerprint = AgentFingerprint::new();
+            complete_tx
+                .send(if success {
+                    Ok(fingerprint)
+                } else {
+                    Err(WorkerServiceError::TypeChecker(
+                        "worker refused create".into(),
+                    ))
+                })
+                .unwrap();
+            let response = pending.await.unwrap();
+            assert_eq!(
+                response.headers()[http::header::ACCESS_CONTROL_ALLOW_ORIGIN],
+                "https://client.example"
+            );
+            if success {
+                assert_eq!(response.status(), StatusCode::CREATED);
+                assert!(response.headers().contains_key(http::header::LOCATION));
+                let reference: AgentReference = response.into_body().into_json().await.unwrap();
+                assert_eq!(reference.agent_fingerprint, fingerprint);
+                assert_eq!(
+                    reference.agent_id,
+                    harness.creates.calls.lock().unwrap()[0].target.agent_id
+                );
+            } else {
+                assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+                assert!(!response.headers().contains_key(http::header::LOCATION));
+                let body: serde_json::Value = response.into_body().into_json().await.unwrap();
+                assert_eq!(body["code"], "INTERNAL_AGENT_EXECUTION_FAILED");
+                assert!(body.to_string().contains("worker refused create"));
+            }
+        }
+    }
+}
+
+#[test]
+async fn oidc_create_dispatch_does_not_turn_a_session_into_an_idempotency_scope() {
+    use crate::api::agents::AgentReference;
+    use crate::custom_api::model::OidcSession;
+    use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
+    use crate::custom_api::route_resolver::tests::test_route;
+    use golem_common::model::AgentFingerprint;
+    use golem_common::model::caller::{Pair, Principal};
+    use golem_common::model::security_scheme::{
+        Provider, SecuritySchemeId, SecuritySchemeLogin, SecuritySchemeName, SecuritySchemeRevision,
+    };
+    use golem_service_base::custom_api::{SecuritySchemeDetails, SecuritySchemeRouteSecurity};
+
+    struct Lookup(std::sync::Mutex<Option<CompiledRoutes>>);
+    #[async_trait]
+    impl HttpApiDefinitionsLookup for Lookup {
+        async fn get(
+            &self,
+            _: &golem_common::model::domain_registration::Domain,
+        ) -> Result<CompiledRoutes, ApiDefinitionLookupError> {
+            Ok(self.0.lock().unwrap().take().unwrap())
+        }
+    }
+
+    for kind in ["create-path", "create-query"] {
+        let harness = invocation_harness();
+        let (store, _db) =
+            crate::custom_api::oidc::session_store::sqlite_test_session_store().await;
+        let session_id = SessionId(uuid::Uuid::new_v4());
+        let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
+        store
+            .store_authenticated_session(
+                &session_id,
+                OidcSession {
+                    subject: "create-user".into(),
+                    issuer: "https://idp.example".into(),
+                    email: None,
+                    name: None,
+                    email_verified: None,
+                    given_name: None,
+                    family_name: None,
+                    picture: None,
+                    preferred_username: None,
+                    claims: openidconnect::IdTokenClaims::new(
+                        openidconnect::IssuerUrl::new("https://idp.example".into()).unwrap(),
+                        vec![],
+                        expires_at,
+                        chrono::Utc::now(),
+                        openidconnect::StandardClaims::new(openidconnect::SubjectIdentifier::new(
+                            "create-user".into(),
+                        )),
+                        openidconnect::EmptyAdditionalClaims {},
+                    ),
+                    scopes: Default::default(),
+                    expires_at,
+                },
+            )
+            .await
+            .unwrap();
+        let scheme_id = SecuritySchemeId::new();
+        let scheme = SecuritySchemeDetails {
+            id: scheme_id,
+            revision: SecuritySchemeRevision::INITIAL,
+            name: SecuritySchemeName("create-login".into()),
+            provider_type: Provider::Google(Empty {}),
+            client_id: openidconnect::ClientId::new("test".into()),
+            client_secret: openidconnect::ClientSecret::new("test".into()),
+            redirect_url: openidconnect::RedirectUrl::new("https://example.com/callback".into())
+                .unwrap(),
+            scopes: vec![],
+            login: SecuritySchemeLogin::Cookie(Empty {}),
+        };
+        let mut route = test_route(1, "/agents/create", Some("POST"), kind);
+        route.security = RouteSecurity::SecurityScheme(SecuritySchemeRouteSecurity {
+            security_scheme_id: scheme_id,
+        });
+        let RouteBehaviour::CreateAgent(create) = &mut route.behavior else {
+            unreachable!()
+        };
+        create.agent.component_id = harness.component_id;
+        create.agent.agent_type = harness.agent_type.type_name.clone();
+        let resolver = RouteResolver::new(
+            &RouteResolverConfig::default(),
+            Arc::new(Lookup(std::sync::Mutex::new(Some(CompiledRoutes {
+                account_id: harness.account_id,
+                account_email: harness.account_email.clone(),
+                environment_id: harness.environment_id,
+                deployment_revision: DeploymentRevision::INITIAL,
+                security_schemes: HashMap::from([(scheme_id, scheme)]),
+                routes: vec![route],
+            })))),
+        );
+        let mut handler = request_handler_with_worker(
+            resolver,
+            Arc::new(InitialAgentFilesService::new(Arc::new(
+                golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+            ))),
+            harness.worker_service.clone(),
+        );
+        handler.oidc_handler = Arc::new(OidcHandler::new(
+            Arc::new(store),
+            Arc::new(DefaultIdentityProvider),
+        ));
+        let endpoint = CustomApiPoemEndpoint::new(Arc::new(handler));
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            harness
+                .creates
+                .responses
+                .lock()
+                .unwrap()
+                .push_back(Box::pin(async { Ok(AgentFingerprint::new()) }));
+            let mut request = create_request(false);
+            request.headers_mut().insert(
+                http::header::COOKIE,
+                format!("golem_session_id={}", session_id.0)
+                    .parse()
+                    .unwrap(),
+            );
+            let response = endpoint.execute(request).await;
+            assert_eq!(response.status(), StatusCode::CREATED);
+            let reference: AgentReference = response.into_body().into_json().await.unwrap();
+            ids.push(reference.agent_id);
+        }
+        assert_ne!(ids[0], ids[1]);
+        let calls = harness.creates.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert!(
+            calls
+                .iter()
+                .all(|call| call.auth.is_system() && call.auth.idempotency_scope().is_none())
+        );
+        for call in calls.iter() {
+            let Principal::User(user) = &call.caller.original else {
+                panic!("an authenticated HTTP constructor must receive its session user");
+            };
+            assert_eq!(user.pair, Pair::new("https://idp.example", "create-user"));
+            assert!(call.caller.original.equals(&call.caller.immediate));
+        }
+        assert_ne!(calls[0].idempotency_key, calls[1].idempotency_key);
+    }
+}
+
+#[test]
+async fn create_dispatch_inherits_auth_and_cors_and_does_not_require_an_incoming_id() {
+    for kind in ["create-path", "create-query"] {
+        let harness = invocation_harness();
+        let endpoint = create_endpoint(&harness, kind, true);
+        for (authorized, body, status, code) in [
+            (false, "not json", StatusCode::UNAUTHORIZED, None),
+            (
+                true,
+                "not json",
+                StatusCode::BAD_REQUEST,
+                Some("REQUEST_BODY_INVALID_JSON"),
+            ),
+            (
+                true,
+                r#"{"parameters":{"kind":"record","value":{"fields":[]}},"keyed":true}"#,
+                StatusCode::BAD_REQUEST,
+                Some("REQUEST_VALUE_PARSING_FAILED"),
+            ),
+            // This reaches the real create service without an incoming agent ID. The
+            // constructor rejects the extra field before any worker can be created.
+            (
+                true,
+                r#"{"parameters":{"kind":"record","value":{"fields":[{"kind":"string","value":"bad"}]}}}"#,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Some("INTERNAL_AGENT_EXECUTION_FAILED"),
+            ),
+        ] {
+            let mut request = Request::builder()
+                .method(http::Method::POST)
+                .uri("/agents/create".parse().unwrap())
+                .header("host", "example.com")
+                .header("origin", "https://client.example")
+                .content_type("application/json");
+            if authorized {
+                request = request.header("x-golem-session", "{}");
+            }
+            let response = endpoint.execute(request.body(body)).await;
+            assert_eq!(response.status(), status, "{kind}: {body}");
+            assert_eq!(
+                response.headers()[http::header::ACCESS_CONTROL_ALLOW_ORIGIN],
+                "https://client.example"
+            );
+            assert!(!response.headers().contains_key(http::header::LOCATION));
+            if let Some(code) = code {
+                let body: serde_json::Value = response.into_body().into_json().await.unwrap();
+                assert_eq!(body["code"], code, "{kind}: {body}");
+                if status == StatusCode::INTERNAL_SERVER_ERROR {
+                    assert!(
+                        body.to_string()
+                            .contains("Agent constructor parameters type error"),
+                        "{body}"
+                    );
+                }
+            }
+        }
+        for (headers, expected) in [
+            ("content-type,idempotency-key", StatusCode::NO_CONTENT),
+            ("content-type,x-unknown", StatusCode::FORBIDDEN),
+        ] {
+            let response = endpoint
+                .execute(
+                    Request::builder()
+                        .method(http::Method::OPTIONS)
+                        .uri("/agents/create".parse().unwrap())
+                        .header("host", "example.com")
+                        .header("origin", "https://client.example")
+                        .header(http::header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                        .header(http::header::ACCESS_CONTROL_REQUEST_HEADERS, headers)
+                        .finish(),
+                )
+                .await;
+            assert_eq!(response.status(), expected);
+            if expected == StatusCode::NO_CONTENT {
+                assert_eq!(
+                    response.headers()[http::header::ACCESS_CONTROL_ALLOW_ORIGIN],
+                    "https://client.example"
+                );
+                let allowed = response.headers()[http::header::ACCESS_CONTROL_ALLOW_HEADERS]
+                    .to_str()
+                    .unwrap();
+                assert!(allowed.split(',').any(|name| name.trim() == "content-type"));
+                assert!(
+                    allowed
+                        .split(',')
+                        .any(|name| name.trim() == "idempotency-key")
+                );
+            }
+        }
+        assert!(harness.targets.lock().unwrap().is_empty());
+        assert!(harness.contexts.lock().unwrap().is_empty());
+        assert!(harness.creates.calls.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+async fn agent_selector_runs_after_auth_and_before_etag_revalidation() {
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
     use golem_common::model::agent::AgentMetadataDto;
     use golem_common::model::agent::{CachePolicy, OwnerKind, ReadOnlyConfig};
-    use golem_common::model::{AgentFingerprint, AgentId, AgentStatus, OplogIndex, Timestamp};
-    use golem_service_base::custom_api::PhantomSelection;
+    use golem_common::model::{
+        AgentFingerprint, AgentId, AgentStatus, OplogIndex, OwnedAgentId, Timestamp,
+    };
+    use golem_service_base::custom_api::AgentSelection;
     use poem::IntoResponse;
-    let p = "550e8400-e29b-41d4-a716-446655440000";
-    let q = "8badf00d-1234-4567-89ab-0123456789ab";
     let harness = InvocationHarness::new(
         AgentInvocationOutput {
             result: golem_common::model::AgentInvocationResult::AgentInitialization,
@@ -690,27 +1234,40 @@ async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
     };
     call.component_id = harness.component_id;
     call.agent_type = AgentTypeName("mcp-agent".into());
-    call.phantom_selection = PhantomSelection::Query {
+    call.agent_selection = AgentSelection::Query {
         name: "instance".into(),
-        optional: true,
     };
     call.read_only = Some(ReadOnlyConfig {
         cache_policy: CachePolicy::UntilWrite(Empty {}),
     });
     let bound_call = call.clone();
+    let keyed = AgentId::keyed(
+        harness.environment_id,
+        harness.type_id,
+        &golem_common::model::agent::AgentKey::new(
+            AgentTypeName("mcp-agent".into()),
+            golem_common::schema::TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::record(vec![])),
+                golem_common::schema::SchemaValue::Record { fields: vec![] },
+            ),
+        )
+        .unwrap(),
+    );
+    let selected_p = AgentId::from_parts(harness.type_id.get(), 1);
+    let selected_q = AgentId::from_parts(harness.type_id.get(), 2);
+    let other_type = AgentId::from_parts(harness.type_id.get() + 1, 1);
+    let p = selected_p.to_string();
+    let q = selected_q.to_string();
     let mut ids = vec![];
-    for phantom in [None, Some(p), Some(q)] {
-        let id = AgentId {
-            component_id: harness.component_id,
-            agent_id: phantom
-                .map(|p| format!("mcp-agent()[{p}]"))
-                .unwrap_or_else(|| "mcp-agent()".into()),
-        };
+    for id in [keyed, selected_p, selected_q] {
         harness.metadata.lock().unwrap().insert(
-            id.clone(),
+            id,
             AgentMetadataDto {
-                agent_id: id.clone(),
+                agent_id: id,
                 owner_kind: OwnerKind::ComponentAgent,
+                agent_type_name: Some(AgentTypeName("mcp-agent".into())),
+                canonical_key: None,
+                constructor_parameters: None,
                 environment_id: harness.environment_id,
                 created_by: harness.account_id,
                 env: Default::default(),
@@ -741,21 +1298,20 @@ async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
         (
             2,
             "/selected-path/{instance}",
-            PhantomSelection::Path { index: 0.into() },
+            AgentSelection::Path { index: 0.into() },
         ),
-        (3, "/original", PhantomSelection::Original),
+        (3, "/keyed", AgentSelection::Key),
         (
             4,
             "/required",
-            PhantomSelection::Query {
+            AgentSelection::Query {
                 name: "instance".into(),
-                optional: false,
             },
         ),
     ] {
         let mut route = test_route(id, path, Some("GET"), "typed");
         let mut call = bound_call.clone();
-        call.phantom_selection = selection;
+        call.agent_selection = selection;
         route.behavior = RouteBehaviour::CallAgent(call);
         route.security = routes[0].security.clone();
         routes.push(route);
@@ -798,10 +1354,10 @@ async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
         crate::custom_api::call_agent::cache_headers::caller_etag_tag(&caller)
     };
     let etag = |id: &AgentId| {
+        let route_agent = OwnedAgentId::new(EnvironmentId(uuid::Uuid::nil()), id);
         format!(
             "\"{}/{}/{fingerprint}/{session_tag}:17\"",
-            id.component_id,
-            id.agent_name_encoded()
+            route_agent.environment_id, route_agent.agent_id
         )
     };
     for (query, authorized, expected) in [
@@ -827,7 +1383,12 @@ async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
             true,
             StatusCode::NOT_MODIFIED,
         ),
-        ("".into(), true, StatusCode::NOT_MODIFIED),
+        ("".into(), true, StatusCode::BAD_REQUEST),
+        (
+            format!("instance={other_type}"),
+            true,
+            StatusCode::NOT_FOUND,
+        ),
     ] {
         harness.metadata_reads.lock().unwrap().clear();
         let mut request = Request::builder()
@@ -851,7 +1412,7 @@ async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
         assert!(harness.contexts.lock().unwrap().is_empty());
         let reads = harness.metadata_reads.lock().unwrap();
         if expected == StatusCode::NOT_MODIFIED {
-            assert_eq!(*reads, vec![ids[usize::from(!query.is_empty())].clone()]);
+            assert_eq!(*reads, vec![ids[usize::from(!query.is_empty())]]);
         } else {
             assert!(reads.is_empty());
         }
@@ -860,7 +1421,7 @@ async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
         (format!("/selected-path/{p}"), 1, StatusCode::NOT_MODIFIED),
         ("/selected-path/invalid".into(), 1, StatusCode::BAD_REQUEST),
         ("/selected-path".into(), 1, StatusCode::NOT_FOUND),
-        ("/original".into(), 0, StatusCode::NOT_MODIFIED),
+        ("/keyed".into(), 0, StatusCode::NOT_MODIFIED),
         ("/required".into(), 1, StatusCode::BAD_REQUEST),
     ] {
         harness.metadata_reads.lock().unwrap().clear();
@@ -881,7 +1442,7 @@ async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
         assert!(harness.contexts.lock().unwrap().is_empty());
         let reads = harness.metadata_reads.lock().unwrap();
         if expected == StatusCode::NOT_MODIFIED {
-            assert_eq!(*reads, vec![ids[selected].clone()]);
+            assert_eq!(*reads, vec![ids[selected]]);
         } else {
             assert!(reads.is_empty());
         }
@@ -911,6 +1472,7 @@ async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl HttpApiDefinitionsLookup for StaticApiDefinitionsLookup {
     async fn get(
         &self,
@@ -1058,7 +1620,7 @@ fn durable_stream_routes() -> CompiledRoutes {
             allow_invocation_delete: false,
             load: None,
         }),
-        component_id: ComponentId::new(),
+        component_id: DURABLE_STREAM_COMPONENT,
         component_revision: ComponentRevision::INITIAL,
         agent_type: AgentTypeName("oracle-agent".to_string()),
         agent_mode: AgentMode::Durable,
@@ -1067,9 +1629,7 @@ fn durable_stream_routes() -> CompiledRoutes {
             input_schema: InputSchema::Parameters(vec![]),
         },
         constructor_parameters: vec![],
-        phantom_selection: golem_service_base::custom_api::PhantomSelection::Policy {
-            phantom: false,
-        },
+        agent_selection: golem_service_base::custom_api::AgentSelection::Key,
         method_name: "stream".to_string(),
         method_input: CompiledInputSchema {
             graph: SchemaGraph::empty(),
@@ -1261,8 +1821,17 @@ fn request_handler_with(
     )
 }
 
-fn invocation_harness() -> InvocationHarness {
-    InvocationHarness::new(
+/// The component that implements `oracle-agent` for the routes of [`durable_stream_routes`].
+const DURABLE_STREAM_COMPONENT: ComponentId = ComponentId(uuid::Uuid::from_u128(0xd5));
+
+/// A harness whose component `component_id` implements the durable agent type
+/// `agent_type`, without constructor parameters, in the nil environment of the test routes.
+fn route_harness(
+    agent_type: &str,
+    component_id: ComponentId,
+    methods: Vec<golem_common::schema::AgentMethodSchema>,
+) -> InvocationHarness {
+    InvocationHarness::with_agent_type(
         AgentInvocationOutput {
             result: golem_common::model::AgentInvocationResult::AgentInitialization,
             consumed_fuel: None,
@@ -1273,13 +1842,44 @@ fn invocation_harness() -> InvocationHarness {
             oplog_index: None,
             agent_fingerprint: None,
         },
-        AgentConstructorSchema {
-            name: None,
+        golem_common::schema::AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
+            type_name: AgentTypeName(agent_type.to_string()),
+            description: String::new(),
+            source_language: String::new(),
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![]),
+            },
+            methods,
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: golem_common::model::agent::Snapshotting::Disabled(Empty {}),
+            config: vec![],
+        },
+        component_id,
+        EnvironmentId(uuid::Uuid::nil()),
+    )
+}
+
+/// A harness that implements the `oracle-agent` of [`durable_stream_routes`].
+fn invocation_harness() -> InvocationHarness {
+    route_harness(
+        "oracle-agent",
+        DURABLE_STREAM_COMPONENT,
+        vec![golem_common::schema::AgentMethodSchema {
+            name: "stream".to_string(),
             description: String::new(),
             prompt_hint: None,
             input_schema: InputSchema::Parameters(vec![]),
-        },
-        vec![],
+            output_schema: OutputSchema::Unit,
+            http_endpoint: vec![],
+            read_only: None,
+        }],
     )
 }
 
@@ -1585,39 +2185,38 @@ async fn durable_stream_selector_keeps_named_forks_in_the_selected_root() {
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
         ForkStreamSlotSuccess, ReadStreamSlotSuccess,
     };
+    use golem_common::model::AgentId;
     use golem_common::model::OplogIndex;
     use golem_common::model::durable_stream::StreamOffset;
-    use golem_service_base::custom_api::PhantomSelection;
-    let p = "550e8400-e29b-41d4-a716-446655440000";
-    let q = "8badf00d-1234-4567-89ab-0123456789ab";
+    use golem_service_base::custom_api::AgentSelection;
+    let selected_p = AgentId::from_parts(42, 1);
+    let selected_q = AgentId::from_parts(42, 2);
+    let p_text = selected_p.to_string();
+    let q_text = selected_q.to_string();
+    let p = p_text.as_str();
+    let q = q_text.as_str();
     let session = golem_common::model::invocation_session_public::new_durable_stream_session_id();
     let target_fork =
         golem_common::model::invocation_session_public::new_durable_stream_session_id();
     let source_fork =
         golem_common::model::invocation_session_public::new_durable_stream_session_id();
-    let named_fork = |root: &str, scope: &str, name: &str| {
-        let hash = blake3::hash(&serde_json::to_vec(&(root, scope, name)).unwrap());
-        let mut bytes: [u8; 16] = hash.as_bytes()[..16].try_into().unwrap();
-        bytes[6] = (bytes[6] & 15) | 64;
-        bytes[8] = (bytes[8] & 63) | 128;
-        format!("oracle-agent()[{}]", uuid::Uuid::from_bytes(bytes))
+    let environment_id = EnvironmentId(uuid::Uuid::nil());
+    let named_fork = |root: AgentId, scope: &str, name: &str| {
+        AgentId::durable_stream_fork(environment_id, root, scope, name)
     };
     for path_selector in [false, true] {
-        for root in [None, Some(p), Some(q)] {
-            if path_selector && root.is_none() {
-                continue;
-            }
+        for root in [p, q] {
             for nested in [false, true] {
                 let harness = invocation_harness();
+                assert_eq!(harness.type_id.get(), 42);
                 let mut routes = durable_stream_routes().routes;
                 for route in &mut routes {
                     if let RouteBehaviour::CallAgent(call) = &mut route.behavior {
-                        call.phantom_selection = if path_selector {
-                            PhantomSelection::Path { index: 0.into() }
+                        call.agent_selection = if path_selector {
+                            AgentSelection::Path { index: 0.into() }
                         } else {
-                            PhantomSelection::Query {
+                            AgentSelection::Query {
                                 name: "instance".into(),
-                                optional: true,
                             }
                         };
                         if path_selector {
@@ -1639,7 +2238,7 @@ async fn durable_stream_selector_keeps_named_forks_in_the_selected_root() {
                     harness.worker_service.clone(),
                 );
                 let base = if path_selector {
-                    format!("/writable/{}", root.unwrap())
+                    format!("/writable/{root}")
                 } else {
                     "/writable".into()
                 };
@@ -1651,21 +2250,17 @@ async fn durable_stream_selector_keeps_named_forks_in_the_selected_root() {
                 let target =
                     format!("{base}/forks/{target_fork}/invocations/{session}/streams/requests");
                 let uri = if path_selector {
-                    target.replace(root.unwrap(), &root.unwrap().to_uppercase())
+                    target.replace(root, &root.to_uppercase())
                 } else {
-                    format!(
-                        "{target}?{}",
-                        root.map(|id| format!("instance={}", id.to_uppercase()))
-                            .unwrap_or_default()
-                    )
+                    format!("{target}?instance={}", root.to_uppercase())
                 };
                 let mut invalid_sources = vec![
                     format!("{source}?instance={p}"),
                     format!("{source}#fragment"),
                 ];
                 if path_selector {
-                    let other = if root == Some(p) { q } else { p };
-                    invalid_sources.push(source.replace(root.unwrap(), other));
+                    let other = if root == p { q } else { p };
+                    invalid_sources.push(source.replace(root, other));
                 }
                 for source in invalid_sources {
                     let response = handler
@@ -1713,29 +2308,27 @@ async fn durable_stream_selector_keeps_named_forks_in_the_selected_root() {
                 let expected_url = if path_selector {
                     target.clone()
                 } else {
-                    format!(
-                        "{target}{}",
-                        root.map(|id| format!("?instance={id}")).unwrap_or_default()
-                    )
+                    format!("{target}?instance={root}")
                 };
                 assert_eq!(response.headers()[http::header::LOCATION], expected_url);
                 let forks = harness.recorded_durable_stream_forks();
                 assert_eq!(forks.len(), 1);
-                let root_id = root
-                    .map(|id| format!("oracle-agent()[{id}]"))
-                    .unwrap_or_else(|| "oracle-agent()".into());
+                let root_id = root.parse::<AgentId>().unwrap();
+                let source_agent_id = AgentId::try_from(forks[0].source_agent_id.unwrap()).unwrap();
+                let target_agent_id = AgentId::try_from(forks[0].target_agent_id.unwrap()).unwrap();
                 assert_eq!(
-                    forks[0].source_agent_id.as_ref().unwrap().name,
+                    source_agent_id,
                     if nested {
-                        named_fork(&root_id, &forks[0].route_scope, &source_fork)
+                        named_fork(root_id, &forks[0].route_scope, &source_fork)
                     } else {
-                        root_id.clone()
+                        root_id
                     }
                 );
                 assert_eq!(
-                    forks[0].target_agent_id.as_ref().unwrap().name,
-                    named_fork(&root_id, &forks[0].route_scope, &target_fork)
+                    target_agent_id,
+                    named_fork(root_id, &forks[0].route_scope, &target_fork)
                 );
+                assert_eq!(target_agent_id.type_tag(), root_id.type_tag());
                 assert_eq!(forks[0].source_path, source);
             }
         }
@@ -2436,7 +3029,16 @@ async fn ordinary_traffic_lazy_openapi_corpus() {
     };
     filesystem.file_bindings = FileMapping::compile_list([("/*", "/$1")]).unwrap();
     routes.push(live);
-    let harness = invocation_harness();
+    let harness = route_harness("agent2", ComponentId(uuid::Uuid::nil()), vec![]);
+    let key = golem_common::model::agent::AgentKey::new(
+        AgentTypeName("agent2".into()),
+        golem_common::schema::TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::record(vec![])),
+            golem_common::schema::SchemaValue::Record { fields: vec![] },
+        ),
+    )
+    .unwrap();
+    harness.add_keyed_agent(&key);
     harness.file_reads.responses.lock().unwrap().push_back(
         std::future::ready(Ok(FileReadResponse {
             head: FileReadHead::Absent,

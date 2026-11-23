@@ -707,7 +707,7 @@
     "text": ""
    },
    "stdout": {
-    "text": "GOLEM_AGENT_ID=conformance-agent\nGOLEM_AGENT_TYPE=Conformance\nGOLEM_COMPONENT_ID=00000000-0000-0000-0000-000000000000\nGOLEM_COMPONENT_REVISION=0\nGOLEM_WORKER_NAME=conformance-agent\n"
+    "text": "GOLEM_AGENT_ID=conformance-agent\nGOLEM_AGENT_TYPE=Conformance\nGOLEM_COMPONENT_REVISION=0\n"
    }
   },
   "real tldr env: unset a variable": {
@@ -3443,6 +3443,6 @@
  },
  "oracle": {
   "dockerfile": "eb9a581386453f85",
-  "profile": "d2542338f5646f8f"
+  "profile": "34ef89961acc4344"
  }
 }

@@ -31,6 +31,7 @@ pub mod agent_sdk_ts;
 pub mod api;
 mod blob_mutation_storage;
 pub mod blobstore;
+mod cancel_rejection;
 pub mod compatibility;
 pub mod concurrent_delivery_order;
 pub mod concurrent_runtime_events;
@@ -53,6 +54,7 @@ pub mod in_function_retry;
 pub mod indexed_storage;
 pub mod instance_layer;
 pub mod invocation_context;
+mod invocation_reads;
 mod invocation_waits;
 pub mod key_value_storage;
 pub mod keyvalue;
@@ -85,6 +87,7 @@ pub mod scheduler_storage;
 mod scheduler_waits;
 pub mod scope_cards;
 pub mod socket_replay;
+pub mod stale_writer;
 pub mod suspension_races;
 pub mod tool_discovery;
 pub mod tool_runtime_bypass;
@@ -120,6 +123,18 @@ pub fn raw_params(
         })
         .collect();
     build_input_record(elements).expect("raw_params: build_input_record failed")
+}
+
+/// A fresh agent ID of type tag 7 in a fresh environment, for storage tests that need an agent
+/// namespace no other test shares.
+pub fn fresh_owned_agent_id() -> golem_common::model::OwnedAgentId {
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::type_id::TypeId;
+    use golem_common::model::{AgentId, OwnedAgentId};
+    OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId::random(TypeId::try_from(7u32).expect("7 is a valid type tag")),
+    )
 }
 
 tag_suite!(api, group1);

@@ -606,7 +606,7 @@ impl EphemeralOplog {
                                 );
                                 let _ = failure.set(OplogError::ArchiveWrite(
                                     crate::services::oplog::ArchiveWriteFailure {
-                                        agent_id: agent_id.clone(),
+                                        agent_id,
                                         level: 0,
                                         details: error.to_string(),
                                     },
@@ -1001,15 +1001,16 @@ impl Debug for EphemeralOplog {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Oplog for EphemeralOplog {
     fn executor_shutdown_handle(&self) -> super::OplogShutdownHandle {
         let executor_shutdown = self.executor_shutdown.clone();
         let service = self.multi_layer_oplog_service.clone();
-        let agent_id = self.owned_agent_id.agent_id.clone();
+        let agent_id = self.owned_agent_id.agent_id;
         let transfer_fiber = self.transfer_fiber.clone();
         let close_executor_shutdown = executor_shutdown.clone();
         let close_service = service.clone();
-        let close_agent_id = agent_id.clone();
+        let close_agent_id = agent_id;
         let close_transfer_fiber = transfer_fiber.clone();
         let jobs = self.jobs.clone();
         let closed = self.closed();
@@ -1022,7 +1023,7 @@ impl Oplog for EphemeralOplog {
             move || {
                 let executor_shutdown = close_executor_shutdown.clone();
                 let service = close_service.clone();
-                let agent_id = close_agent_id.clone();
+                let agent_id = close_agent_id;
                 let transfer_fiber = close_transfer_fiber.clone();
                 let jobs = jobs.clone();
                 let closed = closed.clone();

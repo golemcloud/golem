@@ -115,16 +115,17 @@ agents:
 
 ## Overriding Config Over RPC
 
-When one agent calls another, the caller can override the callee's **local** (non-secret) config at client creation with the callee definition's `WithConfig`, which checks the config type at compile time:
+When one agent calls another, the caller can override the callee's **local** (non-secret) config when it creates the callee, with the callee definition's `WithConfig` option to `Create`, which checks the config type at compile time. `golem.Keyed()` creates the keyed agent of the `ID`, the one `Upsert` reaches, and fails with a `*golem.RemoteCallError` of kind `golem.RemoteConflict` when it already exists; without it, `Create` makes a new agent without a key:
 
 ```go
-client := shop.Agent.Get(
+client, err := shop.Agent.Create(
 	shop.ID{Name: "acme"},
+	golem.Keyed(),
 	shop.Agent.WithConfig(shop.Config{Greeting: "Hi from the caller"}),
 )
 ```
 
-Only declared local keys can be overridden; secret fields are always platform-provisioned and are skipped. `WithConfig` replaces every local value: it sends every local field of the struct, zero values included. To set only some, or to call an agent in another component, use the generated guest client's `With<Agent>Config` option (see [`golem-call-another-agent-go`](/next/how-to-guides/go/golem-call-another-agent-go)). It sends only the fields you set, through `golem.WithConfigEntries(golem.ConfigEntryOf(path, value)…)`.
+`Upsert` takes no config overrides: an agent that it creates gets its provisioned config. Only declared local keys can be overridden; secret fields are always platform-provisioned and are skipped. `WithConfig` replaces every local value: it sends every local field of the struct, zero values included. To set only some, or to call an agent in another component, use the generated guest client's `With<Agent>Config` option (see [`golem-call-another-agent-go`](/next/how-to-guides/go/golem-call-another-agent-go)). It sends only the fields you set, through `golem.WithConfigEntries(golem.ConfigEntryOf(path, value)…)`.
 
 ## Key Constraints
 
