@@ -989,38 +989,6 @@ pub(crate) mod replay_divergence_tests {
         }
     }
 
-    /// `ReplayDivergence` as it was stored before it had a replay start.
-    #[derive(Debug, desert_rust::BinaryCodec)]
-    #[desert(evolution())]
-    struct EarlierReplayDivergence {
-        oplog_index: OplogIndex,
-        expected: ReplayStep,
-        actual: ReplayStep,
-        mismatched: Vec<StartIdentityField>,
-    }
-
-    #[test]
-    fn a_divergence_stored_without_a_replay_start_reads_without_one() {
-        let earlier = EarlierReplayDivergence {
-            oplog_index: OplogIndex::from_u64(7),
-            expected: ReplayStep::HostCall(host_call("http::send", Some("recorded"))),
-            actual: ReplayStep::invocation_end(),
-            mismatched: vec![StartIdentityField::FunctionName],
-        };
-        let bytes = desert_rust::serialize_to_byte_vec(&earlier).unwrap();
-        let decoded: ReplayDivergence = desert_rust::deserialize(&bytes).unwrap();
-        assert_eq!(
-            decoded,
-            ReplayDivergence {
-                oplog_index: earlier.oplog_index,
-                expected: earlier.expected,
-                actual: earlier.actual,
-                mismatched: earlier.mismatched,
-                replay_start: None,
-            }
-        );
-    }
-
     #[test]
     fn the_text_of_a_divergence_names_where_its_replay_started() {
         const HINT: &str = "a snapshot load that differs from the live state is a common cause";

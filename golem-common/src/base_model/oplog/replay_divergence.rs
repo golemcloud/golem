@@ -30,7 +30,7 @@ use std::hash::{Hash, Hasher};
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
 )]
-#[cfg_attr(feature = "full", desert(evolution(FieldAdded("replay_start", None))))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct ReplayDivergence {

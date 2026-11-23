@@ -640,7 +640,7 @@ const READ_COMPACTED_RESTARTS: u32 = 3;
 
 /// The value stored at a resource's `state` key.
 #[derive(Debug, Clone, BinaryCodec)]
-#[desert(evolution(FieldAdded("deficit", 0)))]
+#[desert(evolution())]
 struct QuotaResourceState {
     definition: ResourceDefinition,
     remaining: u64,
@@ -1256,74 +1256,6 @@ mod tests {
         ] {
             assert!(parse_key(key.as_bytes()).is_err(), "{key} was accepted");
         }
-    }
-
-    /// `QuotaResourceState` as stored before it had a deficit.
-    #[derive(Debug, Clone, BinaryCodec)]
-    #[desert(evolution())]
-    struct QuotaResourceStateWithoutDeficit {
-        definition: ResourceDefinition,
-        remaining: u64,
-        last_refilled_at: DateTime<Utc>,
-        last_refreshed_at: DateTime<Utc>,
-    }
-
-    fn capacity_definition() -> ResourceDefinition {
-        use golem_common::model::environment::EnvironmentId;
-        use golem_common::model::quota::{
-            EnforcementAction, ResourceCapacityLimit, ResourceDefinitionId,
-            ResourceDefinitionRevision, ResourceLimit, ResourceName,
-        };
-        ResourceDefinition {
-            id: ResourceDefinitionId(Uuid::new_v4()),
-            revision: ResourceDefinitionRevision::INITIAL,
-            environment_id: EnvironmentId(Uuid::new_v4()),
-            name: ResourceName("tokens".to_string()),
-            limit: ResourceLimit::Capacity(ResourceCapacityLimit { value: 50 }),
-            enforcement_action: EnforcementAction::Reject,
-            unit: "token".to_string(),
-            units: "tokens".to_string(),
-        }
-    }
-
-    #[test]
-    fn a_resource_state_stored_without_a_deficit_reads_as_no_deficit() {
-        let definition = capacity_definition();
-        let now = Utc::now();
-        let stored = encode(&QuotaResourceStateWithoutDeficit {
-            definition: definition.clone(),
-            remaining: 40,
-            last_refilled_at: now,
-            last_refreshed_at: now,
-        })
-        .unwrap();
-
-        let read: QuotaResourceState = try_deserialize(&stored).unwrap().unwrap();
-        assert_eq!(read.definition.id, definition.id);
-        assert_eq!(read.remaining, 40);
-        assert_eq!(read.deficit, 0);
-        assert_eq!(read.last_refilled_at, now);
-        assert_eq!(read.last_refreshed_at, now);
-    }
-
-    #[test]
-    fn a_resource_state_with_a_deficit_reads_without_it_in_the_earlier_shape() {
-        let definition = capacity_definition();
-        let now = Utc::now();
-        let stored = encode(&QuotaResourceState {
-            definition: definition.clone(),
-            remaining: 0,
-            last_refilled_at: now,
-            last_refreshed_at: now,
-            deficit: 10,
-        })
-        .unwrap();
-
-        let read: QuotaResourceStateWithoutDeficit = try_deserialize(&stored).unwrap().unwrap();
-        assert_eq!(read.definition.id, definition.id);
-        assert_eq!(read.remaining, 0);
-        assert_eq!(read.last_refilled_at, now);
-        assert_eq!(read.last_refreshed_at, now);
     }
 
     #[test]
