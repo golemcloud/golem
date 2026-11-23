@@ -36,9 +36,7 @@ use super::{
 };
 #[cfg(any(test, feature = "test-utils"))]
 use super::{CardId, StoredCard};
-use super::{
-    ExportReturned, OpenInvocation, is_invocation_terminal_of, primary_invocation_terminal_id,
-};
+use super::{ExportReturned, is_invocation_terminal_of, primary_invocation_terminal_id};
 use crate::durable_host::PositionalRead;
 use crate::durable_host::tool::operation::OwnerToolOperation;
 use crate::services::oplog::UnreadableOplog;

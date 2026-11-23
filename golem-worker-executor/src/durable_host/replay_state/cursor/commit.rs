@@ -69,7 +69,7 @@ impl CursorTx<'_> {
         }
         self.st
             .owners
-            .validate_start(read_idx, entry, self.st.has_open_invocation())
+            .validate_start(read_idx, entry)
             .map(Some)
             .map_err(|divergence| {
                 WorkerExecutorError::replay_divergence(ReplayDivergence {
@@ -294,8 +294,9 @@ impl CursorTx<'_> {
                 wallet_pin,
                 ..
             } => {
-                self.st.last_started_invocation = Some((read_idx, *invocation_id));
-                self.st.owners.commit_invocation_started(read_idx);
+                self.st
+                    .owners
+                    .commit_invocation_started(read_idx, *invocation_id);
                 self.record_wallet_replay_event(
                     read_idx,
                     ReplayEvent::InvocationWalletPinned {
@@ -347,7 +348,11 @@ impl CursorTx<'_> {
                 // The background work of an open anchor still replays after its terminal;
                 // `ReplayState::close_invocation_anchor` finishes the invocation's wallet replay
                 // once that work settled.
-                if !self.st.is_open_invocation(invocation_id)
+                if !self
+                    .st
+                    .owners
+                    .open_invocation(invocation_id)
+                    .is_some_and(|(_, open)| open.records_result_at_return())
                     && let Some(wallet) = &self.cursor.wallet
                 {
                     wallet.finish_replayed_invocation();

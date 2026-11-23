@@ -894,25 +894,12 @@ struct CursorState {
     /// them again. The map stores every known member index for each root so nested descendants
     /// can be recognized by parent.
     custom_subtrees: HashMap<OplogIndex, HashSet<OplogIndex>>,
-    /// The anchors (`AgentInvocationStarted` indexes) of the agent-method and constructor
-    /// invocations whose background work may still replay. Opened by
-    /// [`ReplayState::open_invocation_anchor`], removed by
-    /// [`ReplayState::close_invocation_anchor`].
-    open_anchors: std::collections::BTreeMap<OplogIndex, OpenInvocation>,
-    /// The owners of the committed `Start`s, and the invocations that closed.
+    /// The lifecycle of every invocation the cursor started, and the owners of the committed
+    /// `Start`s.
     owners: owners::OwnerMap,
     /// The `AgentInvocationSettled` entries the cursor committed or skipped as hints, with their
     /// invocation ids. Entries no open or later anchor can need are pruned when an anchor closes.
     settled_invocations: std::collections::BTreeMap<OplogIndex, golem_common::model::InvocationId>,
-    /// The index and invocation id of the last `AgentInvocationStarted` the cursor committed.
-    last_started_invocation: Option<(OplogIndex, golem_common::model::InvocationId)>,
-}
-
-/// One entry of [`CursorState::open_anchors`].
-#[derive(Debug)]
-struct OpenInvocation {
-    invocation_id: golem_common::model::InvocationId,
-    export_returned: ExportReturned,
 }
 
 /// Whether `entry` is the primary invocation terminal (`AgentInvocationFinished`, or an
@@ -939,32 +926,17 @@ fn primary_invocation_terminal_id(
 }
 
 impl CursorState {
-    /// The open anchor of the invocation `invocation_id`.
-    fn open_invocation(
-        &self,
-        invocation_id: &golem_common::model::InvocationId,
-    ) -> Option<(OplogIndex, &OpenInvocation)> {
-        self.open_anchors
-            .iter()
-            .find(|(_, open)| open.invocation_id == *invocation_id)
-            .map(|(anchor, open)| (*anchor, open))
-    }
-
-    /// Whether `invocation_id` names the invocation of an open anchor.
-    fn is_open_invocation(&self, invocation_id: &golem_common::model::InvocationId) -> bool {
-        self.open_invocation(invocation_id).is_some()
-    }
-
-    /// Whether `entry` is the primary invocation terminal of an open anchor whose export
-    /// returned. Only the open-anchor reader consumes such a terminal.
+    /// Whether `entry` is the primary invocation terminal of an open invocation that records its
+    /// result at the export's return, and whose export returned. Only the open-anchor reader
+    /// consumes such a terminal.
     fn is_returned_open_invocation_terminal(&self, entry: &OplogEntry) -> bool {
         primary_invocation_terminal_id(entry)
-            .and_then(|id| self.open_invocation(id))
-            .is_some_and(|(_, open)| open.export_returned.is_marked())
+            .and_then(|id| self.owners.open_invocation(id))
+            .is_some_and(|(_, open)| open.has_returned())
     }
 
     /// Whether the entry buffered at the cursor head is the primary invocation terminal of an
-    /// open anchor whose export returned.
+    /// open invocation whose export returned.
     fn returned_open_invocation_terminal_at_head(&self) -> bool {
         self.replay_buffer
             .front()

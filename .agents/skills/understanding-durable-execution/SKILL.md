@@ -2322,10 +2322,12 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   reference gives way to a resolved invocation id, or, when the `Start` records no invocation id,
   to its `driver`. That invocation closed, so every entity body on the reference's chain ended,
   and the driven `Start` has no enclosing body. The map is resident state derived from the
-  prefix: each cursor rebuilds it, and `set_replay_target` truncates it. Its `closed` map names
-  every invocation whose close the cursor reached, in any order, with its closing entry;
-  truncation drops the closes beyond the new target, and the owners such a close pruned become
-  owners again. The owner of a `Start` is validated before a reader commits or retains it
+  prefix: each cursor rebuilds it, and `set_replay_target` truncates it. It holds the one record
+  of each invocation the cursor started: open from its `AgentInvocationStarted` (with the return
+  signal of an invocation that records its result at the export's return) until its close, then
+  closed with its closing entry, in any order. Every open/closed question of the cursor reads that
+  record. Truncation reopens the closes beyond the new target, and the owners such a close pruned
+  become owners again. The owner of a `Start` is validated before a reader commits or retains it
   (`validate_start_owner`); a `Start` that a scan-ahead claim finds is validated when the cursor
   reaches it. So a divergent `Start` is the same divergence on every read. Committing a
   `Start` without `driver` whose owner invocation already closed, or a root `Start` with no id or
@@ -2786,9 +2788,9 @@ live, releases the retained `Start`s it owns and appends `AgentInvocationSettled
 abandoned-`Start` check (`replay_state/abandoned.rs`) runs at the anchor's close, not at the
 terminal: the close classifies each retained `Start` by its recorded owner (see "Entry
 ownership"), folds only its own, keeps another open invocation's, and waits for an enclosing body
-that can still consume one. The close adds the anchor to the owner map's `closed` map; a later
-`Start` of that invocation is a divergence unless it records a `driver`. A settled-path terminal
-closes its invocation the same way, except that a retained `Start` that would wait is a
+that can still consume one. The close moves the anchor to the owner map's `closed_invocations`; a
+later `Start` of that invocation is a divergence unless it records a `driver`. A settled-path
+terminal closes its invocation the same way, except that a retained `Start` that would wait is a
 divergence.
 
 The status fold keeps the agent `Running` from a terminal with `awaits_settlement` until its

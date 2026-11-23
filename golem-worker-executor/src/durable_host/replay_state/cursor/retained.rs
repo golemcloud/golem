@@ -676,7 +676,7 @@ impl ReplayState {
         let owned_agent_id = self.cursor.owned_agent_id.clone();
         self.run_owned_cursor_op(move |state| async move {
             let mut st = state.cursor.state.lock().await;
-            let ending = st.last_started_invocation.map(|(started, _)| started);
+            let ending = st.owners.last_invocation();
             let mut own = Vec::new();
             let mut waiting = false;
             let retained: Vec<OplogIndex> = st.starts.retained_keys().copied().collect();

@@ -16981,7 +16981,7 @@ fn invocation_owner(anchor: u64, body: Option<u64>) -> owners::RecordOwner {
 /// member at 8.
 fn owner_map_of_one_invocation() -> owners::OwnerMap {
     let mut map = owners::OwnerMap::default();
-    map.commit_invocation_started(OplogIndex::from_u64(2));
+    map.commit_invocation_started(OplogIndex::from_u64(2), replayed_invocation_id());
     for (index, entry) in [
         (3, anchored_start(2, 0)),
         (
@@ -16996,7 +16996,7 @@ fn owner_map_of_one_invocation() -> owners::OwnerMap {
         ),
         (8, observational_start_now(7, None)),
     ] {
-        map.commit_start(OplogIndex::from_u64(index), &entry, false)
+        map.commit_start(OplogIndex::from_u64(index), &entry)
             .unwrap();
     }
     map
@@ -17032,7 +17032,7 @@ fn record_owner_resolves_ids_parents_observers_and_agent_level_records() {
 #[test]
 fn record_owner_takes_the_driver_and_keeps_the_nearest_body() {
     let mut map = owner_map_of_one_invocation();
-    map.commit_invocation_started(OplogIndex::from_u64(9));
+    map.commit_invocation_started(OplogIndex::from_u64(9), replayed_invocation_id());
     let driven = with_parent(driven_start(4, 1, 9), 5);
     assert_eq!(
         map.record_owner(OplogIndex::from_u64(10), &driven),
@@ -17123,7 +17123,7 @@ fn record_owner_refuses_a_never_committed_reference_beside_a_resolved_id() {
             "{what} beside a resolved id is an orphan"
         );
         assert!(
-            map.commit_start(index, &entry, true).is_err(),
+            map.commit_start(index, &entry).is_err(),
             "committing {what} beside a resolved id is a divergence"
         );
         assert_eq!(map.owner(index), None, "{what} records no owner");
@@ -17138,7 +17138,7 @@ fn record_owner_refuses_a_never_committed_reference_beside_a_resolved_id() {
 
     // The invocation started at 2 closes at 12; the entries 9 to 11 inside it are no `Start`s.
     map.close(OplogIndex::from_u64(2), OplogIndex::from_u64(12), |_| false);
-    map.commit_invocation_started(OplogIndex::from_u64(13));
+    map.commit_invocation_started(OplogIndex::from_u64(13), replayed_invocation_id());
     assert_eq!(
         map.record_owner(
             OplogIndex::from_u64(14),
@@ -17184,7 +17184,7 @@ fn with_driver(mut entry: OplogEntry, driver: u64) -> OplogEntry {
 #[test]
 fn commit_start_refuses_orphans_with_and_without_a_driver() {
     let mut map = owner_map_of_one_invocation();
-    map.commit_invocation_started(OplogIndex::from_u64(9));
+    map.commit_invocation_started(OplogIndex::from_u64(9), replayed_invocation_id());
     let index = OplogIndex::from_u64(10);
     for (entry, what) in [
         (anchored_start(3, 0), "an id anchored at an ordinary Start"),
@@ -17200,13 +17200,13 @@ fn commit_start_refuses_orphans_with_and_without_a_driver() {
                 None => entry.clone(),
             };
             assert!(
-                map.commit_start(index, &entry, true).is_err(),
+                map.commit_start(index, &entry).is_err(),
                 "{what} with the driver {driver:?} is a divergence"
             );
             assert_eq!(map.owner(index), None, "{what} records no owner");
         }
     }
-    map.commit_start(index, &with_driver(owned_start_now(5), 9), true)
+    map.commit_start(index, &with_driver(owned_start_now(5), 9))
         .unwrap();
     assert_eq!(map.owner(index), Some(invocation_owner(9, Some(4))));
 }
@@ -17215,7 +17215,7 @@ fn commit_start_refuses_orphans_with_and_without_a_driver() {
 fn closed_set_handles_out_of_order_closes() {
     let mut map = owners::OwnerMap::default();
     for anchor in [10, 20, 30] {
-        map.commit_invocation_started(OplogIndex::from_u64(anchor));
+        map.commit_invocation_started(OplogIndex::from_u64(anchor), replayed_invocation_id());
     }
     map.close(OplogIndex::from_u64(30), OplogIndex::from_u64(35), |_| {
         false
@@ -17236,7 +17236,7 @@ fn closed_set_handles_out_of_order_closes() {
 fn truncation_drops_closes_beyond_the_target() {
     let mut map = owners::OwnerMap::default();
     for anchor in [10, 20] {
-        map.commit_invocation_started(OplogIndex::from_u64(anchor));
+        map.commit_invocation_started(OplogIndex::from_u64(anchor), replayed_invocation_id());
     }
     map.close(OplogIndex::from_u64(10), OplogIndex::from_u64(15), |_| {
         false
@@ -18354,11 +18354,11 @@ async fn cancelled_body_claim_of_unclosed_start_does_not_continue_live() {
 #[test]
 fn driven_child_of_a_pruned_parent_without_an_id_takes_its_driver() {
     let mut map = owners::OwnerMap::default();
-    map.commit_invocation_started(OplogIndex::from_u64(2));
-    map.commit_start(OplogIndex::from_u64(3), &anchored_start(2, 0), true)
+    map.commit_invocation_started(OplogIndex::from_u64(2), replayed_invocation_id());
+    map.commit_start(OplogIndex::from_u64(3), &anchored_start(2, 0))
         .unwrap();
     map.close(OplogIndex::from_u64(2), OplogIndex::from_u64(5), |_| false);
-    map.commit_invocation_started(OplogIndex::from_u64(6));
+    map.commit_invocation_started(OplogIndex::from_u64(6), replayed_invocation_id());
     let child = with_driver(owned_start_now(3), 6);
     assert_eq!(
         map.record_owner(OplogIndex::from_u64(7), &child),
@@ -18386,10 +18386,10 @@ fn driven_child_of_a_pruned_parent_without_an_id_takes_its_driver() {
 #[test]
 fn truncation_restores_the_owners_an_undone_close_pruned() {
     let mut map = owners::OwnerMap::default();
-    map.commit_invocation_started(OplogIndex::from_u64(2));
-    map.commit_start(OplogIndex::from_u64(3), &anchored_start(2, 0), true)
+    map.commit_invocation_started(OplogIndex::from_u64(2), replayed_invocation_id());
+    map.commit_start(OplogIndex::from_u64(3), &anchored_start(2, 0))
         .unwrap();
-    map.commit_start(OplogIndex::from_u64(5), &anchored_start(2, 1), true)
+    map.commit_start(OplogIndex::from_u64(5), &anchored_start(2, 1))
         .unwrap();
     map.close(OplogIndex::from_u64(2), OplogIndex::from_u64(6), |_| false);
     assert_eq!(map.owner(OplogIndex::from_u64(3)), None);

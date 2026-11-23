@@ -368,24 +368,20 @@ impl CursorTx<'_> {
 
             if condition(&entry) {
                 self.commit_consumed_entry(read_idx, &entry).await?;
-                if let BoundaryRead::InvocationBoundary(abandoned) = &mut boundary {
-                    match self.st.last_started_invocation {
-                        Some((started, invocation_id))
-                            if primary_invocation_terminal_id(&entry) == Some(&invocation_id) =>
-                        {
-                            // The replayed guest has produced its invocation result: the retained
-                            // `Start`s of the invocation are live-only abandoned progress nobody
-                            // can claim anymore. The boundary read holds the Store outside the
-                            // concurrent runtime, so it cannot wait for a body.
-                            let own = self.classify_retained_at_boundary(started, read_idx)?;
-                            self.fold_retained_into_abandoned(abandoned, &own)?;
-                            let st = &mut *self.st;
-                            st.owners.close(started, read_idx, |index| {
-                                st.starts.get_retained(&index).is_some()
-                            });
-                        }
-                        _ => {}
-                    }
+                if let BoundaryRead::InvocationBoundary(abandoned) = &mut boundary
+                    && let Some((started, _)) = primary_invocation_terminal_id(&entry)
+                        .and_then(|id| self.st.owners.open_invocation(id))
+                {
+                    // The replayed guest has produced its invocation result: the retained
+                    // `Start`s of the invocation are live-only abandoned progress nobody can
+                    // claim anymore. The boundary read holds the Store outside the concurrent
+                    // runtime, so it cannot wait for a body.
+                    let own = self.classify_retained_at_boundary(started, read_idx)?;
+                    self.fold_retained_into_abandoned(abandoned, &own)?;
+                    let st = &mut *self.st;
+                    st.owners.close(started, read_idx, |index| {
+                        st.starts.get_retained(&index).is_some()
+                    });
                 }
                 return Ok(Some((read_idx, entry)));
             } else if unclaimed_starts == UnclaimedStarts::Retain
@@ -1378,12 +1374,17 @@ impl CursorTx<'_> {
         &mut self,
         invocation_id: golem_common::model::InvocationId,
     ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
-        let Some((anchor, _)) = self.st.open_invocation(&invocation_id) else {
+        let Some((anchor, export_returned)) = self
+            .st
+            .owners
+            .open_invocation(&invocation_id)
+            .and_then(|(anchor, open)| Some((anchor, open.export_returned.as_ref()?)))
+        else {
             return Err(WorkerExecutorError::runtime(format!(
                 "the invocation {invocation_id} has no open invocation anchor"
             )));
         };
-        self.st.open_anchors[&anchor].export_returned.mark();
+        export_returned.mark();
         let settled_before = |st: &CursorState, bound: Option<OplogIndex>| {
             st.first_settled_after(anchor)
                 .filter(|settled| bound.is_none_or(|bound| *settled < bound))
@@ -1441,9 +1442,9 @@ impl CursorTx<'_> {
     ) -> Result<Option<SettledAt>, WorkerExecutorError> {
         if self
             .st
-            .open_anchors
-            .get(&anchor)
-            .is_none_or(|open| open.invocation_id != invocation_id)
+            .owners
+            .open_invocation_at(anchor)
+            .is_none_or(|open| open.id != invocation_id || !open.records_result_at_return())
         {
             return Err(WorkerExecutorError::runtime(format!(
                 "the invocation anchor {anchor} of invocation {invocation_id} is not open"
@@ -1654,17 +1655,15 @@ impl CursorTx<'_> {
         if let Some(wallet) = &self.cursor.wallet {
             wallet.finish_replayed_invocation();
         }
-        self.st.open_anchors.remove(&anchor);
         let st = &mut *self.st;
         st.owners
             .close(anchor, at, |index| st.starts.get_retained(&index).is_some());
         // An anchor needs only the settlements after it, and later anchors lie after this one.
         let keep_from = self
             .st
-            .open_anchors
-            .keys()
-            .next()
-            .map_or(anchor, |lowest_open| anchor.min(*lowest_open))
+            .owners
+            .first_open_invocation()
+            .map_or(anchor, |lowest_open| anchor.min(lowest_open))
             .next();
         self.st.settled_invocations = self.st.settled_invocations.split_off(&keep_from);
         self.notify_progress = true;
@@ -1673,10 +1672,12 @@ impl CursorTx<'_> {
 
 impl ReplayState {
     /// Opens the invocation anchor of the agent-method or constructor invocation whose
-    /// `AgentInvocationStarted` the cursor consumed at `anchor`. While the anchor is open, only
+    /// `AgentInvocationStarted` the cursor consumed at `anchor`, the last one it consumed: the
+    /// open invocation records its result at the export's return. While the anchor is open, only
     /// [`Self::get_oplog_entry_agent_invocation_terminal_in_open_anchor`] consumes the
     /// invocation's terminal, the retained `Start`s stay claimable after that terminal, and the
-    /// wallet replay of the invocation stays open until [`Self::close_invocation_anchor`].
+    /// wallet replay of the invocation stays open until [`Self::close_invocation_anchor`] closes
+    /// the invocation.
     ///
     /// `export_returned` is the invocation's return signal, which the export call sets when it
     /// returns.
@@ -1687,32 +1688,22 @@ impl ReplayState {
     ) -> Result<(), WorkerExecutorError> {
         self.run_owned_cursor_op(move |state| async move {
             let mut st = state.cursor.state.lock().await;
-            let invocation_id = match st.last_started_invocation {
-                Some((started, invocation_id)) if started == anchor => invocation_id,
-                last => {
-                    return Err(WorkerExecutorError::runtime(format!(
-                        "cannot open the invocation anchor {anchor}: the last consumed \
-                         AgentInvocationStarted is {last:?}"
-                    )));
-                }
-            };
-            if st.owners.is_closed(anchor)
-                || st
-                    .open_anchors
-                    .insert(
-                        anchor,
-                        OpenInvocation {
-                            invocation_id,
-                            export_returned: export_returned.clone(),
-                        },
-                    )
-                    .is_some()
-            {
+            let last = st.owners.last_invocation();
+            if last != Some(anchor) {
                 return Err(WorkerExecutorError::runtime(format!(
-                    "the invocation anchor {anchor} was already opened"
+                    "cannot open the invocation anchor {anchor}: the last consumed \
+                     AgentInvocationStarted is at {last:?}"
                 )));
             }
-            Ok(())
+            match st.owners.open_invocation_at_mut(anchor) {
+                Some(open) if open.export_returned.is_none() => {
+                    open.export_returned = Some(export_returned.clone());
+                    Ok(())
+                }
+                _ => Err(WorkerExecutorError::runtime(format!(
+                    "the invocation anchor {anchor} was already opened"
+                ))),
+            }
         })
         .await
     }
