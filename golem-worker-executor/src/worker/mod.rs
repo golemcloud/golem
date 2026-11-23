@@ -946,7 +946,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         Principal::Agent(AgentPrincipal::of_agent(
             issuer.to_string(),
-            self.owned_agent_id.agent_id.clone(),
+            self.owned_agent_id.agent_id,
             metadata.fingerprint,
             agent_type,
             self.owned_agent_id.environment_id,

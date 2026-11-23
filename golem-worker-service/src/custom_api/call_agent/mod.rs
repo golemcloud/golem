@@ -387,14 +387,14 @@ impl CallAgentHandler {
                         [usize::from(*path_segment_index)]
                     .clone();
 
-                    parse_path_segment_value(raw, parameter_type).map_err(&invalid)?
+                    parse_path_segment_value(raw, parameter_type).map_err(invalid)?
                 }
 
                 MethodParameter::Query {
                     query_parameter_name,
                     parameter_type,
                 } => parse_query_parameter(query_parameter_name, query_params, parameter_type)
-                    .map_err(&invalid)?,
+                    .map_err(invalid)?,
 
                 MethodParameter::Header {
                     header_name,
@@ -412,7 +412,7 @@ impl CallAgentHandler {
                         })
                         .collect::<Result<Vec<_>, _>>()?;
 
-                    parse_query_or_header_value(&vals, parameter_type).map_err(&invalid)?
+                    parse_query_or_header_value(&vals, parameter_type).map_err(invalid)?
                 }
 
                 MethodParameter::JsonObjectBodyField { field_index } => match &body {
