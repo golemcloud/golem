@@ -21,7 +21,7 @@ use golem_common::base_model::api;
 use golem_common::model::Empty;
 use golem_common::model::auth::TokenWithSecret;
 use golem_common::model::login::{
-    OAuth2Provider, OAuth2WebflowData, OAuth2WebflowStart, OAuth2WebflowStateId,
+    OAuth2Login, OAuth2WebflowData, OAuth2WebflowStart, OAuth2WebflowStateId,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -54,33 +54,22 @@ impl LoginApi {
     /// - `secret` is the secret key to be sent in the Authorization header as a bearer token for all the other endpoints
     ///
     #[oai(path = "/oauth2", method = "post", operation_id = "login_oauth2")]
-    async fn oauth2(
-        &self,
-        /// Currently only `github` is supported.
-        provider: Query<OAuth2Provider>,
-        /// OAuth2 access token
-        #[oai(name = "access-token")]
-        access_token: Query<String>,
-    ) -> ApiResult<Json<TokenWithSecret>> {
+    async fn oauth2(&self, request: Json<OAuth2Login>) -> ApiResult<Json<TokenWithSecret>> {
         let record = recorded_http_api_request!("login_oauth2",);
         let response = self
-            .oauth2_internal(provider.0, access_token.0)
+            .oauth2_internal(request.0)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn oauth2_internal(
-        &self,
-        provider: OAuth2Provider,
-        access_token: String,
-    ) -> ApiResult<Json<TokenWithSecret>> {
+    async fn oauth2_internal(&self, request: OAuth2Login) -> ApiResult<Json<TokenWithSecret>> {
         let login_system = self.get_enabled_login_system()?;
 
         let result = login_system
             .oauth2_service
-            .exchange_external_access_token_for_token(&provider, &access_token)
+            .exchange_external_access_token_for_token(&request.provider, &request.access_token)
             .await?;
 
         Ok(Json(result))
@@ -256,3 +245,6 @@ enum WebFlowCallbackResponse {
     #[oai(status = 302)]
     Redirect(Json<Empty>, #[oai(header = "Location")] String),
 }
+
+#[cfg(test)]
+mod tests;

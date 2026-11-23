@@ -71,8 +71,8 @@ describe("GitHub sign-in", () => {
 
     const [login, ...otherLogins] = upstreams.registryLogins()
     expect(otherLogins).toEqual([])
-    expect(login!.url.searchParams.get("provider")).toBe("github")
-    expect(login!.url.searchParams.get("access-token")).toBe(upstreams.github.accessToken)
+    expect(login!.url.search).toBe("")
+    expect(login!.body).toEqual({ provider: "github", accessToken: upstreams.github.accessToken })
 
     expect(await users()).toEqual([
       { email: "octocat@example.com", golem_account_id: upstreams.registryAccount.accountId }
@@ -131,8 +131,8 @@ describe("GitHub sign-in", () => {
     const callback = await signInWithGitHub(app.handler, new CookieJar())
 
     expect(new URL(callback.headers.get("location")!, baseUrl).searchParams.get("error")).toBe("account_not_linked")
-    expect(upstreams.registryLogins().map((login) => login.url.searchParams.get("access-token"))).toEqual([
-      first.accessToken
+    expect(upstreams.registryLogins().map((login) => login.body)).toEqual([
+      { provider: "github", accessToken: first.accessToken }
     ])
     expect(await sessions()).toHaveLength(1)
     expect(await users()).toEqual([

@@ -330,9 +330,10 @@ export class FakeUpstreams {
         if (this.registryLoginStatus !== 200) {
           return Response.json({ error: "unavailable" }, { status: this.registryLoginStatus })
         }
-        const token = url.searchParams.get("access-token")
-        const account = token === null ? undefined : this.registryAccounts.get(token)
-        if (url.searchParams.get("provider") !== "github" || account === undefined) {
+        const login = body as { provider?: unknown; accessToken?: unknown } | undefined
+        const account =
+          typeof login?.accessToken === "string" ? this.registryAccounts.get(login.accessToken) : undefined
+        if (login?.provider !== "github" || account === undefined) {
           return Response.json({ error: "invalid token" }, { status: 401 })
         }
         return Response.json({
