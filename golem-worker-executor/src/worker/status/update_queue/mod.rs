@@ -205,6 +205,7 @@ impl UpdateQueue {
                 timestamp,
                 description,
                 update_attempt_index,
+                requester: _,
             } => self.after_pending_update(index, *timestamp, description, *update_attempt_index),
             OplogEntry::FailedUpdate {
                 target_revision,

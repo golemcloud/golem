@@ -66,6 +66,18 @@ inherit_test_dep!(
 
 const CACHE_TTL: Duration = Duration::from_millis(50);
 
+fn increment_invocation() -> golem_api_grpc::proto::golem::worker::InvocationStart {
+    golem_api_grpc::proto::golem::worker::InvocationStart {
+        method_name: Some("increment".into()),
+        input: Some(
+            golem_schema::SchemaValue::Record { fields: vec![] }
+                .try_into()
+                .unwrap(),
+        ),
+        ..Default::default()
+    }
+}
+
 #[path = "create_config_admission.rs"]
 mod create_config_admission;
 
@@ -126,12 +138,39 @@ async fn fresh_ephemeral_streaming_preparation_skips_the_existence_lookup(
         &golem_common::model::InvocationRequestKey::Internal(key.clone()).owner_key("increment"),
     );
     let target = resolved.owned_agent_id.clone();
+    let mismatch = seed
+        .all()
+        .rpc()
+        .create_demand(
+            resolved.clone(),
+            "WRONG",
+            Some(increment_invocation()),
+            seed.get_initial_worker_metadata().created_by,
+            &seed.agent_id(),
+            &[],
+            InvocationContextStack::fresh(),
+            &callers::anonymous(),
+            vec![],
+            &AuthCtx::System,
+            Some(key.clone()),
+            InvocationFreshnessDisposition::MayExist,
+        )
+        .await;
+    assert!(mismatch.is_err());
+    assert!(
+        Worker::get_latest_metadata(seed.all(), &target)
+            .await?
+            .is_none()
+    );
+    assert!(executor.stored_oplog(&target.agent_id).await.is_empty());
+    assert_eq!(executor.instance_load_count(&target.agent_id), 0);
     let demand = seed
         .all()
         .rpc()
         .create_demand(
             resolved.clone(),
             "increment",
+            Some(increment_invocation()),
             seed.get_initial_worker_metadata().created_by,
             &seed.agent_id(),
             &[],
@@ -170,6 +209,7 @@ async fn fresh_ephemeral_streaming_preparation_skips_the_existence_lookup(
         .create_demand(
             resolved,
             "increment",
+            Some(increment_invocation()),
             seed.get_initial_worker_metadata().created_by,
             &seed.agent_id(),
             &[],
@@ -229,6 +269,7 @@ async fn grpc_ephemeral_streaming_preparation_validates_freshness_and_reuses_the
         idempotency_key: Some(IdempotencyKey::fresh().into()),
         freshness_disposition: ProtoFreshness::KnownFresh as i32,
         caller: Some(callers::anonymous().into()),
+        invocation: Some(increment_invocation()),
         ..Default::default()
     };
     let invalid = executor
@@ -247,6 +288,28 @@ async fn grpc_ephemeral_streaming_preparation_validates_freshness_and_reuses_the
     );
 
     request.idempotency_key = Some(key.clone().into());
+    request.invocation.as_mut().unwrap().method_name = Some("WRONG".into());
+    let rejected = executor
+        .client
+        .clone()
+        .create_worker(request.clone())
+        .await?
+        .into_inner();
+    assert!(matches!(
+        rejected.result,
+        Some(create_worker_response::Result::Failure(_))
+    ));
+    assert!(executor.stored_oplog(&target).await.is_empty());
+    assert_eq!(executor.instance_load_count(&target), 0);
+    assert!(
+        Worker::get_latest_metadata(
+            seed.all(),
+            &OwnedAgentId::new(seed.get_initial_worker_metadata().environment_id, &target),
+        )
+        .await?
+        .is_none()
+    );
+    request.invocation = Some(increment_invocation());
     let first = executor
         .client
         .clone()
@@ -312,6 +375,7 @@ async fn grpc_ephemeral_streaming_preparation_validates_freshness_and_reuses_the
         .create_demand(
             rpc_resolved,
             "increment",
+            Some(increment_invocation()),
             metadata.created_by,
             &seed.agent_id(),
             &[],
@@ -2039,6 +2103,7 @@ impl Target {
         CreateIntent::Invocation {
             owner: self.owner.clone(),
             idempotency_key: None,
+            invocation: Some(increment_invocation()),
         }
     }
 
@@ -2093,6 +2158,82 @@ async fn acquire(
         target.invocation(),
     )
     .await
+}
+
+#[test]
+#[timeout("4 minutes")]
+async fn rejected_fresh_initializer_does_not_reject_its_valid_follower(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let (executor, seed, faults) = setup(last_unique_id, deps, component).await?;
+    for (invalid_first, cancel_first) in [(true, false), (false, false), (true, true)] {
+        let id = target(
+            &seed,
+            &format!("validation-race-{invalid_first}-{cancel_first}"),
+        );
+        let acquire = |invalid: bool| {
+            let seed = seed.clone();
+            let id = id.clone();
+            async move {
+                let mut invocation = increment_invocation();
+                if invalid {
+                    invocation.method_name = Some("WRONG".into());
+                }
+                Worker::get_or_create_suspended_with_freshness(
+                    seed.all(),
+                    &id,
+                    None,
+                    vec![],
+                    None,
+                    None,
+                    &InvocationContextStack::fresh(),
+                    callers::anonymous(),
+                    InvocationFreshnessDisposition::MayExist,
+                    CreateIntent::Invocation {
+                        owner: id.owner.clone(),
+                        idempotency_key: None,
+                        invocation: Some(invocation),
+                    },
+                )
+                .await
+            }
+        };
+        let gate = faults.pause_next("read_cached_agent_mode");
+        let mut first = Box::pin(acquire(invalid_first));
+        assert!(poll!(&mut first).is_pending());
+        gate.entered().await;
+        let mut second = Box::pin(acquire(!invalid_first));
+        assert!(poll!(&mut second).is_pending());
+        assert!(executor.stored_oplog(&id.agent_id).await.is_empty());
+        if cancel_first {
+            drop(first);
+            gate.release();
+            second.await?;
+        } else {
+            gate.release();
+            let second = second.await?;
+            if invalid_first {
+                assert!(matches!(
+                    first.await,
+                    Err(WorkerExecutorError::InvalidRequest { .. })
+                ));
+            } else {
+                assert!(Arc::ptr_eq(&first.await?, &second));
+            }
+        }
+        let entries = executor.stored_oplog(&id.agent_id).await;
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| matches!(entry, OplogEntry::Create { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(executor.instance_load_count(&id.agent_id), 0);
+    }
+    Ok(())
 }
 
 async fn register_stream(worker: &Worker<TestWorkerCtx>) -> anyhow::Result<DurableStreamHandle> {
@@ -2560,7 +2701,7 @@ async fn restart_initializes_a_partially_created_agent_as_its_recorded_creator(
     for loader in loaders {
         let id = target(&seed, &format!("restart-creator-{loader}"));
         if loader == "existing-only" {
-            Worker::interrupt(seed.all(), &id, false, callers::anonymous(), None).await?;
+            Worker::interrupt(seed.all(), &id, false, None).await?;
         }
         let worker = acquire(&seed, &id).await?;
         let entries = worker
@@ -2654,7 +2795,7 @@ async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
     let (executor, seed, _) = setup(last_unique_id, deps, component).await?;
     let id = target(&seed, "cancelled-creator");
     let all = seed.all().clone();
-    Worker::interrupt(&all, &id, false, callers::anonymous(), None).await?;
+    Worker::interrupt(&all, &id, false, None).await?;
     assert!(!executor.worker_is_cached(&id).await);
     assert!(
         !seed
@@ -2700,13 +2841,7 @@ async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
         .expect("creator must reach the initialization enqueue");
     creating.abort();
     assert!(creating.await.err().unwrap().is_cancelled());
-    let mut existing = Box::pin(Worker::interrupt(
-        &all,
-        &id,
-        false,
-        callers::anonymous(),
-        None,
-    ));
+    let mut existing = Box::pin(Worker::interrupt(&all, &id, false, None));
     let mut competing = Box::pin(acquire(&seed, &id));
     assert!(poll!(&mut existing).is_pending());
     assert!(poll!(&mut competing).is_pending());
@@ -2933,12 +3068,13 @@ async fn prepare_session(
     completed: bool,
 ) -> anyhow::Result<StreamSessionKey> {
     let oplog = worker.oplog();
-    let pending_index = oplog.current_oplog_index().await.next().next();
+    let pending_index = oplog.current_oplog_index().await.next();
     let operation = InvocationRequestOperation::AgentMethod {
         method_name: "increment".into(),
     };
     let payload = OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
-        input: data_value!().value().clone(),
+        input: data_value!().value().clone().try_into().unwrap(),
+        allow_streams: false,
         caller: callers::anonymous(),
         scope_card: None,
     }));
@@ -2959,37 +3095,51 @@ async fn prepare_session(
         &idempotency_key,
     )?;
     let attempt_id = AttemptId::fresh();
-    for record in [
-        StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
+    let prepared = StreamSessionPreparedRecord {
+        format_version: 1,
+        public_session_id: idempotency_key.to_string(),
+        route_scope: None,
+        session_key: idempotency_key,
+        expiry_policy: StreamSessionExpiryPolicy::None,
+        expiry_deadline_millis: None,
+        attempt: StartAttemptDescriptor {
             format_version: 1,
-            public_session_id: idempotency_key.to_string(),
-            route_scope: None,
-            session_key: idempotency_key,
-            expiry_policy: StreamSessionExpiryPolicy::None,
-            expiry_deadline_millis: None,
-            attempt: StartAttemptDescriptor {
+            session_key: session_key.clone(),
+            attachment_id,
+            expected_callee_fingerprint: metadata.fingerprint,
+            attempt_id,
+            invocation: PersistedStreamInvocationDescriptor {
                 format_version: 1,
                 session_key: session_key.clone(),
-                attachment_id,
-                expected_callee_fingerprint: metadata.fingerprint,
-                attempt_id,
-                invocation: PersistedStreamInvocationDescriptor {
-                    format_version: 1,
-                    session_key: session_key.clone(),
-                    target_component_revision: metadata.last_known_status.component_revision,
-                    target: PersistedInvocationTarget::AgentMethod {
-                        method_name: "increment".into(),
-                    },
-                    invocation_value: vec![],
-                    stream_handles: vec![],
-                    execution_config: vec![],
-                    effective_identity: vec![],
+                target_component_revision: metadata.last_known_status.component_revision,
+                target: PersistedInvocationTarget::AgentMethod {
+                    method_name: "increment".into(),
                 },
+                invocation_value: vec![],
+                stream_handles: vec![],
+                execution_config: vec![],
                 effective_identity: vec![],
-                live_join_buffer_events: 1,
             },
-            stream_mappings: vec![],
-        }),
+            effective_identity: vec![],
+            live_join_buffer_events: 1,
+        },
+        stream_mappings: vec![],
+    };
+    assert_eq!(
+        worker
+            .add_and_commit_oplog(OplogEntry::pending_agent_invocation(
+                None,
+                idempotency_key,
+                Box::new(operation.clone()),
+                payload.clone(),
+                trace_id.clone(),
+                trace_states.clone(),
+                invocation_context.clone(),
+            ))
+            .await?,
+        pending_index
+    );
+    for record in [
         StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
             session_key: idempotency_key,
@@ -2997,9 +3147,10 @@ async fn prepare_session(
             attempt_id,
             epoch: 1,
             pending_invocation_oplog_index: pending_index,
+            acceptance: prepared.acceptance(),
         }),
+        StreamSessionRecord::Prepared(prepared),
     ] {
-        let prepared = matches!(record, StreamSessionRecord::Prepared(_));
         worker
             .add_and_commit_oplog(OplogEntry::StreamSession {
                 timestamp: Timestamp::now_utc(),
@@ -3009,23 +3160,6 @@ async fn prepare_session(
             })
             .await
             .unwrap();
-        if prepared {
-            assert_eq!(
-                worker
-                    .add_and_commit_oplog(OplogEntry::pending_agent_invocation(
-                        None,
-                        idempotency_key,
-                        Box::new(operation.clone()),
-                        payload.clone(),
-                        trace_id.clone(),
-                        trace_states.clone(),
-                        invocation_context.clone(),
-                    ))
-                    .await
-                    .unwrap(),
-                pending_index
-            );
-        }
     }
     if completed {
         worker
@@ -3058,6 +3192,7 @@ async fn prepare_session(
                 method_name: Some("increment".into()),
                 consumed_fuel: 0,
                 component_revision: metadata.last_known_status.component_revision,
+                awaits_settlement: false,
             })
             .await
             .unwrap();
@@ -3081,7 +3216,8 @@ async fn completion_receipt_precedes_fifo_status_fold(
         method_name: "increment".into(),
     };
     let payload = OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
-        input: data_value!().value().clone(),
+        input: data_value!().value().clone().try_into().unwrap(),
+        allow_streams: false,
         caller: callers::anonymous(),
         scope_card: None,
     }));
@@ -3130,6 +3266,7 @@ async fn completion_receipt_precedes_fifo_status_fold(
             method_name: Some("increment".into()),
             consumed_fuel: 0,
             component_revision: metadata.last_known_status.component_revision,
+            awaits_settlement: false,
         })
         .await
         .unwrap();
@@ -3245,7 +3382,8 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
                 method_name: "increment".into(),
             }),
             payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
-                input: data_value!().value().clone(),
+                input: data_value!().value().clone().try_into().unwrap(),
+                allow_streams: false,
                 caller: callers::anonymous(),
                 scope_card: None,
             })),
@@ -3288,6 +3426,7 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
                 .get_initial_worker_metadata()
                 .last_known_status
                 .component_revision,
+            awaits_settlement: false,
         })
         .await?;
     // Actor-owned reconstruction must reach the checkpoint before publishing the repaired status.
@@ -3319,6 +3458,7 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
                 idempotency_key: None,
                 oplog_index: Some(finished),
                 agent_fingerprint: None,
+                background_failure: None,
             },
         ),
     )
@@ -3406,7 +3546,8 @@ async fn jump_projection_finishes_without_its_producer(
                 }),
                 payload: OplogPayload::Inline(Box::new(
                     StoredAgentInvocationPayload::AgentMethod {
-                        input: data_value!().value().clone(),
+                        input: data_value!().value().clone().try_into().unwrap(),
+                        allow_streams: false,
                         caller: callers::anonymous(),
                         scope_card: None,
                     },

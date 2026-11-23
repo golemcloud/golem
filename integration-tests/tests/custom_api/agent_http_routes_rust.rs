@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::assert_json_content_type;
+use super::{assert_invocation_receipt, assert_json_content_type, assert_no_invocation_receipt};
 use crate::custom_api::http_test_context::{HttpTestContext, make_test_context};
 use golem_common::base_model::agent::AgentTypeName;
 use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
@@ -267,6 +267,7 @@ async fn json_body_missing_field(#[dimension(db)] agent: &HttpTestContext) -> an
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_no_invocation_receipt(&response);
     Ok(())
 }
 
@@ -451,6 +452,7 @@ async fn response_no_content(#[dimension(db)] agent: &HttpTestContext) -> anyhow
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
+    assert_invocation_receipt(agent, &response).await?;
     assert!(response.bytes().await?.is_empty());
 
     Ok(())
@@ -512,6 +514,7 @@ async fn response_optional_not_found(
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+    assert_invocation_receipt(agent, &response).await?;
     assert!(response.bytes().await?.is_empty());
 
     Ok(())
@@ -556,6 +559,7 @@ async fn response_result_err(#[dimension(db)] agent: &HttpTestContext) -> anyhow
         response.status(),
         reqwest::StatusCode::INTERNAL_SERVER_ERROR
     );
+    assert_invocation_receipt(agent, &response).await?;
     assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
@@ -1028,13 +1032,14 @@ async fn webhook_callback(#[dimension(db)] agent: &HttpTestContext) -> anyhow::R
 
                     let client = Client::new();
                     let payload = serde_json::to_vec(&"hello").unwrap();
-                    client
+                    let callback = client
                         .post(url)
                         .header("Host", host_header.clone())
                         .body(payload.clone())
                         .send()
                         .await
                         .unwrap();
+                    assert_no_invocation_receipt(&callback);
 
                     "ok"
                 }

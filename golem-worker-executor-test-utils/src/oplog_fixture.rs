@@ -241,6 +241,7 @@ impl OplogService for OplogFixtureService {
         index: OplogIndex,
         count: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        self.deps.record_oplog_call(id, "service_read_exact");
         self.inner.read_exact(id, mode, index, count).await
     }
 

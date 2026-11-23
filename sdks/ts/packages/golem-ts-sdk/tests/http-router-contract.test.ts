@@ -55,6 +55,9 @@ it('compiles optional roles without a fake handler or policy override', () => {
   expect(result.handlerBinding).toBeUndefined();
   expect(result.mount.openapiProviderMethod).toBe('documentation');
   expect(result.mount.authDetails).toEqual({ required: true });
+  expect(result.mount.agentIdBinding).toBeUndefined();
+  expect(result.mount.createRoute).toBeUndefined();
+  expect(result.mount).not.toHaveProperty('phantomIdBinding');
   expect(compileRouterMount({ mount: '/', handlerMethod: 'anything' }).handlerBinding).toEqual({
     httpMethod: { tag: 'any' },
     pathSuffix: [],

@@ -377,6 +377,14 @@ paths:
         schema:
           type: string
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '200':
           content:
@@ -384,12 +392,47 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.OkResponse'
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
     options:
@@ -469,6 +512,14 @@ paths:
         schema:
           type: string
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       requestBody:
         content:
           application/json:
@@ -489,12 +540,47 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.PreflightResponse'
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /cors-agents/{agent-name}/wildcard:
@@ -510,6 +596,14 @@ paths:
         schema:
           type: string
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '200':
           content:
@@ -517,12 +611,47 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.OkResponse'
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
     options:
@@ -578,6 +707,14 @@ paths:
         schema:
           type: string
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       requestBody:
         content:
           application/json:
@@ -605,12 +742,47 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.JsonBodyResponse'
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/multi-path-vars/{first}/{second}:
@@ -642,6 +814,14 @@ paths:
         schema:
           type: string
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '200':
           content:
@@ -649,12 +829,47 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.MultiPathVarsResponse'
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/path-and-header/{resource-id}:
@@ -686,6 +901,14 @@ paths:
         schema:
           type: string
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '200':
           content:
@@ -693,12 +916,47 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.PathAndHeaderResponse'
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/path-and-query/{item-id}:
@@ -735,6 +993,14 @@ paths:
           x-golem-maximum: '18446744073709551615'
           x-golem-minimum: '0'
         style: form
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '200':
           content:
@@ -742,12 +1008,47 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.PathAndQueryResponse'
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/query-body:
@@ -760,6 +1061,14 @@ paths:
         in: path
         name: agent-name
         required: true
+        schema:
+          type: string
+        style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
         schema:
           type: string
         style: simple
@@ -802,12 +1111,47 @@ paths:
                   type: string
                 type: array
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/query-delete:
@@ -834,6 +1178,14 @@ paths:
           minimum: 0
           type: integer
         style: form
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '200':
           content:
@@ -843,12 +1195,47 @@ paths:
                 minimum: 0
                 type: integer
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/query-explicit:
@@ -898,6 +1285,14 @@ paths:
             minimum: 0
             type: integer
         style: deepObject
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '200':
           content:
@@ -907,12 +1302,47 @@ paths:
                   type: string
                 type: array
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/query-optional:
@@ -962,6 +1392,14 @@ paths:
             minimum: 0
             type: integer
         style: deepObject
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '200':
           content:
@@ -971,12 +1409,47 @@ paths:
                   type: string
                 type: array
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/query/{item}:
@@ -1051,6 +1524,14 @@ paths:
         schema:
           type: string
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '200':
           content:
@@ -1060,12 +1541,47 @@ paths:
                   type: string
                 type: array
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/resource/{id}:
@@ -1089,6 +1605,14 @@ paths:
         schema:
           type: string
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       requestBody:
         content:
           application/json:
@@ -1109,12 +1633,47 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.ResourceResponse'
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/resource/{id}/partial:
@@ -1138,6 +1697,14 @@ paths:
         schema:
           type: string
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '200':
           content:
@@ -1145,12 +1712,47 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.ResourceResponse'
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/resp/binary:
@@ -1166,6 +1768,14 @@ paths:
         schema:
           type: string
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '200':
           content:
@@ -1174,9 +1784,30 @@ paths:
                 format: binary
                 type: string
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '307':
           description: Response 307
           headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
             Location:
               description: 'Response header: Location'
               required: true
@@ -1189,6 +1820,30 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/resp/guarded-binary/{state}:
@@ -1212,6 +1867,14 @@ paths:
         schema:
           type: string
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '200':
           content:
@@ -1220,9 +1883,30 @@ paths:
                 format: binary
                 type: string
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '307':
           description: Response 307
           headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
             Location:
               description: 'Response header: Location'
               required: true
@@ -1235,14 +1919,60 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '404':
           description: Response 404
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '500':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.ResultErrResponse'
           description: Response 500
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/resp/guarded-text/{state}:
@@ -1266,6 +1996,14 @@ paths:
         schema:
           type: string
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '200':
           content:
@@ -1282,9 +2020,29 @@ paths:
                 - en
                 type: string
               style: simple
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '307':
           description: Response 307
           headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
             Location:
               description: 'Response header: Location'
               required: true
@@ -1297,14 +2055,60 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '404':
           description: Response 404
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '500':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.ResultErrResponse'
           description: Response 500
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/resp/json:
@@ -1320,6 +2124,14 @@ paths:
         schema:
           type: string
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '200':
           content:
@@ -1327,12 +2139,47 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.JsonResponse'
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/resp/no-content:
@@ -1348,15 +2195,58 @@ paths:
         schema:
           type: string
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '204':
           description: Response 204
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/resp/optional-binary/{found}:
@@ -1380,6 +2270,14 @@ paths:
         schema:
           type: boolean
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '200':
           content:
@@ -1388,9 +2286,30 @@ paths:
                 format: binary
                 type: string
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '307':
           description: Response 307
           headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
             Location:
               description: 'Response header: Location'
               required: true
@@ -1403,8 +2322,43 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '404':
           description: Response 404
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/resp/optional/{found}:
@@ -1428,6 +2382,14 @@ paths:
         schema:
           type: boolean
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '200':
           content:
@@ -1435,14 +2397,60 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.OptionalResponse'
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '404':
           description: Response 404
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/resp/result-json-json/{ok}:
@@ -1466,6 +2474,14 @@ paths:
         schema:
           type: boolean
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '200':
           content:
@@ -1473,18 +2489,64 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.ResultOkResponse'
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '500':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.ResultErrResponse'
           description: Response 500
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/resp/result-json-void:
@@ -1500,6 +2562,14 @@ paths:
         schema:
           type: string
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '200':
           content:
@@ -1507,14 +2577,60 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.ResultOkResponse'
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '500':
           description: Response 500
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/resp/result-void-json:
@@ -1530,21 +2646,75 @@ paths:
         schema:
           type: string
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '204':
           description: Response 204
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '500':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.ResultErrResponse'
           description: Response 500
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/rest/{tail}:
@@ -1569,6 +2739,14 @@ paths:
           description: Parameter represents the remaining path, including slashes.
           type: string
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '200':
           content:
@@ -1576,12 +2754,47 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.RemainingPathResponse'
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/restricted-unstructured-binary/{bucket}:
@@ -1605,6 +2818,14 @@ paths:
         schema:
           type: string
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       requestBody:
         content:
           image/gif:
@@ -1624,12 +2845,47 @@ paths:
                 x-golem-maximum: '9223372036854775807'
                 x-golem-minimum: '-9223372036854775808'
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/string-path-var/{path-var}:
@@ -1653,6 +2909,14 @@ paths:
         schema:
           type: string
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '200':
           content:
@@ -1660,12 +2924,47 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.StringPathVarResponse'
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /http-agents/{agent-name}/unrestricted-unstructured-binary/{bucket}:
@@ -1689,6 +2988,14 @@ paths:
         schema:
           type: string
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       requestBody:
         content:
           '*/*':
@@ -1708,12 +3015,47 @@ paths:
                 x-golem-maximum: '9223372036854775807'
                 x-golem-minimum: '-9223372036854775808'
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /openapi.json:
@@ -1751,6 +3093,14 @@ paths:
         schema:
           type: string
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       requestBody:
         content:
           application/json:
@@ -1767,12 +3117,47 @@ paths:
       responses:
         '204':
           description: Response 204
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /webhook-agents/{agent-name}/test-webhook:
@@ -1788,6 +3173,14 @@ paths:
         schema:
           type: string
         style: simple
+      - description: External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.
+        explode: false
+        in: header
+        name: Idempotency-Key
+        required: false
+        schema:
+          type: string
+        style: simple
       responses:
         '200':
           content:
@@ -1795,12 +3188,47 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.WebhookResponse'
           description: Response 200
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
         '400':
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
           description: Response 400
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
+        default:
+          description: Request or invocation failure
+          headers:
+            Golem-Environment-Id:
+              description: Environment of the accepted invocation. Present together with Golem-Invocation-Id.
+              required: false
+              schema:
+                type: string
+            Golem-Invocation-Id:
+              description: Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.
+              required: false
+              schema:
+                type: string
       security: []
       x-golem-route-mode: plain
   /webhooks/cors-agent/{promise-id}:

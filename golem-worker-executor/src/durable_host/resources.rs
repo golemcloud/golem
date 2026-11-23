@@ -145,6 +145,7 @@ where
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
     fn self_uri(&self) -> Uri {
         self.state.self_uri()
@@ -246,6 +247,7 @@ impl PrivateDurableWorkerState {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ResourceStore for PrivateDurableWorkerState {
     fn self_uri(&self) -> Uri {
         Uri {
@@ -307,6 +309,7 @@ mod tests {
     }
 
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl ResourceLimiterAsync for LimitedMemory {
         async fn memory_growing(
             &mut self,

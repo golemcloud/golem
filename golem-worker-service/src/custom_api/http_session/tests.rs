@@ -48,6 +48,7 @@ struct ScriptTransport {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SessionTransport for ScriptTransport {
     async fn start(
         &self,
@@ -352,6 +353,7 @@ pub(in crate::custom_api) fn accepted(epoch: u64, high_water: Option<u64>) -> In
             command_path: vec![],
             joined_origin_observer: false,
             terminal_cursor_stream_ids: vec![],
+            captured_method_input: None,
         },
     ))
 }
@@ -2345,6 +2347,7 @@ fn unread_request_body_bounds_only_the_wait_for_acceptance() {
                     IDLE,
                     has_request_body,
                     crate::custom_api::http_envelope::HttpVersion::Http1,
+                    &mut None,
                 )
                 .await
                 .map(|_| ())
@@ -2477,6 +2480,7 @@ fn guest_input_disposal_stops_the_upload_without_a_late_idle_failure() {
                     Duration::from_secs(1),
                     true,
                     version,
+                    &mut None,
                 )
                 .await
                 .unwrap();
@@ -2572,6 +2576,7 @@ async fn disconnect_cancels_the_session_after_the_upload_stops() {
                         idle,
                         true,
                         version,
+                        &mut None,
                     )
                     .await;
                     let _ = head_tx.send(head.map(|_| ()));

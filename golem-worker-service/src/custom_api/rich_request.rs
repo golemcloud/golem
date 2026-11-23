@@ -15,6 +15,7 @@ use super::{OidcSession, ParsedRequestBody, RawBinaryBody};
 // limitations under the License.
 
 use super::error::RequestHandlerError;
+use crate::service::worker::AcceptedInvocation;
 use anyhow::anyhow;
 use golem_common::model::agent::{TextSource, TextType};
 use golem_common::model::invocation_context::{
@@ -37,6 +38,7 @@ pub struct RichRequest {
     pub underlying: poem::Request,
     pub request_id: Uuid,
     pub authenticated_session: Option<OidcSession>,
+    pub accepted_invocation: Option<AcceptedInvocation>,
 
     parsed_cookies: OnceLock<HashMap<String, String>>,
     parsed_query_params: OnceLock<HashMap<String, Vec<String>>>,
@@ -48,6 +50,7 @@ impl RichRequest {
             underlying,
             request_id: Uuid::new_v4(),
             authenticated_session: None,
+            accepted_invocation: None,
             parsed_cookies: OnceLock::new(),
             parsed_query_params: OnceLock::new(),
         }
@@ -296,13 +299,25 @@ impl RichRequest {
         })))
     }
 
-    pub fn idempotency_key(&self) -> IdempotencyKey {
+    pub fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, RequestHandlerError> {
         self.underlying
             .headers()
             .get("idempotency-key")
-            .and_then(|h| h.to_str().ok())
-            .map(|value| IdempotencyKey::new(value.to_string()))
-            .unwrap_or_else(IdempotencyKey::fresh)
+            .map(|header| {
+                let value = header
+                    .to_str()
+                    .map_err(|_| RequestHandlerError::HeaderIsNotAscii {
+                        header_name: "Idempotency-Key".into(),
+                    })?;
+                if value.is_empty() {
+                    return Err(RequestHandlerError::InvalidParameter {
+                        name: "Idempotency-Key".into(),
+                        error: "must not be empty".into(),
+                    });
+                }
+                Ok(IdempotencyKey::new(value.to_string()))
+            })
+            .transpose()
     }
 
     pub fn invocation_context(&self) -> InvocationContextStack {
@@ -543,6 +558,19 @@ mod request_body_tests {
         let result = request.parse_request_body(&schema).await.unwrap();
 
         let_assert!(ParsedRequestBody::JsonBody(SchemaValue::Record { .. }) = result);
+    }
+
+    #[test]
+    async fn business_idempotency_key_field_is_not_a_transport_key() {
+        let mut request = json_request(json!({"idempotencyKey": "business-value"}));
+        let schema = json_body(SchemaType::record(vec![record_field(
+            "idempotencyKey",
+            SchemaType::string(),
+        )]));
+        let result = request.parse_request_body(&schema).await.unwrap();
+        let_assert!(ParsedRequestBody::JsonBody(SchemaValue::Record { fields }) = result);
+        assert_eq!(fields, vec![SchemaValue::String("business-value".into())]);
+        assert_eq!(request.idempotency_key().unwrap(), None);
     }
 
     #[test]

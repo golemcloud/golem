@@ -26,7 +26,7 @@ use golem_common::model::quota::{EnforcementAction, TimePeriod};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_key, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use golem_test_framework::dsl::{TestDsl, TestDslExtended, original_native_method_input};
 use integration_tests::agents::lookup_keyed_agent;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -40,10 +40,7 @@ const QUOTA_TOKEN_PLACEHOLDER: &str = "<redacted: quota-token>";
 
 /// Returns the externally redacted argument record of the first
 /// `AgentInvocationStarted` entry of the given agent method.
-fn started_input_fields<'a>(
-    oplog: &'a [PublicOplogEntryWithIndex],
-    method: &str,
-) -> &'a [SchemaValue] {
+fn started_input_fields(oplog: &[PublicOplogEntryWithIndex], method: &str) -> Vec<SchemaValue> {
     let typed = oplog
         .iter()
         .find_map(|e| match &e.entry {
@@ -54,7 +51,7 @@ fn started_input_fields<'a>(
             _ => None,
         })
         .unwrap_or_else(|| panic!("no AgentInvocationStarted entry for {method}"));
-    match typed.value() {
+    match original_native_method_input(typed).unwrap() {
         SchemaValue::Record { fields } => fields,
         other => panic!("expected record input value for {method}, got {other:?}"),
     }

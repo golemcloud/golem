@@ -25,29 +25,28 @@ import { multimodal } from "../src/Multimodal.js"
 import { UnstructuredText } from "../src/Unstructured.js"
 import * as Wit from "../src/WitTypes.js"
 
-const selectedMount: Http.MountDef<"name"> = Http.mount("/c/{name}/{instance}", {
-  phantomId: Http.phantomId.path("instance", { optional: true }),
+const selectedMount = Http.mount("/c/{instance}", {
+  agentIdBinding: Http.agentId.path("instance"),
 })
 void selectedMount
 // @ts-expect-error a literal path selector must refer to a mount capture
-void Http.mount("/c/{name}", { phantomId: Http.phantomId.path("missing") })
+void Http.mount("/c/{name}", { agentIdBinding: Http.agentId.path("missing") })
 // @ts-expect-error system variables cannot be selectors
-void Http.mount("/c/{agent-type}", { phantomId: Http.phantomId.path("agent-type") })
+void Http.mount("/c/{agent-type}", { agentIdBinding: Http.agentId.path("agent-type") })
 defineAgent({
-  name: "SelectedConstructorHole",
+  name: "SelectedConstructorIndependent",
   id: { name: Schema.String, missing: Schema.String },
-  // @ts-expect-error selection cannot hide an uncovered constructor parameter
   http: selectedMount,
   methods: { read: method({ input: {}, success: Schema.String, http: [Http.get("/read")] }) },
 })
 // @ts-expect-error only the declared capture is exempt
 const extraCapture: Http.MountDef<"name"> = Http.mount("/c/{name}/{instance}/{other}", {
-  phantomId: Http.phantomId.path("instance"),
+  agentIdBinding: Http.agentId.path("instance"),
 })
 void extraCapture
 // @ts-expect-error query selection does not exempt a path capture
 const queryCapture: Http.MountDef<"name"> = Http.mount("/c/{name}/{instance}", {
-  phantomId: Http.phantomId.query("instance"),
+  agentIdBinding: Http.agentId.query("instance"),
 })
 void queryCapture
 
@@ -1180,6 +1179,49 @@ void defineAgent({
   init: () => Effect.void,
   methods: () => Effect.succeed({ value: () => Effect.succeed(0) }),
 })
+
+// ID mounts do not bind constructor input, including non-URL schemas.
+void defineAgent({
+  name: "IdMounted",
+  id: { customer: Schema.Struct({ name: Schema.String }) },
+  http: Http.mount("/agents/{id}", {
+    agentIdBinding: Http.agentId.path("id"),
+    createRoute: "/{agent-type}/create",
+    exposeFiles: [{ route: "/file", path: "/file" }],
+  }).pipe(Http.withAuth(true)),
+  methods: { read: method({ input: {}, success: Schema.String, http: [Http.get("/read")] }) },
+})
+void Http.mount("/agents", { agentIdBinding: Http.agentId.query("id"), createRoute: "/" })
+void defineAgent({
+  name: "IdMountedNonPhantom",
+  id: { customer: Schema.Struct({ name: Schema.String }) },
+  http: Http.mount("/{id}", { agentIdBinding: Http.agentId.path("id") }).pipe(
+    Http.withPhantomAgent(false),
+  ),
+  methods: { read: method({ input: {}, success: Schema.String, http: [Http.get("/read")] }) },
+})
+void defineAgent({
+  name: "IdMountedWebhook",
+  id: { customer: Schema.String },
+  http: Http.mount("/agents", { agentIdBinding: Http.agentId.query("id") }).pipe(
+    Http.withWebhookSuffix("/inbox/{customer}"),
+  ),
+  methods: {},
+})
+// @ts-expect-error ID selection is required, with no optional fallback
+void Http.agentId.query("id", { optional: true })
+// @ts-expect-error path binding must name a mount capture
+void Http.mount("/agents", { agentIdBinding: Http.agentId.path("id") })
+// @ts-expect-error ID mounts cannot also bind constructor captures
+void Http.mount("/agents/{customer}/{id}", { agentIdBinding: Http.agentId.path("id") })
+// @ts-expect-error query-ID mounts cannot bind constructor captures
+void Http.mount("/agents/{customer}", { agentIdBinding: Http.agentId.query("id") })
+// @ts-expect-error create is only available on ID mounts
+void Http.mount("/agents", { createRoute: "/create" })
+// @ts-expect-error create paths cannot capture application inputs
+void Http.mount("/agents", { agentIdBinding: Http.agentId.query("id"), createRoute: "/{id}" })
+// @ts-expect-error ID binding excludes phantomAgent
+void Http.mount("/agents", { agentIdBinding: Http.agentId.query("id"), phantomAgent: true })
 
 // Positive — agent with NO HTTP methods may also omit `http` even when
 // `withHttp` is NOT used. Confirms `HasHttp = false` is the default.

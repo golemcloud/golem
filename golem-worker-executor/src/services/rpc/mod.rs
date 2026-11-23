@@ -23,7 +23,6 @@ use super::{
 };
 use crate::durable_host::durable_session::durable_stream_mapping_to_proto;
 use crate::durable_host::websocket::WebSocketConnectionPool;
-use crate::grpc::{build_durable_streaming_request, decode_invocation_input};
 use crate::services::agent_filesystem_snapshots::AgentFilesystemSnapshots;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
@@ -76,7 +75,6 @@ use golem_common::schema::SchemaValue;
 use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
-use prost::Message;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
@@ -162,6 +160,7 @@ pub trait Rpc: Send + Sync {
         &self,
         target: ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],

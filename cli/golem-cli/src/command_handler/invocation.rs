@@ -235,6 +235,7 @@ fn state(state: InvocationStateArg) -> InvocationState {
         InvocationStateArg::Retrying => InvocationState::Retrying,
         InvocationStateArg::Interrupted => InvocationState::Interrupted,
         InvocationStateArg::Completed => InvocationState::Completed,
+        InvocationStateArg::BackgroundFailed => InvocationState::BackgroundFailed,
         InvocationStateArg::Failed => InvocationState::Failed,
         InvocationStateArg::Cancelled => InvocationState::Cancelled,
     }

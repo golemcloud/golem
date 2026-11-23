@@ -1310,6 +1310,7 @@ fn collector_abandonment_requires_the_owning_entity_cancellation() {
                 function_name: function.to_string(),
                 invocation_id: None,
                 observational_owner: None,
+                driver: None,
                 request: None,
                 durable_function_type: PublicDurableFunctionType::ReadLocal(Empty {}),
                 span_started: None,

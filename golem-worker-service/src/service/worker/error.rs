@@ -18,15 +18,27 @@ use crate::service::limit::LimitServiceError;
 use crate::service::worker::CallWorkerExecutorError;
 use golem_common::SafeDisplay;
 use golem_common::base_model::api;
-use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{CanonicalFilePath, ComponentId};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::filesystem::FileReadError;
+use golem_common::model::{AgentId, OwnedInvocationId};
 use golem_service_base::clients::registry::RegistryServiceError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AcceptedInvocation {
+    pub id: OwnedInvocationId,
+    pub environment_id: EnvironmentId,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum WorkerServiceError {
+    #[error("{source}")]
+    AcceptedInvocation {
+        accepted: AcceptedInvocation,
+        source: Box<WorkerServiceError>,
+    },
     #[error(transparent)]
     Component(#[from] ComponentServiceError),
     #[error(transparent)]
@@ -66,6 +78,7 @@ pub enum WorkerServiceError {
 impl SafeDisplay for WorkerServiceError {
     fn to_safe_string(&self) -> String {
         match self {
+            Self::AcceptedInvocation { source, .. } => source.to_safe_string(),
             Self::Component(inner) => inner.to_safe_string(),
             Self::TypeChecker(_) => self.to_string(),
             Self::ComponentNotFound(_) => self.to_string(),
@@ -102,6 +115,7 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::agen
         use golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error as GrpcError;
 
         match error {
+            WorkerServiceError::AcceptedInvocation { source, .. } => (*source).into(),
             WorkerServiceError::ComponentNotFound(_) => Self::NotFound(ErrorBody {
                 error: error.to_safe_string(),
                 code: api::error_code::COMPONENT_NOT_FOUND.to_string(),

@@ -17,6 +17,7 @@ use std::pin::Pin;
 use std::sync::OnceLock;
 use std::task::{Context, Poll};
 
+use crate::durable_host::attribution::with_import_access;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, Cancellable, CompletionDelivery, DeferredCallReplayOutcome, DemandDelivery,
     DurableCallSession, DurableDemandItem, DurableDemandStream, InvocationIdSource, NotCancellable,
@@ -2233,7 +2234,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 let (result_tx, result_rx) = oneshot::channel();
                 // The host owns the reader of the guest stream; the durable task appends the
                 // `send` `Start` only after both guest-facing handles exist.
-                let future = accessor.with(|mut store| {
+                let future = with_import_access(accessor, |mut store| {
                     let future = FutureReader::new(&mut store, wait_tcp_stream_result(result_rx))?;
                     data.pipe(&mut store, DurableTcpSendConsumer::new(demand_tx))?;
                     let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
@@ -2312,7 +2313,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 // task appends the `receive` `Start`; the guest cannot poll either handle
                 // until this host call returns, so spawning first would risk committing a
                 // `Start` with no terminal if a later handle construction fails.
-                let handles = accessor.with(|mut store| {
+                let handles = with_import_access(accessor, |mut store| {
                     let mut stream =
                         StreamReader::new(&mut store, DurableTcpReceiveProducer::new(demand_tx))?;
                     let future =

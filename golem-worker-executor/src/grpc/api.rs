@@ -37,6 +37,7 @@ use super::{
 };
 
 #[tonic::async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutor for WorkerExecutorImpl<Ctx, Svcs>
 {
@@ -781,7 +782,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     result: Some(resolve_revert_last_invocations_response::Result::Success(
                         golem::common::ResolvedRevert {
                             last_oplog_index: resolved.last_oplog_index.as_u64(),
-                            observed_oplog_index: resolved.observed_oplog_index.as_u64(),
                         },
                     )),
                 })))

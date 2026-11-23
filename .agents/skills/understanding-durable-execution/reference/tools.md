@@ -342,6 +342,19 @@ trap paths retain owner recovery. Every host call the body makes records its own
 with `parent_start_index` pointing at its enclosing scope — normally that entity `Start`
 (`durable_host/concurrent/call.rs`).
 
+A body cancelled live can leave a `LeaveIncompleteOnDrop` call in flight: its `Start` precedes the
+body's `Cancelled` and has no terminal. That is the one incomplete `Start` settled history may
+keep. Replay re-runs the body and aborts it only after it claimed every call it recorded
+(`coordinate_entity_reconstruction`): closed calls return their recorded results, and the
+in-flight call is claimed and waits without being repaired, so the abort drops it at the same
+point the live cancellation did. A later claim, positional read or stream read of the body
+waits until the abort; work under the body after it settled, such as the disposal of its
+resources, is decided as for any settled body. A body that returns with a recorded call
+unclaimed is a divergence.
+Nothing is folded, repaired or appended. A body cancelled by the live caller during an
+incomplete replay (`IncompleteCancelled`, `IncompleteLiveAdmissionCancelled`) is not covered:
+the cancellation stops it before it re-claims its calls.
+
 `OwnerExecution` (`worker/instance/mod.rs`) is "the durable execution stream shared by every Store
 belonging to one owner": entity Stores clone the primary's `ReplayState`, which shares the cursor
 rather than opening a second cursor over the same oplog, and `HostedInstance::invoke_scoped` runs
@@ -604,7 +617,8 @@ waits outside cleanup drains so reconstruction can still make progress, and retr
 target grows. The context registers these admission jobs synchronously in a separate owned task set,
 reusing `NativeReconstructionTasks` and `WorkerTasks`, not Store tail activity. Successful
 completion drains cleanup, joins admissions, then drains their handoffs before publishing its
-terminal. The primary does not join before consuming a historical Finished; successful replay exit
+terminal. An agent method or constructor that records its result at the export's return does this
+at the end of its drain, before `AgentInvocationSettled`. The primary does not join before consuming a historical Finished; successful replay exit
 also drains pending disposals. A failed entity body closes and aborts admission jobs, but still
 joins already accepted terminal publications and native accepted-write reconstruction. Later
 destructors and unaccepted queued disposals cannot start repair in that failed context. Context
@@ -707,7 +721,11 @@ temporarily connects its caller to the awaited subtree, including children retai
 terminal. Before returning a result, the await withdraws its incapable edges and waits for any
 already-running capable descendant to return the lane. Later capable work stays queued until a
 new causal await or caller completion; an output producer must not depend on an unawaited ambient
-capable call after its caller resumes.
+capable call after its caller resumes. For an agent method or constructor that records its result
+at the export's return, tool children that already run, or need no admission, settle before the
+result is recorded, and their failure fails the invocation; capable children staged until their
+parent ends are admitted at the end of the drain (`end_tool_parent` in `worker/invocation.rs`)
+and settle before `AgentInvocationSettled`.
 
 Owner failure selection is a runtime teardown boundary, like executor loss: unfinished durable
 calls remain incomplete rather than applying guest cancellation or non-cancellable-drop policies.

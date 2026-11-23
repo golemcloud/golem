@@ -1,4 +1,5 @@
 use super::*;
+use crate::golem_started::GolemStartedWork;
 use golem_common::model::InvocationId;
 use golem_common::model::caller::Caller;
 use golem_common::model::oplog::UpdateFailureClass;
@@ -151,10 +152,12 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 }
 
 impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
-    /// Try to perform the save-snapshot step of a manual update on the worker
+    /// Try to perform the save-snapshot step of a manual update on the worker. `requester` asked
+    /// for the update; the `PendingUpdate` written after the save records it.
     pub(super) async fn manual_update(
         &mut self,
         target_revision: ComponentRevision,
+        requester: Caller,
         update_attempt_index: OplogIndex,
     ) -> CommandOutcome {
         let span = span!(
@@ -169,7 +172,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .unwrap_or_else(|| "-".to_string()),
         );
 
-        self.manual_update_inner(target_revision, update_attempt_index)
+        self.manual_update_inner(target_revision, requester, update_attempt_index)
             .instrument(span)
             .await
     }
@@ -178,6 +181,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     pub(super) async fn manual_update_inner(
         &mut self,
         target_revision: ComponentRevision,
+        requester: Caller,
         update_attempt_index: OplogIndex,
     ) -> CommandOutcome {
         // The saved snapshot becomes the replay cut point of the snapshot-based update: after the
@@ -250,12 +254,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 match self
                     .parent
                     .owner_retirement_requested
-                    .run_until_cancelled(
-                        self.parent.enqueue_update_for_attempt(
-                            update_description,
-                            Some(update_attempt_index),
-                        ),
-                    )
+                    .run_until_cancelled(self.parent.enqueue_update_for_attempt(
+                        update_description,
+                        Some(update_attempt_index),
+                        requester,
+                    ))
                     .await
                 {
                     None => CommandOutcome::BreakInnerLoop(RetryDecision::None),
@@ -306,14 +309,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
         let save_snapshot_invocation = AgentInvocation::SaveSnapshot {
             idempotency_key,
-            // Nothing records this caller: the call is lowered and run directly, with no invocation
-            // entry. It is the value that the guest's caller() returns through its fallback.
-            caller: Caller::entry(self.store.data().durable_ctx().self_principal()),
+            // The requester of the update is recorded in its `PendingUpdate`, never as this caller.
+            caller: GolemStartedWork::SelfInvocation {
+                agent: self.store.data().durable_ctx().self_principal(),
+            }
+            .caller(),
         };
         let lowered = match lower_invocation(
             save_snapshot_invocation,
             &component_metadata,
             &self.parent.owner_context,
+            None,
         ) {
             Ok(lowered) => lowered,
             Err(err) => {
@@ -498,7 +504,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .data_mut()
             .durable_ctx_mut()
             .begin_call_snapshotting_function();
-        let result = invoke_observed_and_traced(lowered, self.store, self.instance, None).await;
+        let result =
+            invoke_observed_and_traced(lowered, self.store, self.instance, None, None).await;
         self.store.data().set_suspended();
         self.store
             .data_mut()
@@ -527,14 +534,16 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
         let save_snapshot_invocation = AgentInvocation::SaveSnapshot {
             idempotency_key,
-            // Nothing records this caller: the call is lowered and run directly, with no invocation
-            // entry. It is the value that the guest's caller() returns through its fallback.
-            caller: Caller::entry(self.store.data().durable_ctx().self_principal()),
+            caller: GolemStartedWork::SelfInvocation {
+                agent: self.store.data().durable_ctx().self_principal(),
+            }
+            .caller(),
         };
         let lowered = match lower_invocation(
             save_snapshot_invocation,
             &component_metadata,
             &self.parent.owner_context,
+            None,
         ) {
             Ok(lowered) => lowered,
             Err(err) => {

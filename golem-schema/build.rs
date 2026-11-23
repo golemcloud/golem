@@ -27,7 +27,8 @@ fn main() -> miette::Result<()> {
         ["proto"],
     )?;
 
-    prost_build::Config::new()
+    let mut config = prost_build::Config::new();
+    config
         .include_file("mod.rs")
         .compile_fds(file_descriptors)
         .map_err(|err| miette::miette!(err))?;
