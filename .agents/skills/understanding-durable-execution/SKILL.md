@@ -4437,7 +4437,8 @@ cursor without finding a match. The first batch pins the oplog end separately, a
 batch checks the grant for its own window. Completed calls replay their recorded results. Guest
 `get-oplog` and `search-oplog` batches hold no attribution, because the guest form of an entry has
 none, so they read no owning `Start` outside the window. A `FailedUpdate` in a guest batch holds the
-expected request of its divergence only when the window covers the divergence index.
+expected request of its divergence only when the window covers the divergence index. A `get-oplog`
+resource that starts at index 0 starts at index 1, so its grant check covers the indexes it reads.
 
 Card events are hints. When replay commits a recorded entry, `skip_forward` publishes every card
 event up to the next recorded entry, and the next authority boundary applies them. A decision that

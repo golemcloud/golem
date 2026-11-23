@@ -317,7 +317,9 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
         let agent_id: AgentId = agent_id.into();
         let owned_agent_id = OwnedAgentId::new(self.owned_agent_id.environment_id(), &agent_id);
 
-        let start = OplogIndex::from_u64(start);
+        // The oplog starts at index 1, and a read from 0 reads from 1. The resource starts at the
+        // first index that it reads, so the grant check of a batch covers the indexes it reads.
+        let start = OplogIndex::from_u64(start).max(OplogIndex::INITIAL);
         let entry = GetOplogEntry::new(
             owned_agent_id,
             start,
