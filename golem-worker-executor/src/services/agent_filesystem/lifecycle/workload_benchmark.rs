@@ -1260,7 +1260,7 @@ async fn filesystem_workload_benchmark() {
         "managed" => (
             SandboxFilesystemProvisioning::new(
                 &FilesystemStorageMode::ManagedXfs {
-                    xfs_quotad_socket: crate::filesystem::volume::in_process_xfs_quotad(
+                    xfs_quotad_socket: crate::filesystem::volume::platform::in_process_xfs_quotad(
                         &managed_root,
                     ),
                     root: managed_root.into(),
@@ -1277,7 +1277,7 @@ async fn filesystem_workload_benchmark() {
         "managed-unmetered" => (
             SandboxFilesystemProvisioning::new(
                 &FilesystemStorageMode::ManagedXfs {
-                    xfs_quotad_socket: crate::filesystem::volume::in_process_xfs_quotad(
+                    xfs_quotad_socket: crate::filesystem::volume::platform::in_process_xfs_quotad(
                         &managed_root,
                     ),
                     root: managed_root.into(),

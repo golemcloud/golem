@@ -223,7 +223,7 @@ async fn durable_websocket_two_receive_interruption(
 
 macro_rules! lock_case {
     ($name:ident, Storage, $mode:ident) => {
-        lock_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
+        lock_case!(#[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
     };
     ($(#[$attr:meta])* $name:ident, $resource:ident, $mode:ident) => {
         $(#[$attr])*
@@ -266,16 +266,22 @@ lock_case!(
     Compute,
     Ephemeral
 );
-lock_case!(
-    durable_websocket_reader_lock_stop_only_managed_xfs_storage_quota,
-    Storage,
-    Durable
-);
-lock_case!(
-    ephemeral_websocket_reader_lock_stop_only_managed_xfs_storage_quota,
-    Storage,
-    Ephemeral
-);
+#[cfg(target_os = "linux")]
+mod storage {
+    use super::*;
+    use test_r::test;
+
+    lock_case!(
+        durable_websocket_reader_lock_stop_only_managed_xfs_storage_quota,
+        Storage,
+        Durable
+    );
+    lock_case!(
+        ephemeral_websocket_reader_lock_stop_only_managed_xfs_storage_quota,
+        Storage,
+        Ephemeral
+    );
+}
 
 fn lock_receive_starts(
     entries: &[PublicOplogEntryWithIndex],

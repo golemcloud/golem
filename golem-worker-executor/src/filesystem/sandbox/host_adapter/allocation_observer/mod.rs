@@ -12,52 +12,48 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{QuotaAuthority, SandboxFilesystem};
-#[cfg(target_os = "linux")]
-use crate::filesystem::blocking::BlockingTask;
-#[cfg(target_os = "linux")]
-use crate::filesystem::errors::OperationContext;
-use crate::filesystem::sandbox::FilesystemStorageError;
-use crate::filesystem::volume::FilesystemAllocation;
+pub(crate) use platform::SandboxFilesystemAllocationObserver;
 
 #[cfg(target_os = "linux")]
-use crate::filesystem::volume::{FilesystemVolume, project_allocation};
-use std::path::PathBuf;
+mod platform {
+    use super::super::{QuotaAuthority, SandboxFilesystem};
+    use crate::filesystem::blocking::BlockingTask;
+    use crate::filesystem::errors::OperationContext;
+    use crate::filesystem::sandbox::FilesystemStorageError;
+    use crate::filesystem::volume::platform::project_allocation;
+    use crate::filesystem::volume::{FilesystemAllocation, FilesystemVolume};
+    use std::path::PathBuf;
 
-#[derive(Clone)]
-pub(crate) struct SandboxFilesystemAllocationObserver {
-    pub(in crate::filesystem::sandbox) root: PathBuf,
-    #[cfg(target_os = "linux")]
-    pub(in crate::filesystem::sandbox) volume: FilesystemVolume,
-    pub(in crate::filesystem::sandbox) quota_authority: QuotaAuthority,
-}
-
-impl SandboxFilesystemAllocationObserver {
-    pub(super) fn new(filesystem: &SandboxFilesystem) -> Self {
-        Self {
-            root: filesystem.root().to_path_buf(),
-            #[cfg(target_os = "linux")]
-            volume: filesystem.volume.clone(),
-            quota_authority: filesystem.quota_authority,
-        }
+    #[derive(Clone)]
+    pub(crate) struct SandboxFilesystemAllocationObserver {
+        pub(in crate::filesystem::sandbox) root: PathBuf,
+        pub(in crate::filesystem::sandbox) volume: FilesystemVolume,
+        pub(in crate::filesystem::sandbox) quota_authority: QuotaAuthority,
     }
 
-    pub(super) async fn observe(&self) -> Result<FilesystemAllocation, FilesystemStorageError> {
-        let QuotaAuthority::Project {
-            project_id: _project_id,
-            ..
-        } = self.quota_authority
-        else {
-            return Err(FilesystemStorageError::allocation_unsupported(Some(
-                &self.root,
-            )));
-        };
-        #[cfg(target_os = "linux")]
-        {
+    impl SandboxFilesystemAllocationObserver {
+        pub(in crate::filesystem::sandbox::host_adapter) fn new(
+            filesystem: &SandboxFilesystem,
+        ) -> Self {
+            Self {
+                root: filesystem.root().to_path_buf(),
+                volume: filesystem.volume.clone(),
+                quota_authority: filesystem.quota_authority,
+            }
+        }
+
+        pub(in crate::filesystem::sandbox::host_adapter) async fn observe(
+            &self,
+        ) -> Result<FilesystemAllocation, FilesystemStorageError> {
+            let QuotaAuthority::Project { project_id, .. } = self.quota_authority else {
+                return Err(FilesystemStorageError::allocation_unsupported(Some(
+                    &self.root,
+                )));
+            };
             let root = self.root.clone();
             let volume = self.volume.clone();
             BlockingTask::Spawn
-                .run(move || project_allocation(&volume, _project_id))
+                .run(move || project_allocation(&volume, project_id))
                 .await
                 .map_err(|error| {
                     FilesystemStorageError::from(OperationContext::task_failure(
@@ -74,7 +70,43 @@ impl SandboxFilesystemAllocationObserver {
                     )
                 })
         }
-        #[cfg(not(target_os = "linux"))]
-        unreachable!("managed XFS is unavailable on this platform");
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+mod platform {
+    use super::super::{QuotaAuthority, SandboxFilesystem};
+    use crate::filesystem::sandbox::FilesystemStorageError;
+    use crate::filesystem::volume::FilesystemAllocation;
+    use std::path::PathBuf;
+
+    #[derive(Clone)]
+    pub(crate) struct SandboxFilesystemAllocationObserver {
+        pub(in crate::filesystem::sandbox) root: PathBuf,
+        pub(in crate::filesystem::sandbox) quota_authority: QuotaAuthority,
+    }
+
+    impl SandboxFilesystemAllocationObserver {
+        pub(in crate::filesystem::sandbox::host_adapter) fn new(
+            filesystem: &SandboxFilesystem,
+        ) -> Self {
+            Self {
+                root: filesystem.root().to_path_buf(),
+                quota_authority: filesystem.quota_authority,
+            }
+        }
+
+        pub(in crate::filesystem::sandbox::host_adapter) async fn observe(
+            &self,
+        ) -> Result<FilesystemAllocation, FilesystemStorageError> {
+            match self.quota_authority {
+                QuotaAuthority::Unsupported => Err(FilesystemStorageError::allocation_unsupported(
+                    Some(&self.root),
+                )),
+                QuotaAuthority::Project { .. } => {
+                    unreachable!("managed XFS is unavailable on this platform")
+                }
+            }
+        }
     }
 }

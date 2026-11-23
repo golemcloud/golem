@@ -18,27 +18,32 @@ use std::sync::Arc;
 use test_r::test;
 
 #[cfg(target_os = "linux")]
-#[test]
-fn deferred_followed_permissions_preserve_raw_terminal_errno() {
-    let mut target =
-        crate::filesystem::sandbox::scripted_adapter::default_scripted_path_resolution(
-            SandboxPath::at_root("link"),
-        )
-        .unwrap();
-    let source = std::io::Error::from_raw_os_error(libc::EIO);
-    target.entry = ResolvedPathEntry::Symlink {
-        referent_read_only: Err(Arc::new(source)),
-    };
+mod linux {
+    use super::*;
+    use test_r::test;
 
-    assert!(target.is_read_only_file(SandboxFollow::No).is_ok());
-    let Err(error) = target.is_read_only_file(SandboxFollow::Yes) else {
-        panic!("followed permissions unexpectedly discarded their deferred failure")
-    };
-    assert_eq!(
-        error.io_error().and_then(std::io::Error::raw_os_error),
-        Some(libc::EIO)
-    );
-    assert!(error.is_terminal_failure());
+    #[test]
+    fn deferred_followed_permissions_preserve_raw_terminal_errno() {
+        let mut target =
+            crate::filesystem::sandbox::scripted_adapter::default_scripted_path_resolution(
+                SandboxPath::at_root("link"),
+            )
+            .unwrap();
+        let source = std::io::Error::from_raw_os_error(libc::EIO);
+        target.entry = ResolvedPathEntry::Symlink {
+            referent_read_only: Err(Arc::new(source)),
+        };
+
+        assert!(target.is_read_only_file(SandboxFollow::No).is_ok());
+        let Err(error) = target.is_read_only_file(SandboxFollow::Yes) else {
+            panic!("followed permissions unexpectedly discarded their deferred failure")
+        };
+        assert_eq!(
+            error.io_error().and_then(std::io::Error::raw_os_error),
+            Some(libc::EIO)
+        );
+        assert!(error.is_terminal_failure());
+    }
 }
 
 #[test]

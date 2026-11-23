@@ -254,7 +254,7 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
             .metadata
             .agent_type_provision_configs
             .get(&AgentTypeName("CounterAgent".to_string()))
-            .map(|config| config.config.as_slice())
+            .map(|config| config.config.captures())
             .unwrap_or_default()
             .iter()
             .map(|e| (e.path.clone(), e.value.value().clone()))
@@ -295,7 +295,7 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
             .metadata
             .agent_type_provision_configs
             .get(&AgentTypeName("CounterAgent".to_string()))
-            .map(|config| config.config.as_slice())
+            .map(|config| config.config.captures())
             .unwrap_or_default()
             .iter()
             .map(|e| (e.path.clone(), e.value.value().clone()))
@@ -518,7 +518,7 @@ async fn component_update_preserves_existing_provision_config_when_omitted(
             .metadata
             .agent_type_provision_configs
             .get(&AgentTypeName("CounterAgent".to_string()))
-            .map(|config| config.config.as_slice())
+            .map(|config| config.config.captures())
             .unwrap_or_default()
             .iter()
             .map(|e| (e.path.clone(), e.value.value().clone()))

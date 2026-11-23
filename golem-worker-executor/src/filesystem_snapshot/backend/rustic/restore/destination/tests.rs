@@ -136,11 +136,7 @@ mod unix {
         let parent = tempfile::tempdir().unwrap();
         let into = parent.path().join("into");
         std::fs::create_dir(&into).unwrap();
-        let modes = if cfg!(target_os = "linux") {
-            vec![0o555, 0o444, 0o000]
-        } else {
-            vec![0o555, 0o444]
-        };
+        let modes = platform::CLEAR_MODES;
         modes.iter().for_each(|mode| {
             let directory = into.join(format!("d{mode:o}"));
             std::fs::create_dir(&directory).unwrap();
@@ -253,33 +249,47 @@ mod unix {
     }
 
     #[cfg(target_os = "linux")]
-    #[test]
-    fn a_directory_swapped_after_its_open_gets_the_mode_and_its_link_target_does_not() {
-        let (parent, into, outside) = into_and_outside();
-        // A directory moves to another parent only with write permission on it.
-        std::fs::create_dir(into.join("d")).unwrap();
-        std::fs::set_permissions(into.join("d"), std::fs::Permissions::from_mode(0o755)).unwrap();
-        let moved = parent.path().join("moved");
-        let swap = Swap {
-            name: "d",
-            target: outside.join("locked"),
-            moved: moved.clone(),
-            at_mode: true,
-            done: Mutex::new(false),
-        };
-        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o7777;
+    mod platform {
+        use super::*;
+        use pretty_assertions::assert_eq;
+        use test_r::test;
 
-        let cleared = clear_with(&into, &swap);
+        pub(super) const CLEAR_MODES: &[u32] = &[0o555, 0o444, 0o000];
 
-        assert_eq!(
-            (
-                cleared.is_err(),
-                mode(&outside.join("locked")),
-                mode(&moved),
-                std::fs::read(outside.join("locked/kept")).unwrap()
-            ),
-            (true, 0o555, 0o700, b"kept".to_vec())
-        );
-        unlock(parent.path());
+        #[test]
+        fn a_directory_swapped_after_its_open_gets_the_mode_and_its_link_target_does_not() {
+            let (parent, into, outside) = into_and_outside();
+            // A directory moves to another parent only with write permission on it.
+            std::fs::create_dir(into.join("d")).unwrap();
+            std::fs::set_permissions(into.join("d"), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+            let moved = parent.path().join("moved");
+            let swap = Swap {
+                name: "d",
+                target: outside.join("locked"),
+                moved: moved.clone(),
+                at_mode: true,
+                done: Mutex::new(false),
+            };
+            let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o7777;
+
+            let cleared = clear_with(&into, &swap);
+
+            assert_eq!(
+                (
+                    cleared.is_err(),
+                    mode(&outside.join("locked")),
+                    mode(&moved),
+                    std::fs::read(outside.join("locked/kept")).unwrap()
+                ),
+                (true, 0o555, 0o700, b"kept".to_vec())
+            );
+            unlock(parent.path());
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    mod platform {
+        pub(super) const CLEAR_MODES: &[u32] = &[0o555, 0o444];
     }
 }

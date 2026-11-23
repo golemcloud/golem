@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::destination::ClearHook;
 use crate::filesystem_snapshot::backend::rustic::RusticSnapshotStore;
 use crate::filesystem_snapshot::backend::rustic::store_policy::StorePolicy;
 use crate::filesystem_snapshot::backend::rustic::test_support::holding::holding_storage;
@@ -201,57 +200,83 @@ async fn a_restore_whose_pack_reads_fail_gives_failed() {
 }
 
 #[cfg(target_os = "linux")]
-#[test]
-#[timeout("60s")]
-async fn a_restore_that_cannot_set_an_extended_attribute_gives_destination() {
-    // A file on tmpfs takes a user attribute of 6,000 bytes. A file on ext4 with 4 KiB blocks
-    // does not, so the restore cannot set it. The test checks nothing on a host where the source
-    // does not take the attribute or where the destination takes it.
-    let value = vec![b'a'; 6000];
-    let set = |path: &Path| xattr_set(path, "user.golem-test", &value);
-    let Ok(source) = tempfile::tempdir_in("/dev/shm") else {
-        println!("SKIPPED: /dev/shm has no directory for the source of the test");
-        return;
-    };
-    let file = source.path().join("file.txt");
-    std::fs::write(&file, b"content").unwrap();
-    let probe = Scratch::new();
-    let probe_file = probe.path().join("probe");
-    std::fs::write(&probe_file, b"probe").unwrap();
-    if let Err(error) = set(&file) {
-        println!("SKIPPED: /dev/shm does not take a user attribute of 6,000 bytes: {error}");
-        return;
-    }
-    if set(&probe_file).is_ok() {
-        println!(
-            "SKIPPED: the destination {} takes a user attribute of 6,000 bytes",
-            probe.path().display()
+mod linux_xattrs {
+    use super::*;
+    use test_r::{test, timeout};
+
+    #[test]
+    #[timeout("60s")]
+    async fn a_restore_that_cannot_set_an_extended_attribute_gives_destination() {
+        // A file on tmpfs takes a user attribute of 6,000 bytes. A file on ext4 with 4 KiB blocks
+        // does not, so the restore cannot set it. The test checks nothing on a host where the source
+        // does not take the attribute or where the destination takes it.
+        let value = vec![b'a'; 6000];
+        let set = |path: &Path| xattr_set(path, "user.golem-test", &value);
+        let Ok(source) = tempfile::tempdir_in("/dev/shm") else {
+            println!("SKIPPED: /dev/shm has no directory for the source of the test");
+            return;
+        };
+        let file = source.path().join("file.txt");
+        std::fs::write(&file, b"content").unwrap();
+        let probe = Scratch::new();
+        let probe_file = probe.path().join("probe");
+        std::fs::write(&probe_file, b"probe").unwrap();
+        if let Err(error) = set(&file) {
+            println!("SKIPPED: /dev/shm does not take a user attribute of 6,000 bytes: {error}");
+            return;
+        }
+        if set(&probe_file).is_ok() {
+            println!(
+                "SKIPPED: the destination {} takes a user attribute of 6,000 bytes",
+                probe.path().display()
+            );
+            return;
+        }
+        let store = store(
+            Arc::new(InMemoryBlobStorage::new()),
+            policy(LONG_DEADLINE, NEVER, Duration::ZERO),
         );
-        return;
+        let scope = new_scope();
+        store
+            .save(
+                &scope,
+                &name("p-xattr"),
+                source.path(),
+                None,
+                never_cancelled(),
+                &Unlimited,
+            )
+            .await
+            .unwrap();
+
+        let restored = restored_listing(&store, &scope, &name("p-xattr")).await;
+
+        assert!(
+            matches!(&restored, Err(RestoreFailure::Destination(_))),
+            "{restored:?}"
+        );
     }
-    let store = store(
-        Arc::new(InMemoryBlobStorage::new()),
-        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
-    );
-    let scope = new_scope();
-    store
-        .save(
-            &scope,
-            &name("p-xattr"),
-            source.path(),
-            None,
-            never_cancelled(),
-            &Unlimited,
-        )
-        .await
-        .unwrap();
 
-    let restored = restored_listing(&store, &scope, &name("p-xattr")).await;
-
-    assert!(
-        matches!(&restored, Err(RestoreFailure::Destination(_))),
-        "{restored:?}"
-    );
+    fn xattr_set(path: &Path, name: &str, value: &[u8]) -> std::io::Result<()> {
+        use std::os::unix::ffi::OsStrExt;
+        let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+        let name = std::ffi::CString::new(name)?;
+        // SAFETY: the path and the name are NUL-terminated strings, and the value lives for the call.
+        let result = unsafe {
+            libc::setxattr(
+                path.as_ptr(),
+                name.as_ptr(),
+                value.as_ptr().cast(),
+                value.len(),
+                0,
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
 }
 
 #[test]
@@ -570,254 +595,251 @@ async fn a_restore_of_a_name_deleted_during_it_gives_not_found() {
 }
 
 #[cfg(unix)]
-#[test]
-#[timeout("60s")]
-async fn a_run_after_a_clear_that_failed_partway_clears_before_it_loads() {
-    // The first run fails after its first write, and its clear fails after one entry. The second
-    // run finds the directory not empty, clears it first, and gives the whole tree.
-    let inner = Arc::new(InMemoryBlobStorage::new());
-    let saving = store_over(&inner);
-    let scope = new_scope();
-    let tree = fixture_tree();
-    saving
-        .save(
-            &scope,
-            &name("p-1"),
-            tree.path(),
-            None,
-            never_cancelled(),
-            &Unlimited,
-        )
-        .await
-        .unwrap();
-    let storage = ScriptedBlobStorage::new(inner.clone(), {
-        let refused = AtomicBool::new(false);
-        move |op_label, path| {
-            if op_label == "read_range"
-                && path.starts_with("data")
-                && !refused.swap(true, Ordering::SeqCst)
-            {
-                Script::Refuse
+mod unix {
+    use super::*;
+    use crate::filesystem_snapshot::backend::rustic::restore::destination::ClearHook;
+    use pretty_assertions::assert_eq;
+    use test_r::{test, timeout};
+
+    /// The points of the clear of a restore where a test acts: the first clear fails after one entry.
+    #[derive(Default)]
+    struct FailingOnce(AtomicBool);
+
+    impl ClearHook for FailingOnce {
+        fn after_entry(&self) -> std::io::Result<()> {
+            if self.0.swap(true, Ordering::SeqCst) {
+                Ok(())
             } else {
-                Script::Pass
+                Err(std::io::Error::other("the clear failed after one entry"))
             }
         }
-    });
-    let hook = Arc::new(FailingOnce::default());
-    let store = Arc::new(
-        RusticSnapshotStore::with_policy(
-            storage.clone(),
-            key(),
-            runs_policy(LONG_DEADLINE, 1),
-            Arc::new(SystemClock),
-        )
-        .with_clear_hook(hook.clone()),
-    );
-    let into = Scratch::new();
+    }
 
-    let restored = store
-        .restore(&scope, &name("p-1"), into.path(), &Unlimited)
-        .await;
-
-    assert!(restored.is_ok(), "{restored:?}");
-    assert_eq!(
-        (hook.0.load(Ordering::SeqCst), listing(into.path())),
-        (true, listing(tree.path()))
-    );
-}
-
-#[cfg(unix)]
-#[test]
-#[timeout("60s")]
-async fn a_restore_whose_run_failed_after_it_made_a_directory_read_only_clears_into_and_gives_the_whole_tree()
- {
-    use std::os::unix::fs::PermissionsExt;
-    let inner = Arc::new(InMemoryBlobStorage::new());
-    let saving = store_over(&inner);
-    let scope = new_scope();
-    let tree = Scratch::new();
-    // A save reads each directory, so the saved directories can be read and searched; the
-    // directory at mode 0o444 is empty. The clear of a directory at mode 0o000 has its own test
-    // in `clear`.
-    let modes = [0o555, 0o444];
-    modes.iter().for_each(|mode| {
-        let directory = tree.path().join(format!("d{mode:o}"));
-        std::fs::create_dir(&directory).unwrap();
-        if *mode == 0o555 {
-            std::fs::write(directory.join("file"), format!("{mode:o}")).unwrap();
-        }
-        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(*mode)).unwrap();
-    });
-    saving
-        .save(
-            &scope,
-            &name("p-1"),
-            tree.path(),
-            None,
-            never_cancelled(),
-            &Unlimited,
-        )
-        .await
-        .unwrap();
-    let expected = listing(tree.path());
-    // The first restore writes the whole tree with its modes; a refused read of the second makes
-    // its first run fail after it wrote into the same directory.
-    let first = Scratch::new();
-    saving
-        .restore(&scope, &name("p-1"), first.path(), &Unlimited)
-        .await
-        .unwrap();
-    let storage = ScriptedBlobStorage::new(inner.clone(), {
-        let refused = AtomicBool::new(false);
-        move |op_label, path| {
-            if op_label == "read_range"
-                && path.starts_with("data")
-                && !refused.swap(true, Ordering::SeqCst)
-            {
-                Script::Refuse
-            } else {
-                Script::Pass
+    #[test]
+    #[timeout("60s")]
+    async fn a_run_after_a_clear_that_failed_partway_clears_before_it_loads() {
+        // The first run fails after its first write, and its clear fails after one entry. The second
+        // run finds the directory not empty, clears it first, and gives the whole tree.
+        let inner = Arc::new(InMemoryBlobStorage::new());
+        let saving = store_over(&inner);
+        let scope = new_scope();
+        let tree = fixture_tree();
+        saving
+            .save(
+                &scope,
+                &name("p-1"),
+                tree.path(),
+                None,
+                never_cancelled(),
+                &Unlimited,
+            )
+            .await
+            .unwrap();
+        let storage = ScriptedBlobStorage::new(inner.clone(), {
+            let refused = AtomicBool::new(false);
+            move |op_label, path| {
+                if op_label == "read_range"
+                    && path.starts_with("data")
+                    && !refused.swap(true, Ordering::SeqCst)
+                {
+                    Script::Refuse
+                } else {
+                    Script::Pass
+                }
             }
-        }
-    });
-    let store = store(storage.clone(), runs_policy(LONG_DEADLINE, 1));
-    let into = Scratch::new();
-
-    let restored = store
-        .restore(&scope, &name("p-1"), into.path(), &Unlimited)
-        .await;
-    let restored_first = listing(first.path());
-    modes.iter().for_each(|mode| {
-        let _ = std::fs::set_permissions(
-            tree.path().join(format!("d{mode:o}")),
-            std::fs::Permissions::from_mode(0o755),
+        });
+        let hook = Arc::new(FailingOnce::default());
+        let store = Arc::new(
+            RusticSnapshotStore::with_policy(
+                storage.clone(),
+                key(),
+                runs_policy(LONG_DEADLINE, 1),
+                Arc::new(SystemClock),
+            )
+            .with_clear_hook(hook.clone()),
         );
-        let _ = std::fs::set_permissions(
-            first.path().join(format!("d{mode:o}")),
-            std::fs::Permissions::from_mode(0o755),
+        let into = Scratch::new();
+
+        let restored = store
+            .restore(&scope, &name("p-1"), into.path(), &Unlimited)
+            .await;
+
+        assert!(restored.is_ok(), "{restored:?}");
+        assert_eq!(
+            (hook.0.load(Ordering::SeqCst), listing(into.path())),
+            (true, listing(tree.path()))
         );
-    });
-    let restored_listing = listing(into.path());
-    modes.iter().for_each(|mode| {
-        let _ = std::fs::set_permissions(
-            into.path().join(format!("d{mode:o}")),
-            std::fs::Permissions::from_mode(0o755),
-        );
-    });
+    }
 
-    assert!(restored.is_ok(), "{restored:?}");
-    assert_eq!(
-        (restored_first, restored_listing),
-        (expected.clone(), expected)
-    );
-}
-
-#[cfg(unix)]
-#[test]
-#[timeout("60s")]
-async fn a_restore_into_a_directory_whose_path_is_not_utf8_gives_destination() {
-    use std::os::unix::ffi::OsStrExt;
-    let inner = Arc::new(InMemoryBlobStorage::new());
-    let store = store_over(&inner);
-    let scope = new_scope();
-    save_each(&store, &scope, &["p-1"]).await;
-    let parent = Scratch::new();
-    let into = parent
-        .path()
-        .join(std::ffi::OsStr::from_bytes(b"into-\xff"));
-    std::fs::create_dir(&into).unwrap();
-
-    let restored = store.restore(&scope, &name("p-1"), &into, &Unlimited).await;
-
-    assert!(
-        matches!(
-            &restored,
-            Err(RestoreFailure::Destination(error))
-                if error.kind() == std::io::ErrorKind::InvalidInput
-        ),
-        "{restored:?}"
-    );
-    assert_eq!(listing(&into), Vec::new());
-}
-
-#[cfg(unix)]
-#[test]
-#[timeout("60s")]
-async fn a_local_io_error_of_a_restore_gives_destination_with_its_kind() {
-    // The directory of the restore loses its permissions while the run loads the repository, so
-    // the write cannot open the first file. rustic gives that error without its `io::Error` as a
-    // source.
-    use std::os::unix::fs::PermissionsExt;
-    let inner = Arc::new(InMemoryBlobStorage::new());
-    let scope = new_scope();
-    save_each(&store_over(&inner), &scope, &["p-1"]).await;
-    let first_read = Arc::new(AtomicBool::new(false));
-    let storage = ScriptedBlobStorage::new(inner, {
-        let first_read = first_read.clone();
-        move |op_label, path| {
-            if op_label == "read"
-                && path == Path::new("config")
-                && !first_read.swap(true, Ordering::SeqCst)
-            {
-                Script::WaitForGate
-            } else {
-                Script::Pass
+    #[test]
+    #[timeout("60s")]
+    async fn a_restore_whose_run_failed_after_it_made_a_directory_read_only_clears_into_and_gives_the_whole_tree()
+     {
+        use std::os::unix::fs::PermissionsExt;
+        let inner = Arc::new(InMemoryBlobStorage::new());
+        let saving = store_over(&inner);
+        let scope = new_scope();
+        let tree = Scratch::new();
+        // A save reads each directory, so the saved directories can be read and searched; the
+        // directory at mode 0o444 is empty. The clear of a directory at mode 0o000 has its own test
+        // in `clear`.
+        let modes = [0o555, 0o444];
+        modes.iter().for_each(|mode| {
+            let directory = tree.path().join(format!("d{mode:o}"));
+            std::fs::create_dir(&directory).unwrap();
+            if *mode == 0o555 {
+                std::fs::write(directory.join("file"), format!("{mode:o}")).unwrap();
             }
-        }
-    });
-    let store = store(
-        storage.clone(),
-        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
-    );
-    let parent = Scratch::new();
-    let into = parent.path().join("into");
-    std::fs::create_dir(&into).unwrap();
-    let restored_name = name("p-1");
-    let restoring = store.restore(&scope, &restored_name, &into, &Unlimited);
-    tokio::pin!(restoring);
-    let reached = tokio::select! {
-        biased;
-        reached = eventually(|| first_read.load(Ordering::SeqCst)) => reached,
-        restored = &mut restoring => panic!("the restore ended before its load: {restored:?}"),
-    };
-    std::fs::set_permissions(&into, std::fs::Permissions::from_mode(0o000)).unwrap();
-    let privileged = std::fs::read_dir(&into).is_ok();
-    storage.open_gate();
-    let restored = tokio::time::timeout(LIMIT, restoring).await.unwrap();
-    std::fs::set_permissions(&into, std::fs::Permissions::from_mode(0o755)).unwrap();
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(*mode)).unwrap();
+        });
+        saving
+            .save(
+                &scope,
+                &name("p-1"),
+                tree.path(),
+                None,
+                never_cancelled(),
+                &Unlimited,
+            )
+            .await
+            .unwrap();
+        let expected = listing(tree.path());
+        // The first restore writes the whole tree with its modes; a refused read of the second makes
+        // its first run fail after it wrote into the same directory.
+        let first = Scratch::new();
+        saving
+            .restore(&scope, &name("p-1"), first.path(), &Unlimited)
+            .await
+            .unwrap();
+        let storage = ScriptedBlobStorage::new(inner.clone(), {
+            let refused = AtomicBool::new(false);
+            move |op_label, path| {
+                if op_label == "read_range"
+                    && path.starts_with("data")
+                    && !refused.swap(true, Ordering::SeqCst)
+                {
+                    Script::Refuse
+                } else {
+                    Script::Pass
+                }
+            }
+        });
+        let store = store(storage.clone(), runs_policy(LONG_DEADLINE, 1));
+        let into = Scratch::new();
 
-    assert!(reached);
-    assert!(
-        privileged
-            || matches!(
+        let restored = store
+            .restore(&scope, &name("p-1"), into.path(), &Unlimited)
+            .await;
+        let restored_first = listing(first.path());
+        modes.iter().for_each(|mode| {
+            let _ = std::fs::set_permissions(
+                tree.path().join(format!("d{mode:o}")),
+                std::fs::Permissions::from_mode(0o755),
+            );
+            let _ = std::fs::set_permissions(
+                first.path().join(format!("d{mode:o}")),
+                std::fs::Permissions::from_mode(0o755),
+            );
+        });
+        let restored_listing = listing(into.path());
+        modes.iter().for_each(|mode| {
+            let _ = std::fs::set_permissions(
+                into.path().join(format!("d{mode:o}")),
+                std::fs::Permissions::from_mode(0o755),
+            );
+        });
+
+        assert!(restored.is_ok(), "{restored:?}");
+        assert_eq!(
+            (restored_first, restored_listing),
+            (expected.clone(), expected)
+        );
+    }
+
+    #[test]
+    #[timeout("60s")]
+    async fn a_restore_into_a_non_utf8_path_gives_destination_without_changing_its_parent() {
+        use std::os::unix::ffi::OsStrExt;
+        let inner = Arc::new(InMemoryBlobStorage::new());
+        let store = store_over(&inner);
+        let scope = new_scope();
+        save_each(&store, &scope, &["p-1"]).await;
+        let parent = Scratch::new();
+        std::fs::write(parent.path().join("kept"), b"unchanged").unwrap();
+        let before = listing(parent.path());
+        let into = parent
+            .path()
+            .join(std::ffi::OsStr::from_bytes(b"into-\xff"));
+
+        let restored = store.restore(&scope, &name("p-1"), &into, &Unlimited).await;
+
+        assert!(
+            matches!(
                 &restored,
                 Err(RestoreFailure::Destination(error))
-                    if error.kind() == std::io::ErrorKind::PermissionDenied
+                    if error.kind() == std::io::ErrorKind::InvalidInput
             ),
-        "{restored:?}"
-    );
-    assert_eq!(listing(&into), Vec::new());
-}
+            "{restored:?}"
+        );
+        assert_eq!(listing(parent.path()), before);
+    }
 
-#[cfg(target_os = "linux")]
-fn xattr_set(path: &Path, name: &str, value: &[u8]) -> std::io::Result<()> {
-    use std::os::unix::ffi::OsStrExt;
-    let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
-    let name = std::ffi::CString::new(name)?;
-    // SAFETY: the path and the name are NUL-terminated strings, and the value lives for the call.
-    let result = unsafe {
-        libc::setxattr(
-            path.as_ptr(),
-            name.as_ptr(),
-            value.as_ptr().cast(),
-            value.len(),
-            0,
-        )
-    };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
+    #[test]
+    #[timeout("60s")]
+    async fn a_local_io_error_of_a_restore_gives_destination_with_its_kind() {
+        // The directory of the restore loses its permissions while the run loads the repository, so
+        // the write cannot open the first file. rustic gives that error without its `io::Error` as a
+        // source.
+        use std::os::unix::fs::PermissionsExt;
+        let inner = Arc::new(InMemoryBlobStorage::new());
+        let scope = new_scope();
+        save_each(&store_over(&inner), &scope, &["p-1"]).await;
+        let first_read = Arc::new(AtomicBool::new(false));
+        let storage = ScriptedBlobStorage::new(inner, {
+            let first_read = first_read.clone();
+            move |op_label, path| {
+                if op_label == "read"
+                    && path == Path::new("config")
+                    && !first_read.swap(true, Ordering::SeqCst)
+                {
+                    Script::WaitForGate
+                } else {
+                    Script::Pass
+                }
+            }
+        });
+        let store = store(
+            storage.clone(),
+            policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+        );
+        let parent = Scratch::new();
+        let into = parent.path().join("into");
+        std::fs::create_dir(&into).unwrap();
+        let restored_name = name("p-1");
+        let restoring = store.restore(&scope, &restored_name, &into, &Unlimited);
+        tokio::pin!(restoring);
+        let reached = tokio::select! {
+            biased;
+            reached = eventually(|| first_read.load(Ordering::SeqCst)) => reached,
+            restored = &mut restoring => panic!("the restore ended before its load: {restored:?}"),
+        };
+        std::fs::set_permissions(&into, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let privileged = std::fs::read_dir(&into).is_ok();
+        storage.open_gate();
+        let restored = tokio::time::timeout(LIMIT, restoring).await.unwrap();
+        std::fs::set_permissions(&into, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(reached);
+        assert!(
+            privileged
+                || matches!(
+                    &restored,
+                    Err(RestoreFailure::Destination(error))
+                        if error.kind() == std::io::ErrorKind::PermissionDenied
+                ),
+            "{restored:?}"
+        );
+        assert_eq!(listing(&into), Vec::new());
     }
 }
 
@@ -874,20 +896,6 @@ async fn marked_dedup() -> (
         mark_the_packs_of_a_hidden_snapshot(inner.clone(), &scope, Duration::from_secs(3600)).await;
 
     (inner, scope, tree, before, unused)
-}
-
-/// The points of the clear of a restore where a test acts: the first clear fails after one entry.
-#[derive(Default)]
-struct FailingOnce(AtomicBool);
-
-impl ClearHook for FailingOnce {
-    fn after_entry(&self) -> std::io::Result<()> {
-        if self.0.swap(true, Ordering::SeqCst) {
-            Ok(())
-        } else {
-            Err(std::io::Error::other("the clear failed after one entry"))
-        }
-    }
 }
 
 #[test]
