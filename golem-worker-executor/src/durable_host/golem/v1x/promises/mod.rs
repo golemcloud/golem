@@ -342,6 +342,7 @@ impl GetPromiseResultEntry {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl wasmtime_wasi::p2::Pollable for GetPromiseResultEntry {
     async fn ready(&mut self) {
         // A failed poll is treated as immediately ready so that the pollable

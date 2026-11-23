@@ -762,6 +762,7 @@ impl Debug for MultiSqliteIndexedStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl IndexedStorage for MultiSqliteIndexedStorage {
     async fn set_key_epoch(
         &self,

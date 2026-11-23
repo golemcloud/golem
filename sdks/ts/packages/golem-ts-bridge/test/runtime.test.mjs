@@ -2022,9 +2022,10 @@ test('packed u8 input uses native nodes and a v1 binary envelope', async () => {
     socket.once('message', (data) => {
       const start = JSON.parse(data);
       const provisionalRef = start.methodParameters.input.value.provisionalRef;
+      socket.send(JSON.stringify(accepted(start)));
       socket.send(
-        JSON.stringify(
-          accepted(start, [
+        JSON.stringify({
+          ...accepted(start, [
             {
               channel: 1,
               direction: 'input',
@@ -2033,7 +2034,8 @@ test('packed u8 input uses native nodes and a v1 binary envelope', async () => {
               inputHighWater: { sequence: '0', terminal: false },
             },
           ]),
-        ),
+          type: 'invocationReady',
+        }),
       );
       socket.send(
         JSON.stringify({

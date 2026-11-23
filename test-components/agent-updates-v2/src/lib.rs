@@ -197,6 +197,7 @@ pub trait SnapshotUpdateTest {
     fn suffix_exit(&self) -> u32;
     fn accumulated_value(&self) -> u32;
     fn revision_two_only(&self) -> u32;
+    fn revision_cache_probe(&mut self) -> u32;
     fn write_file(&mut self, path: String, content: String);
     fn read_file(&self, path: String) -> Option<String>;
 }
@@ -276,6 +277,11 @@ impl SnapshotUpdateTest for SnapshotUpdateTestImpl {
 
     fn revision_two_only(&self) -> u32 {
         2
+    }
+
+    fn revision_cache_probe(&mut self) -> u32 {
+        self.accumulated_value += 1;
+        self.accumulated_value
     }
 
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {

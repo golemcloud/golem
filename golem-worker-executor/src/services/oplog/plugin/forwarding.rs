@@ -385,6 +385,7 @@ impl Drop for ForwardingOplog {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Oplog for ForwardingOplog {
     fn executor_shutdown_handle(&self) -> super::super::OplogShutdownHandle {
         let forwarding_retired = self.forwarding_retired.clone();

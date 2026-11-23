@@ -5,4 +5,20 @@ import {
   "moonbitlang/core/set",
 }
 
-supported_targets = "+wasm"
+supported_targets = "+wasm+wasm-gc"
+
+// BEGIN generated backend
+#cfg(target = "wasm-gc")
+import {
+  "golemcloud/golem_sdk/gen/cabi" @witCabi,
+}
+// END generated backend
+
+// BEGIN generated backend
+options(
+  targets: {
+    "async_poll.mbt": ["wasm"],
+    "async_poll_gc.mbt": ["wasm-gc"],
+  },
+)
+// END generated backend

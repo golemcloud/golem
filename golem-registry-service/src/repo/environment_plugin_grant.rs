@@ -81,6 +81,7 @@ impl<Repo: EnvironmentPluginGrantRepo> LoggedEnvironmentPluginGrantRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: EnvironmentPluginGrantRepo> EnvironmentPluginGrantRepo
     for LoggedEnvironmentPluginGrantRepo<Repo>
 {
@@ -169,6 +170,7 @@ impl<DBP: Pool> DbEnvironmentPluginGrantRepo<DBP> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
     async fn create(
         &self,

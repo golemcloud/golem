@@ -3788,6 +3788,7 @@ class OutputStream<T> implements AgentStream<T> {
 class StreamingSession {
   private socket?: WebSocket;
   private accepted = false;
+  private executionReady = false;
   private everAccepted = false;
   private pendingResume = false;
   private resumeOperation: 'resume' | 'takeover' = 'resume';
@@ -4225,9 +4226,13 @@ class StreamingSession {
         'message received after invocation finish',
       );
     switch (message.type) {
-      case 'invocationAccepted': {
-        if (this.accepted)
+      case 'invocationAccepted':
+      case 'invocationReady': {
+        const ready = message.type === 'invocationReady';
+        if (this.accepted && !ready)
           throw new StreamingProtocolError('protocol-error', 'duplicate invocation acceptance');
+        if (ready && (!this.accepted || this.executionReady))
+          throw new StreamingProtocolError('protocol-error', 'unexpected invocation readiness');
         object(message, [
           'version',
           'type',
@@ -4260,10 +4265,11 @@ class StreamingSession {
             'accepted invocation identity changed',
           );
         validateOpaqueToken(message.sessionToken, 'session token');
-        this.install(message.mappings, true);
+        this.install(message.mappings, ready || message.mappings.length !== 0);
         this.acceptedInvocation = { agentId, idempotencyKey: message.idempotencyKey };
         this.sessionToken = message.sessionToken;
         this.accepted = true;
+        this.executionReady = ready || message.mappings.length !== 0;
         this.everAccepted = true;
         this.pendingResume = false;
         this.acceptedAt = Date.now();
@@ -5164,6 +5170,7 @@ class StreamingSession {
         });
       }
       this.accepted = false;
+      this.executionReady = false;
       await this.connectRetry();
     } catch (error) {
       this.fail(error);

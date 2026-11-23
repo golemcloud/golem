@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::super::ComponentCommandHandler;
-use super::{ComponentStager, extract_local_component, resolve_ifs_entry, resolve_tool_ifs_entry};
+use super::{ComponentStager, extract_local_component, resolve_provision_file};
 use crate::app::context::ApplicationContext;
 use crate::command_handler::component::ifs::expand_package_files;
 use crate::model::app::{InitialComponentFile, ResolvedToolProvision};
@@ -50,6 +50,9 @@ impl ComponentCommandHandler {
             )?,
             components: BTreeMap::new(),
         };
+        for calls in app_ctx.installed_package_calls.values() {
+            config.package.calls.extend(calls.iter().cloned());
+        }
         let mut stage = PackageStage {
             blobs: BTreeMap::new(),
             root: &tokio::fs::canonicalize(app.app_root_dir()).await?,
@@ -137,7 +140,7 @@ impl ComponentCommandHandler {
                     let files = staged
                         .files
                         .iter()
-                        .map(|file| resolve_ifs_entry(file, &staged.files_source))
+                        .map(resolve_provision_file)
                         .collect::<anyhow::Result<Vec<_>>>()?;
                     stage
                         .provision(&mut provision, &files)
@@ -386,7 +389,7 @@ impl PackageStage<'_> {
             .properties
             .files
             .iter()
-            .map(resolve_tool_ifs_entry)
+            .map(resolve_provision_file)
             .collect::<anyhow::Result<Vec<_>>>()?;
         self.provision(&mut provision, &files).await?;
         Ok(provision)
@@ -478,7 +481,7 @@ mod tests {
     use crate::model::app::{Application, ApplicationPreload, ComponentPresetSelector};
     use crate::model::app_raw::ApplicationWithSource;
     use clap::Parser;
-    use golem_common::model::agent::extraction::ExtractedComponentMetadata;
+    use golem_common::model::agent::{AgentTypeName, extraction::ExtractedComponentMetadata};
     use golem_common::model::component::ComponentPackageMetadata;
     use std::sync::Arc;
     use test_r::test;
@@ -537,7 +540,12 @@ mod tests {
             app.publisher_package = Some(package::PackageIdentity {
                 name: "publisher".into(),
                 version: "1.0.0".into(),
+                calls: BTreeSet::from([AgentTypeName("SupportCall".into())]),
             });
+            app.installed_package_calls.insert(
+                "fixture".into(),
+                BTreeSet::from([AgentTypeName("Escalation".into())]),
+            );
             // Installed fixtures provide extracted metadata without a guest build.
             app.installed_components.insert(
                 "publisher:main".try_into().map_err(anyhow::Error::msg)?,
@@ -584,9 +592,14 @@ mod tests {
             json!([])
         );
         let report = serde_json::to_value(with_exports)?;
+        let unpacked = package::read(archive.as_slice())?;
+        assert_eq!(report["digest"], unpacked.digest());
         assert_eq!(
-            report["digest"],
-            package::read(archive.as_slice())?.digest()
+            unpacked.config().package.calls,
+            BTreeSet::from([
+                AgentTypeName("Escalation".into()),
+                AgentTypeName("SupportCall".into()),
+            ])
         );
         assert_eq!(
             report["omittedExports"],

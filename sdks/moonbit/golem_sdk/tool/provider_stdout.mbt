@@ -33,7 +33,6 @@ priv struct ProviderOutputState {
 ///|
 pub struct ProviderOutput {
   priv state : Ref[ProviderOutputState]
-  priv output : @async-core.Sink[Byte]
 }
 
 ///|
@@ -61,45 +60,7 @@ fn provider_output_from_callbacks(
     idle: @async-core.Future::ready(()),
     idle_promise: None,
   })
-  let output = @async-core.Sink::from_callbacks(
-    async fn(bytes) {
-      if !state.val.open || state.val.dropped {
-        return 0
-      }
-      match (state.val.write_callback)(FixedArray::from_array(bytes)) {
-        Ok(_) => bytes.length()
-        Err(error) => {
-          if error is @toolStreams.StreamWriteError::Closed(_) {
-            state.val.open = false
-          }
-          raise error
-        }
-      }
-    },
-    async fn() {
-      if !state.val.open || state.val.dropped {
-        return
-      }
-      if state.val.busy {
-        raise @toolStreams.StreamWriteError::ConcurrentOperation
-      }
-      state.val.begin_operation()
-      defer state.val.end_operation()
-      match (state.val.finish_callback)() {
-        Ok(_) => state.val.open = false
-        Err(error) => {
-          if error is @toolStreams.StreamWriteError::Closed(_) {
-            state.val.open = false
-          }
-          raise error
-        }
-      }
-    },
-    fn() { state.val.open && !state.val.dropped },
-    None,
-    write_window_size=65536,
-  )
-  { state, output, }
+  { state, }
 }
 
 ///|
@@ -152,7 +113,8 @@ pub async fn ProviderOutput::write(
   }
   self.begin_write()
   defer self.state.val.end_operation()
-  self.output.write(data)
+  let length = data.length().min(65536)
+  self.write_chunk(snapshot_bytes(data[:length]))
 }
 
 ///|
@@ -165,7 +127,8 @@ pub async fn ProviderOutput::write_bytes(
   }
   self.begin_write()
   defer self.state.val.end_operation()
-  self.output.write_bytes(data)
+  let length = data.length().min(65536)
+  self.write_chunk(data[:length].to_fixedarray())
 }
 
 ///|
@@ -178,7 +141,15 @@ pub async fn ProviderOutput::write_all(
   }
   self.begin_write()
   defer self.state.val.end_operation()
-  self.output.write_all(data)
+  let mut offset = 0
+  while offset < data.length() {
+    let end = offset + (data.length() - offset).min(65536)
+    offset += self.write_chunk(snapshot_bytes(data[offset:end]))
+    if !self.is_open() {
+      return false
+    }
+  }
+  true
 }
 
 ///|
@@ -191,7 +162,34 @@ pub async fn ProviderOutput::write_all_bytes(
   }
   self.begin_write()
   defer self.state.val.end_operation()
-  self.output.write_all_bytes(data)
+  let mut offset = 0
+  while offset < data.length() {
+    let end = offset + (data.length() - offset).min(65536)
+    offset += self.write_chunk(data[offset:end].to_fixedarray())
+    if !self.is_open() {
+      return false
+    }
+  }
+  true
+}
+
+///|
+async fn ProviderOutput::write_chunk(
+  self : ProviderOutput,
+  bytes : FixedArray[Byte],
+) -> Int32 {
+  if bytes.is_empty() || !self.is_open() {
+    return 0
+  }
+  match (self.state.val.write_callback)(bytes) {
+    Ok(_) => bytes.length()
+    Err(error) => {
+      if error is @toolStreams.StreamWriteError::Closed(_) {
+        self.state.val.open = false
+      }
+      raise error
+    }
+  }
 }
 
 ///|

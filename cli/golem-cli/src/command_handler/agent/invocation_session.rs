@@ -331,7 +331,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 attempt_id,
                 config: config.clone(),
                 idempotency_key: idempotency_key_value.clone(),
-                method_parameters: method_parameters.clone(),
+                method_parameters: method_parameters.clone().try_into()?,
                 selector: Box::new(selector.clone()),
                 version: INVOCATION_SESSION_VERSION,
             };
@@ -685,18 +685,25 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 if let ServerFrame::Message(PublicServerMessage::InvocationAccepted {
                     agent_id,
                     idempotency_key,
+                    mappings,
+                    ..
+                } | PublicServerMessage::InvocationReady {
+                    agent_id,
+                    idempotency_key,
+                    mappings,
                     ..
                 }) = &server_frame
                 {
                     accepted = true;
                     accepted_key = idempotency_key.to_string();
-                    if let Some(live_output) = &args.live_output {
+                    let ready = matches!(&server_frame, ServerFrame::Message(PublicServerMessage::InvocationReady { .. }));
+                    if let Some(live_output) = &args.live_output && !ready {
                         live_output
                             .accepted(agent_id, &args.selected_agent_name, *idempotency_key)
                             .await?;
                     }
                     output_streams.clear();
-                    if let Some(binding) = input_binding.as_mut() {
+                    if let Some(binding) = input_binding.as_mut() && (ready || !mappings.is_empty()) {
                         let (channel, stream_token) = session
                             .input_binding(&input_buffer)
                             .ok_or_else(|| anyhow!("invocation acceptance omitted the stdin stream mapping"))?;
@@ -1021,7 +1028,7 @@ pub(super) async fn invoke_scalar(
         attempt_id: uuid::Uuid::new_v4(),
         config: Vec::new(),
         idempotency_key: args.idempotency_key.value.clone(),
-        method_parameters,
+        method_parameters: method_parameters.try_into()?,
         selector: Box::new(invocation_selector(
             &args.application_name,
             &args.environment_name,
@@ -1081,6 +1088,7 @@ pub(super) async fn invoke_scalar(
                 }
                 accepted_key = Some(idempotency_key);
             }
+            PublicServerMessage::InvocationReady { .. } => {}
             PublicServerMessage::InvocationResult { result: value, .. } => {
                 result = match *value {
                     PublicInvocationResult::Value {
@@ -1197,7 +1205,7 @@ fn load_checkpoint(path: &Path) -> anyhow::Result<InvocationSessionCheckpoint> {
         .map(|pending| pending_operation_kind(&pending.request))
         .transpose()?;
     if let Some(pending) = &checkpoint.pending_operation {
-        golem_common::model::invocation_session_public::encode_text(&pending.request)
+        golem_common::model::invocation_session_public::encode_client_text(&pending.request)
             .context("invocation session file contains an invalid pending operation")?;
     }
     if checkpoint.session_token.is_none() && pending_kind != Some(PendingOperationKind::Start) {
@@ -1234,10 +1242,11 @@ fn validate_pending_start(
     else {
         bail!("pending operation is not an invocation start");
     };
+    let saved_parameters = serde_json::from_str(saved_parameters.as_str())?;
     let saved_values = decode_public_schema_value(
         input_graph,
         &input_graph.root,
-        saved_parameters,
+        &saved_parameters,
         PublicStreamReferencePolicy::Provisional,
         |reference, _| {
             let PublicStreamReference::Provisional(reference) = reference else {
@@ -1300,7 +1309,7 @@ fn validate_pending_start(
         attempt_id: *attempt_id,
         config: config.to_vec(),
         idempotency_key: idempotency_key.to_string(),
-        method_parameters: expected_parameters,
+        method_parameters: expected_parameters.try_into()?,
         selector: Box::new(selector.clone()),
         version: INVOCATION_SESSION_VERSION,
     };
@@ -1866,6 +1875,7 @@ fn cancel_announced_outputs(
 ) -> Vec<PublicClientMessage> {
     let ServerFrame::Message(
         PublicServerMessage::InvocationAccepted { mappings, .. }
+        | PublicServerMessage::InvocationReady { mappings, .. }
         | PublicServerMessage::InvocationResult { mappings, .. }
         | PublicServerMessage::OutputStreamItem { mappings, .. }
         | PublicServerMessage::InputStreamAck { mappings, .. },
@@ -2032,6 +2042,7 @@ async fn handle_response(
 ) -> anyhow::Result<bool> {
     let mut failed = false;
     match response {
+        ServerFrame::Message(PublicServerMessage::InvocationReady { .. }) => {}
         ServerFrame::Message(PublicServerMessage::InvocationAccepted { .. }) => {
             if structured {
                 let mut event = event(AgentInvocationSessionEventKind::Accepted, idempotency_key);
@@ -3101,7 +3112,7 @@ fn schema_value_to_json(
 mod public_tests {
     use super::*;
     use golem_common::model::invocation_session_public::{
-        PublicStreamDirection, PublicStreamMapping,
+        JsonMethodInput, PublicStreamDirection, PublicStreamMapping,
     };
     use golem_common::schema::metadata::MetadataEnvelope;
     use std::io::ErrorKind;
@@ -3152,6 +3163,34 @@ mod public_tests {
         assert_eq!(
             load_checkpoint(&path).unwrap().accepted_invocation,
             expected.accepted_invocation
+        );
+
+        let mut queued = expected.clone();
+        queued.session_token = None;
+        queued.accepted_invocation = None;
+        queued.delivered_output_cursors.clear();
+        queued.stable_stream_bindings.clear();
+        queued.pending_operation = Some(PendingOperation {
+            request: PublicClientMessage::InvocationStart {
+                attempt_id: uuid::Uuid::new_v4(),
+                config: Vec::new(),
+                idempotency_key: queued.idempotency_key.clone(),
+                method_parameters: JsonMethodInput::capture(
+                    br#"{"huge":1e400,"precise":1.00000000000000001,"zero":-0.0}"#,
+                )
+                .unwrap(),
+                selector: Box::new(queued.selector.clone()),
+                version: INVOCATION_SESSION_VERSION,
+            },
+        });
+        write_checkpoint(&path, &queued).unwrap();
+        assert_eq!(
+            load_checkpoint(&path)
+                .unwrap()
+                .pending_operation
+                .unwrap()
+                .request,
+            queued.pending_operation.unwrap().request
         );
 
         expected
@@ -3256,7 +3295,9 @@ mod public_tests {
                     {"kind":"stream","value":{"provisionalRef":saved_reference}},
                     {"kind":"string","value":"tail"}
                 ]}
-            }),
+            })
+            .try_into()
+            .unwrap(),
             selector: Box::new(selector.clone()),
             version: INVOCATION_SESSION_VERSION,
         };
@@ -3319,7 +3360,7 @@ mod public_tests {
                 attempt_id: uuid::Uuid::new_v4(),
                 config: Vec::new(),
                 idempotency_key: "invocation-key".to_string(),
-                method_parameters: parameters,
+                method_parameters: parameters.try_into().unwrap(),
                 selector: Box::new(selector.clone()),
                 version: INVOCATION_SESSION_VERSION,
             };
@@ -3351,7 +3392,9 @@ mod public_tests {
                     {"kind":"stream","value":{"provisionalRef":saved_reference}},
                     {"kind":"string","value":"tail"}
                 ]}
-            }),
+            })
+            .try_into()
+            .unwrap(),
             selector: Box::new(selector.clone()),
             version: INVOCATION_SESSION_VERSION,
         };

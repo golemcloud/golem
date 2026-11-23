@@ -196,7 +196,7 @@ pub(super) async fn run_session(
             send_error(&events, HttpSessionError::Protocol(error)).await;
             return;
         }
-        let current = match decision.response.unwrap() {
+        let mut current = match decision.response.unwrap() {
             invocation_response::Response::Accepted(current) => current,
             invocation_response::Response::Rejected(rejected)
                 if accepted.is_some()
@@ -236,6 +236,49 @@ pub(super) async fn run_session(
             }
             _ => unreachable!(),
         };
+        if accepted.is_none() && current.component_revision.is_none() {
+            if current.agent_id.as_ref() != start.target_agent_id()
+                || current.method_name != start.method_name
+            {
+                send_error(
+                    &events,
+                    HttpSessionError::Protocol("acceptance changed target".into()),
+                )
+                .await;
+                return;
+            }
+            if !send_event(
+                &events,
+                &cancelled,
+                HttpSessionEvent::QueuedAccepted(current.clone()),
+            )
+            .await
+            {
+                cancelled.cancel();
+                return;
+            }
+        }
+        while current.component_revision.is_none() {
+            let response = tokio::select! {
+                _ = cancelled.cancelled() => return,
+                response = responses.next() => response,
+            };
+            let Some(Ok(response)) = response else {
+                send_error(&events, HttpSessionError::TransportUnavailable).await;
+                return;
+            };
+            if let Err(error) = protocol.validate_response(&response) {
+                send_error(&events, HttpSessionError::Protocol(error)).await;
+                return;
+            }
+            match response.response {
+                Some(invocation_response::Response::Ready(ready)) => current = ready,
+                _ => {
+                    send_error(&events, HttpSessionError::Rejected).await;
+                    return;
+                }
+            }
+        }
         if let Some(expected) = accepted.as_ref() {
             if current.agent_id != expected.accepted.agent_id
                 || current.component_revision != expected.accepted.component_revision
@@ -518,7 +561,7 @@ pub(super) async fn run_session(
                             debug!(reason = "attachment_revoked", "HTTP session requires reattachment");
                             continue 'attempts;
                         }
-                        invocation_response::Response::Accepted(_) | invocation_response::Response::Rejected(_) => unreachable!(),
+                        invocation_response::Response::Accepted(_) | invocation_response::Response::Ready(_) | invocation_response::Response::Rejected(_) => unreachable!(),
                     }
                 }
                 command = async {

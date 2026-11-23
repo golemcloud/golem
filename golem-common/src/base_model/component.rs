@@ -370,6 +370,10 @@ declare_structs! {
         // oplog processor only
         pub oplog_processor_component_id: Option<ComponentId>,
         pub oplog_processor_component_revision: Option<ComponentRevision>,
+
+        /// The account that installed the plugin. An oplog processor processes each batch with
+        /// this account as its original caller.
+        pub installed_by: AccountId,
     }
 
     #[derive(Eq)]

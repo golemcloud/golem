@@ -21,6 +21,7 @@ use super::{
     get_public_oplog_range_page, golem, min, oplog_page_cursor, oplog_page_start,
     oplog_range_allowance, search_public_oplog_page,
 };
+use golem_common::base_model::caller::ClaimVisibility;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -73,6 +74,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_type_name = &identity.create_parameters().agent_type_name;
 
         let limits = self.oplog_query_limits(request.count)?;
+        let claims = ClaimVisibility::from_protobuf(request.claims)
+            .map_err(WorkerExecutorError::invalid_request)?;
         if let Some(to) = request.to_oplog_index {
             let allowance = oplog_range_allowance(
                 request.scan_allowance.map(Into::into),
@@ -91,6 +94,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 OplogIndex::from_u64(to),
                 limits,
                 allowance,
+                claims,
             )
             .await?;
             return Ok(GetOplogResponse {
@@ -126,6 +130,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             start_component_revision,
             start,
             limits,
+            claims,
         )
         .await
         .map_err(WorkerExecutorError::unknown)?;
@@ -196,6 +201,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             agent_type_name.as_ref(),
             OplogIndex::from_u64(request.oplog_index),
             component_revision,
+            ClaimVisibility::from_protobuf(request.claims)
+                .map_err(WorkerExecutorError::invalid_request)?,
         )
         .await?;
         let entry: golem::worker::OplogEntryWithIndex =
@@ -249,6 +256,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             limits,
             &request.query,
             self.services.config().limits.scan_budget,
+            ClaimVisibility::from_protobuf(request.claims)
+                .map_err(WorkerExecutorError::invalid_request)?,
         )
         .await
         .map_err(WorkerExecutorError::unknown)?;

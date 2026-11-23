@@ -128,7 +128,7 @@ impl DeploymentPlanAmbientToolEntry {
             owner_account_email: self.owner_account_email.clone(),
             metadata_version: self.metadata_version.0.clone(),
             metadata_digest: self.metadata_digest,
-            provision: self.provision.clone(),
+            provision: (&self.provision).into(),
             component_bindings,
             bindings,
             environment_middleware_binding: Some((&self.environment_binding).into()),

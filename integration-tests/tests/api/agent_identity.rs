@@ -1109,6 +1109,7 @@ async fn management_statuses(
                         None,
                         None,
                         None,
+                        None,
                     )
                     .await,
             ),
@@ -1117,7 +1118,7 @@ async fn management_statuses(
             "get_oplog_entry",
             status(
                 &client
-                    .get_oplog_entry(&environment, &agent, 1, None, None)
+                    .get_oplog_entry(&environment, &agent, 1, None, None, None)
                     .await,
             ),
         ),
