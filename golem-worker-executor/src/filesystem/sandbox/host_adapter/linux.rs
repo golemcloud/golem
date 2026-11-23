@@ -16,9 +16,8 @@ use super::{NativeRoot, NativeRootHandles, SandboxFilesystem};
 use crate::filesystem::blocking::BlockingTask;
 use crate::filesystem::errors::OperationContext;
 use crate::filesystem::sandbox::{FilesystemStorageError, InstalledLimits};
-use crate::filesystem::volume::{
-    FilesystemAllocation, FilesystemLimits, install_project_limits, project_allocation,
-};
+use crate::filesystem::volume::platform::{install_project_limits, project_allocation};
+use crate::filesystem::volume::{FilesystemAllocation, FilesystemLimits};
 use std::num::{NonZeroU32, NonZeroU64};
 use std::path::PathBuf;
 use std::sync::Arc;

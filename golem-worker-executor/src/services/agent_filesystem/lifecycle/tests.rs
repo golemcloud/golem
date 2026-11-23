@@ -6986,7 +6986,9 @@ mod managed_xfs {
             .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
         let profile = FilesystemStorageConfig {
             mode: FilesystemStorageMode::ManagedXfs {
-                xfs_quotad_socket: crate::filesystem::volume::in_process_xfs_quotad(&root),
+                xfs_quotad_socket: crate::filesystem::volume::platform::in_process_xfs_quotad(
+                    &root,
+                ),
                 root: root.into(),
             },
             ..FilesystemStorageConfig::default()
@@ -7035,7 +7037,9 @@ mod managed_xfs {
             .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
         let profile = FilesystemStorageConfig {
             mode: FilesystemStorageMode::ManagedXfs {
-                xfs_quotad_socket: crate::filesystem::volume::in_process_xfs_quotad(&root),
+                xfs_quotad_socket: crate::filesystem::volume::platform::in_process_xfs_quotad(
+                    &root,
+                ),
                 root: root.into(),
             },
             ..FilesystemStorageConfig::default()

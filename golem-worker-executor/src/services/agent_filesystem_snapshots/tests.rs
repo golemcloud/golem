@@ -3406,7 +3406,9 @@ mod native_pressure {
                 .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
             a_volume_below_the_pressure_target_admits_no_periodic_upload(
                 FilesystemStorageMode::ManagedXfs {
-                    xfs_quotad_socket: crate::filesystem::volume::in_process_xfs_quotad(&root),
+                    xfs_quotad_socket: crate::filesystem::volume::platform::in_process_xfs_quotad(
+                        &root,
+                    ),
                     root: root.into(),
                 },
                 "managed-xfs-pressure",

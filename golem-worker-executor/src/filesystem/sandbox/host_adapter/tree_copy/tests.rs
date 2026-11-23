@@ -14,6 +14,20 @@
 
 use super::macos_finalization::*;
 use super::*;
+use crate::filesystem::host_directories::{HostDirectory, HostPath};
+use crate::filesystem::sandbox::errors::FilesystemStorageError;
+use crate::filesystem::sandbox::host_adapter::sandbox_provisioning::{
+    SandboxFilesystemName, SandboxFilesystemProvisioning,
+};
+use crate::filesystem::sandbox::host_adapter::{SandboxFilesystem, directory_for};
+use crate::filesystem::sandbox::open_handles::{SandboxDirectory, SandboxHandle};
+use crate::filesystem::sandbox::sandbox_paths::SandboxPath;
+use crate::filesystem::sandbox::{
+    SandboxAccessMode, SandboxFilesystemAdapter, SandboxFollow, SandboxObjectKind,
+    SandboxOpenOptions, SeedEntry,
+};
+use crate::services::golem_config::FilesystemStorageMode;
+use golem_common::model::RetryConfig;
 use std::num::NonZeroU64;
 use test_r::test;
 
@@ -1081,26 +1095,339 @@ fn a_clone_open_error_precedes_a_temporary_removal_error() {
     assert_eq!(error.to_string(), "open cloned file");
 }
 
+#[test]
+fn seed_fails_on_an_existing_target_path() {
+    let source = tempfile::tempdir().unwrap();
+    std::fs::create_dir(source.path().join("data")).unwrap();
+    std::fs::write(source.path().join("data/file"), b"new").unwrap();
+    let destination = tempfile::tempdir().unwrap();
+    std::fs::create_dir(destination.path().join("data")).unwrap();
+    std::fs::write(destination.path().join("data/file"), b"old").unwrap();
+
+    let error = seed_entry(
+        buffered_seed(SeedPlacement::CreateNew),
+        &open(destination.path()),
+        source.path(),
+        Path::new(""),
+    )
+    .unwrap_err();
+
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(
+        std::fs::read(destination.path().join("data/file")).unwrap(),
+        b"old"
+    );
+}
+
+#[test]
+fn copy_contents_copies_a_file_with_several_names_once_and_reports_its_names() {
+    let source = tempfile::tempdir().unwrap();
+    std::fs::create_dir(source.path().join("a")).unwrap();
+    std::fs::create_dir(source.path().join("b")).unwrap();
+    std::fs::write(source.path().join("a/file"), b"linked").unwrap();
+    std::fs::hard_link(source.path().join("a/file"), source.path().join("b/second")).unwrap();
+    std::fs::hard_link(source.path().join("a/file"), source.path().join("third")).unwrap();
+    std::fs::write(source.path().join("single"), b"single").unwrap();
+    std::fs::write(source.path().join("excluded"), b"excluded").unwrap();
+    std::fs::hard_link(source.path().join("excluded"), source.path().join("kept")).unwrap();
+    let destination = tempfile::tempdir().unwrap();
+
+    let groups = copy_contents(
+        &open(source.path()),
+        Path::new(""),
+        &exclusions(&["excluded"]),
+        destination.path(),
+        FileTransfer::Bytes,
+    )
+    .unwrap();
+
+    assert_eq!(
+        groups.as_ref(),
+        [LinkGroup {
+            first: Path::new("a/file").into(),
+            others: [Path::new("b/second"), Path::new("third")]
+                .map(Box::<Path>::from)
+                .into(),
+        }]
+    );
+    assert_eq!(
+        tree_listing(destination.path()),
+        ["a", "a/file", "b", "kept", "single"]
+            .map(String::from)
+            .into()
+    );
+    assert_eq!(
+        std::fs::read(destination.path().join("a/file")).unwrap(),
+        b"linked"
+    );
+    assert_eq!(
+        std::fs::read(destination.path().join("kept")).unwrap(),
+        b"excluded"
+    );
+}
+
+#[test]
+fn a_panicking_temporary_write_removes_its_name_before_resuming_unwind() {
+    let root = tempfile::tempdir().unwrap();
+    let directory =
+        cap_std::fs::Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap();
+    let temporary = CapabilityTempFile::new(&directory).unwrap();
+    let name = temporary.name.as_ref().unwrap().clone();
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        temporary.finish::<()>(|_| panic!("seed write panic"))
+    }))
+    .unwrap_err();
+    assert_eq!(panicked.downcast_ref::<&str>(), Some(&"seed write panic"));
+    assert!(!directory.try_exists(name).unwrap());
+}
+
+async fn assert_pinned_seed_after_directory_rename(
+    parent: &Path,
+    provisioning: SandboxFilesystemProvisioning,
+) {
+    let filesystem = <SandboxFilesystem as SandboxFilesystemAdapter>::create_fresh(
+        provisioning,
+        sandbox_name(),
+        None,
+    )
+    .await
+    .unwrap();
+    let root = filesystem.root().to_path_buf();
+    std::fs::create_dir(root.join("pinned")).unwrap();
+    let pinned = open_sandbox_directory(&filesystem, "pinned").await;
+    std::fs::rename(root.join("pinned"), root.join("renamed")).unwrap();
+    std::fs::create_dir(root.join("pinned")).unwrap();
+
+    let host_source = create_scratch_directory(parent).await;
+    std::fs::write(host_source.path().as_path().join("source"), b"seeded").unwrap();
+    let source = host_child_path(&host_source, "source");
+    seed_one_entry(
+        &filesystem,
+        SeedEntry {
+            source: source.clone(),
+            target: SandboxPath::at(pinned.clone(), "destination"),
+            access: SeedAccess::ReadOnly,
+            placement: SeedPlacement::CreateNew,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        std::fs::read(root.join("renamed/destination")).unwrap(),
+        b"seeded"
+    );
+    assert!(
+        std::fs::metadata(root.join("renamed/destination"))
+            .unwrap()
+            .permissions()
+            .readonly()
+    );
+    assert!(!root.join("pinned/destination").exists());
+    let existing = seed_one_entry(
+        &filesystem,
+        SeedEntry {
+            source,
+            target: SandboxPath::at(pinned, "destination"),
+            access: SeedAccess::ReadOnly,
+            placement: SeedPlacement::CreateNew,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(existing.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
+    <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        .await
+        .unwrap();
+}
+
+fn host_child_path(directory: &HostDirectory, name: &str) -> HostPath {
+    directory.path().child(std::ffi::OsStr::new(name)).unwrap()
+}
+
+/// Makes the host directories under `root` on development storage, and gives `.scratch`.
+async fn create_scratch_directory(root: &Path) -> HostDirectory {
+    crate::services::agent_filesystem::provision_executor_directories(
+        &FilesystemStorageMode::Directory { root: root.into() },
+        RetryConfig::default(),
+    )
+    .await
+    .unwrap()
+    .1
+    .scratch
+}
+
+fn sandbox_name() -> SandboxFilesystemName {
+    SandboxFilesystemName::new(
+        "environment".to_string(),
+        "component".to_string(),
+        "filesystem".to_string(),
+    )
+    .unwrap()
+}
+
+async fn open_sandbox_directory(
+    filesystem: &SandboxFilesystem,
+    path: impl Into<PathBuf>,
+) -> SandboxDirectory {
+    match filesystem
+        .open(
+            SandboxPath::at_root(path),
+            SandboxOpenOptions::Existing {
+                expected: SandboxObjectKind::Directory,
+                access: SandboxAccessMode::ReadWrite,
+                follow: SandboxFollow::Yes,
+            },
+        )
+        .await
+        .unwrap()
+    {
+        SandboxHandle::Directory(directory) => directory,
+        SandboxHandle::File(_) => panic!("path must open as a directory"),
+    }
+}
+
+fn make_seed_entry(
+    source: HostPath,
+    target: impl Into<PathBuf>,
+    access: SeedAccess,
+    placement: SeedPlacement,
+) -> SeedEntry {
+    SeedEntry {
+        source,
+        target: SandboxPath::at_root(target),
+        access,
+        placement,
+    }
+}
+
+async fn seed_one_entry(
+    filesystem: &SandboxFilesystem,
+    entry: SeedEntry,
+) -> Result<(), FilesystemStorageError> {
+    <SandboxFilesystem as SandboxFilesystemAdapter>::seed(filesystem, Box::new([entry])).await
+}
+
+fn directory_sandbox_provisioning(root: PathBuf) -> SandboxFilesystemProvisioning {
+    SandboxFilesystemProvisioning::new(
+        &FilesystemStorageMode::Directory { root: root.into() },
+        RetryConfig::default(),
+    )
+    .unwrap()
+}
+
+#[test]
+async fn external_seed_keeps_the_pinned_destination_after_directory_rename() {
+    let parent = tempfile::tempdir().unwrap();
+    let provisioning = directory_sandbox_provisioning(parent.path().to_path_buf());
+    assert_pinned_seed_after_directory_rename(parent.path(), provisioning).await;
+}
+
+#[test]
+async fn root_relative_seed_reuses_root_without_descriptor_duplication() {
+    let parent = tempfile::tempdir().unwrap();
+    let provisioning = directory_sandbox_provisioning(parent.path().to_path_buf());
+    let filesystem = <SandboxFilesystem as SandboxFilesystemAdapter>::create_fresh(
+        provisioning,
+        sandbox_name(),
+        None,
+    )
+    .await
+    .unwrap();
+    let host_source = create_scratch_directory(parent.path()).await;
+    std::fs::write(
+        host_source.path().as_path().join("source"),
+        b"seeded contents",
+    )
+    .unwrap();
+    let source = || host_child_path(&host_source, "source");
+    let root_directory = directory_for(
+        &filesystem.root_directory_state(),
+        &SandboxPath::at_root("."),
+    )
+    .unwrap();
+    let probe = CapabilityCopyParentProbe::install(root_directory);
+
+    seed_one_entry(
+        &filesystem,
+        make_seed_entry(
+            source(),
+            "destination",
+            SeedAccess::ReadOnly,
+            SeedPlacement::CreateNew,
+        ),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        probe.reused_base(),
+        Some(true),
+        "root-relative seed duplicated the root capability"
+    );
+    assert_eq!(
+        std::fs::read(filesystem.root().join("destination")).unwrap(),
+        b"seeded contents"
+    );
+    assert!(
+        std::fs::metadata(filesystem.root().join("destination"))
+            .unwrap()
+            .permissions()
+            .readonly()
+    );
+
+    let existing = seed_one_entry(
+        &filesystem,
+        make_seed_entry(
+            source(),
+            "destination",
+            SeedAccess::ReadWrite,
+            SeedPlacement::CreateNew,
+        ),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(existing.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
+    assert_eq!(
+        std::fs::read(filesystem.root().join("destination")).unwrap(),
+        b"seeded contents"
+    );
+    let escaped_path = filesystem.root().parent().unwrap().join("escaped-seed");
+    let escaped = seed_one_entry(
+        &filesystem,
+        make_seed_entry(
+            source(),
+            "../escaped-seed",
+            SeedAccess::ReadWrite,
+            SeedPlacement::CreateNew,
+        ),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        escaped.io_kind(),
+        Some(std::io::ErrorKind::PermissionDenied)
+    );
+    assert!(!escaped_path.exists());
+    assert!(std::fs::read_dir(filesystem.root()).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".golem-copy-")
+    }));
+
+    drop(probe);
+    <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+        .await
+        .unwrap();
+}
+
 #[cfg(unix)]
 mod native {
     use super::*;
-    use crate::filesystem::host_directories::{HostDirectory, HostPath};
-    use crate::filesystem::sandbox::errors::FilesystemStorageError;
-    use crate::filesystem::sandbox::host_adapter::sandbox_provisioning::{
-        SandboxFilesystemName, SandboxFilesystemProvisioning,
-    };
-    use crate::filesystem::sandbox::host_adapter::{
-        SandboxFilesystem, directory_for, root_user::running_as_root, tree_copy,
-    };
-    use crate::filesystem::sandbox::open_handles::{SandboxDirectory, SandboxHandle};
-    use crate::filesystem::sandbox::sandbox_paths::SandboxPath;
-    use crate::filesystem::sandbox::{
-        SandboxAccessMode, SandboxFilesystemAdapter, SandboxFollow, SandboxObjectKind,
-        SandboxOpenOptions, SeedEntry,
-    };
-    use crate::services::golem_config::FilesystemStorageMode;
+    use crate::filesystem::sandbox::host_adapter::{root_user::running_as_root, tree_copy};
     use cap_std::fs::PermissionsExt as _;
-    use golem_common::model::RetryConfig;
     use std::os::unix::ffi::OsStringExt as _;
     use std::os::unix::fs::PermissionsExt as _;
     use std::sync::Arc;
@@ -1578,30 +1905,6 @@ mod native {
     }
 
     #[test]
-    fn seed_fails_on_an_existing_target_path() {
-        let source = tempfile::tempdir().unwrap();
-        std::fs::create_dir(source.path().join("data")).unwrap();
-        std::fs::write(source.path().join("data/file"), b"new").unwrap();
-        let destination = tempfile::tempdir().unwrap();
-        std::fs::create_dir(destination.path().join("data")).unwrap();
-        std::fs::write(destination.path().join("data/file"), b"old").unwrap();
-
-        let error = seed_entry(
-            buffered_seed(SeedPlacement::CreateNew),
-            &open(destination.path()),
-            source.path(),
-            Path::new(""),
-        )
-        .unwrap_err();
-
-        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
-        assert_eq!(
-            std::fs::read(destination.path().join("data/file")).unwrap(),
-            b"old"
-        );
-    }
-
-    #[test]
     fn copy_contents_copies_a_symlink_with_several_names_once_and_reports_its_names() {
         let source = tempfile::tempdir().unwrap();
         std::fs::write(source.path().join("target"), b"target").unwrap();
@@ -1636,68 +1939,6 @@ mod native {
     }
 
     #[test]
-    fn copy_contents_copies_a_file_with_several_names_once_and_reports_its_names() {
-        let source = tempfile::tempdir().unwrap();
-        std::fs::create_dir(source.path().join("a")).unwrap();
-        std::fs::create_dir(source.path().join("b")).unwrap();
-        std::fs::write(source.path().join("a/file"), b"linked").unwrap();
-        std::fs::hard_link(source.path().join("a/file"), source.path().join("b/second")).unwrap();
-        std::fs::hard_link(source.path().join("a/file"), source.path().join("third")).unwrap();
-        std::fs::write(source.path().join("single"), b"single").unwrap();
-        std::fs::write(source.path().join("excluded"), b"excluded").unwrap();
-        std::fs::hard_link(source.path().join("excluded"), source.path().join("kept")).unwrap();
-        let destination = tempfile::tempdir().unwrap();
-
-        let groups = copy_contents(
-            &open(source.path()),
-            Path::new(""),
-            &exclusions(&["excluded"]),
-            destination.path(),
-            FileTransfer::Bytes,
-        )
-        .unwrap();
-
-        assert_eq!(
-            groups.as_ref(),
-            [LinkGroup {
-                first: Path::new("a/file").into(),
-                others: [Path::new("b/second"), Path::new("third")]
-                    .map(Box::<Path>::from)
-                    .into(),
-            }]
-        );
-        assert_eq!(
-            tree_listing(destination.path()),
-            ["a", "a/file", "b", "kept", "single"]
-                .map(String::from)
-                .into()
-        );
-        assert_eq!(
-            std::fs::read(destination.path().join("a/file")).unwrap(),
-            b"linked"
-        );
-        assert_eq!(
-            std::fs::read(destination.path().join("kept")).unwrap(),
-            b"excluded"
-        );
-    }
-
-    #[test]
-    fn a_panicking_temporary_write_removes_its_name_before_resuming_unwind() {
-        let root = tempfile::tempdir().unwrap();
-        let directory =
-            cap_std::fs::Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap();
-        let temporary = CapabilityTempFile::new(&directory).unwrap();
-        let name = temporary.name.as_ref().unwrap().clone();
-        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            temporary.finish::<()>(|_| panic!("seed write panic"))
-        }))
-        .unwrap_err();
-        assert_eq!(panicked.downcast_ref::<&str>(), Some(&"seed write panic"));
-        assert!(!directory.try_exists(name).unwrap());
-    }
-
-    #[test]
     fn a_failed_temporary_unlink_retains_its_name_for_explicit_cleanup() {
         use std::os::unix::fs::PermissionsExt as _;
         if running_as_root() {
@@ -1722,82 +1963,6 @@ mod native {
         assert!(!directory.try_exists(&name).unwrap());
     }
 
-    async fn assert_pinned_seed_after_directory_rename(
-        parent: &Path,
-        provisioning: SandboxFilesystemProvisioning,
-    ) {
-        let filesystem = <SandboxFilesystem as SandboxFilesystemAdapter>::create_fresh(
-            provisioning,
-            sandbox_name(),
-            None,
-        )
-        .await
-        .unwrap();
-        let root = filesystem.root().to_path_buf();
-        std::fs::create_dir(root.join("pinned")).unwrap();
-        let pinned = open_sandbox_directory(&filesystem, "pinned").await;
-        std::fs::rename(root.join("pinned"), root.join("renamed")).unwrap();
-        std::fs::create_dir(root.join("pinned")).unwrap();
-
-        let host_source = create_scratch_directory(parent).await;
-        std::fs::write(host_source.path().as_path().join("source"), b"seeded").unwrap();
-        let source = host_child_path(&host_source, "source");
-        seed_one_entry(
-            &filesystem,
-            SeedEntry {
-                source: source.clone(),
-                target: SandboxPath::at(pinned.clone(), "destination"),
-                access: SeedAccess::ReadOnly,
-                placement: SeedPlacement::CreateNew,
-            },
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(
-            std::fs::read(root.join("renamed/destination")).unwrap(),
-            b"seeded"
-        );
-        assert!(
-            std::fs::metadata(root.join("renamed/destination"))
-                .unwrap()
-                .permissions()
-                .readonly()
-        );
-        assert!(!root.join("pinned/destination").exists());
-        let existing = seed_one_entry(
-            &filesystem,
-            SeedEntry {
-                source,
-                target: SandboxPath::at(pinned, "destination"),
-                access: SeedAccess::ReadOnly,
-                placement: SeedPlacement::CreateNew,
-            },
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(existing.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
-            .await
-            .unwrap();
-    }
-
-    fn host_child_path(directory: &HostDirectory, name: &str) -> HostPath {
-        directory.path().child(std::ffi::OsStr::new(name)).unwrap()
-    }
-
-    /// Makes the host directories under `root` on development storage, and gives `.scratch`.
-    async fn create_scratch_directory(root: &Path) -> HostDirectory {
-        crate::services::agent_filesystem::provision_executor_directories(
-            &FilesystemStorageMode::Directory { root: root.into() },
-            RetryConfig::default(),
-        )
-        .await
-        .unwrap()
-        .1
-        .scratch
-    }
-
     fn permissions_mode(path: &Path) -> u32 {
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::symlink_metadata(path)
@@ -1805,65 +1970,6 @@ mod native {
             .permissions()
             .mode()
             & 0o7777
-    }
-
-    fn sandbox_name() -> SandboxFilesystemName {
-        SandboxFilesystemName::new(
-            "environment".to_string(),
-            "component".to_string(),
-            "filesystem".to_string(),
-        )
-        .unwrap()
-    }
-
-    async fn open_sandbox_directory(
-        filesystem: &SandboxFilesystem,
-        path: impl Into<PathBuf>,
-    ) -> SandboxDirectory {
-        match filesystem
-            .open(
-                SandboxPath::at_root(path),
-                SandboxOpenOptions::Existing {
-                    expected: SandboxObjectKind::Directory,
-                    access: SandboxAccessMode::ReadWrite,
-                    follow: SandboxFollow::Yes,
-                },
-            )
-            .await
-            .unwrap()
-        {
-            SandboxHandle::Directory(directory) => directory,
-            SandboxHandle::File(_) => panic!("path must open as a directory"),
-        }
-    }
-
-    fn make_seed_entry(
-        source: HostPath,
-        target: impl Into<PathBuf>,
-        access: SeedAccess,
-        placement: SeedPlacement,
-    ) -> SeedEntry {
-        SeedEntry {
-            source,
-            target: SandboxPath::at_root(target),
-            access,
-            placement,
-        }
-    }
-
-    async fn seed_one_entry(
-        filesystem: &SandboxFilesystem,
-        entry: SeedEntry,
-    ) -> Result<(), FilesystemStorageError> {
-        <SandboxFilesystem as SandboxFilesystemAdapter>::seed(filesystem, Box::new([entry])).await
-    }
-
-    fn directory_sandbox_provisioning(root: PathBuf) -> SandboxFilesystemProvisioning {
-        SandboxFilesystemProvisioning::new(
-            &FilesystemStorageMode::Directory { root: root.into() },
-            RetryConfig::default(),
-        )
-        .unwrap()
     }
 
     #[test]
@@ -3122,13 +3228,6 @@ mod native {
             .unwrap();
     }
 
-    #[test]
-    async fn external_seed_keeps_the_pinned_destination_after_directory_rename() {
-        let parent = tempfile::tempdir().unwrap();
-        let provisioning = directory_sandbox_provisioning(parent.path().to_path_buf());
-        assert_pinned_seed_after_directory_rename(parent.path(), provisioning).await;
-    }
-
     #[cfg(target_os = "macos")]
     mod pinned_clone {
         use super::*;
@@ -3147,111 +3246,12 @@ mod native {
         }
     }
 
-    #[test]
-    async fn root_relative_seed_reuses_root_without_descriptor_duplication() {
-        let parent = tempfile::tempdir().unwrap();
-        let provisioning = directory_sandbox_provisioning(parent.path().to_path_buf());
-        let filesystem = <SandboxFilesystem as SandboxFilesystemAdapter>::create_fresh(
-            provisioning,
-            sandbox_name(),
-            None,
-        )
-        .await
-        .unwrap();
-        let host_source = create_scratch_directory(parent.path()).await;
-        std::fs::write(
-            host_source.path().as_path().join("source"),
-            b"seeded contents",
-        )
-        .unwrap();
-        let source = || host_child_path(&host_source, "source");
-        let root_directory = directory_for(
-            &filesystem.root_directory_state(),
-            &SandboxPath::at_root("."),
-        )
-        .unwrap();
-        let probe = CapabilityCopyParentProbe::install(root_directory);
-
-        seed_one_entry(
-            &filesystem,
-            make_seed_entry(
-                source(),
-                "destination",
-                SeedAccess::ReadOnly,
-                SeedPlacement::CreateNew,
-            ),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(
-            probe.reused_base(),
-            Some(true),
-            "root-relative seed duplicated the root capability"
-        );
-        assert_eq!(
-            std::fs::read(filesystem.root().join("destination")).unwrap(),
-            b"seeded contents"
-        );
-        assert!(
-            std::fs::metadata(filesystem.root().join("destination"))
-                .unwrap()
-                .permissions()
-                .readonly()
-        );
-
-        let existing = seed_one_entry(
-            &filesystem,
-            make_seed_entry(
-                source(),
-                "destination",
-                SeedAccess::ReadWrite,
-                SeedPlacement::CreateNew,
-            ),
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(existing.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
-        assert_eq!(
-            std::fs::read(filesystem.root().join("destination")).unwrap(),
-            b"seeded contents"
-        );
-        let escaped_path = filesystem.root().parent().unwrap().join("escaped-seed");
-        let escaped = seed_one_entry(
-            &filesystem,
-            make_seed_entry(
-                source(),
-                "../escaped-seed",
-                SeedAccess::ReadWrite,
-                SeedPlacement::CreateNew,
-            ),
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(
-            escaped.io_kind(),
-            Some(std::io::ErrorKind::PermissionDenied)
-        );
-        assert!(!escaped_path.exists());
-        assert!(std::fs::read_dir(filesystem.root()).unwrap().all(|entry| {
-            !entry
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".golem-copy-")
-        }));
-
-        drop(probe);
-        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
-            .await
-            .unwrap();
-    }
-
     #[cfg(target_os = "macos")]
     mod apfs {
         use super::*;
         use crate::filesystem::sandbox::host_adapter::admit_root;
-        use crate::filesystem::volume::{FilesystemSpace, clone_file_at, observe_space_blocking};
+        use crate::filesystem::volume::platform::clone_file_at;
+        use crate::filesystem::volume::{FilesystemSpace, observe_space_blocking};
         use std::io::{Seek as _, SeekFrom, Write as _};
         use test_r::test;
 
@@ -3572,10 +3572,12 @@ mod native {
     #[cfg(target_os = "linux")]
     mod xfs {
         use super::*;
-        use crate::filesystem::volume::{
-            AgentAccounting, FilesystemAllocation, FilesystemLimits, FilesystemSpace,
+        use crate::filesystem::volume::platform::{
             assign_project, cow_extent_size_hint, file_project_id, get_fsxattr,
             has_project_identity,
+        };
+        use crate::filesystem::volume::{
+            AgentAccounting, FilesystemAllocation, FilesystemLimits, FilesystemSpace,
         };
         use crate::services::agent_filesystem::ExecutorDirectories;
         use std::io::Write as _;
@@ -3709,7 +3711,8 @@ mod native {
             let (provisioning, directories) =
                 crate::services::agent_filesystem::provision_executor_directories(
                     &FilesystemStorageMode::ManagedXfs {
-                        xfs_quotad_socket: crate::filesystem::volume::in_process_xfs_quotad(&root),
+                        xfs_quotad_socket:
+                            crate::filesystem::volume::platform::in_process_xfs_quotad(&root),
                         root: root.clone().into(),
                     },
                     RetryConfig::default(),
@@ -3930,7 +3933,8 @@ mod native {
             let (provisioning, directories) =
                 crate::services::agent_filesystem::provision_executor_directories(
                     &FilesystemStorageMode::ManagedXfs {
-                        xfs_quotad_socket: crate::filesystem::volume::in_process_xfs_quotad(&root),
+                        xfs_quotad_socket:
+                            crate::filesystem::volume::platform::in_process_xfs_quotad(&root),
                         root: root.clone().into(),
                     },
                     RetryConfig::default(),
@@ -4025,7 +4029,8 @@ mod native {
             let (provisioning, directories) =
                 crate::services::agent_filesystem::provision_executor_directories(
                     &FilesystemStorageMode::ManagedXfs {
-                        xfs_quotad_socket: crate::filesystem::volume::in_process_xfs_quotad(&root),
+                        xfs_quotad_socket:
+                            crate::filesystem::volume::platform::in_process_xfs_quotad(&root),
                         root: root.clone().into(),
                     },
                     RetryConfig::default(),

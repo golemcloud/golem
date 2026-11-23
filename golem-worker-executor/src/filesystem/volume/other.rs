@@ -55,7 +55,7 @@ mod test_support {
 
     impl FilesystemVolume {
         pub(crate) fn copy_on_write(_root: Arc<File>) -> Self {
-            Self::with_copy_on_write(CopyOnWrite)
+            Self::from(CopyOnWrite)
         }
     }
 

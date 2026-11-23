@@ -146,7 +146,7 @@ mod platform {
             &self,
             project_id: std::num::NonZeroU32,
         ) -> std::io::Result<crate::filesystem::volume::FilesystemAllocation> {
-            crate::filesystem::volume::project_allocation(&self.volume, project_id)
+            crate::filesystem::volume::platform::project_allocation(&self.volume, project_id)
         }
     }
 }

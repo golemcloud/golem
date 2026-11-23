@@ -97,7 +97,7 @@ impl FilesystemVolume {
     }
 
     pub(crate) fn copy_on_write(root: Arc<File>, identity: FilesystemIdentity) -> Self {
-        Self::with_copy_on_write(CopyOnWrite {
+        Self::from(CopyOnWrite {
             root,
             identity,
             project_quotas: None,

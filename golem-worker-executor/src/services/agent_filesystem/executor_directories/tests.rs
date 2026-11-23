@@ -493,7 +493,7 @@ mod linux {
 
     mod xfs_directory_checks {
         use super::*;
-        use crate::filesystem::volume::{get_fsxattr, set_fsxattr};
+        use crate::filesystem::volume::platform::{get_fsxattr, set_fsxattr};
         use test_r::{test, timeout};
 
         fn reflink_test_root() -> PathBuf {

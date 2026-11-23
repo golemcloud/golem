@@ -47,7 +47,7 @@ use crate::filesystem::sandbox::open_handles::AppendCoordinationCounts;
 use crate::filesystem::sandbox::open_handles::SandboxDirectory;
 use crate::filesystem::sandbox::open_handles::SandboxHandle;
 use crate::filesystem::sandbox::sandbox_paths::SandboxPath;
-use crate::filesystem::volume::copy_on_write_volume_for_test;
+use crate::filesystem::volume::platform::copy_on_write_volume_for_test;
 use crate::services::golem_config::FilesystemStorageMode;
 use bytes::Bytes;
 use golem_common::model::RetryConfig;

@@ -86,7 +86,7 @@ pub(in crate::filesystem::sandbox) fn resolve_host_path_target(
 mod platform {
     use super::*;
     use crate::filesystem::sandbox::object_identity::NativeFileIdentity;
-    use crate::filesystem::volume::ValidatedXfsNameMode;
+    use crate::filesystem::volume::platform::ValidatedXfsNameMode;
 
     #[derive(Clone, Copy)]
     pub(in crate::filesystem::sandbox) enum NativeNameModeSource {

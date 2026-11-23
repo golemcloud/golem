@@ -43,7 +43,7 @@ impl FilesystemVolume {
     }
 
     pub(crate) fn copy_on_write(root: Arc<File>) -> Self {
-        Self::with_copy_on_write(CopyOnWrite { root })
+        Self::from(CopyOnWrite { root })
     }
 }
 

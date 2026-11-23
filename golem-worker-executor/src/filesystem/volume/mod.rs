@@ -33,16 +33,16 @@ mod apfs;
 mod non_linux;
 #[cfg(target_os = "linux")]
 #[path = "linux.rs"]
-mod platform;
+pub(crate) mod platform;
 #[cfg(target_os = "macos")]
 #[path = "macos.rs"]
-mod platform;
+pub(crate) mod platform;
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 #[path = "other.rs"]
-mod platform;
+pub(crate) mod platform;
 #[cfg(target_os = "linux")]
 mod xfs;
-pub(crate) use platform::*;
+use platform::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FilesystemAllocation {
@@ -96,6 +96,16 @@ enum FilesystemVolumeMode {
     CopyOnWrite(CopyOnWrite),
 }
 
+impl From<CopyOnWrite> for FilesystemVolume {
+    fn from(mode: CopyOnWrite) -> Self {
+        let mut volume = Self::unmanaged_development();
+        let state = volume.unique();
+        state.mode = FilesystemVolumeMode::CopyOnWrite(mode);
+        state.accounting = AgentAccounting::Unaccounted;
+        volume
+    }
+}
+
 impl FilesystemVolume {
     /// Opens and validates executor storage once. Sandboxes and capacity observers share the
     /// returned volume; its descriptors retain the storage root and any exclusive root lock.
@@ -136,14 +146,6 @@ impl FilesystemVolume {
 
     fn unique(&mut self) -> &mut VolumeState {
         Arc::get_mut(&mut self.state).expect("volume construction must precede sharing")
-    }
-
-    fn with_copy_on_write(mode: CopyOnWrite) -> Self {
-        let mut volume = Self::unmanaged_development();
-        let state = volume.unique();
-        state.mode = FilesystemVolumeMode::CopyOnWrite(mode);
-        state.accounting = AgentAccounting::Unaccounted;
-        volume
     }
 
     /// Whether the volume makes copy-on-write copies of files: `copy_contents` and `seed` then

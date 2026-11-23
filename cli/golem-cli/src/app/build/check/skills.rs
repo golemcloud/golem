@@ -168,7 +168,12 @@ pub(crate) fn resolve_claude_skills_context(
     let claude_path = application_path.join(".claude");
     let path_state = resolve_claude_path_state(&claude_path);
 
-    let mode = platform::sync_mode(path_state);
+    let mode = match (platform::SYNC_ALL, path_state) {
+        (true, _) | (false, ClaudePathState::Directory) => ClaudeSkillsSyncMode::SyncAll,
+        (false, ClaudePathState::Missing | ClaudePathState::Symlink | ClaudePathState::File) => {
+            ClaudeSkillsSyncMode::ClaudeSymlink
+        }
+    };
 
     Ok(ClaudeSkillsContext { mode, path_state })
 }
@@ -227,15 +232,8 @@ fn ensure_claude_symlink_or_warn(
 
 #[cfg(unix)]
 mod platform {
-    use super::{ClaudePathState, ClaudeSkillsSyncMode};
-    pub(super) fn sync_mode(path_state: ClaudePathState) -> ClaudeSkillsSyncMode {
-        match path_state {
-            ClaudePathState::Directory => ClaudeSkillsSyncMode::SyncAll,
-            ClaudePathState::Missing | ClaudePathState::Symlink | ClaudePathState::File => {
-                ClaudeSkillsSyncMode::ClaudeSymlink
-            }
-        }
-    }
+    pub(super) const SYNC_ALL: bool = false;
+
     pub(super) fn symlink(path: &std::path::Path) -> std::io::Result<()> {
         std::os::unix::fs::symlink(".agents", path)
     }
@@ -243,10 +241,8 @@ mod platform {
 
 #[cfg(windows)]
 mod platform {
-    use super::{ClaudePathState, ClaudeSkillsSyncMode};
-    pub(super) fn sync_mode(_path_state: ClaudePathState) -> ClaudeSkillsSyncMode {
-        ClaudeSkillsSyncMode::SyncAll
-    }
+    pub(super) const SYNC_ALL: bool = true;
+
     pub(super) fn symlink(path: &std::path::Path) -> std::io::Result<()> {
         std::os::windows::fs::symlink_dir(".agents", path)
     }
@@ -254,16 +250,7 @@ mod platform {
 
 #[cfg(not(any(unix, windows)))]
 mod platform {
-    use super::{ClaudePathState, ClaudeSkillsSyncMode};
-
-    pub(super) fn sync_mode(path_state: ClaudePathState) -> ClaudeSkillsSyncMode {
-        match path_state {
-            ClaudePathState::Directory => ClaudeSkillsSyncMode::SyncAll,
-            ClaudePathState::Missing | ClaudePathState::Symlink | ClaudePathState::File => {
-                ClaudeSkillsSyncMode::ClaudeSymlink
-            }
-        }
-    }
+    pub(super) const SYNC_ALL: bool = false;
 
     pub(super) fn symlink(_path: &std::path::Path) -> std::io::Result<()> {
         Ok(())

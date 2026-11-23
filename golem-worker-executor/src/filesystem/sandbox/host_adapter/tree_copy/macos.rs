@@ -15,7 +15,7 @@
 use super::macos_finalization::{open_cloned_file, sync_seed_batch_submissions};
 use super::{CapabilityTempFile, File, Path, SeedSyncPlatform};
 use super::{sync_ordinary_descriptor, temporary_copy_name};
-use crate::filesystem::volume::clone_file_at;
+use crate::filesystem::volume::platform::clone_file_at;
 use cap_fs_ext::OpenOptionsFollowExt as _;
 
 pub(in crate::filesystem::sandbox) use super::non_linux::*;

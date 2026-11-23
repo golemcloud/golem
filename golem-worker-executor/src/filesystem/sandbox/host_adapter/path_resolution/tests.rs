@@ -56,7 +56,8 @@ mod linux {
     use crate::filesystem::sandbox::host_adapter::sandbox_cleanup::{LeaseState, NativeCleanup};
     use crate::filesystem::sandbox::host_adapter::{NativeRoot, QuotaAuthority, tree_copy};
     use crate::filesystem::sandbox::object_identity::NativeFileIdentity;
-    use crate::filesystem::volume::{FilesystemVolume, validated_xfs_name_mode_for_test};
+    use crate::filesystem::volume::FilesystemVolume;
+    use crate::filesystem::volume::platform::validated_xfs_name_mode_for_test;
     use std::fs::File;
     use std::path::Path;
     use std::sync::Arc;

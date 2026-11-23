@@ -20,7 +20,8 @@ mod platform {
     use crate::filesystem::blocking::BlockingTask;
     use crate::filesystem::errors::OperationContext;
     use crate::filesystem::sandbox::FilesystemStorageError;
-    use crate::filesystem::volume::{FilesystemAllocation, FilesystemVolume, project_allocation};
+    use crate::filesystem::volume::platform::project_allocation;
+    use crate::filesystem::volume::{FilesystemAllocation, FilesystemVolume};
     use std::path::PathBuf;
 
     #[derive(Clone)]

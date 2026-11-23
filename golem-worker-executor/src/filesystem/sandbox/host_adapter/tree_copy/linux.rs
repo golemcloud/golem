@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::{File, NonZeroU32, Path, SeedSyncPlatform};
-use crate::filesystem::volume::{
+use crate::filesystem::volume::platform::{
     clone_file_contents, clone_file_contents_into_project, sync_volume,
 };
 
