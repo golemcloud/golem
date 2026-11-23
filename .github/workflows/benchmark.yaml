@@ -25,6 +25,34 @@ on:
         description: Build only an instrumented executor overlay, without measurement or publication
         type: boolean
         default: false
+      prepare_bundle:
+        description: Build and archive services and fixtures only (requires publish=false)
+        type: boolean
+        default: false
+      paired:
+        description: Compare two prepared CI bundles on one measurement runner (requires publish=false)
+        type: boolean
+        default: false
+      base_run_id:
+        description: Successful attempt-1 run with the prepared base bundle
+        type: string
+      base_source:
+        description: Exact base source SHA
+        type: string
+      head_run_id:
+        description: Successful attempt-1 run with the prepared head bundle
+        type: string
+      head_source:
+        description: Exact head source SHA
+        type: string
+      paired_suite:
+        description: Fixed suite for both sides of the comparison
+        type: string
+        default: integration-tests/benchmark_suites/r3-trace.yaml
+      pairs:
+        description: Number of interleaved fresh-process base/head pairs (3 to 10)
+        type: string
+        default: '3'
       executor_run_id:
         description: Successful preparation run supplying the executor overlay for a trace diagnostic
         type: string
@@ -44,8 +72,24 @@ env:
   WASI_SDK_PATH: /opt/wasi-sdk
 
 jobs:
+  paired-comparison:
+    if: github.event_name == 'workflow_dispatch' && inputs.paired
+    permissions:
+      contents: read
+      actions: write
+    uses: ./.github/workflows/benchmark-paired.yaml
+    with:
+      base_run_id: ${{ inputs.base_run_id }}
+      base_source: ${{ inputs.base_source }}
+      head_run_id: ${{ inputs.head_run_id }}
+      head_source: ${{ inputs.head_source }}
+      suite: ${{ inputs.paired_suite }}
+      pairs: ${{ inputs.pairs }}
+      deadline: ${{ inputs.deadline }}
+      isolated: ${{ !inputs.publish && !inputs.prepare_bundle && !inputs.prepare_executor && !inputs.short_validation && !inputs.trace_diagnostic && !inputs.r3_controls }}
+
   short-validation:
-    if: github.event_name == 'workflow_dispatch' && !inputs.prepare_executor && (inputs.short_validation || inputs.trace_diagnostic)
+    if: github.event_name == 'workflow_dispatch' && !inputs.paired && !inputs.prepare_bundle && !inputs.prepare_executor && (inputs.short_validation || inputs.trace_diagnostic)
     permissions:
       contents: read
       actions: read
@@ -59,7 +103,7 @@ jobs:
       executor_source: ${{ inputs.executor_source }}
 
   prepare-executor:
-    if: github.event_name == 'workflow_dispatch' && inputs.prepare_executor
+    if: github.event_name == 'workflow_dispatch' && inputs.prepare_executor && !inputs.paired && !inputs.prepare_bundle
     runs-on: blacksmith-32vcpu-ubuntu-2204
     timeout-minutes: 30
     permissions:
@@ -106,18 +150,25 @@ jobs:
           retention-days: 30
 
   build-benchmarks:
-    if: ${{ !inputs.short_validation && !inputs.trace_diagnostic && !inputs.prepare_executor }}
+    if: ${{ !inputs.paired && !inputs.short_validation && !inputs.trace_diagnostic && !inputs.prepare_executor }}
     runs-on: blacksmith-32vcpu-ubuntu-2204
+    timeout-minutes: ${{ inputs.prepare_bundle && 45 || 360 }}
     outputs:
       timestamp: ${{ steps.bundle.outputs.timestamp }}
       attempt: ${{ github.run_attempt }}
       bundle: benchmark-bundle-attempt${{ github.run_attempt }}
     steps:
       - name: Require unpublished research runs
-        if: inputs.r3_controls && inputs.publish
+        if: (inputs.r3_controls || inputs.prepare_bundle) && inputs.publish
         run: |
-          echo 'R3 controls require publish=false.' >&2
+          echo 'Research and preparation runs require publish=false.' >&2
           exit 1
+      - name: Require a fresh isolated bundle preparation
+        if: inputs.prepare_bundle
+        env:
+          CONTROLS: ${{ inputs.r3_controls }}
+        run: |
+          [[ "$GITHUB_RUN_ATTEMPT" == 1 && "$CONTROLS" == false ]]
       - uses: actions/checkout@v5
         with:
           fetch-depth: 1
@@ -179,6 +230,7 @@ jobs:
 
   run-benchmark:
     needs: build-benchmarks
+    if: ${{ !inputs.prepare_bundle }}
     runs-on: blacksmith-32vcpu-ubuntu-2204
     strategy:
       fail-fast: false
@@ -303,7 +355,7 @@ jobs:
 
   merge-and-publish:
     needs: [build-benchmarks, run-benchmark]
-    if: ${{ always() && !cancelled() && needs.build-benchmarks.result == 'success' }}
+    if: ${{ always() && !cancelled() && !inputs.prepare_bundle && needs.build-benchmarks.result == 'success' }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5

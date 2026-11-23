@@ -24,3 +24,22 @@ async fn published_ci_benchmark_analysis() {
         String::from_utf8_lossy(&output.stderr),
     );
 }
+
+#[test]
+#[timeout("1m")]
+async fn paired_ci_benchmark_analysis() {
+    let output = Command::new("python3")
+        .kill_on_drop(true)
+        .current_dir(crate::workspace_path())
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .arg("cli/golem-cli/test-data/benchmark-analysis/paired_test.py")
+        .output()
+        .await
+        .expect("start paired CI benchmark comparison tests");
+    assert!(
+        output.status.success(),
+        "Paired CI benchmark comparison tests failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
