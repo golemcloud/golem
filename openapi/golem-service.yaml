@@ -21702,10 +21702,14 @@ components:
           items:
             $ref: '#/components/schemas/StartIdentityField'
         replayStart:
-          description: Where the replay that diverged started; `None` for a divergence outside a recovery replay.
+          description: |-
+            Where the replay that diverged started; `None` for a divergence outside a recovery replay,
+            such as the replay of an update.
           allOf:
           - $ref: '#/components/schemas/ReplayStart'
-          - description: Where the replay that diverged started; `None` for a divergence outside a recovery replay.
+          - description: |-
+              Where the replay that diverged started; `None` for a divergence outside a recovery replay,
+              such as the replay of an update.
       required:
       - oplogIndex
       - expected
@@ -21761,18 +21765,27 @@ components:
       - carriesRequest
     ReplaySnapshotStart:
       title: ReplaySnapshotStart
-      description: A replay that started from the snapshot at `snapshot_index`.
+      description: |-
+        A replay that started from the snapshot at `snapshot_index`. `rejected_snapshots` holds the
+        oplog indexes of the automatic snapshots that the recovery rejected before it, in ascending
+        order.
       type: object
       properties:
         snapshotIndex:
           type: integer
           format: uint64
+        rejectedSnapshots:
+          type: array
+          items:
+            type: integer
+            format: uint64
       required:
       - snapshotIndex
+      - rejectedSnapshots
     ReplayStart:
       description: |-
-        Where a recovery replay started: from a loaded snapshot, or without a snapshot, after the
-        recovery rejected the automatic snapshots that it could have loaded.
+        Where a recovery replay started: from a loaded snapshot or without a snapshot, each with
+        the automatic snapshots that the recovery rejected before it.
       discriminator:
         propertyName: type
         mapping:
@@ -21784,8 +21797,8 @@ components:
       - $ref: '#/components/schemas/ReplayStart_ReplayFullStart'
     ReplayStart_ReplayFullStart:
       description: |-
-        Where a recovery replay started: from a loaded snapshot, or without a snapshot, after the
-        recovery rejected the automatic snapshots that it could have loaded.
+        Where a recovery replay started: from a loaded snapshot or without a snapshot, each with
+        the automatic snapshots that the recovery rejected before it.
       allOf:
       - type: object
         properties:
@@ -21799,8 +21812,8 @@ components:
       - $ref: '#/components/schemas/ReplayFullStart'
     ReplayStart_ReplaySnapshotStart:
       description: |-
-        Where a recovery replay started: from a loaded snapshot, or without a snapshot, after the
-        recovery rejected the automatic snapshots that it could have loaded.
+        Where a recovery replay started: from a loaded snapshot or without a snapshot, each with
+        the automatic snapshots that the recovery rejected before it.
       allOf:
       - type: object
         properties:

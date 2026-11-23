@@ -770,8 +770,17 @@ const (
 // Why an update failed
 type UpdateFailureClass = uint8
 
+// A recovery replay from a loaded snapshot
+type ReplaySnapshotStart struct {
+	// The oplog index of the loaded snapshot
+	SnapshotIndex uint64
+	// The oplog indexes of the automatic snapshots that the recovery rejected before it, in
+	// ascending order
+	RejectedSnapshots []uint64
+}
+
 const (
-	// From the snapshot at this oplog index
+	// From a loaded snapshot
 	ReplayStartSnapshot uint8 = 0
 	// Without a snapshot, after the recovery rejected the automatic snapshots at these oplog
 	// indexes, in ascending order; empty when no snapshot was involved
@@ -788,11 +797,11 @@ func (self ReplayStart) Tag() uint8 {
 	return self.tag
 }
 
-func (self ReplayStart) Snapshot() uint64 {
+func (self ReplayStart) Snapshot() ReplaySnapshotStart {
 	if self.tag != ReplayStartSnapshot {
 		panic("tag mismatch")
 	}
-	return self.value.(uint64)
+	return self.value.(ReplaySnapshotStart)
 }
 func (self ReplayStart) FullReplay() []uint64 {
 	if self.tag != ReplayStartFullReplay {
@@ -801,7 +810,7 @@ func (self ReplayStart) FullReplay() []uint64 {
 	return self.value.([]uint64)
 }
 
-func MakeReplayStartSnapshot(value uint64) ReplayStart {
+func MakeReplayStartSnapshot(value ReplaySnapshotStart) ReplayStart {
 	return ReplayStart{ReplayStartSnapshot, value}
 }
 func MakeReplayStartFullReplay(value []uint64) ReplayStart {
@@ -3208,11 +3217,11 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 	returnArea := uintptr(witRuntime.Allocate(pinner, (3 * 4), 4))
 	slice := entries
 	length := uint32(len(slice))
-	result := witRuntime.Allocate(pinner, uintptr(length*(288+30*4)), 8)
+	result := witRuntime.Allocate(pinner, uintptr(length*(296+30*4)), 8)
 	for index, element := range slice {
-		base := unsafe.Add(result, index*(288+30*4))
+		base := unsafe.Add(result, index*(296+30*4))
 		*(*int64)(unsafe.Add(unsafe.Pointer(base), 0)) = int64((element).F0)
-		wasm_lower_1_t420(pinner, (element).F1, unsafe.Add(unsafe.Pointer(base), 8))
+		wasm_lower_1_t421(pinner, (element).F1, unsafe.Add(unsafe.Pointer(base), 8))
 
 	}
 
@@ -3222,8 +3231,8 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 	case 0:
 		result1 := make([]PublicOplogEntry, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))
 		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))), index*(280+30*4))
-			result0 := wasm_lift_1_t421(unsafe.Add(unsafe.Pointer(base), 0))
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))), index*(288+30*4))
+			result0 := wasm_lift_1_t422(unsafe.Add(unsafe.Pointer(base), 0))
 
 			result1 = append(result1, result0)
 		}
@@ -3271,8 +3280,8 @@ func (self *GetOplog) GetNext() witTypes.Result[witTypes.Option[[]PublicOplogEnt
 		case 1:
 			result0 := make([]PublicOplogEntry, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))), index*(280+30*4))
-				result := wasm_lift_1_t421(unsafe.Add(unsafe.Pointer(base), 0))
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))), index*(288+30*4))
+				result := wasm_lift_1_t422(unsafe.Add(unsafe.Pointer(base), 0))
 
 				result0 = append(result0, result)
 			}
@@ -3284,7 +3293,7 @@ func (self *GetOplog) GetNext() witTypes.Result[witTypes.Option[[]PublicOplogEnt
 
 		result2 = witTypes.Ok[witTypes.Option[[]PublicOplogEntry], OplogReadError](option)
 	case 1:
-		result1 := wasm_lift_1_t422(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result1 := wasm_lift_1_t423(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result2 = witTypes.Err[witTypes.Option[[]PublicOplogEntry], OplogReadError](result1)
 	default:
@@ -3329,8 +3338,8 @@ func (self *SearchOplog) GetNext() witTypes.Result[witTypes.Option[[]witTypes.Tu
 		case 1:
 			result0 := make([]witTypes.Tuple2[uint64, PublicOplogEntry], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))), index*(288+30*4))
-				result := wasm_lift_1_t421(unsafe.Add(unsafe.Pointer(base), 8))
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))), index*(296+30*4))
+				result := wasm_lift_1_t422(unsafe.Add(unsafe.Pointer(base), 8))
 
 				result0 = append(result0, witTypes.Tuple2[uint64, PublicOplogEntry]{F0: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 0))), F1: result})
 			}
@@ -3342,7 +3351,7 @@ func (self *SearchOplog) GetNext() witTypes.Result[witTypes.Option[[]witTypes.Tu
 
 		result2 = witTypes.Ok[witTypes.Option[[]witTypes.Tuple2[uint64, PublicOplogEntry]], OplogReadError](option)
 	case 1:
-		result1 := wasm_lift_1_t422(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result1 := wasm_lift_1_t423(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result2 = witTypes.Err[witTypes.Option[[]witTypes.Tuple2[uint64, PublicOplogEntry]], OplogReadError](result1)
 	default:
@@ -3354,58 +3363,58 @@ func (self *SearchOplog) GetNext() witTypes.Result[witTypes.Option[[]witTypes.Tu
 }
 
 //go:noinline
-func wasm_lower_1_t420(pinner *runtime.Pinner, value OplogEntry, dst unsafe.Pointer) {
+func wasm_lower_1_t421(pinner *runtime.Pinner, value OplogEntry, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case OplogEntryCreate:
 		payload := value.Create()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
-		wasm_lower_1_t381(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t382(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryStart:
 		payload := value.Start()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
-		wasm_lower_1_t383(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t384(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryEnd:
 		payload := value.End()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(2))
-		wasm_lower_1_t384(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t385(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryCancelled:
 		payload := value.Cancelled()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(3))
-		wasm_lower_1_t385(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t386(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryAgentInvocationStarted:
 		payload := value.AgentInvocationStarted()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(4))
-		wasm_lower_1_t401(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t402(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryAgentInvocationFinished:
 		payload := value.AgentInvocationFinished()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(5))
-		wasm_lower_1_t402(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t403(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryAgentInvocationFailed:
 		payload := value.AgentInvocationFailed()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(6))
-		wasm_lower_1_t403(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t404(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntrySuspend:
 		payload := value.Suspend()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(7))
-		wasm_lower_1_t370(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t371(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryError:
 		payload := value.Error()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(8))
-		wasm_lower_1_t404(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t405(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryRecoverySucceeded:
 		payload := value.RecoverySucceeded()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(9))
-		wasm_lower_1_t370(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t371(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryJump:
 		payload := value.Jump()
@@ -3415,122 +3424,122 @@ func wasm_lower_1_t420(pinner *runtime.Pinner, value OplogEntry, dst unsafe.Poin
 	case OplogEntryInterrupted:
 		payload := value.Interrupted()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(11))
-		wasm_lower_1_t370(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t371(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryExited:
 		payload := value.Exited()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(12))
-		wasm_lower_1_t370(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t371(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryPendingAgentInvocation:
 		payload := value.PendingAgentInvocation()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(13))
-		wasm_lower_1_t405(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t406(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryPendingUpdate:
 		payload := value.PendingUpdate()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(14))
-		wasm_lower_1_t409(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t410(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntrySuccessfulUpdate:
 		payload := value.SuccessfulUpdate()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(15))
-		wasm_lower_1_t410(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t411(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryFailedUpdate:
 		payload := value.FailedUpdate()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(16))
-		wasm_lower_1_t342(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t343(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryGrowMemory:
 		payload := value.GrowMemory()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(17))
-		wasm_lower_1_t343(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t344(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryMemorySizeReconciled:
 		payload := value.MemorySizeReconciled()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(18))
-		wasm_lower_1_t344(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t345(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryCreateResource:
 		payload := value.CreateResource()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(19))
-		wasm_lower_1_t412(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t413(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryDropResource:
 		payload := value.DropResource()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(20))
-		wasm_lower_1_t413(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t414(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryLog:
 		payload := value.Log()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(21))
-		wasm_lower_1_t351(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t352(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryRestart:
 		payload := value.Restart()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(22))
-		wasm_lower_1_t370(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t371(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryResumed:
 		payload := value.Resumed()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(23))
-		wasm_lower_1_t370(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t371(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryActivatePlugin:
 		payload := value.ActivatePlugin()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(24))
-		wasm_lower_1_t414(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t415(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryDeactivatePlugin:
 		payload := value.DeactivatePlugin()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(25))
-		wasm_lower_1_t415(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t416(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryRevert:
 		payload := value.Revert()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(26))
-		wasm_lower_1_t354(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t355(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryCancelPendingInvocation:
 		payload := value.CancelPendingInvocation()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(27))
-		wasm_lower_1_t355(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t356(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryBeginRemoteTransaction:
 		payload := value.BeginRemoteTransaction()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(28))
-		wasm_lower_1_t416(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t417(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryPreCommitRemoteTransaction:
 		payload := value.PreCommitRemoteTransaction()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(29))
-		wasm_lower_1_t357(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t358(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryPreRollbackRemoteTransaction:
 		payload := value.PreRollbackRemoteTransaction()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(30))
-		wasm_lower_1_t357(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t358(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryCommittedRemoteTransaction:
 		payload := value.CommittedRemoteTransaction()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(31))
-		wasm_lower_1_t357(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t358(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryRolledBackRemoteTransaction:
 		payload := value.RolledBackRemoteTransaction()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(32))
-		wasm_lower_1_t357(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t358(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntrySnapshot:
 		payload := value.Snapshot()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(33))
-		wasm_lower_1_t418(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t419(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryOplogProcessorCheckpoint:
 		payload := value.OplogProcessorCheckpoint()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(34))
-		wasm_lower_1_t419(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t420(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntrySetRetryPolicy:
 		payload := value.SetRetryPolicy()
@@ -3570,57 +3579,57 @@ func wasm_lower_1_t420(pinner *runtime.Pinner, value OplogEntry, dst unsafe.Poin
 	case OplogEntryHostStreamFrame:
 		payload := value.HostStreamFrame()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(42))
-		wasm_lower_1_t388(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t389(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryToolAttachmentRead:
 		payload := value.ToolAttachmentRead()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(43))
-		wasm_lower_1_t389(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t390(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryToolAttachmentControl:
 		payload := value.ToolAttachmentControl()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(44))
-		wasm_lower_1_t391(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t392(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryStreamRegistered:
 		payload := value.StreamRegistered()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(45))
-		wasm_lower_1_t398(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t399(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryStreamItems:
 		payload := value.StreamItems()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(46))
-		wasm_lower_1_t398(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t399(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryStreamTerminal:
 		payload := value.StreamTerminal()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(47))
-		wasm_lower_1_t398(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t399(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryStreamSession:
 		payload := value.StreamSession()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(48))
-		wasm_lower_1_t398(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t399(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryCompletionDiscarded:
 		payload := value.CompletionDiscarded()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(49))
-		wasm_lower_1_t386(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t387(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntryCompletionDelivered:
 		payload := value.CompletionDelivered()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(50))
-		wasm_lower_1_t387(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t388(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntrySnapshotConfirmed:
 		payload := value.SnapshotConfirmed()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(51))
-		wasm_lower_1_t367(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t368(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case OplogEntrySpanClosed:
 		payload := value.SpanClosed()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(52))
-		wasm_lower_1_t390(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t391(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	default:
 		panic("unreachable")
@@ -3629,7 +3638,7 @@ func wasm_lower_1_t420(pinner *runtime.Pinner, value OplogEntry, dst unsafe.Poin
 }
 
 //go:noinline
-func wasm_lift_1_t421(src unsafe.Pointer) PublicOplogEntry {
+func wasm_lift_1_t422(src unsafe.Pointer) PublicOplogEntry {
 	var variant PublicOplogEntry
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -3653,12 +3662,12 @@ func wasm_lift_1_t421(src unsafe.Pointer) PublicOplogEntry {
 		variant = MakePublicOplogEntryCancelled(result2)
 
 	case 4:
-		result3 := wasm_lift_1_t361(unsafe.Add(unsafe.Pointer(src), 8))
+		result3 := wasm_lift_1_t362(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryAgentInvocationStarted(result3)
 
 	case 5:
-		result4 := wasm_lift_1_t364(unsafe.Add(unsafe.Pointer(src), 8))
+		result4 := wasm_lift_1_t365(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryAgentInvocationFinished(result4)
 
@@ -3668,7 +3677,7 @@ func wasm_lift_1_t421(src unsafe.Pointer) PublicOplogEntry {
 		variant = MakePublicOplogEntryAgentInvocationFailed(result5)
 
 	case 7:
-		result6 := wasm_lift_1_t370(unsafe.Add(unsafe.Pointer(src), 8))
+		result6 := wasm_lift_1_t371(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntrySuspend(result6)
 
@@ -3678,7 +3687,7 @@ func wasm_lift_1_t421(src unsafe.Pointer) PublicOplogEntry {
 		variant = MakePublicOplogEntryError(result7)
 
 	case 9:
-		result8 := wasm_lift_1_t370(unsafe.Add(unsafe.Pointer(src), 8))
+		result8 := wasm_lift_1_t371(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryRecoverySucceeded(result8)
 
@@ -3688,17 +3697,17 @@ func wasm_lift_1_t421(src unsafe.Pointer) PublicOplogEntry {
 		variant = MakePublicOplogEntryJump(result9)
 
 	case 11:
-		result10 := wasm_lift_1_t370(unsafe.Add(unsafe.Pointer(src), 8))
+		result10 := wasm_lift_1_t371(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryInterrupted(result10)
 
 	case 12:
-		result11 := wasm_lift_1_t370(unsafe.Add(unsafe.Pointer(src), 8))
+		result11 := wasm_lift_1_t371(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryExited(result11)
 
 	case 13:
-		result12 := wasm_lift_1_t365(unsafe.Add(unsafe.Pointer(src), 8))
+		result12 := wasm_lift_1_t366(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryPendingAgentInvocation(result12)
 
@@ -3713,97 +3722,97 @@ func wasm_lift_1_t421(src unsafe.Pointer) PublicOplogEntry {
 		variant = MakePublicOplogEntrySuccessfulUpdate(result14)
 
 	case 16:
-		result15 := wasm_lift_1_t342(unsafe.Add(unsafe.Pointer(src), 8))
+		result15 := wasm_lift_1_t343(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryFailedUpdate(result15)
 
 	case 17:
-		result16 := wasm_lift_1_t343(unsafe.Add(unsafe.Pointer(src), 8))
+		result16 := wasm_lift_1_t344(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryGrowMemory(result16)
 
 	case 18:
-		result17 := wasm_lift_1_t344(unsafe.Add(unsafe.Pointer(src), 8))
+		result17 := wasm_lift_1_t345(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryMemorySizeReconciled(result17)
 
 	case 19:
-		result18 := wasm_lift_1_t346(unsafe.Add(unsafe.Pointer(src), 8))
+		result18 := wasm_lift_1_t347(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryCreateResource(result18)
 
 	case 20:
-		result19 := wasm_lift_1_t347(unsafe.Add(unsafe.Pointer(src), 8))
+		result19 := wasm_lift_1_t348(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryDropResource(result19)
 
 	case 21:
-		result20 := wasm_lift_1_t351(unsafe.Add(unsafe.Pointer(src), 8))
+		result20 := wasm_lift_1_t352(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryLog(result20)
 
 	case 22:
-		result21 := wasm_lift_1_t370(unsafe.Add(unsafe.Pointer(src), 8))
+		result21 := wasm_lift_1_t371(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryRestart(result21)
 
 	case 23:
-		result22 := wasm_lift_1_t370(unsafe.Add(unsafe.Pointer(src), 8))
+		result22 := wasm_lift_1_t371(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryResumed(result22)
 
 	case 24:
-		result23 := wasm_lift_1_t352(unsafe.Add(unsafe.Pointer(src), 8))
+		result23 := wasm_lift_1_t353(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryActivatePlugin(result23)
 
 	case 25:
-		result24 := wasm_lift_1_t353(unsafe.Add(unsafe.Pointer(src), 8))
+		result24 := wasm_lift_1_t354(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryDeactivatePlugin(result24)
 
 	case 26:
-		result25 := wasm_lift_1_t354(unsafe.Add(unsafe.Pointer(src), 8))
+		result25 := wasm_lift_1_t355(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryRevert(result25)
 
 	case 27:
-		result26 := wasm_lift_1_t355(unsafe.Add(unsafe.Pointer(src), 8))
+		result26 := wasm_lift_1_t356(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryCancelPendingInvocation(result26)
 
 	case 28:
-		result27 := wasm_lift_1_t356(unsafe.Add(unsafe.Pointer(src), 8))
+		result27 := wasm_lift_1_t357(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryBeginRemoteTransaction(result27)
 
 	case 29:
-		result28 := wasm_lift_1_t357(unsafe.Add(unsafe.Pointer(src), 8))
+		result28 := wasm_lift_1_t358(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryPreCommitRemoteTransaction(result28)
 
 	case 30:
-		result29 := wasm_lift_1_t357(unsafe.Add(unsafe.Pointer(src), 8))
+		result29 := wasm_lift_1_t358(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryPreRollbackRemoteTransaction(result29)
 
 	case 31:
-		result30 := wasm_lift_1_t357(unsafe.Add(unsafe.Pointer(src), 8))
+		result30 := wasm_lift_1_t358(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryCommittedRemoteTransaction(result30)
 
 	case 32:
-		result31 := wasm_lift_1_t357(unsafe.Add(unsafe.Pointer(src), 8))
+		result31 := wasm_lift_1_t358(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryRolledBackRemoteTransaction(result31)
 
 	case 33:
-		result32 := wasm_lift_1_t366(unsafe.Add(unsafe.Pointer(src), 8))
+		result32 := wasm_lift_1_t367(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntrySnapshot(result32)
 
 	case 34:
-		result33 := wasm_lift_1_t369(unsafe.Add(unsafe.Pointer(src), 8))
+		result33 := wasm_lift_1_t370(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntryOplogProcessorCheckpoint(result33)
 
@@ -3888,12 +3897,12 @@ func wasm_lift_1_t421(src unsafe.Pointer) PublicOplogEntry {
 		variant = MakePublicOplogEntryCompletionDelivered(result49)
 
 	case 51:
-		result50 := wasm_lift_1_t367(unsafe.Add(unsafe.Pointer(src), 8))
+		result50 := wasm_lift_1_t368(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntrySnapshotConfirmed(result50)
 
 	case 52:
-		result51 := wasm_lift_1_t368(unsafe.Add(unsafe.Pointer(src), 8))
+		result51 := wasm_lift_1_t369(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakePublicOplogEntrySpanClosed(result51)
 
@@ -3905,7 +3914,7 @@ func wasm_lift_1_t421(src unsafe.Pointer) PublicOplogEntry {
 }
 
 //go:noinline
-func wasm_lift_1_t422(src unsafe.Pointer) OplogReadError {
+func wasm_lift_1_t423(src unsafe.Pointer) OplogReadError {
 	var variant OplogReadError
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -3925,7 +3934,7 @@ func wasm_lift_1_t422(src unsafe.Pointer) OplogReadError {
 }
 
 //go:noinline
-func wasm_lower_1_t381(pinner *runtime.Pinner, value RawCreateParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t382(pinner *runtime.Pinner, value RawCreateParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	wasm_lower_1_t8(nil, (value).AgentId, unsafe.Add(unsafe.Pointer(dst), 16))
 
@@ -4016,7 +4025,7 @@ func wasm_lower_1_t381(pinner *runtime.Pinner, value RawCreateParameters, dst un
 }
 
 //go:noinline
-func wasm_lower_1_t383(pinner *runtime.Pinner, value RawStartParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t384(pinner *runtime.Pinner, value RawStartParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 
 	switch (value).ParentStartIndex.Tag() {
@@ -4069,7 +4078,7 @@ func wasm_lower_1_t383(pinner *runtime.Pinner, value RawStartParameters, dst uns
 	case witTypes.OptionSome:
 		payload := (value).Request.Some()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (72 + 2*4))) = int8(int32(1))
-		wasm_lower_1_t372(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (80+2*4)))
+		wasm_lower_1_t373(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (80+2*4)))
 
 	default:
 		panic("unreachable")
@@ -4108,7 +4117,7 @@ func wasm_lower_1_t383(pinner *runtime.Pinner, value RawStartParameters, dst uns
 }
 
 //go:noinline
-func wasm_lower_1_t384(pinner *runtime.Pinner, value RawEndParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t385(pinner *runtime.Pinner, value RawEndParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 16)) = int64((value).StartIndex)
 
@@ -4119,7 +4128,7 @@ func wasm_lower_1_t384(pinner *runtime.Pinner, value RawEndParameters, dst unsaf
 	case witTypes.OptionSome:
 		payload := (value).Response.Some()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 24)) = int8(int32(1))
-		wasm_lower_1_t372(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 32))
+		wasm_lower_1_t373(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 32))
 
 	default:
 		panic("unreachable")
@@ -4161,7 +4170,7 @@ func wasm_lower_1_t384(pinner *runtime.Pinner, value RawEndParameters, dst unsaf
 }
 
 //go:noinline
-func wasm_lower_1_t385(pinner *runtime.Pinner, value RawCancelledParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t386(pinner *runtime.Pinner, value RawCancelledParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 16)) = int64((value).StartIndex)
 
@@ -4172,7 +4181,7 @@ func wasm_lower_1_t385(pinner *runtime.Pinner, value RawCancelledParameters, dst
 	case witTypes.OptionSome:
 		payload := (value).Partial.Some()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 24)) = int8(int32(1))
-		wasm_lower_1_t372(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 32))
+		wasm_lower_1_t373(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 32))
 
 	default:
 		panic("unreachable")
@@ -4194,11 +4203,11 @@ func wasm_lower_1_t385(pinner *runtime.Pinner, value RawCancelledParameters, dst
 }
 
 //go:noinline
-func wasm_lower_1_t401(pinner *runtime.Pinner, value RawAgentInvocationStartedParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t402(pinner *runtime.Pinner, value RawAgentInvocationStartedParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	wasm_lower_1_t4(nil, (value).InvocationId, unsafe.Add(unsafe.Pointer(dst), 16))
-	wasm_lower_1_t400(pinner, (value).Operation, unsafe.Add(unsafe.Pointer(dst), 32))
-	wasm_lower_1_t372(pinner, (value).Payload, unsafe.Add(unsafe.Pointer(dst), (40+4*4)))
+	wasm_lower_1_t401(pinner, (value).Operation, unsafe.Add(unsafe.Pointer(dst), 32))
+	wasm_lower_1_t373(pinner, (value).Payload, unsafe.Add(unsafe.Pointer(dst), (40+4*4)))
 	utf8 := unsafe.Pointer(unsafe.StringData((value).TraceId))
 	pinner.Pin(utf8)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (64 + 7*4))) = uint32(uint32(len((value).TraceId)))
@@ -4233,10 +4242,10 @@ func wasm_lower_1_t401(pinner *runtime.Pinner, value RawAgentInvocationStartedPa
 }
 
 //go:noinline
-func wasm_lower_1_t402(pinner *runtime.Pinner, value RawAgentInvocationFinishedParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t403(pinner *runtime.Pinner, value RawAgentInvocationFinishedParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	wasm_lower_1_t4(nil, (value).InvocationId, unsafe.Add(unsafe.Pointer(dst), 16))
-	wasm_lower_1_t372(pinner, (value).Result, unsafe.Add(unsafe.Pointer(dst), 32))
+	wasm_lower_1_t373(pinner, (value).Result, unsafe.Add(unsafe.Pointer(dst), 32))
 
 	switch (value).MethodName.Tag() {
 	case witTypes.OptionNone:
@@ -4259,22 +4268,22 @@ func wasm_lower_1_t402(pinner *runtime.Pinner, value RawAgentInvocationFinishedP
 }
 
 //go:noinline
-func wasm_lower_1_t403(pinner *runtime.Pinner, value RawAgentInvocationFailedParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t404(pinner *runtime.Pinner, value RawAgentInvocationFailedParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	wasm_lower_1_t4(nil, (value).InvocationId, unsafe.Add(unsafe.Pointer(dst), 16))
-	wasm_lower_1_t378(pinner, (value).Error, unsafe.Add(unsafe.Pointer(dst), 32))
+	wasm_lower_1_t379(pinner, (value).Error, unsafe.Add(unsafe.Pointer(dst), 32))
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), (56 + 2*4))) = int64((value).StartIndex)
 
 }
 
 //go:noinline
-func wasm_lower_1_t370(pinner *runtime.Pinner, value Timestamp, dst unsafe.Pointer) {
+func wasm_lower_1_t371(pinner *runtime.Pinner, value Timestamp, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 
 }
 
 //go:noinline
-func wasm_lower_1_t404(pinner *runtime.Pinner, value RawErrorParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t405(pinner *runtime.Pinner, value RawErrorParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32((value).Kind))
 
@@ -4290,7 +4299,7 @@ func wasm_lower_1_t404(pinner *runtime.Pinner, value RawErrorParameters, dst uns
 	default:
 		panic("unreachable")
 	}
-	wasm_lower_1_t378(pinner, (value).Error, unsafe.Add(unsafe.Pointer(dst), 48))
+	wasm_lower_1_t379(pinner, (value).Error, unsafe.Add(unsafe.Pointer(dst), 48))
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), (72 + 2*4))) = int64((value).RetryFrom)
 
 	switch (value).RetryPolicyState.Tag() {
@@ -4342,7 +4351,7 @@ func wasm_lower_1_t292(pinner *runtime.Pinner, value JumpParameters, dst unsafe.
 }
 
 //go:noinline
-func wasm_lower_1_t405(pinner *runtime.Pinner, value RawPendingAgentInvocationParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t406(pinner *runtime.Pinner, value RawPendingAgentInvocationParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 
 	switch (value).NotBefore.Tag() {
@@ -4358,8 +4367,8 @@ func wasm_lower_1_t405(pinner *runtime.Pinner, value RawPendingAgentInvocationPa
 		panic("unreachable")
 	}
 	wasm_lower_1_t4(nil, (value).InvocationId, unsafe.Add(unsafe.Pointer(dst), 40))
-	wasm_lower_1_t400(pinner, (value).Operation, unsafe.Add(unsafe.Pointer(dst), 56))
-	wasm_lower_1_t372(pinner, (value).Payload, unsafe.Add(unsafe.Pointer(dst), (64+4*4)))
+	wasm_lower_1_t401(pinner, (value).Operation, unsafe.Add(unsafe.Pointer(dst), 56))
+	wasm_lower_1_t373(pinner, (value).Payload, unsafe.Add(unsafe.Pointer(dst), (64+4*4)))
 	utf8 := unsafe.Pointer(unsafe.StringData((value).TraceId))
 	pinner.Pin(utf8)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (88 + 7*4))) = uint32(uint32(len((value).TraceId)))
@@ -4393,9 +4402,9 @@ func wasm_lower_1_t405(pinner *runtime.Pinner, value RawPendingAgentInvocationPa
 }
 
 //go:noinline
-func wasm_lower_1_t409(pinner *runtime.Pinner, value RawPendingUpdateParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t410(pinner *runtime.Pinner, value RawPendingUpdateParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
-	wasm_lower_1_t408(pinner, (value).Description, unsafe.Add(unsafe.Pointer(dst), 16))
+	wasm_lower_1_t409(pinner, (value).Description, unsafe.Add(unsafe.Pointer(dst), 16))
 
 	switch (value).UpdateAttemptIndex.Tag() {
 	case witTypes.OptionNone:
@@ -4413,7 +4422,7 @@ func wasm_lower_1_t409(pinner *runtime.Pinner, value RawPendingUpdateParameters,
 }
 
 //go:noinline
-func wasm_lower_1_t410(pinner *runtime.Pinner, value RawSuccessfulUpdateParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t411(pinner *runtime.Pinner, value RawSuccessfulUpdateParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 16)) = int64((value).TargetRevision)
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 24)) = int64((value).NewComponentSize)
@@ -4458,7 +4467,7 @@ func wasm_lower_1_t410(pinner *runtime.Pinner, value RawSuccessfulUpdateParamete
 }
 
 //go:noinline
-func wasm_lower_1_t342(pinner *runtime.Pinner, value FailedUpdateParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t343(pinner *runtime.Pinner, value FailedUpdateParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 16)) = int64((value).TargetRevision)
 
@@ -4485,7 +4494,7 @@ func wasm_lower_1_t342(pinner *runtime.Pinner, value FailedUpdateParameters, dst
 	case witTypes.OptionSome:
 		payload := (value).SnapshotAssistedDetails.Some()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (32 + 2*4))) = int8(int32(1))
-		wasm_lower_1_t339(nil, payload, unsafe.Add(unsafe.Pointer(dst), (40+2*4)))
+		wasm_lower_1_t340(nil, payload, unsafe.Add(unsafe.Pointer(dst), (40+2*4)))
 
 	default:
 		panic("unreachable")
@@ -4512,7 +4521,7 @@ func wasm_lower_1_t342(pinner *runtime.Pinner, value FailedUpdateParameters, dst
 	case witTypes.OptionSome:
 		payload := (value).Divergence.Some()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (96 + 2*4))) = int8(int32(1))
-		wasm_lower_1_t338(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (104+2*4)))
+		wasm_lower_1_t339(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (104+2*4)))
 
 	default:
 		panic("unreachable")
@@ -4521,37 +4530,37 @@ func wasm_lower_1_t342(pinner *runtime.Pinner, value FailedUpdateParameters, dst
 }
 
 //go:noinline
-func wasm_lower_1_t343(pinner *runtime.Pinner, value GrowMemoryParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t344(pinner *runtime.Pinner, value GrowMemoryParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 16)) = int64((value).Delta)
 
 }
 
 //go:noinline
-func wasm_lower_1_t344(pinner *runtime.Pinner, value MemorySizeReconciledParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t345(pinner *runtime.Pinner, value MemorySizeReconciledParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 16)) = int64((value).Bytes)
 
 }
 
 //go:noinline
-func wasm_lower_1_t412(pinner *runtime.Pinner, value RawCreateResourceParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t413(pinner *runtime.Pinner, value RawCreateResourceParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 16)) = int64((value).Id)
-	wasm_lower_1_t411(pinner, (value).ResourceTypeId, unsafe.Add(unsafe.Pointer(dst), 24))
+	wasm_lower_1_t412(pinner, (value).ResourceTypeId, unsafe.Add(unsafe.Pointer(dst), 24))
 
 }
 
 //go:noinline
-func wasm_lower_1_t413(pinner *runtime.Pinner, value RawDropResourceParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t414(pinner *runtime.Pinner, value RawDropResourceParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 16)) = int64((value).Id)
-	wasm_lower_1_t411(pinner, (value).ResourceTypeId, unsafe.Add(unsafe.Pointer(dst), 24))
+	wasm_lower_1_t412(pinner, (value).ResourceTypeId, unsafe.Add(unsafe.Pointer(dst), 24))
 
 }
 
 //go:noinline
-func wasm_lower_1_t351(pinner *runtime.Pinner, value LogParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t352(pinner *runtime.Pinner, value LogParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 16)) = int8(int32((value).Level))
 	utf8 := unsafe.Pointer(unsafe.StringData((value).Context))
@@ -4570,7 +4579,7 @@ func wasm_lower_1_t351(pinner *runtime.Pinner, value LogParameters, dst unsafe.P
 	case witTypes.OptionSome:
 		payload := (value).TraceContext.Some()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (16 + 5*4))) = int8(int32(1))
-		wasm_lower_1_t349(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (16+6*4)))
+		wasm_lower_1_t350(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (16+6*4)))
 
 	default:
 		panic("unreachable")
@@ -4579,35 +4588,35 @@ func wasm_lower_1_t351(pinner *runtime.Pinner, value LogParameters, dst unsafe.P
 }
 
 //go:noinline
-func wasm_lower_1_t414(pinner *runtime.Pinner, value RawActivatePluginParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t415(pinner *runtime.Pinner, value RawActivatePluginParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	wasm_lower_1_t245(nil, (value).PluginGrantId, unsafe.Add(unsafe.Pointer(dst), 16))
 
 }
 
 //go:noinline
-func wasm_lower_1_t415(pinner *runtime.Pinner, value RawDeactivatePluginParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t416(pinner *runtime.Pinner, value RawDeactivatePluginParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	wasm_lower_1_t245(nil, (value).PluginGrantId, unsafe.Add(unsafe.Pointer(dst), 16))
 
 }
 
 //go:noinline
-func wasm_lower_1_t354(pinner *runtime.Pinner, value RevertParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t355(pinner *runtime.Pinner, value RevertParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	wasm_lower_1_t291(nil, (value).DroppedRegion, unsafe.Add(unsafe.Pointer(dst), 16))
 
 }
 
 //go:noinline
-func wasm_lower_1_t355(pinner *runtime.Pinner, value CancelPendingInvocationParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t356(pinner *runtime.Pinner, value CancelPendingInvocationParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	wasm_lower_1_t4(nil, (value).InvocationId, unsafe.Add(unsafe.Pointer(dst), 16))
 
 }
 
 //go:noinline
-func wasm_lower_1_t416(pinner *runtime.Pinner, value RawBeginRemoteTransactionParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t417(pinner *runtime.Pinner, value RawBeginRemoteTransactionParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	utf8 := unsafe.Pointer(unsafe.StringData((value).TransactionId))
 	pinner.Pin(utf8)
@@ -4618,16 +4627,16 @@ func wasm_lower_1_t416(pinner *runtime.Pinner, value RawBeginRemoteTransactionPa
 }
 
 //go:noinline
-func wasm_lower_1_t357(pinner *runtime.Pinner, value RemoteTransactionParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t358(pinner *runtime.Pinner, value RemoteTransactionParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 16)) = int64((value).BeginIndex)
 
 }
 
 //go:noinline
-func wasm_lower_1_t418(pinner *runtime.Pinner, value RawSnapshotParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t419(pinner *runtime.Pinner, value RawSnapshotParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
-	wasm_lower_1_t372(pinner, (value).Data, unsafe.Add(unsafe.Pointer(dst), 16))
+	wasm_lower_1_t373(pinner, (value).Data, unsafe.Add(unsafe.Pointer(dst), 16))
 	utf8 := unsafe.Pointer(unsafe.StringData((value).MimeType))
 	pinner.Pin(utf8)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (40 + 3*4))) = uint32(uint32(len((value).MimeType)))
@@ -4680,7 +4689,7 @@ func wasm_lower_1_t418(pinner *runtime.Pinner, value RawSnapshotParameters, dst 
 }
 
 //go:noinline
-func wasm_lower_1_t419(pinner *runtime.Pinner, value RawOplogProcessorCheckpointParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t420(pinner *runtime.Pinner, value RawOplogProcessorCheckpointParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	wasm_lower_1_t245(nil, (value).PluginGrantId, unsafe.Add(unsafe.Pointer(dst), 16))
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 32)) = int64((value).SourceComponentRevision)
@@ -4782,16 +4791,16 @@ func wasm_lower_1_t304(pinner *runtime.Pinner, value CardExpiredParameters, dst 
 }
 
 //go:noinline
-func wasm_lower_1_t388(pinner *runtime.Pinner, value RawHostStreamFrameParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t389(pinner *runtime.Pinner, value RawHostStreamFrameParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 16)) = int64((value).ParentStartIndex)
 	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 24)) = int8(int32((value).Kind))
-	wasm_lower_1_t372(pinner, (value).Payload, unsafe.Add(unsafe.Pointer(dst), 32))
+	wasm_lower_1_t373(pinner, (value).Payload, unsafe.Add(unsafe.Pointer(dst), 32))
 
 }
 
 //go:noinline
-func wasm_lower_1_t389(pinner *runtime.Pinner, value RawToolAttachmentReadParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t390(pinner *runtime.Pinner, value RawToolAttachmentReadParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 
 	switch (value).EntityParentStartIndex.Tag() {
@@ -4815,7 +4824,7 @@ func wasm_lower_1_t389(pinner *runtime.Pinner, value RawToolAttachmentReadParame
 	case witTypes.OptionSome:
 		payload := (value).Payload.Some()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (32 + 8*4))) = int8(int32(1))
-		wasm_lower_1_t372(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (40+8*4)))
+		wasm_lower_1_t373(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (40+8*4)))
 
 	default:
 		panic("unreachable")
@@ -4824,7 +4833,7 @@ func wasm_lower_1_t389(pinner *runtime.Pinner, value RawToolAttachmentReadParame
 }
 
 //go:noinline
-func wasm_lower_1_t391(pinner *runtime.Pinner, value RawToolAttachmentControlParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t392(pinner *runtime.Pinner, value RawToolAttachmentControlParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 
 	switch (value).EntityParentStartIndex.Tag() {
@@ -4845,9 +4854,9 @@ func wasm_lower_1_t391(pinner *runtime.Pinner, value RawToolAttachmentControlPar
 }
 
 //go:noinline
-func wasm_lower_1_t398(pinner *runtime.Pinner, value RawDurableStreamRecordParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t399(pinner *runtime.Pinner, value RawDurableStreamRecordParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
-	wasm_lower_1_t372(pinner, (value).Record, unsafe.Add(unsafe.Pointer(dst), 16))
+	wasm_lower_1_t373(pinner, (value).Record, unsafe.Add(unsafe.Pointer(dst), 16))
 
 	switch (value).Summary.Tag() {
 	case witTypes.OptionNone:
@@ -4856,7 +4865,7 @@ func wasm_lower_1_t398(pinner *runtime.Pinner, value RawDurableStreamRecordParam
 	case witTypes.OptionSome:
 		payload := (value).Summary.Some()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (40 + 2*4))) = int8(int32(1))
-		wasm_lower_1_t396(nil, payload, unsafe.Add(unsafe.Pointer(dst), (48+2*4)))
+		wasm_lower_1_t397(nil, payload, unsafe.Add(unsafe.Pointer(dst), (48+2*4)))
 
 	default:
 		panic("unreachable")
@@ -4865,21 +4874,21 @@ func wasm_lower_1_t398(pinner *runtime.Pinner, value RawDurableStreamRecordParam
 }
 
 //go:noinline
-func wasm_lower_1_t386(pinner *runtime.Pinner, value RawCompletionDiscardedParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t387(pinner *runtime.Pinner, value RawCompletionDiscardedParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 16)) = int64((value).StartIndex)
 
 }
 
 //go:noinline
-func wasm_lower_1_t387(pinner *runtime.Pinner, value RawCompletionDeliveredParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t388(pinner *runtime.Pinner, value RawCompletionDeliveredParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 16)) = int64((value).StartIndex)
 
 }
 
 //go:noinline
-func wasm_lower_1_t367(pinner *runtime.Pinner, value SnapshotConfirmedParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t368(pinner *runtime.Pinner, value SnapshotConfirmedParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	utf8 := unsafe.Pointer(unsafe.StringData((value).FilesystemSnapshot))
 	pinner.Pin(utf8)
@@ -4889,7 +4898,7 @@ func wasm_lower_1_t367(pinner *runtime.Pinner, value SnapshotConfirmedParameters
 }
 
 //go:noinline
-func wasm_lower_1_t390(pinner *runtime.Pinner, value RawSpanClosedParameters, dst unsafe.Pointer) {
+func wasm_lower_1_t391(pinner *runtime.Pinner, value RawSpanClosedParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 
 	switch (value).EntityParentStartIndex.Tag() {
@@ -5135,19 +5144,19 @@ func wasm_lift_1_t270(src unsafe.Pointer) CancelledParameters {
 }
 
 //go:noinline
-func wasm_lift_1_t361(src unsafe.Pointer) AgentInvocationStartedParameters {
+func wasm_lift_1_t362(src unsafe.Pointer) AgentInvocationStartedParameters {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
-	result0 := wasm_lift_1_t360(unsafe.Add(unsafe.Pointer(src), 16))
+	result0 := wasm_lift_1_t361(unsafe.Add(unsafe.Pointer(src), 16))
 	result1 := wasm_lift_1_t282(unsafe.Add(unsafe.Pointer(src), (40 + 18*4)))
 
 	return AgentInvocationStartedParameters{Timestamp: result, Invocation: result0, WalletPin: result1}
 }
 
 //go:noinline
-func wasm_lift_1_t364(src unsafe.Pointer) AgentInvocationFinishedParameters {
+func wasm_lift_1_t365(src unsafe.Pointer) AgentInvocationFinishedParameters {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
 	result0 := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(src), 16))
-	result1 := wasm_lift_1_t363(unsafe.Add(unsafe.Pointer(src), 32))
+	result1 := wasm_lift_1_t364(unsafe.Add(unsafe.Pointer(src), 32))
 	var option witTypes.Option[string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (32 + 14*4)))) {
 	case 0:
@@ -5174,7 +5183,7 @@ func wasm_lift_1_t285(src unsafe.Pointer) AgentInvocationFailedParameters {
 }
 
 //go:noinline
-func wasm_lift_1_t370(src unsafe.Pointer) Timestamp {
+func wasm_lift_1_t371(src unsafe.Pointer) Timestamp {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
 
 	return Timestamp{Timestamp: result}
@@ -5244,9 +5253,9 @@ func wasm_lift_1_t292(src unsafe.Pointer) JumpParameters {
 }
 
 //go:noinline
-func wasm_lift_1_t365(src unsafe.Pointer) PendingAgentInvocationParameters {
+func wasm_lift_1_t366(src unsafe.Pointer) PendingAgentInvocationParameters {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
-	result0 := wasm_lift_1_t360(unsafe.Add(unsafe.Pointer(src), 16))
+	result0 := wasm_lift_1_t361(unsafe.Add(unsafe.Pointer(src), 16))
 	var option witTypes.Option[wasi_clocks_0_3_0_system_clock.Instant]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (40 + 18*4)))) {
 	case 0:
@@ -5311,7 +5320,7 @@ func wasm_lift_1_t329(src unsafe.Pointer) SuccessfulUpdateParameters {
 }
 
 //go:noinline
-func wasm_lift_1_t342(src unsafe.Pointer) FailedUpdateParameters {
+func wasm_lift_1_t343(src unsafe.Pointer) FailedUpdateParameters {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
 	var option witTypes.Option[string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 24))) {
@@ -5331,7 +5340,7 @@ func wasm_lift_1_t342(src unsafe.Pointer) FailedUpdateParameters {
 
 		option2 = witTypes.None[FailedSnapshotAssistedUpdateDetails]()
 	case 1:
-		result1 := wasm_lift_1_t339(unsafe.Add(unsafe.Pointer(src), (40 + 2*4)))
+		result1 := wasm_lift_1_t340(unsafe.Add(unsafe.Pointer(src), (40 + 2*4)))
 
 		option2 = witTypes.Some[FailedSnapshotAssistedUpdateDetails](result1)
 	default:
@@ -5354,7 +5363,7 @@ func wasm_lift_1_t342(src unsafe.Pointer) FailedUpdateParameters {
 
 		option5 = witTypes.None[ReplayDivergence]()
 	case 1:
-		result4 := wasm_lift_1_t338(unsafe.Add(unsafe.Pointer(src), (104 + 2*4)))
+		result4 := wasm_lift_1_t339(unsafe.Add(unsafe.Pointer(src), (104 + 2*4)))
 
 		option5 = witTypes.Some[ReplayDivergence](result4)
 	default:
@@ -5365,21 +5374,21 @@ func wasm_lift_1_t342(src unsafe.Pointer) FailedUpdateParameters {
 }
 
 //go:noinline
-func wasm_lift_1_t343(src unsafe.Pointer) GrowMemoryParameters {
+func wasm_lift_1_t344(src unsafe.Pointer) GrowMemoryParameters {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
 
 	return GrowMemoryParameters{Timestamp: result, Delta: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 16)))}
 }
 
 //go:noinline
-func wasm_lift_1_t344(src unsafe.Pointer) MemorySizeReconciledParameters {
+func wasm_lift_1_t345(src unsafe.Pointer) MemorySizeReconciledParameters {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
 
 	return MemorySizeReconciledParameters{Timestamp: result, Bytes: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 16)))}
 }
 
 //go:noinline
-func wasm_lift_1_t346(src unsafe.Pointer) CreateResourceParameters {
+func wasm_lift_1_t347(src unsafe.Pointer) CreateResourceParameters {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 24))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (24 + 1*4))))
 	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (24 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (24 + 3*4))))
@@ -5388,7 +5397,7 @@ func wasm_lift_1_t346(src unsafe.Pointer) CreateResourceParameters {
 }
 
 //go:noinline
-func wasm_lift_1_t347(src unsafe.Pointer) DropResourceParameters {
+func wasm_lift_1_t348(src unsafe.Pointer) DropResourceParameters {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 24))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (24 + 1*4))))
 	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (24 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (24 + 3*4))))
@@ -5397,7 +5406,7 @@ func wasm_lift_1_t347(src unsafe.Pointer) DropResourceParameters {
 }
 
 //go:noinline
-func wasm_lift_1_t351(src unsafe.Pointer) LogParameters {
+func wasm_lift_1_t352(src unsafe.Pointer) LogParameters {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4))))
 	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 4*4))))
@@ -5407,7 +5416,7 @@ func wasm_lift_1_t351(src unsafe.Pointer) LogParameters {
 
 		option = witTypes.None[LogTraceContext]()
 	case 1:
-		result2 := wasm_lift_1_t349(unsafe.Add(unsafe.Pointer(src), (16 + 6*4)))
+		result2 := wasm_lift_1_t350(unsafe.Add(unsafe.Pointer(src), (16 + 6*4)))
 
 		option = witTypes.Some[LogTraceContext](result2)
 	default:
@@ -5418,7 +5427,7 @@ func wasm_lift_1_t351(src unsafe.Pointer) LogParameters {
 }
 
 //go:noinline
-func wasm_lift_1_t352(src unsafe.Pointer) ActivatePluginParameters {
+func wasm_lift_1_t353(src unsafe.Pointer) ActivatePluginParameters {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
 	result0 := wasm_lift_1_t247(unsafe.Add(unsafe.Pointer(src), 16))
 
@@ -5426,7 +5435,7 @@ func wasm_lift_1_t352(src unsafe.Pointer) ActivatePluginParameters {
 }
 
 //go:noinline
-func wasm_lift_1_t353(src unsafe.Pointer) DeactivatePluginParameters {
+func wasm_lift_1_t354(src unsafe.Pointer) DeactivatePluginParameters {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
 	result0 := wasm_lift_1_t247(unsafe.Add(unsafe.Pointer(src), 16))
 
@@ -5434,7 +5443,7 @@ func wasm_lift_1_t353(src unsafe.Pointer) DeactivatePluginParameters {
 }
 
 //go:noinline
-func wasm_lift_1_t354(src unsafe.Pointer) RevertParameters {
+func wasm_lift_1_t355(src unsafe.Pointer) RevertParameters {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
 	result0 := wasm_lift_1_t291(unsafe.Add(unsafe.Pointer(src), 16))
 
@@ -5442,7 +5451,7 @@ func wasm_lift_1_t354(src unsafe.Pointer) RevertParameters {
 }
 
 //go:noinline
-func wasm_lift_1_t355(src unsafe.Pointer) CancelPendingInvocationParameters {
+func wasm_lift_1_t356(src unsafe.Pointer) CancelPendingInvocationParameters {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
 	result0 := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(src), 16))
 
@@ -5450,7 +5459,7 @@ func wasm_lift_1_t355(src unsafe.Pointer) CancelPendingInvocationParameters {
 }
 
 //go:noinline
-func wasm_lift_1_t356(src unsafe.Pointer) BeginRemoteTransactionParameters {
+func wasm_lift_1_t357(src unsafe.Pointer) BeginRemoteTransactionParameters {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4))))
 
@@ -5458,16 +5467,16 @@ func wasm_lift_1_t356(src unsafe.Pointer) BeginRemoteTransactionParameters {
 }
 
 //go:noinline
-func wasm_lift_1_t357(src unsafe.Pointer) RemoteTransactionParameters {
+func wasm_lift_1_t358(src unsafe.Pointer) RemoteTransactionParameters {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
 
 	return RemoteTransactionParameters{Timestamp: result, BeginIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 16)))}
 }
 
 //go:noinline
-func wasm_lift_1_t366(src unsafe.Pointer) SnapshotParameters {
+func wasm_lift_1_t367(src unsafe.Pointer) SnapshotParameters {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
-	result0 := wasm_lift_1_t358(unsafe.Add(unsafe.Pointer(src), 16))
+	result0 := wasm_lift_1_t359(unsafe.Add(unsafe.Pointer(src), 16))
 	var option witTypes.Option[string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 4*4)))) {
 	case 0:
@@ -5497,7 +5506,7 @@ func wasm_lift_1_t366(src unsafe.Pointer) SnapshotParameters {
 }
 
 //go:noinline
-func wasm_lift_1_t369(src unsafe.Pointer) OplogProcessorCheckpointParameters {
+func wasm_lift_1_t370(src unsafe.Pointer) OplogProcessorCheckpointParameters {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
 	result0 := wasm_lift_1_t247(unsafe.Add(unsafe.Pointer(src), 16))
 	result1 := wasm_lift_1_t8(unsafe.Add(unsafe.Pointer(src), (48 + 6*4)))
@@ -5632,7 +5641,7 @@ func wasm_lift_1_t275(src unsafe.Pointer) CompletionDeliveredParameters {
 }
 
 //go:noinline
-func wasm_lift_1_t367(src unsafe.Pointer) SnapshotConfirmedParameters {
+func wasm_lift_1_t368(src unsafe.Pointer) SnapshotConfirmedParameters {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4))))
 
@@ -5640,7 +5649,7 @@ func wasm_lift_1_t367(src unsafe.Pointer) SnapshotConfirmedParameters {
 }
 
 //go:noinline
-func wasm_lift_1_t368(src unsafe.Pointer) SpanClosedParameters {
+func wasm_lift_1_t369(src unsafe.Pointer) SpanClosedParameters {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
 	var option witTypes.Option[uint64]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
@@ -5724,7 +5733,7 @@ func wasm_lower_1_t255(pinner *runtime.Pinner, value DurableInvocationId, dst un
 }
 
 //go:noinline
-func wasm_lower_1_t372(pinner *runtime.Pinner, value OplogPayload, dst unsafe.Pointer) {
+func wasm_lower_1_t373(pinner *runtime.Pinner, value OplogPayload, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case OplogPayloadInline:
@@ -5738,7 +5747,7 @@ func wasm_lower_1_t372(pinner *runtime.Pinner, value OplogPayload, dst unsafe.Po
 	case OplogPayloadExternal:
 		payload := value.External()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
-		wasm_lower_1_t371(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t372(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	default:
 		panic("unreachable")
@@ -5871,7 +5880,7 @@ func wasm_lower_1_t271(pinner *runtime.Pinner, value SpanAttributes, dst unsafe.
 }
 
 //go:noinline
-func wasm_lower_1_t400(pinner *runtime.Pinner, value RawInvocationRequestOperation, dst unsafe.Pointer) {
+func wasm_lower_1_t401(pinner *runtime.Pinner, value RawInvocationRequestOperation, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case RawInvocationRequestOperationManualUpdate:
@@ -5894,7 +5903,7 @@ func wasm_lower_1_t400(pinner *runtime.Pinner, value RawInvocationRequestOperati
 	case RawInvocationRequestOperationExternalTool:
 		payload := value.ExternalTool()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(3))
-		wasm_lower_1_t399(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t400(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case RawInvocationRequestOperationLoadSnapshot:
 
@@ -5965,7 +5974,7 @@ func wasm_lower_1_t284(pinner *runtime.Pinner, value RawInvocationWalletPin, dst
 }
 
 //go:noinline
-func wasm_lower_1_t378(pinner *runtime.Pinner, value WorkerError, dst unsafe.Pointer) {
+func wasm_lower_1_t379(pinner *runtime.Pinner, value WorkerError, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case WorkerErrorUnknown:
@@ -6043,27 +6052,27 @@ func wasm_lower_1_t378(pinner *runtime.Pinner, value WorkerError, dst unsafe.Poi
 	case WorkerErrorAgentTerminatedByQuota:
 		payload := value.AgentTerminatedByQuota()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(12))
-		wasm_lower_1_t373(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t374(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case WorkerErrorEphemeralSleepTooLong:
 		payload := value.EphemeralSleepTooLong()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(13))
-		wasm_lower_1_t374(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t375(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case WorkerErrorEphemeralFuelExhausted:
 		payload := value.EphemeralFuelExhausted()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(14))
-		wasm_lower_1_t375(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t376(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case WorkerErrorEphemeralCannotSuspend:
 		payload := value.EphemeralCannotSuspend()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(15))
-		wasm_lower_1_t376(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t377(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case WorkerErrorReadOnlyViolation:
 		payload := value.ReadOnlyViolation()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(16))
-		wasm_lower_1_t377(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t378(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	default:
 		panic("unreachable")
@@ -6095,7 +6104,7 @@ func wasm_lower_1_t291(pinner *runtime.Pinner, value OplogRegion, dst unsafe.Poi
 }
 
 //go:noinline
-func wasm_lower_1_t408(pinner *runtime.Pinner, value RawUpdateDescription, dst unsafe.Pointer) {
+func wasm_lower_1_t409(pinner *runtime.Pinner, value RawUpdateDescription, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case RawUpdateDescriptionAutomatic:
@@ -6106,12 +6115,12 @@ func wasm_lower_1_t408(pinner *runtime.Pinner, value RawUpdateDescription, dst u
 	case RawUpdateDescriptionSnapshotAssistedAutomatic:
 		payload := value.SnapshotAssistedAutomatic()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
-		wasm_lower_1_t406(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t407(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case RawUpdateDescriptionSnapshotBased:
 		payload := value.SnapshotBased()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(2))
-		wasm_lower_1_t407(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t408(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	default:
 		panic("unreachable")
@@ -6129,7 +6138,7 @@ func wasm_lower_1_t326(pinner *runtime.Pinner, value SnapshotAssistedUpdateDetai
 }
 
 //go:noinline
-func wasm_lower_1_t339(pinner *runtime.Pinner, value FailedSnapshotAssistedUpdateDetails, dst unsafe.Pointer) {
+func wasm_lower_1_t340(pinner *runtime.Pinner, value FailedSnapshotAssistedUpdateDetails, dst unsafe.Pointer) {
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = int64((value).PendingUpdateIndex)
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 8)) = int64((value).SourceComponentRevision)
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 16)) = int64((value).SourceRevisionStartIndex)
@@ -6138,10 +6147,10 @@ func wasm_lower_1_t339(pinner *runtime.Pinner, value FailedSnapshotAssistedUpdat
 }
 
 //go:noinline
-func wasm_lower_1_t338(pinner *runtime.Pinner, value ReplayDivergence, dst unsafe.Pointer) {
+func wasm_lower_1_t339(pinner *runtime.Pinner, value ReplayDivergence, dst unsafe.Pointer) {
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = int64((value).OplogIndex)
-	wasm_lower_1_t334(pinner, (value).Expected, unsafe.Add(unsafe.Pointer(dst), 8))
-	wasm_lower_1_t334(pinner, (value).Actual, unsafe.Add(unsafe.Pointer(dst), (80+12*4)))
+	wasm_lower_1_t335(pinner, (value).Expected, unsafe.Add(unsafe.Pointer(dst), 8))
+	wasm_lower_1_t335(pinner, (value).Actual, unsafe.Add(unsafe.Pointer(dst), (80+12*4)))
 	slice := (value).Mismatched
 	length := uint32(len(slice))
 	result := witRuntime.Allocate(pinner, uintptr(length*1), 1)
@@ -6161,7 +6170,7 @@ func wasm_lower_1_t338(pinner *runtime.Pinner, value ReplayDivergence, dst unsaf
 	case witTypes.OptionSome:
 		payload := (value).ReplayStart.Some()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (152 + 26*4))) = int8(int32(1))
-		wasm_lower_1_t332(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (160+26*4)))
+		wasm_lower_1_t333(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (160+26*4)))
 
 	default:
 		panic("unreachable")
@@ -6170,7 +6179,7 @@ func wasm_lower_1_t338(pinner *runtime.Pinner, value ReplayDivergence, dst unsaf
 }
 
 //go:noinline
-func wasm_lower_1_t411(pinner *runtime.Pinner, value ResourceTypeId, dst unsafe.Pointer) {
+func wasm_lower_1_t412(pinner *runtime.Pinner, value ResourceTypeId, dst unsafe.Pointer) {
 	utf8 := unsafe.Pointer(unsafe.StringData((value).Name))
 	pinner.Pin(utf8)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).Name)))
@@ -6183,7 +6192,7 @@ func wasm_lower_1_t411(pinner *runtime.Pinner, value ResourceTypeId, dst unsafe.
 }
 
 //go:noinline
-func wasm_lower_1_t349(pinner *runtime.Pinner, value LogTraceContext, dst unsafe.Pointer) {
+func wasm_lower_1_t350(pinner *runtime.Pinner, value LogTraceContext, dst unsafe.Pointer) {
 	utf8 := unsafe.Pointer(unsafe.StringData((value).TraceId))
 	pinner.Pin(utf8)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).TraceId)))
@@ -6241,7 +6250,7 @@ func wasm_lower_1_t81(pinner *runtime.Pinner, value golem_core_types.TypedSchema
 }
 
 //go:noinline
-func wasm_lower_1_t396(pinner *runtime.Pinner, value DurableStreamEventSummary, dst unsafe.Pointer) {
+func wasm_lower_1_t397(pinner *runtime.Pinner, value DurableStreamEventSummary, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case DurableStreamEventSummaryRegistered:
@@ -6256,7 +6265,7 @@ func wasm_lower_1_t396(pinner *runtime.Pinner, value DurableStreamEventSummary, 
 	case DurableStreamEventSummaryTerminal:
 		payload := value.Terminal()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(2))
-		wasm_lower_1_t395(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t396(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case DurableStreamEventSummarySessionResult:
 
@@ -6454,7 +6463,7 @@ func wasm_lift_1_t271(src unsafe.Pointer) SpanAttributes {
 }
 
 //go:noinline
-func wasm_lift_1_t360(src unsafe.Pointer) AgentInvocation {
+func wasm_lift_1_t361(src unsafe.Pointer) AgentInvocation {
 	var variant AgentInvocation
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -6477,7 +6486,7 @@ func wasm_lift_1_t360(src unsafe.Pointer) AgentInvocation {
 		variant = MakeAgentInvocationSaveSnapshot()
 
 	case 4:
-		result2 := wasm_lift_1_t359(unsafe.Add(unsafe.Pointer(src), 8))
+		result2 := wasm_lift_1_t360(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeAgentInvocationLoadSnapshot(result2)
 
@@ -6518,7 +6527,7 @@ func wasm_lift_1_t282(src unsafe.Pointer) PublicInvocationWalletPin {
 }
 
 //go:noinline
-func wasm_lift_1_t363(src unsafe.Pointer) AgentInvocationResult {
+func wasm_lift_1_t364(src unsafe.Pointer) AgentInvocationResult {
 	var variant AgentInvocationResult
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -6546,7 +6555,7 @@ func wasm_lift_1_t363(src unsafe.Pointer) AgentInvocationResult {
 		variant = MakeAgentInvocationResultLoadSnapshot(result2)
 
 	case 5:
-		result3 := wasm_lift_1_t362(unsafe.Add(unsafe.Pointer(src), 4))
+		result3 := wasm_lift_1_t363(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = MakeAgentInvocationResultSaveSnapshot(result3)
 
@@ -6612,15 +6621,15 @@ func wasm_lift_1_t326(src unsafe.Pointer) SnapshotAssistedUpdateDetails {
 }
 
 //go:noinline
-func wasm_lift_1_t339(src unsafe.Pointer) FailedSnapshotAssistedUpdateDetails {
+func wasm_lift_1_t340(src unsafe.Pointer) FailedSnapshotAssistedUpdateDetails {
 
 	return FailedSnapshotAssistedUpdateDetails{PendingUpdateIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 0))), SourceComponentRevision: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 8))), SourceRevisionStartIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 16))), SnapshotIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 24)))}
 }
 
 //go:noinline
-func wasm_lift_1_t338(src unsafe.Pointer) ReplayDivergence {
-	result := wasm_lift_1_t334(unsafe.Add(unsafe.Pointer(src), 8))
-	result0 := wasm_lift_1_t334(unsafe.Add(unsafe.Pointer(src), (80 + 12*4)))
+func wasm_lift_1_t339(src unsafe.Pointer) ReplayDivergence {
+	result := wasm_lift_1_t335(unsafe.Add(unsafe.Pointer(src), 8))
+	result0 := wasm_lift_1_t335(unsafe.Add(unsafe.Pointer(src), (80 + 12*4)))
 	result1 := make([]StartIdentityField, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (152 + 25*4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (152 + 25*4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (152 + 24*4))))), index*1)
@@ -6634,7 +6643,7 @@ func wasm_lift_1_t338(src unsafe.Pointer) ReplayDivergence {
 
 		option = witTypes.None[ReplayStart]()
 	case 1:
-		result2 := wasm_lift_1_t332(unsafe.Add(unsafe.Pointer(src), (160 + 26*4)))
+		result2 := wasm_lift_1_t333(unsafe.Add(unsafe.Pointer(src), (160 + 26*4)))
 
 		option = witTypes.Some[ReplayStart](result2)
 	default:
@@ -6645,7 +6654,7 @@ func wasm_lift_1_t338(src unsafe.Pointer) ReplayDivergence {
 }
 
 //go:noinline
-func wasm_lift_1_t349(src unsafe.Pointer) LogTraceContext {
+func wasm_lift_1_t350(src unsafe.Pointer) LogTraceContext {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
 
@@ -6653,7 +6662,7 @@ func wasm_lift_1_t349(src unsafe.Pointer) LogTraceContext {
 }
 
 //go:noinline
-func wasm_lift_1_t358(src unsafe.Pointer) SnapshotData {
+func wasm_lift_1_t359(src unsafe.Pointer) SnapshotData {
 	value0 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
 
@@ -6715,7 +6724,7 @@ func wasm_lower_1_t80(pinner *runtime.Pinner, value golem_core_types.SchemaValue
 }
 
 //go:noinline
-func wasm_lower_1_t371(pinner *runtime.Pinner, value OplogExternalPayload, dst unsafe.Pointer) {
+func wasm_lower_1_t372(pinner *runtime.Pinner, value OplogExternalPayload, dst unsafe.Pointer) {
 	wasm_lower_1_t4(nil, (value).PayloadId, unsafe.Add(unsafe.Pointer(dst), 0))
 	data := unsafe.Pointer(unsafe.SliceData((value).Md5Hash))
 	pinner.Pin(data)
@@ -6762,7 +6771,7 @@ func wasm_lower_1_t121(pinner *runtime.Pinner, value golem_api_context.Attribute
 }
 
 //go:noinline
-func wasm_lower_1_t399(pinner *runtime.Pinner, value RawExternalToolOperation, dst unsafe.Pointer) {
+func wasm_lower_1_t400(pinner *runtime.Pinner, value RawExternalToolOperation, dst unsafe.Pointer) {
 	utf8 := unsafe.Pointer(unsafe.StringData((value).ToolName))
 	pinner.Pin(utf8)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).ToolName)))
@@ -6861,7 +6870,7 @@ func wasm_lower_1_t280(pinner *runtime.Pinner, value WalletVersionToken, dst uns
 }
 
 //go:noinline
-func wasm_lower_1_t373(pinner *runtime.Pinner, value AgentTerminatedByQuotaError, dst unsafe.Pointer) {
+func wasm_lower_1_t374(pinner *runtime.Pinner, value AgentTerminatedByQuotaError, dst unsafe.Pointer) {
 	wasm_lower_1_t141(nil, (value).EnvironmentId, unsafe.Add(unsafe.Pointer(dst), 0))
 	utf8 := unsafe.Pointer(unsafe.StringData((value).ResourceName))
 	pinner.Pin(utf8)
@@ -6871,20 +6880,20 @@ func wasm_lower_1_t373(pinner *runtime.Pinner, value AgentTerminatedByQuotaError
 }
 
 //go:noinline
-func wasm_lower_1_t374(pinner *runtime.Pinner, value EphemeralSleepTooLong, dst unsafe.Pointer) {
+func wasm_lower_1_t375(pinner *runtime.Pinner, value EphemeralSleepTooLong, dst unsafe.Pointer) {
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = int64((value).RequestedNanos)
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 8)) = int64((value).MaxNanos)
 
 }
 
 //go:noinline
-func wasm_lower_1_t375(pinner *runtime.Pinner, value EphemeralFuelExhausted, dst unsafe.Pointer) {
+func wasm_lower_1_t376(pinner *runtime.Pinner, value EphemeralFuelExhausted, dst unsafe.Pointer) {
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = int64((value).OverdraftLimit)
 
 }
 
 //go:noinline
-func wasm_lower_1_t376(pinner *runtime.Pinner, value EphemeralCannotSuspend, dst unsafe.Pointer) {
+func wasm_lower_1_t377(pinner *runtime.Pinner, value EphemeralCannotSuspend, dst unsafe.Pointer) {
 	utf8 := unsafe.Pointer(unsafe.StringData((value).Reason))
 	pinner.Pin(utf8)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).Reason)))
@@ -6893,7 +6902,7 @@ func wasm_lower_1_t376(pinner *runtime.Pinner, value EphemeralCannotSuspend, dst
 }
 
 //go:noinline
-func wasm_lower_1_t377(pinner *runtime.Pinner, value ReadOnlyViolation, dst unsafe.Pointer) {
+func wasm_lower_1_t378(pinner *runtime.Pinner, value ReadOnlyViolation, dst unsafe.Pointer) {
 	utf8 := unsafe.Pointer(unsafe.StringData((value).Method))
 	pinner.Pin(utf8)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).Method)))
@@ -6945,7 +6954,7 @@ func wasm_lower_1_t242(pinner *runtime.Pinner, value StateNode, dst unsafe.Point
 }
 
 //go:noinline
-func wasm_lower_1_t406(pinner *runtime.Pinner, value RawSnapshotAssistedAutomaticUpdate, dst unsafe.Pointer) {
+func wasm_lower_1_t407(pinner *runtime.Pinner, value RawSnapshotAssistedAutomaticUpdate, dst unsafe.Pointer) {
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = int64((value).TargetRevision)
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 8)) = int64((value).SourceComponentRevision)
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 16)) = int64((value).SourceRevisionStartIndex)
@@ -6984,9 +6993,9 @@ func wasm_lower_1_t406(pinner *runtime.Pinner, value RawSnapshotAssistedAutomati
 }
 
 //go:noinline
-func wasm_lower_1_t407(pinner *runtime.Pinner, value RawSnapshotBasedUpdate, dst unsafe.Pointer) {
+func wasm_lower_1_t408(pinner *runtime.Pinner, value RawSnapshotBasedUpdate, dst unsafe.Pointer) {
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = int64((value).TargetRevision)
-	wasm_lower_1_t372(pinner, (value).Payload, unsafe.Add(unsafe.Pointer(dst), 8))
+	wasm_lower_1_t373(pinner, (value).Payload, unsafe.Add(unsafe.Pointer(dst), 8))
 	utf8 := unsafe.Pointer(unsafe.StringData((value).MimeType))
 	pinner.Pin(utf8)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (32 + 3*4))) = uint32(uint32(len((value).MimeType)))
@@ -7011,13 +7020,13 @@ func wasm_lower_1_t407(pinner *runtime.Pinner, value RawSnapshotBasedUpdate, dst
 }
 
 //go:noinline
-func wasm_lower_1_t334(pinner *runtime.Pinner, value ReplayStep, dst unsafe.Pointer) {
+func wasm_lower_1_t335(pinner *runtime.Pinner, value ReplayStep, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case ReplayStepHostCall:
 		payload := value.HostCall()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
-		wasm_lower_1_t333(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t334(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case ReplayStepInvocationEnd:
 
@@ -7042,13 +7051,13 @@ func wasm_lower_1_t334(pinner *runtime.Pinner, value ReplayStep, dst unsafe.Poin
 }
 
 //go:noinline
-func wasm_lower_1_t332(pinner *runtime.Pinner, value ReplayStart, dst unsafe.Pointer) {
+func wasm_lower_1_t333(pinner *runtime.Pinner, value ReplayStart, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case ReplayStartSnapshot:
 		payload := value.Snapshot()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
-		*(*int64)(unsafe.Add(unsafe.Pointer(dst), 8)) = int64(payload)
+		wasm_lower_1_t332(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case ReplayStartFullReplay:
 		payload := value.FullReplay()
@@ -7144,7 +7153,7 @@ func wasm_lower_1_t61(pinner *runtime.Pinner, value golem_core_types.SchemaGraph
 }
 
 //go:noinline
-func wasm_lower_1_t395(pinner *runtime.Pinner, value DurableStreamTerminalSummary, dst unsafe.Pointer) {
+func wasm_lower_1_t396(pinner *runtime.Pinner, value DurableStreamTerminalSummary, dst unsafe.Pointer) {
 	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32((value).Outcome))
 	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 1)) = int8(int32((value).Origin))
 
@@ -7315,8 +7324,8 @@ func wasm_lift_1_t317(src unsafe.Pointer) ExternalToolInvocationParameters {
 }
 
 //go:noinline
-func wasm_lift_1_t359(src unsafe.Pointer) LoadSnapshotParameters {
-	result := wasm_lift_1_t358(unsafe.Add(unsafe.Pointer(src), 0))
+func wasm_lift_1_t360(src unsafe.Pointer) LoadSnapshotParameters {
+	result := wasm_lift_1_t359(unsafe.Add(unsafe.Pointer(src), 0))
 
 	return LoadSnapshotParameters{Snapshot: result}
 }
@@ -7386,8 +7395,8 @@ func wasm_lift_1_t322(src unsafe.Pointer) FallibleResultParameters {
 }
 
 //go:noinline
-func wasm_lift_1_t362(src unsafe.Pointer) SaveSnapshotResultParameters {
-	result := wasm_lift_1_t358(unsafe.Add(unsafe.Pointer(src), 0))
+func wasm_lift_1_t363(src unsafe.Pointer) SaveSnapshotResultParameters {
+	result := wasm_lift_1_t359(unsafe.Add(unsafe.Pointer(src), 0))
 
 	return SaveSnapshotResultParameters{Snapshot: result}
 }
@@ -7451,11 +7460,11 @@ func wasm_lift_1_t323(src unsafe.Pointer) SnapshotBasedUpdateParameters {
 }
 
 //go:noinline
-func wasm_lift_1_t334(src unsafe.Pointer) ReplayStep {
+func wasm_lift_1_t335(src unsafe.Pointer) ReplayStep {
 	var variant ReplayStep
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
-		result := wasm_lift_1_t333(unsafe.Add(unsafe.Pointer(src), 8))
+		result := wasm_lift_1_t334(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeReplayStepHostCall(result)
 
@@ -7480,22 +7489,23 @@ func wasm_lift_1_t334(src unsafe.Pointer) ReplayStep {
 }
 
 //go:noinline
-func wasm_lift_1_t332(src unsafe.Pointer) ReplayStart {
+func wasm_lift_1_t333(src unsafe.Pointer) ReplayStart {
 	var variant ReplayStart
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
+		result := wasm_lift_1_t332(unsafe.Add(unsafe.Pointer(src), 8))
 
-		variant = MakeReplayStartSnapshot(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 8))))
+		variant = MakeReplayStartSnapshot(result)
 
 	case 1:
-		result := make([]uint64, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+		result0 := make([]uint64, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
 		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))); index++ {
 			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))), index*8)
 
-			result = append(result, uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 0))))
+			result0 = append(result0, uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 0))))
 		}
 
-		variant = MakeReplayStartFullReplay(result)
+		variant = MakeReplayStartFullReplay(result0)
 
 	default:
 		panic("unreachable")
@@ -7874,7 +7884,7 @@ func wasm_lower_1_t241(pinner *runtime.Pinner, value PairState, dst unsafe.Point
 }
 
 //go:noinline
-func wasm_lower_1_t333(pinner *runtime.Pinner, value ReplayHostCall, dst unsafe.Pointer) {
+func wasm_lower_1_t334(pinner *runtime.Pinner, value ReplayHostCall, dst unsafe.Pointer) {
 	utf8 := unsafe.Pointer(unsafe.StringData((value).FunctionName))
 	pinner.Pin(utf8)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).FunctionName)))
@@ -7939,6 +7949,23 @@ func wasm_lower_1_t333(pinner *runtime.Pinner, value ReplayHostCall, dst unsafe.
 	default:
 		panic("unreachable")
 	}
+
+}
+
+//go:noinline
+func wasm_lower_1_t332(pinner *runtime.Pinner, value ReplaySnapshotStart, dst unsafe.Pointer) {
+	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = int64((value).SnapshotIndex)
+	slice := (value).RejectedSnapshots
+	length := uint32(len(slice))
+	result := witRuntime.Allocate(pinner, uintptr(length*8), 8)
+	for index, element := range slice {
+		base := unsafe.Add(result, index*8)
+		*(*int64)(unsafe.Add(unsafe.Pointer(base), 0)) = int64(element)
+
+	}
+
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (8 + 1*4))) = uint32(length)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 8)) = uint32(uintptr(uintptr(result)))
 
 }
 
@@ -8510,7 +8537,7 @@ func wasm_lift_1_t241(src unsafe.Pointer) PairState {
 }
 
 //go:noinline
-func wasm_lift_1_t333(src unsafe.Pointer) ReplayHostCall {
+func wasm_lift_1_t334(src unsafe.Pointer) ReplayHostCall {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	result := wasm_lift_1_t246(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
 	var option witTypes.Option[uint64]
@@ -8561,6 +8588,18 @@ func wasm_lift_1_t333(src unsafe.Pointer) ReplayHostCall {
 	}
 
 	return ReplayHostCall{FunctionName: value0, DurableFunctionType: result, ParentStartIndex: option, InvocationId: option2, ObservationalOwner: option3, CarriesRequest: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (64 + 2*4)))) != 0), Request: option5}
+}
+
+//go:noinline
+func wasm_lift_1_t332(src unsafe.Pointer) ReplaySnapshotStart {
+	result := make([]uint64, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
+	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))); index++ {
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8)))), index*8)
+
+		result = append(result, uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 0))))
+	}
+
+	return ReplaySnapshotStart{SnapshotIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 0))), RejectedSnapshots: result}
 }
 
 //go:noinline

@@ -43,7 +43,8 @@ pub struct ReplayDivergence {
     /// The identity fields on which `expected` and `actual` differ; empty when the steps differ
     /// in kind.
     pub mismatched: Vec<StartIdentityField>,
-    /// Where the replay that diverged started; `None` for a divergence outside a recovery replay.
+    /// Where the replay that diverged started; `None` for a divergence outside a recovery replay,
+    /// such as the replay of an update.
     pub replay_start: Option<ReplayStart>,
 }
 
@@ -117,8 +118,8 @@ impl Display for ReplayDivergence {
 }
 
 declare_unions! {
-    /// Where a recovery replay started: from a loaded snapshot, or without a snapshot, after the
-    /// recovery rejected the automatic snapshots that it could have loaded.
+    /// Where a recovery replay started: from a loaded snapshot or without a snapshot, each with
+    /// the automatic snapshots that the recovery rejected before it.
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     #[cfg_attr(feature = "full", desert(evolution()))]
     #[derive(Eq, Hash)]
@@ -129,8 +130,11 @@ declare_unions! {
 }
 
 impl ReplayStart {
-    pub fn snapshot(snapshot_index: OplogIndex) -> Self {
-        Self::Snapshot(ReplaySnapshotStart { snapshot_index })
+    pub fn snapshot(snapshot_index: OplogIndex, rejected_snapshots: Vec<OplogIndex>) -> Self {
+        Self::Snapshot(ReplaySnapshotStart {
+            snapshot_index,
+            rejected_snapshots,
+        })
     }
 
     pub fn full_replay(rejected_snapshots: Vec<OplogIndex>) -> Self {
@@ -148,33 +152,39 @@ impl ReplayStart {
 
 impl Display for ReplayStart {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Snapshot(start) => write!(
+        let rejected = match self {
+            Self::Snapshot(start) => {
+                write!(
+                    f,
+                    "from the snapshot at oplog index {}",
+                    start.snapshot_index
+                )?;
+                &start.rejected_snapshots
+            }
+            Self::FullReplay(start) => {
+                write!(f, "without a snapshot")?;
+                &start.rejected_snapshots
+            }
+        };
+        match rejected.as_slice() {
+            [] => Ok(()),
+            [index] => write!(f, " after the snapshot at oplog index {index} was rejected"),
+            indexes => write!(
                 f,
-                "from the snapshot at oplog index {}",
-                start.snapshot_index
+                " after the snapshots at oplog indexes {} were rejected",
+                indexes
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
-            Self::FullReplay(start) => match start.rejected_snapshots.as_slice() {
-                [] => write!(f, "without a snapshot"),
-                [index] => write!(
-                    f,
-                    "without a snapshot after the snapshot at oplog index {index} was rejected"
-                ),
-                indexes => write!(
-                    f,
-                    "without a snapshot after the snapshots at oplog indexes {} were rejected",
-                    indexes
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            },
         }
     }
 }
 
-/// A replay that started from the snapshot at `snapshot_index`.
+/// A replay that started from the snapshot at `snapshot_index`. `rejected_snapshots` holds the
+/// oplog indexes of the automatic snapshots that the recovery rejected before it, in ascending
+/// order.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
@@ -185,6 +195,7 @@ impl Display for ReplayStart {
 #[serde(rename_all = "camelCase")]
 pub struct ReplaySnapshotStart {
     pub snapshot_index: OplogIndex,
+    pub rejected_snapshots: Vec<OplogIndex>,
 }
 
 /// A replay without a snapshot. `rejected_snapshots` holds the oplog indexes of the automatic

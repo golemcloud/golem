@@ -613,11 +613,20 @@ interface oplog {
 
     /// Where a recovery replay started
     variant replay-start {
-        /// From the snapshot at this oplog index
-        snapshot(oplog-index),
+        /// From a loaded snapshot
+        snapshot(replay-snapshot-start),
         /// Without a snapshot, after the recovery rejected the automatic snapshots at these oplog
         /// indexes, in ascending order; empty when no snapshot was involved
         full-replay(list<oplog-index>),
+    }
+
+    /// A recovery replay from a loaded snapshot
+    record replay-snapshot-start {
+        /// The oplog index of the loaded snapshot
+        snapshot-index: oplog-index,
+        /// The oplog indexes of the automatic snapshots that the recovery rejected before it, in
+        /// ascending order
+        rejected-snapshots: list<oplog-index>,
     }
 
     /// One step of a replay

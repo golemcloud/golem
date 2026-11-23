@@ -3031,6 +3031,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                 ],
                 replay_start: Some(golem_common::model::oplog::ReplayStart::snapshot(
                     OplogIndex::from_u64(19),
+                    vec![OplogIndex::from_u64(23)],
                 )),
             })),
         }),

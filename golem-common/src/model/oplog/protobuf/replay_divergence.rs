@@ -102,7 +102,14 @@ impl From<ReplayStart> for proto::ReplayStart {
     fn from(value: ReplayStart) -> Self {
         use proto::replay_start::Start;
         let start = match value {
-            ReplayStart::Snapshot(start) => Start::Snapshot(start.snapshot_index.into()),
+            ReplayStart::Snapshot(start) => Start::Snapshot(proto::ReplaySnapshotStart {
+                snapshot_index: start.snapshot_index.into(),
+                rejected_snapshots: start
+                    .rejected_snapshots
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            }),
             ReplayStart::FullReplay(start) => Start::FullReplay(proto::ReplayFullStart {
                 rejected_snapshots: start
                     .rejected_snapshots
@@ -121,8 +128,13 @@ impl TryFrom<proto::ReplayStart> for ReplayStart {
     fn try_from(value: proto::ReplayStart) -> Result<Self, Self::Error> {
         use proto::replay_start::Start;
         Ok(match value.start.ok_or("Missing field: start")? {
-            Start::Snapshot(index) => ReplayStart::Snapshot(ReplaySnapshotStart {
-                snapshot_index: OplogIndex::from_u64(index),
+            Start::Snapshot(start) => ReplayStart::Snapshot(ReplaySnapshotStart {
+                snapshot_index: OplogIndex::from_u64(start.snapshot_index),
+                rejected_snapshots: start
+                    .rejected_snapshots
+                    .into_iter()
+                    .map(OplogIndex::from_u64)
+                    .collect(),
             }),
             Start::FullReplay(start) => ReplayStart::FullReplay(ReplayFullStart {
                 rejected_snapshots: start

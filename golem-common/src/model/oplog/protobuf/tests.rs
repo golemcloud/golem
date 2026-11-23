@@ -962,7 +962,10 @@ pub(crate) mod replay_divergence_tests {
                 expected: ReplayStep::end_of_history(),
                 actual: ReplayStep::HostCall(host_call("random::bytes", Some("replayed"))),
                 mismatched: vec![],
-                replay_start: Some(ReplayStart::snapshot(OplogIndex::from_u64(6))),
+                replay_start: Some(ReplayStart::snapshot(
+                    OplogIndex::from_u64(6),
+                    vec![OplogIndex::from_u64(8), OplogIndex::from_u64(11)],
+                )),
             },
             ReplayDivergence::described(
                 OplogIndex::from_u64(12),
@@ -1002,8 +1005,14 @@ pub(crate) mod replay_divergence_tests {
             (None, plain.to_string()),
             (Some(ReplayStart::full_replay(vec![])), plain.to_string()),
             (
-                Some(ReplayStart::snapshot(index(30))),
+                Some(ReplayStart::snapshot(index(30), vec![])),
                 format!("{plain}; replay started from the snapshot at oplog index 30; {HINT}"),
+            ),
+            (
+                Some(ReplayStart::snapshot(index(30), vec![index(40), index(47)])),
+                format!(
+                    "{plain}; replay started from the snapshot at oplog index 30 after the snapshots at oplog indexes 40, 47 were rejected; {HINT}"
+                ),
             ),
             (
                 Some(ReplayStart::full_replay(vec![index(40)])),
@@ -1056,7 +1065,7 @@ pub(crate) mod replay_divergence_tests {
                     ..host_call("rpc::invoke", None)
                 }),
                 mismatched: vec![StartIdentityField::FunctionName],
-                replay_start: Some(ReplayStart::snapshot(OplogIndex::from_u64(5))),
+                replay_start: Some(ReplayStart::snapshot(OplogIndex::from_u64(5), vec![])),
             };
 
             let decoded: ReplayDivergence = divergence

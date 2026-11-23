@@ -2156,6 +2156,16 @@ async fn assert_snapshot_assisted_suffix_failure(
         "unexpected assisted failure: {details}"
     );
     assert_eq!(failed.failure_class, expected_class, "{details}");
+    // The target code decides the divergence of an update replay, not the snapshot load.
+    assert_eq!(
+        failed
+            .divergence
+            .as_ref()
+            .and_then(|divergence| divergence.replay_start.clone()),
+        None,
+        "{details}"
+    );
+    assert!(!details.contains("replay started"), "{details}");
     assert_eq!(
         failed
             .snapshot_assisted_details
@@ -9938,6 +9948,8 @@ async fn a_diverging_automatic_update_keeps_its_class_and_divergence_across_a_re
         .clone()
         .expect("the oplog keeps the divergence");
     assert_eq!(from_metadata.divergence.as_ref(), Some(&divergence));
+    // The new code decides the divergence of an update replay, so it names no replay start.
+    assert_eq!(divergence.replay_start, None);
 
     // The index names the recorded `Start` of the call that the source made.
     let recorded = oplog

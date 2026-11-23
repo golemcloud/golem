@@ -542,41 +542,45 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         })
     }
 
-    /// Records where the replay started on a divergence at a recorded entry that does not name
-    /// its start yet: the loaded snapshot, or else a replay without a snapshot with the oplog
-    /// indexes of the automatic snapshots that the starts of this incarnation rejected. A
-    /// divergence without an oplog index is not a position of the replay and keeps no start.
+    /// Records where the recovery replay started on a divergence at a recorded entry that does
+    /// not name its start yet: the loaded snapshot or a replay without a snapshot, each with the
+    /// oplog indexes of the automatic snapshots that the starts of this incarnation rejected. The
+    /// replay of an update keeps no start, because the new code, not a snapshot load, decides its
+    /// divergence. A divergence without an oplog index is not a position of the replay and keeps
+    /// no start.
     fn with_replay_start(store: &Store<Ctx>, error: WorkerExecutorError) -> WorkerExecutorError {
+        let state = &store.data().durable_ctx().state;
         let mut divergence = match error {
             WorkerExecutorError::UnexpectedOplogEntry { divergence }
-                if divergence.oplog_index != OplogIndex::NONE =>
+                if divergence.oplog_index != OplogIndex::NONE
+                    && !matches!(
+                        state.snapshot_replay_purpose,
+                        SnapshotReplayPurpose::AssistedUpdate
+                            | SnapshotReplayPurpose::AutomaticUpdate
+                    ) =>
             {
                 divergence
             }
             error => return error,
         };
         if divergence.replay_start.is_none() {
-            divergence.replay_start = Some(
-                match store.data().durable_ctx().state.last_snapshot_index {
-                    Some(snapshot_index) => {
-                        golem_common::model::oplog::ReplayStart::snapshot(snapshot_index)
-                    }
-                    None => {
-                        let mut rejected: Vec<OplogIndex> = store
-                            .data()
-                            .get_public_state()
-                            .worker()
-                            .read_exclusions(
-                                crate::worker::snapshot_selection::SnapshotExclusions::persisted_rejections,
-                            )
-                            .into_iter()
-                            .flatten()
-                            .collect();
-                        rejected.sort();
-                        golem_common::model::oplog::ReplayStart::full_replay(rejected)
-                    }
-                },
-            );
+            let mut rejected: Vec<OplogIndex> = store
+                .data()
+                .get_public_state()
+                .worker()
+                .read_exclusions(
+                    crate::worker::snapshot_selection::SnapshotExclusions::persisted_rejections,
+                )
+                .into_iter()
+                .flatten()
+                .collect();
+            rejected.sort();
+            divergence.replay_start = Some(match state.last_snapshot_index {
+                Some(snapshot_index) => {
+                    golem_common::model::oplog::ReplayStart::snapshot(snapshot_index, rejected)
+                }
+                None => golem_common::model::oplog::ReplayStart::full_replay(rejected),
+            });
         }
         WorkerExecutorError::UnexpectedOplogEntry { divergence }
     }

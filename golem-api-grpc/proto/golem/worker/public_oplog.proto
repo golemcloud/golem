@@ -154,14 +154,20 @@ message ReplayDivergence {
 // Where a recovery replay started.
 message ReplayStart {
   oneof start {
-    // The oplog index of the loaded snapshot.
-    uint64 snapshot = 1;
-    // A replay without a snapshot, after the recovery rejected these snapshots.
+    // A replay from a loaded snapshot.
+    ReplaySnapshotStart snapshot = 1;
+    // A replay without a snapshot.
     ReplayFullStart full_replay = 2;
   }
 }
 
-// A replay without a snapshot.
+// A replay from the snapshot at snapshot_index, after the recovery rejected these snapshots.
+message ReplaySnapshotStart {
+  uint64 snapshot_index = 1;
+  repeated uint64 rejected_snapshots = 2;
+}
+
+// A replay without a snapshot, after the recovery rejected these snapshots.
 message ReplayFullStart {
   repeated uint64 rejected_snapshots = 1;
 }

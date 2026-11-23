@@ -249,18 +249,23 @@ async fn ts_divergence_after_a_snapshot_names_the_snapshot(
         })
         .expect("the manual update has a pending-update entry");
 
-    let (metadata, _, finished) = fail_recovery_after_a_live_restore(
+    let (metadata, snapshots, finished) = fail_recovery_after_a_live_restore(
         deps, &context, executor, &updated, &agent_id, &worker_id, 1,
     )
     .await?;
 
+    // Recovery rejects the two newest snapshots, whose loads differ from the live state, and
+    // then replays from the baseline, which the live agent also ran from.
+    let [.., older, newer] = snapshots[..] else {
+        panic!("the agent has at least two snapshots: {snapshots:?}");
+    };
     let error = metadata.last_error.expect("a failed agent has an error");
     let (index, rest) = divergence_at(&error);
     assert!(finished.contains(&index), "{error}");
     assert!(rest.starts_with("expected add => AgentMethod"), "{error}");
     assert!(
         error.ends_with(&format!(
-            "; replay started from the snapshot at oplog index {baseline}; {SNAPSHOT_HINT}"
+            "; replay started from the snapshot at oplog index {baseline} after the snapshots at oplog indexes {older}, {newer} were rejected; {SNAPSHOT_HINT}"
         )),
         "{error}"
     );

@@ -391,6 +391,10 @@ impl Walker<'_, '_> {
                             "snapshot",
                             Fields::new()
                                 .add("snapshotIndex", idx(&start.snapshot_index))
+                                .add(
+                                    "rejectedSnapshots",
+                                    tuple(start.rejected_snapshots.iter().map(idx).collect()),
+                                )
                                 .build(),
                         )
                         .build(),
