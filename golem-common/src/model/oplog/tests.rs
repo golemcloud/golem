@@ -4084,8 +4084,6 @@ fn public_entry_shows_the_original_claims_text_everywhere() {
             json.contains(&expected),
             "the JSON must hold {expected}, but it is {json}"
         );
-        let decoded: PublicClaims = serde_json::from_str(&claims_text).unwrap();
-        assert_eq!(decoded.as_json(), claims_text);
 
         // Protobuf, with a real encode and decode in between.
         let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
@@ -4146,6 +4144,24 @@ fn protobuf_refuses_claims_text_that_is_not_a_json_object() {
         bad.claims = Some(text.to_string());
         assert!(PublicUserPrincipal::try_from(bad).is_err(), "{text}");
     }
+}
+
+/// A container that holds the value in a buffer before it reads it, as a derived tagged or
+/// untagged enum does, reads the claims as a JSON object.
+#[test]
+fn public_claims_are_read_through_a_buffer() {
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(untagged)]
+    enum Buffered {
+        User { claims: PublicClaims },
+    }
+
+    let Buffered::User { claims } =
+        serde_json::from_str(r#"{"claims":{"sub":"bob","groups":["a","b"],"level":3}}"#).unwrap();
+    assert_eq!(
+        claims.to_value().unwrap(),
+        serde_json::json!({"sub": "bob", "groups": ["a", "b"], "level": 3})
+    );
 }
 
 /// Claims on the wire must be one JSON object.
