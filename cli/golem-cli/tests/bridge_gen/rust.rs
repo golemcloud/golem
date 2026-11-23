@@ -1363,6 +1363,21 @@ fn external_streaming_generation_compiles_recursive_streams_and_config() {
     .unwrap();
     generator.generate().unwrap();
     let source = std::fs::read_to_string(package_dir.join("src/lib.rs")).unwrap();
+    for method in ["exchange", "multimodal"] {
+        let body = source
+            .split(&format!("pub async fn {method}("))
+            .nth(1)
+            .unwrap()
+            .split("let config =")
+            .next()
+            .unwrap();
+        assert!(body.contains("PublicAgentTarget::Id {"), "{body}");
+        assert!(body.contains("agent_id: *agent_id"), "{body}");
+        assert!(body.contains("expected_fingerprint: Some("), "{body}");
+        let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(compact.contains("AgentFingerprint(*fingerprint"), "{body}");
+        assert!(body.contains("PublicAgentTarget::Key {"), "{body}");
+    }
     for type_name in ["StreamingInput", "StreamingOutput"] {
         let declaration = source.find(&format!("pub struct {type_name}")).unwrap();
         let derive = &source[source[..declaration].rfind("#[derive(").unwrap()..declaration];

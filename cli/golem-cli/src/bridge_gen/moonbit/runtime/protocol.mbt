@@ -73,9 +73,7 @@ pub(all) struct InvocationReceipt {
 /// A client of `upsert` has the constructor `parameters` and no `target`; its
 /// invocations name the keyed agent by them. A client of `create` or
 /// `get_by_id` has a `target`, and its invocations name the agent by its ID and
-/// fingerprint. Only the keyed agent of a keyed create also keeps its
-/// `parameters`, which streaming invocations need because they name the agent
-/// by its key.
+/// fingerprint.
 pub struct ResolvedAgent {
   configuration : Configuration
   agent_type_name : String
@@ -101,14 +99,13 @@ pub fn ResolvedAgent::new(
 }
 
 ///|
-/// The constructor parameters that name the keyed agent of a streaming
-/// invocation.
+/// The constructor parameters that name an upsert client's keyed agent.
 fn ResolvedAgent::keyed_parameters(self : ResolvedAgent) -> SchemaValue raise {
   match self.parameters {
     Some(parameters) => parameters
     None =>
       raise BridgeError(
-        "A streaming invocation names its \{self.agent_type_name} agent by its key: use a client of upsert, or of a keyed create",
+        "Missing constructor parameters for keyed \{self.agent_type_name} agent",
       )
   }
 }
