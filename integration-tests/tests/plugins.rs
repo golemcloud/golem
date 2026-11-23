@@ -21,8 +21,8 @@ use golem_client::api::RegistryServiceClient;
 use golem_common::model::agent::{AgentMode, AgentTypeName, OwnedAgentId, OwnerKind};
 use golem_common::model::base64::Base64;
 use golem_common::model::component::{
-    AgentTypeProvisionConfigUpdate, PluginInstallation, PluginInstallationAction, PluginPriority,
-    PluginUninstallation,
+    AgentTypeProvisionConfigUpdate, PluginInstallation, PluginInstallationAction,
+    PluginInstallationUpdate, PluginPriority, PluginUninstallation,
 };
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
 use golem_common::model::oplog::PublicOplogEntry;
@@ -558,6 +558,27 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
 async fn oplog_processor_runs_as_the_installer_and_the_processed_agent(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
+    assert_batches_run_as_the_installer(deps, false).await
+}
+
+/// The owner of the environment changes the priority and the parameters of a processor that
+/// another account installed. The installing account stays the installer: the component still
+/// names it, and every batch still runs with it as the original caller.
+#[test]
+#[tracing::instrument]
+async fn oplog_processor_keeps_its_installer_when_another_account_updates_it(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    assert_batches_run_as_the_installer(deps, true).await
+}
+
+/// The account `installer` installs the processor on a component of the account `owner`. With
+/// `owner_updates_the_installation`, the owner then changes the installation. The processor guest
+/// must observe the installer as the original caller of every batch.
+async fn assert_batches_run_as_the_installer(
+    deps: &EnvBasedTestDependencies,
+    owner_updates_the_installation: bool,
+) -> anyhow::Result<()> {
     let owner = deps.user().await?;
     let (_, env) = owner.app_and_env().await?;
     let installer = deps.user().await?;
@@ -654,6 +675,47 @@ async fn oplog_processor_runs_as_the_installer_and_the_processed_agent(
             Vec::new(),
         )
         .await?;
+
+    let component = if owner_updates_the_installation {
+        let updated = owner
+            .update_component_with(
+                &component.id,
+                component.revision,
+                None,
+                Some(BTreeMap::from([(
+                    AgentTypeName("Repository".to_string()),
+                    AgentTypeProvisionConfigUpdate {
+                        plugin_updates: vec![PluginInstallationAction::Update(
+                            PluginInstallationUpdate {
+                                environment_plugin_grant_id: oplog_processor_plugin_grant.id,
+                                new_priority: Some(PluginPriority(1)),
+                                new_parameters: Some(BTreeMap::from([
+                                    ("callback-url".to_string(), callback_url.clone()),
+                                    ("updated".to_string(), "yes".to_string()),
+                                ])),
+                            },
+                        )],
+                        ..Default::default()
+                    },
+                )])),
+                Vec::new(),
+            )
+            .await?;
+        // The update is in effect, and it did not change the installer.
+        let plugins = &updated.metadata.agent_type_provision_configs
+            [&AgentTypeName("Repository".to_string())]
+            .plugins;
+        assert_eq!(plugins.len(), 1, "{plugins:?}");
+        assert_eq!(plugins[0].priority, PluginPriority(1));
+        assert_eq!(
+            plugins[0].parameters.get("updated").map(String::as_str),
+            Some("yes")
+        );
+        assert_eq!(plugins[0].installed_by, installer.account_id);
+        updated
+    } else {
+        component
+    };
 
     let repo_id = agent_key!("Repository", "installer-caller");
     let worker_id = owner.start_agent(&component.id, repo_id.clone()).await?;

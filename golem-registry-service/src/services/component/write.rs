@@ -1126,8 +1126,8 @@ impl ComponentWriteService {
                         plugin.parameters = new_parameters;
                     };
 
-                    // The account that changes an installation is its installer from now on.
-                    plugin.installed_by = auth.access_account_id();
+                    // An update keeps `installed_by`: the account that installed the plugin stays
+                    // its installer, whatever account changes the priority or the parameters.
                 }
                 PluginInstallationAction::Install(inner) => {
                     // ensure the plugin priority and environment_plugin_grant_id is not already used
