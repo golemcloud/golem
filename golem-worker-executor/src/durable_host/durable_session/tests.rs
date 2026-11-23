@@ -2203,6 +2203,8 @@ async fn output_drains_preserve_typed_terminals_authors_and_source_origin() {
                         StreamSessionRecord::Attached(StreamSessionAttachedRecord {
                             format_version: DURABLE_STREAM_FORMAT_VERSION,
                             session_key: identity.invocation.idempotency_key,
+                            acceptance: oplog
+                                .session_acceptance(&identity.invocation.idempotency_key),
                             attachment_id,
                             attempt_id,
                             epoch: 1,
@@ -3524,6 +3526,7 @@ impl Rpc for AttachedProducerRpc {
         &self,
         _target: ResolvedTarget,
         _method_name: &str,
+        _invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         _self_created_by: AccountId,
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
@@ -3891,6 +3894,7 @@ pub(super) async fn backpressured_session_input() -> (
             StreamSessionRecord::Attached(StreamSessionAttachedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: identity.invocation.idempotency_key,
+                acceptance: oplog.session_acceptance(&identity.invocation.idempotency_key),
                 attachment_id,
                 attempt_id,
                 epoch: 1,
@@ -5287,6 +5291,7 @@ async fn a_fenced_oplog_refuses_a_foreign_mapping_and_releases_the_session() {
             StreamSessionRecord::Attached(StreamSessionAttachedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: local.invocation.idempotency_key,
+                acceptance: oplog.session_acceptance(&local.invocation.idempotency_key),
                 attachment_id,
                 attempt_id,
                 epoch: 1,
@@ -5417,6 +5422,7 @@ async fn retirement_from_foreign_rpc(prepare: bool) {
             StreamSessionRecord::Attached(StreamSessionAttachedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: local.invocation.idempotency_key,
+                acceptance: oplog.session_acceptance(&local.invocation.idempotency_key),
                 attachment_id,
                 attempt_id,
                 epoch: 1,
@@ -8839,6 +8845,7 @@ async fn check_dropped_input_cancellation(dropped: DroppedInput) {
             StreamSessionRecord::Attached(StreamSessionAttachedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: identity.invocation.idempotency_key,
+                acceptance: oplog.session_acceptance(&identity.invocation.idempotency_key),
                 attachment_id,
                 attempt_id,
                 epoch: 1,
@@ -9014,6 +9021,7 @@ async fn dropped_input_cancellation_is_skipped_once_the_attachment_is_fenced() {
             StreamSessionRecord::Attached(StreamSessionAttachedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: identity.invocation.idempotency_key,
+                acceptance: oplog.session_acceptance(&identity.invocation.idempotency_key),
                 attachment_id,
                 attempt_id,
                 epoch: 1,
@@ -9119,6 +9127,7 @@ async fn guest_authored_input_cancellation_targets_the_current_attachment_epoch(
             StreamSessionRecord::Attached(StreamSessionAttachedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: identity.invocation.idempotency_key,
+                acceptance: oplog.session_acceptance(&identity.invocation.idempotency_key),
                 attachment_id,
                 attempt_id: start_attempt_id,
                 epoch: 1,
@@ -9660,6 +9669,7 @@ async fn detached_continuation_activates_prepared_and_new_foreign_inputs() {
                 StreamSessionRecord::Attached(StreamSessionAttachedRecord {
                     format_version: 1,
                     session_key: consumer.invocation.idempotency_key,
+                    acceptance: oplog.session_acceptance(&consumer.invocation.idempotency_key),
                     attachment_id,
                     attempt_id,
                     epoch: 1,
@@ -10961,6 +10971,7 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
             StreamSessionRecord::Attached(StreamSessionAttachedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: identity.invocation.idempotency_key,
+                acceptance: oplog.session_acceptance(&identity.invocation.idempotency_key),
                 attachment_id,
                 attempt_id: start_attempt_id,
                 epoch: 1,
@@ -11006,6 +11017,49 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
 
     let epoch1 = streams_for(1, start_attempt_id).await;
     epoch1.ensure_current_attachment().await.unwrap();
+    // Exhaust admission before a resume enters, then let the admitted operations take the
+    // session lock. A resume that holds that lock while waiting for admission deadlocks.
+    let barrier = Arc::new(tokio::sync::Barrier::new(17));
+    let (entered, mut admissions) = tokio::sync::mpsc::channel(16);
+    let mut operations = tokio::task::JoinSet::new();
+    for _ in 0..16 {
+        let producer = producer.clone();
+        let session = epoch1.clone();
+        let barrier = barrier.clone();
+        let entered = entered.clone();
+        operations.spawn(async move {
+            producer
+                .run_admitted(None, 0, true, move |_, _admission| async move {
+                    entered.send(()).await.unwrap();
+                    barrier.wait().await;
+                    let _guard = session.session_lock.lock().await;
+                    session.ensure_current_attachment().await
+                })
+                .await
+        });
+    }
+    for _ in 0..16 {
+        admissions.recv().await.unwrap();
+    }
+    let blocked_resume = epoch1.commit_resume_attempt(StreamSessionResumeAttemptRecord {
+        format_version: DURABLE_STREAM_FORMAT_VERSION,
+        session_key: identity.invocation.idempotency_key,
+        attempt: attempt(StreamResumeOperation::Resume, 0, AttemptId::fresh()),
+        accepted_epoch: 1,
+    });
+    tokio::pin!(blocked_resume);
+    assert!(futures::poll!(&mut blocked_resume).is_pending());
+    barrier.wait().await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let (resume, ()) = tokio::join!(&mut blocked_resume, async {
+            while let Some(result) = operations.join_next().await {
+                result.unwrap().unwrap();
+            }
+        });
+        assert!(resume.unwrap_err().contains("StaleEpoch"));
+    })
+    .await
+    .expect("resume and admitted session operations must not deadlock");
     assert!(epoch1.detach_current().await.unwrap());
     assert!(epoch1.ensure_current_attachment().await.is_err());
     producer
@@ -11599,6 +11653,8 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
                 golem_common::base_model::durable_stream::StreamSessionAttachedRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: consumer.invocation.idempotency_key,
+                    acceptance: consumer_oplog
+                        .session_acceptance(&consumer.invocation.idempotency_key),
                     attachment_id: attachment.attachment_id,
                     attempt_id,
                     epoch: 1,
@@ -12141,6 +12197,7 @@ async fn local_topology_cannot_activate_before_exact_session_attachment() {
             StreamSessionRecord::Attached(StreamSessionAttachedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: identity.invocation.idempotency_key,
+                acceptance: oplog.session_acceptance(&identity.invocation.idempotency_key),
                 attachment_id,
                 attempt_id,
                 epoch: 1,
@@ -12574,6 +12631,7 @@ async fn packed_output_keeps_an_unanswered_batch_read_transient_and_resumes_with
         StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key: session_key.idempotency_key,
+            acceptance: oplog.session_acceptance(&session_key.idempotency_key),
             attachment_id,
             attempt_id,
             epoch: 1,
@@ -12809,6 +12867,7 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
                 golem_common::base_model::durable_stream::StreamSessionAttachedRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: session_key.idempotency_key,
+                    acceptance: oplog.session_acceptance(&session_key.idempotency_key),
                     attachment_id,
                     attempt_id,
                     epoch: 1,
@@ -13345,6 +13404,7 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
             StreamSessionRecord::Attached(StreamSessionAttachedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: consumer.invocation.idempotency_key,
+                acceptance: consumer_oplog.session_acceptance(&consumer.invocation.idempotency_key),
                 attachment_id,
                 attempt_id: start_attempt_id,
                 epoch: 1,

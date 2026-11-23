@@ -15,10 +15,9 @@
 //! Transport conversion for the Worker's domain stream-slot operations.
 
 use super::{
-    AgentInvocation, Arc, AuthCtx, CanStartWorker, DurableStreamRemoteError, HasAll,
-    HasComponentService, HasConfig, InvocationFreshnessDisposition, Message, OwnedAgentId,
-    UsesAllDeps, Worker, WorkerCtx, WorkerExecutorImpl, build_durable_streaming_request,
-    decode_invocation_input, from_proto_invocation_context, golem, stream_slots,
+    AgentInvocation, Arc, AuthCtx, CanStartWorker, DurableStreamRemoteError, HasAll, HasConfig,
+    InvocationFreshnessDisposition, OwnedAgentId, UsesAllDeps, Worker, WorkerCtx,
+    WorkerExecutorImpl, from_proto_invocation_context, golem, stream_slots,
 };
 use crate::worker;
 use golem_api_grpc::proto::golem::workerexecutor::v1 as proto;
@@ -31,7 +30,7 @@ impl From<worker::CreateStreamSessionResult> for proto::CreateStreamSessionSucce
         Self {
             session: result.session,
             replayed: result.replayed,
-            component_revision: result.component_revision.into(),
+            component_revision: result.component_revision.map(Into::into),
             invocation_key: Some(result.invocation_key.into()),
             expiry_policy: Some(expiry_policy_to_proto(result.expiry_policy)),
             expiry_deadline_millis: result.expiry_deadline_millis,
@@ -116,6 +115,11 @@ impl TryFrom<proto::ReadStreamSlotRequest> for worker::ReadStreamSlotRequest {
                 Ok(proto::StreamSlotReadAdmission::Head) if request.invocation_key.is_none() => {
                     worker::StreamSlotReadAdmission::Head
                 }
+                Ok(proto::StreamSlotReadAdmission::WaitReady)
+                    if request.invocation_key.is_none() =>
+                {
+                    worker::StreamSlotReadAdmission::WaitReady
+                }
                 Ok(proto::StreamSlotReadAdmission::Continuation) => {
                     worker::StreamSlotReadAdmission::Continuation(
                         request
@@ -162,7 +166,8 @@ impl From<worker::ReadStreamSlotResult> for proto::ReadStreamSlotSuccess {
                 .unwrap_or_default(),
             closed: value.closed,
             cancelled: value.cancelled,
-            element_schema: Some(value.element_schema.into()),
+            element_schema: value.element_schema.map(Into::into),
+            queued: value.queued,
             content_type: value.content_type.into(),
             up_to_date: value.up_to_date,
             head_offset: value
@@ -354,43 +359,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let key = *admission.invocation_key();
         request.idempotency_key =
             Some(golem_common::model::IdempotencyKey::from_uuid(key.0).into());
-        let revision = worker.stream_session_revision(&key).await?;
-        let component = worker
-            .component_service()
-            .get_metadata(worker.component_id(), Some(revision))
-            .await?;
         let method_name = request
             .method_name
             .clone()
             .ok_or_else(|| WorkerExecutorError::invalid_request("method_name not found"))?;
-        let proto_input = request
-            .input
-            .clone()
-            .ok_or_else(|| WorkerExecutorError::invalid_request("input not found"))?;
-        let input_len = proto_input.encoded_len();
-        let input =
-            decode_invocation_input(proto_input).map_err(WorkerExecutorError::invalid_request)?;
-        let parsed = worker
-            .get_initial_worker_metadata()
-            .parse_agent_id(&component.metadata)
-            .map_err(WorkerExecutorError::invalid_request)?;
-        if !crate::worker::invocation::validate_agent_method_invocation(
-            &component.metadata,
-            Some(&parsed),
-            &method_name,
-            &input,
-        )? {
-            return Err(WorkerExecutorError::invalid_request(
-                "Durable Streams requires a streaming method",
-            ));
-        }
         request.attempt_id = Some(uuid::Uuid::new_v4().into());
         request.expected_callee_fingerprint =
             Some(worker.get_initial_worker_metadata().fingerprint.0.into());
         let invocation = AgentInvocation::AgentMethod {
             idempotency_key: key,
             method_name,
-            input,
+            allow_streams: true,
+            input: super::invocation_session::capture_method_input(&request)?,
             invocation_context: from_proto_invocation_context(&request.context)
                 .limit_depth(worker.config().limits.max_invocation_context_stack_depth),
             caller: request.caller()?,
@@ -401,17 +381,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .transpose()
                 .map_err(WorkerExecutorError::permission_denied)?,
         };
-        let (committed, _receipt) = tokio::sync::oneshot::channel();
-        let domain_request = build_durable_streaming_request(
+        let acceptance = super::capture_session_acceptance(
             &request,
-            id.agent_id,
-            Some(&parsed.agent_type),
-            &component.metadata,
-            revision,
-            worker.get_initial_worker_metadata().fingerprint,
-            invocation,
-            input_len,
-            committed,
             worker
                 .config()
                 .limits
@@ -419,7 +390,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .get(),
         )?;
         let result = worker
-            .create_stream_session(domain_request, admission)
+            .create_stream_session(
+                invocation,
+                acceptance,
+                golem_common::model::durable_stream::AttemptId(request.attempt_id.unwrap().into()),
+                admission,
+            )
             .await?;
         Ok(result.into())
     }
@@ -461,7 +437,8 @@ mod tests {
             head_offset: Some(head),
             closed: true,
             cancelled: false,
-            element_schema: schema,
+            queued: false,
+            element_schema: Some(schema),
             content_type: "application/octet-stream",
             up_to_date: false,
             stream_identity: "identity".into(),

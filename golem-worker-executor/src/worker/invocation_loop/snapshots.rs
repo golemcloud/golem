@@ -314,6 +314,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             save_snapshot_invocation,
             &component_metadata,
             &self.parent.owner_context,
+            None,
         ) {
             Ok(lowered) => lowered,
             Err(err) => {
@@ -535,6 +536,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             save_snapshot_invocation,
             &component_metadata,
             &self.parent.owner_context,
+            None,
         ) {
             Ok(lowered) => lowered,
             Err(err) => {

@@ -423,7 +423,8 @@ where
             return Ok(protocol_failure(details));
         }
         match response.response {
-            Some(invocation_response::Response::Accepted(_)) => {}
+            Some(invocation_response::Response::Accepted(_))
+            | Some(invocation_response::Response::Ready(_)) => {}
             Some(invocation_response::Response::Rejected(rejected)) => {
                 terminal_outcome = Some(Ok(OneShotInvocationSessionResult::Rejected(rejected)));
             }
@@ -513,6 +514,7 @@ pub trait WorkerClient: Send + Sync {
         caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)>;
 
     async fn create(
@@ -527,6 +529,7 @@ pub trait WorkerClient: Send + Sync {
         invocation_context: Option<InvocationContext>,
         caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)>;
 
     async fn connect(
@@ -759,7 +762,7 @@ pub trait WorkerClient: Send + Sync {
         &self,
         target: &RoutedTarget,
         method_name: Option<String>,
-        method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
+        method_parameters: Option<golem_common::model::agent::AgentMethodInput>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         request_key: InvocationRequestKey,
@@ -1079,6 +1082,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
         let agent_id = target.agent_id;
         let (constructor, unkeyed_id, component_id) = target.create_fields()?;
@@ -1103,6 +1107,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         caller: Some(caller.clone()),
                         invocation_context: invocation_context.clone(),
                         idempotency_key: idempotency_key.clone().map(Into::into),
+                        invocation: invocation.clone(),
                         freshness_disposition: match freshness_disposition {
                             InvocationFreshnessDisposition::KnownFresh => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh as i32,
                             InvocationFreshnessDisposition::MayExist => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
@@ -1137,6 +1142,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         invocation_context: Option<InvocationContext>,
         caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
         let agent_id = target.agent_id;
         let (constructor, unkeyed_id, component_id) = target.create_fields()?;
@@ -1168,6 +1174,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             invocation_context: invocation_context.clone(),
                             idempotency_key: Some(idempotency_key.clone().into()),
                             freshness_disposition: 0,
+                            invocation: invocation.clone(),
                         }),
                     )
                 },
@@ -2474,7 +2481,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         &self,
         target: &RoutedTarget,
         method_name: Option<String>,
-        method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
+        method_parameters: Option<golem_common::model::agent::AgentMethodInput>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         request_key: InvocationRequestKey,
@@ -2492,6 +2499,11 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         let target = target.clone();
         let first_dispatch = Arc::new(AtomicBool::new(true));
         let attempt_id = uuid::Uuid::new_v4();
+        let captured_method_input = method_parameters
+            .as_ref()
+            .map(golem_common::serialization::serialize)
+            .transpose()
+            .map_err(WorkerServiceError::Internal)?;
         let idempotency_key = match &request_key {
             InvocationRequestKey::External { key, .. }
             | InvocationRequestKey::Internal(key)
@@ -2511,7 +2523,9 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         constructor: None,
                         component_id: None,
                         method_name: method_name.clone(),
-                        input: method_parameters.clone(),
+                        captured_method_input: captured_method_input.clone(),
+                        allow_streams: false,
+                        input: None,
                         idempotency_key: idempotency_key.clone().map(Into::into),
                         request_key: Some(request_key.clone().into()),
                         context: invocation_context.clone(),
@@ -4362,9 +4376,16 @@ mod rejection_mapping_tests {
             .invoke_agent(
                 &RoutedTarget::existing(agent_id, None),
                 Some("run".to_string()),
-                Some(SchemaValue {
-                    value: Some(schema_value::Value::TupleValue(Default::default())),
-                }),
+                Some(golem_common::model::agent::AgentMethodInput::Native(
+                    golem_common::model::agent::NativeMethodInput::capture(
+                        SchemaValue {
+                            value: Some(schema_value::Value::TupleValue(Default::default())),
+                        },
+                        Vec::new(),
+                    )
+                    .unwrap()
+                    .0,
+                )),
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 None,
                 golem_common::model::InvocationRequestKey::external(None, None),
@@ -4488,6 +4509,7 @@ mod rejection_mapping_tests {
                     AuthCtx::System,
                     None,
                     Caller::anonymous().into(),
+                    None,
                     None,
                 )
             };

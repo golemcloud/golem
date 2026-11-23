@@ -1,7 +1,7 @@
 use golem_rust::agentic::Config;
 use golem_rust::wasip3::http::{client, types};
 use golem_rust::wasip3::{wit_future, wit_stream};
-use golem_rust::{ConfigSchema, agent_definition, agent_implementation, description};
+use golem_rust::{ConfigSchema, agent_definition, agent_implementation, description, read_only};
 
 mod wallet_replay;
 
@@ -157,6 +157,9 @@ pub trait SnapshotUpdateTest {
     fn suffix_trap(&self) -> u32;
     fn suffix_exit(&self) -> u32;
     fn accumulated_value(&self) -> u32;
+    fn revision_one_only(&self) -> u32;
+    #[read_only]
+    fn revision_cache_probe(&self) -> u32;
     fn write_file(&mut self, path: String, content: String);
     fn read_file(&self, path: String) -> Option<String>;
 }
@@ -223,6 +226,14 @@ impl SnapshotUpdateTest for SnapshotUpdateTestImpl {
     }
 
     fn accumulated_value(&self) -> u32 {
+        self.accumulated_value
+    }
+
+    fn revision_one_only(&self) -> u32 {
+        1
+    }
+
+    fn revision_cache_probe(&self) -> u32 {
         self.accumulated_value
     }
 

@@ -11092,6 +11092,8 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
         constructor: None,
         component_id: Some(caller_component.id.into()),
         method_name: Some("hold_fire_and_forget_capable_staging".to_string()),
+        allow_streams: false,
+        captured_method_input: None,
         input: Some(value.try_into().map_err(anyhow::Error::msg)?),
         mode: AgentInvocationMode::Await as i32,
         schedule_at: None,

@@ -114,7 +114,6 @@ pub mod rpc;
 pub(crate) mod sockets;
 pub mod stream_bus;
 pub(crate) mod stream_outcome;
-pub mod stream_session;
 pub mod stream_transport;
 mod suspendable_wait;
 pub mod tail_work;

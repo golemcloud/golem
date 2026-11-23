@@ -199,7 +199,10 @@ fn a_remote_schedule_names_the_scheduling_agent_as_parent_also_for_a_tool() {
                 method_name: "increment".to_string(),
                 input: golem_common::schema::SchemaValue::Tuple {
                     elements: Vec::new(),
-                },
+                }
+                .try_into()
+                .unwrap(),
+                allow_streams: false,
                 invocation_context: InvocationContextStack::fresh(),
                 caller: Caller {
                     original: crate::test_callers::user_principal(),
