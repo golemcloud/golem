@@ -219,7 +219,12 @@ export class FakeUpstreams {
    * The checkouts of Polar by ID, with what `GET /v1/checkouts/{id}` reports. `POST /v1/checkouts/`
    * creates `polar_c_1`, `polar_c_2` and so on, which Polar takes payments for 24 hours.
    */
-  readonly checkouts = new Map<string, { status: CheckoutStatus; expiresAt: Date }>()
+  readonly checkouts = new Map<string, { status: CheckoutStatus; currency: string; expiresAt: Date }>()
+  /**
+   * The currency of a checkout that `POST /v1/checkouts/` creates without `currency`, which Polar
+   * selects from the address of the browser.
+   */
+  checkoutCurrency = "usd"
   /** The status of `POST /v1/checkouts/`; with another status than 201, Polar creates no checkout. */
   checkoutCreateStatus = 201
   /** The external IDs of the Polar customers; `DELETE /v1/customers/external/{id}` removes one. */
@@ -293,7 +298,11 @@ export class FakeUpstreams {
           return Response.json({ detail: "unavailable" }, { status: this.checkoutCreateStatus })
         }
         const id = `polar_c_${this.checkouts.size + 1}`
-        this.checkouts.set(id, { status: "open", expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) })
+        this.checkouts.set(id, {
+          status: "open",
+          currency: (body as { readonly currency?: string }).currency ?? this.checkoutCurrency,
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
+        })
         return Response.json(this.checkoutJson(id), { status: 201 })
       }
       case `POST ${polarApiUrl}/v1/customer-sessions/`:
@@ -487,6 +496,7 @@ export class FakeUpstreams {
       id: checkoutId,
       url: this.checkoutUrl(checkoutId),
       status: checkout.status,
+      currency: checkout.currency,
       expires_at: checkout.expiresAt.toISOString()
     }
   }

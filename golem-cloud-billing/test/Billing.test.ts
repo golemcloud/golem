@@ -1607,6 +1607,38 @@ describe("Polar billing", () => {
       expect(upstreams.deletionHolds.get(accountId)).toBe(openCheckoutHold(expiryOf("polar_c_2")))
     })
 
+    /** The route shows the error page and never sends the URL of the checkout, which pays it. */
+    const expectErrorPage = async (response: Response, checkoutId: string) => {
+      expect(response.status).toBe(500)
+      expect(response.headers.get("location")).toBeNull()
+      expect(await response.text()).not.toContain(checkoutId)
+    }
+
+    it("refuses a new checkout in a currency that the app has no prices for", async () => {
+      const { jar } = await signedIn()
+      upstreams.checkoutCurrency = "cad"
+
+      await expectErrorPage(await postCheckout(jar), "polar_c_1")
+      expect(upstreams.polarRequests("/v1/checkouts/")).toHaveLength(1)
+    })
+
+    it("refuses the open checkout in such a currency that a later click reuses, until a new checkout replaces it", async () => {
+      const { jar } = await signedIn()
+      upstreams.checkoutCurrency = "cad"
+      await postCheckout(jar)
+      // An operator removes the prices in CAD from the product.
+      upstreams.checkoutCurrency = "usd"
+
+      await expectErrorPage(await postCheckout(jar), "polar_c_1")
+      expect(upstreams.polarRequests("/v1/checkouts/")).toHaveLength(1)
+      expect(upstreams.polarRequests("/v1/checkouts/polar_c_1")).toHaveLength(1)
+
+      await expireSoon("polar_c_1")
+      const later = await postCheckout(jar)
+      expect(later.status).toBe(303)
+      expect(later.headers.get("location")).toBe(upstreams.checkoutUrl("polar_c_2"))
+    })
+
     it.each(["confirmed", "succeeded"] as const)(
       "sends each later click to the payment notice while Polar has the payment of a %s checkout",
       async (status) => {
@@ -2181,12 +2213,14 @@ describe("Polar billing", () => {
 
       it("lets Polar choose the currency of the checkout, records the currency of the subscription, and shows its prices with the tax included", async () => {
         const { jar, accountId } = await signedIn()
+        upstreams.checkoutCurrency = currency
 
         const checkout = await request(app.handler, jar, "POST", "/billing/checkout", {
           origin: baseUrl,
           "x-forwarded-for": "203.0.113.7, 198.51.100.7"
         })
         expect(checkout.status).toBe(303)
+        expect(checkout.headers.get("location")).toBe(upstreams.checkoutUrl("polar_c_1"))
         const [created] = upstreams.polarRequests("/v1/checkouts/")
         expect(created!.body).toMatchObject({ products: [polarProductId], customer_ip_address: "198.51.100.7" })
         expect(created!.body).not.toHaveProperty("currency")

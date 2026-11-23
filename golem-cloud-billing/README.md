@@ -156,7 +156,8 @@ plan.
   (`confirmed` or `succeeded`), each click redirects to `/?checkout_id=...` and starts no new
   checkout, also when the person paid in another tab. Else a click goes back to an open checkout
   that takes payments for more than an hour (`CHECKOUT_REUSE_MS`), so the hold does not grow with
-  each click.
+  each click. The route never sends a checkout in a currency that the app has no prices for, also
+  not an open one that a click reuses (see [Currencies](#currencies)).
 - **Customer portal.** `POST /billing/portal` creates a customer session for the Golem account and
   redirects to the customer portal of Polar: payment method, invoices, cancellation.
 - **Settlement.** `POST /billing/settle` creates a checkout session of the settlement product for
@@ -264,9 +265,15 @@ subscription, with the prices of that currency in the configuration (see
 of Polar shows the price in the local currency. When the page cannot read the subscription, it
 shows the usage without prices or costs.
 
-The app stores no subscription or order in a currency that it has no prices for. The webhook logs
-the error `unsupported_currency` and answers 200, because a delivery again changes nothing. So the
-Polar product must have prices in USD, EUR and GBP only.
+The checkout route reads the currency of the checkout that Polar returns. For a currency that the
+app has no prices for, it logs the error `unsupported_currency` and shows the error page, and it
+never sends the URL of the checkout. Polar selects the currency at the creation of a checkout, and
+the billing address that the customer enters on the checkout page does not change it. So a later
+click that reuses that open checkout gets the error page too, until the checkout takes payments for
+less than an hour more and the route creates a new one. The app also stores no subscription or
+order in such a currency: the webhook logs the error `unsupported_currency` and answers 200,
+because a delivery again changes nothing. So the Polar product must have prices in USD, EUR and GBP
+only.
 
 ### Settlement
 

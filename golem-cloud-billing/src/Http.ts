@@ -12,6 +12,7 @@ import {
 } from "effect/http"
 import { Auth, type SignedIn } from "./Auth.ts"
 import { BillingConfig } from "./BillingConfig.ts"
+import { isCurrency } from "./Currency.ts"
 import { Database } from "./Database.ts"
 import {
   canCheckOut,
@@ -450,6 +451,20 @@ export const routes = HttpRouter.use((router) =>
               return HttpServerResponse.redirect(notice.href, { status: 303 })
             }
             const { session, reasons } = started
+            // The app has no prices for another currency, so the person must never pay such a
+            // checkout. Polar selects the currency at the creation of the checkout, so the route
+            // refuses also each later click that would reuse it.
+            if (!isCurrency(session.currency)) {
+              yield* Effect.logError("Refused a checkout in a currency that the app has no prices for").pipe(
+                Effect.annotateLogs({
+                  event: "unsupported_currency",
+                  golemAccountId: accountId,
+                  checkoutId: session.id,
+                  currency: session.currency
+                })
+              )
+              return errorPage
+            }
             if (reasons === "deleted" || !reasons.includes("openCheckout")) {
               yield* Effect.logWarning("Refused a checkout that no deletion hold covers").pipe(
                 Effect.annotateLogs({ golemAccountId: accountId, checkoutId: session.id, reasons: String(reasons) })

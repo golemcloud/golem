@@ -124,6 +124,12 @@ export interface CheckoutSession {
   readonly id: string
   readonly url: string
   readonly status: CheckoutStatus
+  /**
+   * The currency of the checkout, as Polar names it, such as `usd`. Polar selects it at the creation
+   * of the checkout, from the address of the browser. The billing address that the customer enters
+   * on the checkout page does not change it.
+   */
+  readonly currency: string
   /** When Polar stops taking the payment of the open checkout: 24 hours after its creation. */
   readonly expiresAt: Date
 }
@@ -132,11 +138,13 @@ const toCheckoutSession = (checkout: {
   readonly id: string
   readonly url: string
   readonly status: CheckoutStatus
+  readonly currency: string
   readonly expires_at: string
 }): CheckoutSession => ({
   id: checkout.id,
   url: checkout.url,
   status: checkout.status,
+  currency: checkout.currency,
   expiresAt: new Date(checkout.expires_at)
 })
 
