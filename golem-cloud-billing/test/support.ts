@@ -24,11 +24,11 @@ export const billingAccountId = "5f0c2e7a-91d4-4b3c-8a6e-2d7b1c9e0f34"
 export const freePlanId = "6d3b6a42-2d71-4b0e-9b1a-1f4e7b3b2c10"
 export const paidPlanId = "9a1f3c2e-5b7d-4e8f-a6c4-2d1e0b9f8a73"
 export const suspendedPlanId = "3e8b1d47-0c2a-4f96-b5e1-7a9d2c4f6b08"
+/** The overage prices of the paid plan at the ECB rate of 23 November 2026. */
 export const overagePrices = {
-  perMillionGcu: "0.0112",
-  perGbHour: "0.045",
-  perDurableGbMonth: "0.27",
-  perEphemeralGbMonth: "0.24"
+  usd: { perMillionGcu: "0.0112", perGbHour: "0.045", perDurableGbMonth: "0.27", perEphemeralGbMonth: "0.24" },
+  eur: { perMillionGcu: "0.0131", perGbHour: "0.053", perDurableGbMonth: "0.32", perEphemeralGbMonth: "0.28" },
+  gbp: { perMillionGcu: "0.0103", perGbHour: "0.042", perDurableGbMonth: "0.25", perEphemeralGbMonth: "0.23" }
 }
 /** A plan that an administrator gave the account; subscriptions do not change it. */
 export const internalPlanId = "c4e2a9b1-7d3f-4a6e-8b5c-1f0e9d2c3b4a"

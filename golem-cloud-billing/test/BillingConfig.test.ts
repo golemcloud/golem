@@ -1,6 +1,7 @@
 import { ConfigProvider, Effect, Exit } from "effect"
 import { describe, expect, it } from "vitest"
-import { pastDueGraceMs, plansConfig } from "../src/BillingConfig.ts"
+import { type OveragePrices, overagePricesConfig, pastDueGraceMs, plansConfig } from "../src/BillingConfig.ts"
+import { overagePrices } from "./support.ts"
 
 const MINUTE = 60 * 1000
 
@@ -59,5 +60,37 @@ describe("the plan IDs", () => {
 
   it("refuses two plans that subscriptions switch between with the same ID", async () => {
     expect(Exit.isFailure(await readPlans({ ...managed, GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID: free }))).toBe(true)
+  })
+})
+
+describe("the overage prices", () => {
+  const variables = (code: string, prices: OveragePrices): Record<string, string> => ({
+    [`GOLEM_CLOUD_BILLING_OVERAGE_${code}_PER_MILLION_GCU`]: prices.perMillionGcu,
+    [`GOLEM_CLOUD_BILLING_OVERAGE_${code}_PER_GB_HOUR`]: prices.perGbHour,
+    [`GOLEM_CLOUD_BILLING_OVERAGE_${code}_PER_DURABLE_GB_MONTH`]: prices.perDurableGbMonth,
+    [`GOLEM_CLOUD_BILLING_OVERAGE_${code}_PER_EPHEMERAL_GB_MONTH`]: prices.perEphemeralGbMonth
+  })
+  const env = {
+    ...variables("USD", overagePrices.usd),
+    ...variables("EUR", overagePrices.eur),
+    ...variables("GBP", overagePrices.gbp)
+  }
+
+  const readPrices = (env: Record<string, string>) =>
+    Effect.runPromiseExit(overagePricesConfig.parse(ConfigProvider.fromEnvRecord(env)))
+
+  it("reads the prices of each currency from the variables of its code", async () => {
+    expect(await readPrices(env)).toEqual(Exit.succeed(overagePrices))
+  })
+
+  it("refuses a currency without its prices", async () => {
+    const { GOLEM_CLOUD_BILLING_OVERAGE_GBP_PER_GB_HOUR: _, ...withoutOne } = env
+    expect(Exit.isFailure(await readPrices(withoutOne))).toBe(true)
+  })
+
+  it("refuses a price that is not a decimal number", async () => {
+    for (const value of ["€0.0131", "0,0131", "-0.0131", ".5", ""]) {
+      expect(Exit.isFailure(await readPrices({ ...env, GOLEM_CLOUD_BILLING_OVERAGE_EUR_PER_MILLION_GCU: value }))).toBe(true)
+    }
   })
 })

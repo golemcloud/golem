@@ -2,6 +2,7 @@ import { Effect, Layer } from "effect"
 import { TestClock } from "effect/testing"
 import { describe, expect, it } from "vitest"
 import { BillingConfig } from "../src/BillingConfig.ts"
+import { currencies } from "../src/Currency.ts"
 import * as Polar from "../src/Polar.ts"
 import * as Registry from "../src/Registry.ts"
 import * as RegistryAccounts from "../src/RegistryAccounts.ts"
@@ -13,8 +14,8 @@ import {
   planFor,
   SETTLEMENT_MARGIN_MS,
   SETTLEMENT_MAX_ORDERS,
-  SETTLEMENT_MAXIMUM_CENTS,
-  SETTLEMENT_MINIMUM_CENTS,
+  SETTLEMENT_MAXIMUM,
+  SETTLEMENT_MINIMUM,
   CONTACT_EMAIL,
   settlementFor,
   sweeper
@@ -31,6 +32,7 @@ const subscription = (overrides: Partial<Subscription> = {}): Subscription => ({
   subscriptionId: "sub_1",
   accountId: "a0a4c3f2-6f43-4a5e-9a51-8c3f0d5b7e21",
   productId: "product",
+  currency: "usd",
   status: "active",
   currentPeriodEnd: new Date("2026-12-04T10:00:00Z"),
   cancelAtPeriodEnd: false,
@@ -51,6 +53,7 @@ const pastDueEndingIn = (milliseconds: number) =>
 const pending = (overrides: Partial<UnpaidOrder> = {}): UnpaidOrder => ({
   orderId: "order_1",
   subscriptionId: "sub_1",
+  currency: "usd",
   status: "pending",
   createdAt: new Date(now.getTime() - MINUTE),
   meteredTotal: 345,
@@ -66,7 +69,7 @@ const pastDueAfterGrace = subscription({
 const revokedUnpaid = subscription({ status: "canceled", pastDueAt: new Date(now.getTime() - MINUTE) })
 const overdue = pending({ createdAt: new Date(now.getTime() - ORDER_PAYMENT_GRACE_MS - MINUTE) })
 const ended = subscription({ status: "canceled", endedAt: new Date(now.getTime() - 2 * ORDER_PAYMENT_GRACE_MS) })
-const belowMinimum = { meteredTotal: SETTLEMENT_MINIMUM_CENTS - 1 }
+const belowMinimum = { meteredTotal: SETTLEMENT_MINIMUM.usd - 1 }
 
 describe("planFor", () => {
   it.each([
@@ -270,12 +273,17 @@ describe("settlementFor", () => {
   })
 
   it("settles the overage of an order of an ended subscription, without its price", () => {
-    expect(settlementFor([ended], [overdue])).toEqual({ orders: [{ orderId: "order_1", amount: 345 }], amount: 345 })
+    expect(settlementFor([ended], [overdue])).toEqual({
+      currency: "usd",
+      orders: [{ orderId: "order_1", amount: 345 }],
+      amount: 345
+    })
     expect(settlementFor([ended], [priceOnly])).toBeUndefined()
   })
 
   it("settles a void order, also before the webhook of the revoke arrives", () => {
     expect(settlementFor([subscription()], [pending({ status: "void" })])).toEqual({
+      currency: "usd",
       orders: [{ orderId: "order_1", amount: 345 }],
       amount: 345
     })
@@ -287,17 +295,19 @@ describe("settlementFor", () => {
   })
 
   it("keeps a settlement within the maximum price of Polar, and skips an order that does not fit", () => {
-    const large = SETTLEMENT_MAXIMUM_CENTS - 100_000
+    const maximum = SETTLEMENT_MAXIMUM.usd
+    const large = maximum - 100_000
 
     expect(
       settlementFor([ended], [pending({ meteredTotal: large }), pending({ orderId: "order_2", meteredTotal: large })])
-    ).toEqual({ orders: [{ orderId: "order_1", amount: large }], amount: large })
+    ).toEqual({ currency: "usd", orders: [{ orderId: "order_1", amount: large }], amount: large })
     expect(
-      settlementFor([ended], [pending({ meteredTotal: SETTLEMENT_MAXIMUM_CENTS + 1 }), pending({ orderId: "order_2" })])
-    ).toEqual({ orders: [{ orderId: "order_2", amount: 345 }], amount: 345 })
-    expect(settlementFor([ended], [pending({ meteredTotal: SETTLEMENT_MAXIMUM_CENTS })])).toEqual({
-      orders: [{ orderId: "order_1", amount: SETTLEMENT_MAXIMUM_CENTS }],
-      amount: SETTLEMENT_MAXIMUM_CENTS
+      settlementFor([ended], [pending({ meteredTotal: maximum + 1 }), pending({ orderId: "order_2" })])
+    ).toEqual({ currency: "usd", orders: [{ orderId: "order_2", amount: 345 }], amount: 345 })
+    expect(settlementFor([ended], [pending({ meteredTotal: maximum })])).toEqual({
+      currency: "usd",
+      orders: [{ orderId: "order_1", amount: maximum }],
+      amount: maximum
     })
   })
 
@@ -305,11 +315,12 @@ describe("settlementFor", () => {
     const small = Array.from({ length: SETTLEMENT_MAX_ORDERS }, (_, index) =>
       pending({ orderId: `order_small_${index}`, meteredTotal: 1 })
     )
-    const payable = pending({ orderId: "order_payable", meteredTotal: SETTLEMENT_MINIMUM_CENTS })
+    const payable = pending({ orderId: "order_payable", meteredTotal: SETTLEMENT_MINIMUM.usd })
 
     expect(settlementFor([ended], [...small, payable])).toEqual({
-      orders: [{ orderId: "order_payable", amount: SETTLEMENT_MINIMUM_CENTS }],
-      amount: SETTLEMENT_MINIMUM_CENTS
+      currency: "usd",
+      orders: [{ orderId: "order_payable", amount: SETTLEMENT_MINIMUM.usd }],
+      amount: SETTLEMENT_MINIMUM.usd
     })
     expect(planFor([ended], [...small, { ...payable, createdAt: overdue.createdAt }], now, PAST_DUE_GRACE_MS)).toBe("suspended")
   })
@@ -318,6 +329,7 @@ describe("settlementFor", () => {
     const orders = [pending({ subscriptionId: "sub_2" }), pending({ orderId: "order_2", status: "void", meteredTotal: 100 })]
 
     expect(settlementFor([subscription({ subscriptionId: "sub_2" })], orders)).toEqual({
+      currency: "usd",
       orders: [{ orderId: "order_2", amount: 100 }],
       amount: 100
     })
@@ -334,6 +346,58 @@ describe("settlementFor", () => {
     expect(offer?.orders[0]?.orderId).toBe(orders[0]?.orderId)
     expect(offer?.amount).toBe(SETTLEMENT_MAX_ORDERS * 345)
     expect(offer!.orders.map((order) => order.orderId).join(",").length).toBeLessThanOrEqual(500)
+  })
+
+  it("settles only the orders in the currency of the oldest order, and leaves the others for a later settlement", () => {
+    const orders = [
+      pending({ orderId: "order_1" }),
+      pending({ orderId: "order_2", currency: "gbp", meteredTotal: 280 }),
+      pending({ orderId: "order_3", meteredTotal: 100 })
+    ]
+
+    expect(settlementFor([ended], orders)).toEqual({
+      currency: "usd",
+      orders: [
+        { orderId: "order_1", amount: 345 },
+        { orderId: "order_3", amount: 100 }
+      ],
+      amount: 445
+    })
+    expect(settlementFor([ended], orders.slice(1, 2))).toEqual({
+      currency: "gbp",
+      orders: [{ orderId: "order_2", amount: 280 }],
+      amount: 280
+    })
+  })
+
+  it("takes the currency of the oldest order that fits within the maximum", () => {
+    const orders = [
+      pending({ orderId: "order_1", currency: "eur", meteredTotal: SETTLEMENT_MAXIMUM.eur + 1 }),
+      pending({ orderId: "order_2", currency: "gbp" }),
+      pending({ orderId: "order_3", currency: "eur" })
+    ]
+
+    expect(settlementFor([ended], orders)).toEqual({
+      currency: "gbp",
+      orders: [{ orderId: "order_2", amount: 345 }],
+      amount: 345
+    })
+  })
+
+  it.each(currencies)("writes off an order in %s below the settlement minimum of its currency", (currency) => {
+    const minimum = SETTLEMENT_MINIMUM[currency]
+    const below = pending({ ...overdue, currency, meteredTotal: minimum - 1 })
+    const atMinimum = pending({ ...overdue, currency, meteredTotal: minimum })
+
+    expect(settlementFor([ended], [below])).toBeUndefined()
+    expect(planFor([ended], [below], now, PAST_DUE_GRACE_MS)).toBe("free")
+    expect(holdFor([ended], [below], false, [])).toEqual([])
+    expect(settlementFor([ended], [atMinimum])).toEqual({
+      currency,
+      orders: [{ orderId: "order_1", amount: minimum }],
+      amount: minimum
+    })
+    expect(planFor([ended], [atMinimum], now, PAST_DUE_GRACE_MS)).toBe("suspended")
   })
 })
 

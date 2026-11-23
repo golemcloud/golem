@@ -91,8 +91,8 @@ describe("cleanup of deleted accounts", () => {
     await pool.query(
       `INSERT INTO polar_subscriptions
          (subscription_id, account_id, product_id, status, current_period_end, cancel_at_period_end, modified_at,
-          metered_price_ids)
-       VALUES ($1, $2, 'paid-product', $3, now(), false, now(), $4)`,
+          metered_price_ids, currency)
+       VALUES ($1, $2, 'paid-product', $3, now(), false, now(), $4, 'usd')`,
       [`sub_${accountId}`, accountId, status, [meteredPriceId]]
     )
   }
@@ -160,8 +160,8 @@ describe("cleanup of deleted accounts", () => {
   it("keeps the customer and the user of a deleted account that owes paid overage", async () => {
     const unpaid = await deletedAccount()
     await pool.query(
-      `INSERT INTO polar_orders (order_id, account_id, subscription_id, status, created_at, modified_at, items)
-       VALUES ('order_1', $1, $2, 'pending', now(), now(), $3)`,
+      `INSERT INTO polar_orders (order_id, account_id, subscription_id, currency, status, created_at, modified_at, items)
+       VALUES ('order_1', $1, $2, 'usd', 'pending', now(), now(), $3)`,
       [unpaid.accountId, `sub_${unpaid.accountId}`, JSON.stringify([{ productPriceId: meteredPriceId, amount: 345, total: 345 }])]
     )
     const unbilled = await deletedAccount()
@@ -319,8 +319,8 @@ describe("cleanup of deleted accounts", () => {
     await pool.query(
       `INSERT INTO polar_subscriptions
          (subscription_id, account_id, product_id, status, current_period_end, cancel_at_period_end, modified_at,
-          metered_price_ids)
-       VALUES ('sub_late', $1, 'paid-product', 'active', now() + interval '30 days', false, now(), '{}')`,
+          metered_price_ids, currency)
+       VALUES ('sub_late', $1, 'paid-product', 'active', now() + interval '30 days', false, now(), '{}', 'usd')`,
       [accountId]
     )
 

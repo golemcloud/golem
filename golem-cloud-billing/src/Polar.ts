@@ -3,6 +3,7 @@ import { createCheckouts, getCheckouts } from "@polar-sh/sdk/2026-10/services/ch
 import { createCustomerSessions } from "@polar-sh/sdk/2026-10/services/customer_sessions"
 import { Config, Context, Data, Effect, Layer, Redacted } from "effect"
 import { HttpBody, HttpClient, HttpClientError } from "effect/http"
+import { type Currency, organizationCurrency } from "./Currency.ts"
 import type { CheckoutStatus } from "./Subscriptions.ts"
 
 export interface PolarConfigShape {
@@ -81,11 +82,29 @@ export const SETTLED_ORDERS_METADATA_KEY = "golem_settled_order_ids"
  * organization: Polar takes the tax out of it, and adds none.
  */
 export interface SettlementCheckoutRequest extends CheckoutRequest {
-  /** The price in USD cents. */
+  /** The currency of the orders that the settlement pays. The checkout charges in it. */
+  readonly currency: Currency
+  /** The price in minor units of `currency`. */
   readonly amount: number
   /** The orders that the settlement pays. */
   readonly orderIds: ReadonlyArray<string>
 }
+
+/**
+ * The ad-hoc prices of a settlement checkout: `amount` in `currency`, tax included. Polar refuses a
+ * list of prices without a price in the default currency of the organization, also for ad-hoc
+ * prices. So a settlement in another currency also gets a price of the same number of minor units
+ * in the default currency. Polar never charges it: the checkout names `currency`, and the customer
+ * cannot change the currency of a checkout. The amount of a settlement is a valid price in every
+ * currency (`Settlement.SETTLEMENT_MINIMUM` and `Settlement.SETTLEMENT_MAXIMUM`).
+ */
+const settlementPrices = (currency: Currency, amount: number) =>
+  [...new Set([organizationCurrency, currency])].map((priceCurrency) => ({
+    amount_type: "fixed" as const,
+    price_amount: amount,
+    price_currency: priceCurrency,
+    tax_behavior: "inclusive" as const
+  }))
 
 /** The fields of a checkout session for the customer and the redirects, the same for each product. */
 const customerFields = (request: CheckoutRequest) => ({
@@ -212,11 +231,8 @@ export const layer: Layer.Layer<Polar, never, PolarConfig | HttpClient.HttpClien
       sdkCall("create_settlement_checkout", () =>
         checkouts({
           products: [request.productId],
-          prices: {
-            [request.productId]: [
-              { amount_type: "fixed", price_amount: request.amount, price_currency: "usd", tax_behavior: "inclusive" }
-            ]
-          },
+          prices: { [request.productId]: settlementPrices(request.currency, request.amount) },
+          currency: request.currency,
           ...customerFields(request),
           allow_discount_codes: false,
           metadata: { [SETTLED_ORDERS_METADATA_KEY]: request.orderIds.join(",") }

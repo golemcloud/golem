@@ -1,4 +1,5 @@
 import { Config, ConfigProvider, Context, Duration, Effect, Layer, Option, Redacted } from "effect"
+import { isoCode, type PerCurrency, perCurrency } from "./Currency.ts"
 
 /**
  * TLS mode of the PostgreSQL connection.
@@ -24,9 +25,9 @@ export interface PostgresConfig {
 }
 
 /**
- * The overage prices that the plan page shows, in USD, as decimal strings. Polar bills the
- * overage with the metered prices of its product; these values only show the prices, so they must
- * match the product.
+ * The overage prices that the plan page shows in one currency, as decimal strings in the major
+ * unit of the currency, such as `0.045`. Polar bills the overage with the metered prices of its
+ * product; these values only show the prices, so they must match the product.
  */
 export interface OveragePrices {
   readonly perMillionGcu: string
@@ -67,7 +68,8 @@ export interface BillingConfigShape {
    * that an administrator gave the account.
    */
   readonly defaultPlanId: string | undefined
-  readonly overagePrices: OveragePrices
+  /** The overage prices of the paid plan in each currency of the Polar product. */
+  readonly overagePrices: PerCurrency<OveragePrices>
   /**
    * How long an account keeps the paid plan after a payment of its subscription fails, in
    * milliseconds (see `Settlement.ts`). Polar retries the payment in this time.
@@ -106,6 +108,38 @@ const decimal = /^(0|[1-9][0-9]*)(\.[0-9]+)?$/
 
 const invalid = (message: string): Effect.Effect<never, Config.ConfigError> =>
   Effect.fail(new Config.ConfigError(new ConfigProvider.SourceError({ message })))
+
+/**
+ * A value for each currency, from the configuration that `read` gives for the ISO 4217 code of
+ * the currency (`USD`, `EUR`, `GBP`). Each setting whose amount depends on the currency reads its
+ * variables through it, so that every currency has its own variables.
+ */
+export const perCurrencyConfig = <A>(read: (code: string) => Config.Config<A>): Config.Config<PerCurrency<A>> =>
+  Config.all(perCurrency((currency) => read(isoCode(currency))))
+
+/** A decimal number in the variable `name`, as the text of the variable. */
+const decimalString = (name: string): Config.Config<string> =>
+  Config.String(name).pipe(
+    Config.mapEffect((value) =>
+      decimal.test(value)
+        ? Effect.succeed(value)
+        : invalid(`${name} must be a decimal number, such as 0.045, got ${value}`)
+    )
+  )
+
+/**
+ * The overage prices of each currency, from `GOLEM_CLOUD_BILLING_OVERAGE_<code>_PER_MILLION_GCU`,
+ * `_PER_GB_HOUR`, `_PER_DURABLE_GB_MONTH` and `_PER_EPHEMERAL_GB_MONTH`, where the code is `USD`,
+ * `EUR` or `GBP`.
+ */
+export const overagePricesConfig: Config.Config<PerCurrency<OveragePrices>> = perCurrencyConfig((code) =>
+  Config.all({
+    perMillionGcu: decimalString(`GOLEM_CLOUD_BILLING_OVERAGE_${code}_PER_MILLION_GCU`),
+    perGbHour: decimalString(`GOLEM_CLOUD_BILLING_OVERAGE_${code}_PER_GB_HOUR`),
+    perDurableGbMonth: decimalString(`GOLEM_CLOUD_BILLING_OVERAGE_${code}_PER_DURABLE_GB_MONTH`),
+    perEphemeralGbMonth: decimalString(`GOLEM_CLOUD_BILLING_OVERAGE_${code}_PER_EPHEMERAL_GB_MONTH`)
+  })
+)
 
 /**
  * The connection settings use the environment variables of the registry service
@@ -195,12 +229,7 @@ export const billingConfig: Config.Config<BillingConfigShape> = Config.all({
   publicApiUrl: Config.URL("GOLEM_CLOUD_BILLING_PUBLIC_API_URL"),
   registryBillingToken: Config.Redacted("GOLEM_CLOUD_BILLING_REGISTRY_TOKEN"),
   planIds: plansConfig,
-  overagePrices: Config.all({
-    perMillionGcu: Config.String("GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_MILLION_GCU"),
-    perGbHour: Config.String("GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_GB_HOUR"),
-    perDurableGbMonth: Config.String("GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_DURABLE_GB_MONTH"),
-    perEphemeralGbMonth: Config.String("GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_EPHEMERAL_GB_MONTH")
-  }),
+  overagePrices: overagePricesConfig,
   pastDueGraceMs,
   polar: Config.all({
     apiUrl: Config.URL("POLAR_API_URL"),
@@ -214,17 +243,6 @@ export const billingConfig: Config.Config<BillingConfigShape> = Config.all({
   Config.mapEffect(({ planIds, ...config }) => {
     if (Redacted.value(config.authSecret).length < 32) {
       return invalid("BETTER_AUTH_SECRET must be at least 32 characters")
-    }
-    const prices = [
-      ["GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_MILLION_GCU", config.overagePrices.perMillionGcu],
-      ["GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_GB_HOUR", config.overagePrices.perGbHour],
-      ["GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_DURABLE_GB_MONTH", config.overagePrices.perDurableGbMonth],
-      ["GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_EPHEMERAL_GB_MONTH", config.overagePrices.perEphemeralGbMonth]
-    ] as const
-    for (const [name, value] of prices) {
-      if (!decimal.test(value)) {
-        return invalid(`${name} must be a decimal number of USD, such as 0.045, got ${value}`)
-      }
     }
     if (config.polar.settlementProductId === config.polar.productId) {
       return invalid("POLAR_SETTLEMENT_PRODUCT_ID and POLAR_PRODUCT_ID must differ")

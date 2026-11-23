@@ -1,5 +1,6 @@
 import { Effect, Layer, Option, Ref, Schedule } from "effect"
 import { BillingConfig } from "./BillingConfig.ts"
+import type { Currency, PerCurrency } from "./Currency.ts"
 import { Polar } from "./Polar.ts"
 import { type Account, Registry, type RegistryError } from "./Registry.ts"
 import { RegistryAccounts, type RegistryAccountsError } from "./RegistryAccounts.ts"
@@ -82,18 +83,19 @@ export const SETTLEMENT_MARGIN_MS = 15 * 60 * 1000
 export const ORDER_PAYMENT_GRACE_MS = 60 * 60 * 1000
 
 /**
- * The smallest amount of a settlement, in cents: the smallest fixed price of Polar in USD. Polar
- * refuses a checkout with a smaller price, so the app writes off an order that Polar no longer
- * collects when its paid overage is smaller (see `owedOrders`).
+ * The smallest amount of a settlement in each currency, in minor units: $0.50, €0.50 and £0.50.
+ * Polar refuses a fixed price below $0.50, €0.50 or £0.40, so a checkout cannot settle a smaller
+ * amount. The app writes off an order that Polar no longer collects when its paid overage is
+ * smaller than the minimum of its currency (see `owedOrders`).
  */
-export const SETTLEMENT_MINIMUM_CENTS = 50
+export const SETTLEMENT_MINIMUM: PerCurrency<number> = { usd: 50, eur: 50, gbp: 50 }
 
 /**
- * The largest amount of a settlement, in cents: the largest fixed price of Polar in USD. A
- * settlement stays within it. A checkout cannot settle an order above it; an operator handles such
- * an order.
+ * The largest amount of a settlement in each currency, in minor units: the largest fixed price of
+ * Polar, 999,999.99 in each. A settlement stays within it. A checkout cannot settle an order above
+ * it; an operator handles such an order.
  */
-export const SETTLEMENT_MAXIMUM_CENTS = 99_999_999
+export const SETTLEMENT_MAXIMUM: PerCurrency<number> = { usd: 99_999_999, eur: 99_999_999, gbp: 99_999_999 }
 
 /**
  * The most orders that one settlement pays. Polar keeps a metadata value of at most 500
@@ -165,14 +167,14 @@ const polarCollects = (order: UnpaidOrder, subscriptions: ReadonlyArray<Subscrip
 
 /**
  * The unpaid orders that a settlement can pay, oldest first: the ones that Polar no longer
- * collects, with paid overage of at least `SETTLEMENT_MINIMUM_CENTS`.
+ * collects, with paid overage of at least the `SETTLEMENT_MINIMUM` of their currency.
  */
 const settleableOrders = (
   subscriptions: ReadonlyArray<Subscription>,
   unpaidOrders: ReadonlyArray<UnpaidOrder>
 ): ReadonlyArray<UnpaidOrder> =>
   unpaidOrders.filter(
-    (order) => order.meteredTotal >= SETTLEMENT_MINIMUM_CENTS && !polarCollects(order, subscriptions)
+    (order) => order.meteredTotal >= SETTLEMENT_MINIMUM[order.currency] && !polarCollects(order, subscriptions)
   )
 
 /**
@@ -188,34 +190,46 @@ export const owedOrders = (
   unpaidOrders.filter(
     (order) =>
       order.meteredTotal > 0 &&
-      (polarCollects(order, subscriptions) || order.meteredTotal >= SETTLEMENT_MINIMUM_CENTS)
+      (polarCollects(order, subscriptions) || order.meteredTotal >= SETTLEMENT_MINIMUM[order.currency])
   )
 
-/** What a settlement pays: the paid overage of each order, in cents, and the sum. */
+/**
+ * What a settlement pays: the paid overage of each order, and the sum, in minor units of the
+ * currency of the orders.
+ */
 export interface SettlementOffer {
+  readonly currency: Currency
   readonly orders: ReadonlyArray<{ readonly orderId: string; readonly amount: number }>
   readonly amount: number
 }
 
 /**
  * The settlement that the account can pay: the paid overage of the oldest orders that a settlement
- * can pay, at most `SETTLEMENT_MAX_ORDERS` of them and at most `SETTLEMENT_MAXIMUM_CENTS` together.
- * An order that does not fit waits for a later settlement. None when no such order exists, so that
- * a settlement never pays an order that Polar can still charge, or an order that the app wrote off.
+ * can pay, at most `SETTLEMENT_MAX_ORDERS` of them and at most the `SETTLEMENT_MAXIMUM` of their
+ * currency together. A checkout has one currency, so the settlement pays only the orders in the
+ * currency of the oldest order that fits. An order that does not fit, or has another currency,
+ * waits for a later settlement. None when no such order exists, so that a settlement never pays
+ * an order that Polar can still charge, or an order that the app wrote off.
  */
 export const settlementFor = (
   subscriptions: ReadonlyArray<Subscription>,
   unpaidOrders: ReadonlyArray<UnpaidOrder>
 ): SettlementOffer | undefined => {
+  let currency: Currency | undefined
   const orders: Array<{ readonly orderId: string; readonly amount: number }> = []
   let amount = 0
   for (const order of settleableOrders(subscriptions, unpaidOrders)) {
-    if (orders.length < SETTLEMENT_MAX_ORDERS && amount + order.meteredTotal <= SETTLEMENT_MAXIMUM_CENTS) {
+    if (
+      order.currency === (currency ?? order.currency) &&
+      orders.length < SETTLEMENT_MAX_ORDERS &&
+      amount + order.meteredTotal <= SETTLEMENT_MAXIMUM[order.currency]
+    ) {
+      currency = order.currency
       orders.push({ orderId: order.orderId, amount: order.meteredTotal })
       amount += order.meteredTotal
     }
   }
-  return orders.length > 0 ? { orders, amount } : undefined
+  return currency === undefined ? undefined : { currency, orders, amount }
 }
 
 /** Whether the account did not pay for paid overage at `now` (see the rules above). */

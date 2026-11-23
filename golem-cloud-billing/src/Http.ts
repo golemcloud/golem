@@ -515,6 +515,7 @@ export const routes = HttpRouter.use((router) =>
               customerEmail: user.email,
               customerName: user.name === "" ? undefined : user.name,
               customerIpAddress: clientAddress(request),
+              currency: offered.currency,
               amount: offered.amount,
               orderIds: offered.orders.map((order) => order.orderId),
               successUrl: successUrl.href,
@@ -523,6 +524,7 @@ export const routes = HttpRouter.use((router) =>
             yield* Effect.logInfo("Started a settlement of paid overage").pipe(
               Effect.annotateLogs({
                 golemAccountId: user.golemAccountId,
+                currency: offered.currency,
                 amount: offered.amount,
                 orderIds: offered.orders.map((order) => order.orderId).join(",")
               })
