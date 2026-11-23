@@ -31,7 +31,6 @@ use golem_common::retries::get_delay;
 use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::HashMap;
-use std::future::Future;
 use std::ops::{Add, Deref};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -279,7 +278,12 @@ impl SchedulerServiceDefault {
                 for _ in 0..self.max_batches_per_tick {
                     let claimed = self
                         .scheduler_storage
-                        .claim_due(now, &assignment, self.claim_batch_size, self.lease_ttl)
+                        .claim_due(
+                            Utc::now(),
+                            &assignment,
+                            self.claim_batch_size,
+                            self.lease_ttl,
+                        )
                         .instrument(debug_span!("scheduler_storage_claim_due"))
                         .await?;
 
@@ -332,26 +336,83 @@ impl SchedulerServiceDefault {
         claimed: Vec<ClaimedScheduledAction>,
         now: DateTime<Utc>,
     ) -> Result<(), SchedulerStorageError> {
-        let mut actions_by_agent: HashMap<OwnedAgentId, Vec<ClaimedScheduledAction>> =
-            HashMap::new();
+        let mut actions_by_agent: HashMap<_, Vec<_>> = HashMap::new();
+        let pending = Mutex::new(HashMap::new());
         for action in claimed {
+            let lease_lost = CancellationToken::new();
+            pending
+                .lock()
+                .unwrap()
+                .insert(action.schedule_id, (action.lease_owner, lease_lost.clone()));
             actions_by_agent
                 .entry(action.action.owned_agent_id())
                 .or_default()
-                .push(action);
+                .push((action, lease_lost));
         }
 
-        let results = futures::stream::iter(actions_by_agent.into_values())
-            .map(|actions| async move {
+        let dispatch = futures::stream::iter(actions_by_agent.into_values())
+            .map(|actions| async {
+                let mut actions = actions.into_iter();
                 // A durable agent's scheduled actions must retain claim order.
-                for action in actions {
-                    self.process_and_ack_claimed_action(action, now).await?;
+                while let Some((action, lease_lost)) = actions.next() {
+                    let schedule_id = action.schedule_id;
+                    let result = if !lease_lost.is_cancelled()
+                        && self.renew_lease(schedule_id, action.lease_owner).await
+                    {
+                        self.process_and_ack_claimed_action(action, now, &lease_lost)
+                            .await
+                    } else {
+                        Ok(())
+                    };
+                    pending.lock().unwrap().remove(&schedule_id);
+                    if let Err(error) = result {
+                        // This lane stops after an ack error; its unstarted tail no longer
+                        // needs renewal, but sibling lanes must still finish.
+                        let mut pending = pending.lock().unwrap();
+                        for (action, _) in actions {
+                            pending.remove(&action.schedule_id);
+                        }
+                        return Err(error);
+                    }
                 }
                 Ok::<(), SchedulerStorageError>(())
             })
             .buffer_unordered(self.max_concurrent_action_processing)
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+
+        // Renew the entire batch, including actions waiting for their agent or a lane.
+        // Keep polling dispatch while storage renewals wait; neither future is detached.
+        let heartbeat = async {
+            let renewal_interval = (self.lease_ttl / 3).max(Duration::from_millis(1));
+            let leases: Vec<_> = pending
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(id, (owner, lost))| (*id, *owner, lost.clone()))
+                .collect();
+            futures::future::join_all(leases.into_iter().map(|(id, owner, lost)| {
+                let pending = &pending;
+                async move {
+                    // Independent loops keep a slow storage call from delaying sibling renewals.
+                    loop {
+                        tokio::time::sleep(renewal_interval).await;
+                        if !pending.lock().unwrap().contains_key(&id) {
+                            return;
+                        }
+                        if !self.renew_lease(id, owner).await {
+                            lost.cancel();
+                            return;
+                        }
+                    }
+                }
+            }))
             .await;
+            futures::future::pending::<()>().await;
+        };
+        let results = tokio::select! {
+            results = dispatch => results,
+            _ = heartbeat => unreachable!("lease heartbeat runs until dispatch completes"),
+        };
 
         for result in results {
             result?;
@@ -364,6 +425,7 @@ impl SchedulerServiceDefault {
         &self,
         claimed_action: ClaimedScheduledAction,
         now: DateTime<Utc>,
+        lease_lost: &CancellationToken,
     ) -> Result<(), SchedulerStorageError> {
         let action_kind = crate::metrics::scheduler::action_kind_label(&claimed_action.action);
         let action_start_time = Utc::now();
@@ -374,7 +436,11 @@ impl SchedulerServiceDefault {
         let schedule_id = claimed_action.schedule_id;
         let lease_owner = claimed_action.lease_owner;
         let action_start = std::time::Instant::now();
-        let processed = self.process_claimed_action(claimed_action, now).await;
+        let processed = tokio::select! {
+            biased;
+            _ = lease_lost.cancelled() => false,
+            processed = self.process_claimed_action(claimed_action, now) => processed,
+        };
         crate::metrics::scheduler::record_scheduled_action_processing(
             action_kind,
             action_start.elapsed(),
@@ -385,7 +451,7 @@ impl SchedulerServiceDefault {
 
         let acked = self
             .scheduler_storage
-            .ack(&schedule_id, lease_owner)
+            .ack(&schedule_id, lease_owner, Utc::now())
             .await
             .map_err(|error| {
                 warn!(
@@ -406,40 +472,22 @@ impl SchedulerServiceDefault {
         Ok(())
     }
 
-    async fn with_lease_renewal<T, F>(
-        &self,
-        schedule_id: ScheduleId,
-        lease_owner: uuid::Uuid,
-        operation: F,
-    ) -> Result<T, String>
-    where
-        F: Future<Output = T>,
-    {
-        let renewal_interval = (self.lease_ttl / 3).max(Duration::from_millis(1));
-        tokio::pin!(operation);
-
-        loop {
-            tokio::select! {
-                result = &mut operation => {
-                    return Ok(result);
-                }
-                _ = tokio::time::sleep(renewal_interval) => {
-                    let lease_until = Utc::now().add(self.lease_ttl);
-                    let renewed = self.scheduler_storage
-                        .extend_lease(
-                            &schedule_id,
-                            lease_owner,
-                            lease_until,
-                        )
-                        .await?;
-
-                    if !renewed {
-                        return Err(format!(
-                            "lease for scheduled action {} was lost before processing completed",
-                            schedule_id
-                        ));
-                    }
-                }
+    async fn renew_lease(&self, schedule_id: ScheduleId, lease_owner: uuid::Uuid) -> bool {
+        let now = Utc::now();
+        match self
+            .scheduler_storage
+            .extend_lease(&schedule_id, lease_owner, now.add(self.lease_ttl), now)
+            .await
+        {
+            Ok(true) => true,
+            result => {
+                warn!(
+                    schedule_id = %schedule_id,
+                    lease_owner = %lease_owner,
+                    result = ?result,
+                    "Stopped scheduled action because lease renewal failed"
+                );
+                false
             }
         }
     }
@@ -449,8 +497,6 @@ impl SchedulerServiceDefault {
         claimed_action: ClaimedScheduledAction,
         now: DateTime<Utc>,
     ) -> bool {
-        let schedule_id = claimed_action.schedule_id;
-        let lease_owner = claimed_action.lease_owner;
         match claimed_action.action {
             ScheduledAction::CompletePromise {
                 account_id: _,
@@ -508,18 +554,11 @@ impl SchedulerServiceDefault {
                 if exists {
                     let start = Instant::now();
                     let archive_result = self
-                        .with_lease_renewal(
-                            schedule_id,
-                            lease_owner,
-                            self.worker_access.archive_oplog(
-                                &owned_agent_id,
-                                last_oplog_index,
-                                ArchiveWait::Queued,
-                            ),
-                        )
+                        .worker_access
+                        .archive_oplog(&owned_agent_id, last_oplog_index, ArchiveWait::Queued)
                         .await;
                     match archive_result {
-                        Ok(Ok(Some(more))) => {
+                        Ok(Some(more)) => {
                             record_scheduled_archive(start.elapsed(), more);
                             if more {
                                 self.schedule(
@@ -535,14 +574,9 @@ impl SchedulerServiceDefault {
                                 .await;
                             }
                         }
-                        Ok(Ok(None)) => {}
-                        Ok(Err(error)) => {
-                            error!(agent_id = %owned_agent_id, error = %error, "Failed to archive worker oplog");
-                            return false;
-                        }
+                        Ok(None) => {}
                         Err(error) => {
-                            warn!(schedule_id = %schedule_id, agent_id = %owned_agent_id, error = %error,
-                                "Stopped scheduled oplog archival because lease renewal failed");
+                            error!(agent_id = %owned_agent_id, error = %error, "Failed to archive worker oplog");
                             return false;
                         }
                     }

@@ -6825,6 +6825,10 @@ mod test {
                 raw_apps,
             )
             .into_product();
+            let errors: Vec<String> = errors
+                .into_iter()
+                .map(strip_ansi_escapes::strip_str)
+                .collect();
             assert_eq!(errors.len(), 1, "{errors:#?}");
             for expected in [
                 "templates.yaml",
@@ -7713,9 +7717,10 @@ mod test {
 
         let (app, _tmp_dir) = load_app_for_env(source, "local", &[]);
         let err = resolve_agents_for(&app, "app:main", "FooAgent").unwrap_err();
+        let err = strip_ansi_escapes::strip_str(format!("{err:#}"));
 
         assert!(
-            format!("{err:#}").contains(
+            err.contains(
                 "Template base is inherited by agent FooAgent through multiple paths: \
                  base and derived -> base"
             ),
@@ -7755,9 +7760,10 @@ mod test {
                 &parse_component_name("app:main"),
             )
             .unwrap_err();
+        let err = strip_ansi_escapes::strip_str(format!("{err:#}"));
 
         assert!(
-            format!("{err:#}").contains(
+            err.contains(
                 "Template base is inherited by tool grep through multiple paths: \
                  base and derived -> base"
             ),
@@ -9872,7 +9878,7 @@ bridge:
         let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
 
         let err = resolve_agents_for(&app, "app:main", "test-agent").unwrap_err();
-        let message = format!("{err:#}");
+        let message = strip_ansi_escapes::strip_str(format!("{err:#}"));
         assert!(
             message.contains(
                 "Template shared-template is inherited by agent test-agent through multiple paths"
@@ -10777,6 +10783,9 @@ bridge:
         .into_product();
         assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
         errors
+            .into_iter()
+            .map(strip_ansi_escapes::strip_str)
+            .collect()
     }
 
     fn with_resolved_agent<T>(

@@ -63,8 +63,8 @@ use crate::model::oplog::{
 };
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    AccountId, AgentId, AgentInvocationPayload, ComponentId, IdempotencyKey, OplogIndex, Timestamp,
-    TransactionId,
+    AccountId, AgentId, AgentInvocationPayload, ComponentId, IdempotencyKey, OplogIndex,
+    StoredAgentInvocationPayload, Timestamp, TransactionId,
 };
 use crate::schema::IntoTypedSchemaValue;
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
@@ -2121,9 +2121,10 @@ fn pending_invocation_deadline_raw_and_public_roundtrips() {
             timestamp: Timestamp::from(1_000),
             not_before,
             invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543213).into(),
+            operation: Box::new(crate::model::InvocationRequestOperation::SaveSnapshot),
             payload: OplogPayload::SerializedInline {
                 bytes: crate::serialization::serialize(
-                    &crate::model::AgentInvocationPayload::SaveSnapshot {
+                    &crate::model::StoredAgentInvocationPayload::SaveSnapshot {
                         caller: Caller::anonymous(),
                     },
                 )
@@ -2165,6 +2166,96 @@ fn pending_invocation_deadline_raw_and_public_roundtrips() {
         let decoded: PublicOplogEntry = serde_json::from_str(&public.to_json_string()).unwrap();
         assert_eq!(public, decoded);
     }
+}
+
+#[test]
+fn request_entries_keep_their_operation_outside_the_payload() {
+    use crate::model::InvocationRequestOperation as Op;
+    use crate::model::oplog::RawSnapshotData;
+
+    let caller = Caller::anonymous();
+    let payloads = vec![
+        AgentInvocationPayload::ManualUpdate {
+            target_revision: ComponentRevision::new(7).unwrap(),
+        },
+        AgentInvocationPayload::AgentInitialization {
+            input: SchemaValue::Record { fields: vec![] },
+            caller: caller.clone(),
+        },
+        AgentInvocationPayload::AgentMethod {
+            method_name: "a-removed-method".to_string(),
+            input: SchemaValue::Record { fields: vec![] },
+            caller: caller.clone(),
+            scope_card: None,
+        },
+        AgentInvocationPayload::LoadSnapshot {
+            snapshot: RawSnapshotData {
+                data: vec![1, 2, 3],
+                mime_type: "application/octet-stream".to_string(),
+            },
+            caller: caller.clone(),
+        },
+        AgentInvocationPayload::SaveSnapshot {
+            caller: caller.clone(),
+        },
+    ];
+    let operations = payloads
+        .iter()
+        .map(AgentInvocationPayload::request_operation)
+        .collect::<Vec<_>>();
+    for (payload, operation) in payloads.into_iter().zip(&operations) {
+        let (split, stored) = payload.clone().into_stored();
+        assert_eq!(&split, operation);
+        let other = operations.iter().find(|other| *other != operation).unwrap();
+        assert!(stored.clone().with_operation(other.clone()).is_err());
+
+        let bytes = crate::serialization::serialize(&stored).unwrap();
+        let pending = OplogEntry::PendingAgentInvocation {
+            timestamp: Timestamp::from(1_000),
+            not_before: None,
+            invocation_id: Uuid::from_u128(0x11).into(),
+            operation: Box::new(split.clone()),
+            payload: OplogPayload::SerializedInline {
+                bytes: bytes.clone(),
+                cached: None,
+            },
+            trace_id: TraceId::generate(),
+            trace_states: vec![],
+            invocation_context: vec![],
+        };
+        let decoded: OplogEntry =
+            crate::serialization::deserialize(&crate::serialization::serialize(&pending).unwrap())
+                .unwrap();
+        assert_eq!(decoded, pending);
+        let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+            pending.clone().try_into().unwrap();
+        let decoded = OplogEntry::try_from(proto).unwrap();
+        assert_eq!(decoded, pending);
+        let OplogEntry::PendingAgentInvocation {
+            operation,
+            payload: OplogPayload::SerializedInline { bytes, .. },
+            ..
+        } = decoded
+        else {
+            panic!("expected an inline pending invocation");
+        };
+        let stored: StoredAgentInvocationPayload =
+            crate::serialization::deserialize(&bytes).unwrap();
+        assert_eq!(stored.with_operation(*operation).unwrap(), payload);
+    }
+
+    let tool = Op::ExternalTool {
+        tool_name: crate::model::tool::ToolName::try_from("weather").unwrap(),
+        command_path: vec!["forecast".to_string(), "daily".to_string()],
+    };
+    let proto =
+        golem_api_grpc::proto::golem::worker::RawInvocationRequestOperation::from(tool.clone());
+    assert_eq!(Op::try_from(proto).unwrap(), tool);
+    assert_eq!(
+        crate::serialization::deserialize::<Op>(&crate::serialization::serialize(&tool).unwrap())
+            .unwrap(),
+        tool
+    );
 }
 
 #[test]
@@ -2918,8 +3009,10 @@ fn invocation_wallet_pin_protobuf_roundtrip_and_required_validation() {
     let raw_entry = OplogEntry::AgentInvocationStarted {
         timestamp: Timestamp::now_utc().rounded(),
         invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543216).into(),
-        payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+        operation: Box::new(crate::model::InvocationRequestOperation::AgentMethod {
             method_name: "test".to_string(),
+        }),
+        payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
             input: SchemaValue::Record { fields: Vec::new() },
             caller: caller.clone(),
             scope_card: None,
@@ -2939,23 +3032,28 @@ fn invocation_wallet_pin_protobuf_roundtrip_and_required_validation() {
     match OplogEntry::try_from(raw_proto.clone()).unwrap() {
         OplogEntry::AgentInvocationStarted {
             wallet_pin,
+            operation,
             payload,
             ..
         } => {
             let payload = match payload {
                 OplogPayload::Inline(payload) => *payload,
                 OplogPayload::SerializedInline { bytes, .. } => {
-                    crate::serialization::deserialize::<AgentInvocationPayload>(&bytes).unwrap()
+                    crate::serialization::deserialize::<StoredAgentInvocationPayload>(&bytes)
+                        .unwrap()
                 }
                 other => panic!("expected an inline payload, got {other:?}"),
             };
             let AgentInvocationPayload::AgentMethod {
-                caller: decoded, ..
-            } = payload
+                method_name,
+                caller: decoded,
+                ..
+            } = payload.with_operation(*operation).unwrap()
             else {
                 panic!("expected a method payload");
             };
             assert_eq!(decoded, caller);
+            assert_eq!(method_name, "test");
             assert_eq!(
                 original_claims_json(&decoded),
                 original_claims_json(&caller)

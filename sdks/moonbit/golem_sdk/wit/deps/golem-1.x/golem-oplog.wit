@@ -1034,9 +1034,28 @@ interface oplog {
         session-expired,
     }
 
+    /// The command of an external tool that a request runs
+    record raw-external-tool-operation {
+        tool-name: string,
+        command-path: list<string>,
+    }
+
+    /// What an accepted request runs. The request entries store it next to the payload, which
+    /// does not repeat it.
+    variant raw-invocation-request-operation {
+        manual-update(component-revision),
+        agent-initialization,
+        agent-method(string),
+        external-tool(raw-external-tool-operation),
+        load-snapshot,
+        save-snapshot,
+        process-oplog-entries,
+    }
+
     record raw-agent-invocation-started-parameters {
         timestamp: datetime,
         invocation-id: uuid,
+        operation: raw-invocation-request-operation,
         payload: oplog-payload,
         trace-id: string,
         trace-states: list<string>,
@@ -1079,6 +1098,7 @@ interface oplog {
         timestamp: datetime,
         not-before: option<datetime>,
         invocation-id: uuid,
+        operation: raw-invocation-request-operation,
         payload: oplog-payload,
         trace-id: string,
         trace-states: list<string>,

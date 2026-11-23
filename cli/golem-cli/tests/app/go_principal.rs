@@ -115,7 +115,7 @@ async fn test_go_principal() {
     // Calling the CLI's ledger through the relay makes the relay the caller, in both roles.
     let relayed = invoke("RelayAgent(\"r\")", "ask", &["\"direct\""]).await;
     assert!(
-        relayed.contains(&format!("method=agent:{relay_id} agent=golem-user")),
+        relayed.contains(&format!("method=agent:{relay_id} agent=agent:{relay_id}")),
         "{relayed}"
     );
 

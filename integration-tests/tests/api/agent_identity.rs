@@ -1072,14 +1072,6 @@ async fn management_statuses(
             ),
         ),
         (
-            "cancel_invocation",
-            status(
-                &client
-                    .cancel_invocation(&environment, &agent, &Uuid::new_v4().to_string(), None)
-                    .await,
-            ),
-        ),
-        (
             "delete_worker",
             status(&client.delete_worker(&environment, &agent, None).await),
         ),

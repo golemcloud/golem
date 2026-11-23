@@ -715,7 +715,7 @@ pub(in crate::worker) fn invocation_keys_to_fail(
         }
     }
 
-    if let Some(current_key) = &status.current_idempotency_key
+    if let Some(current_key) = status.current_idempotency_key()
         && !keys.contains(current_key)
     {
         keys.push(*current_key);

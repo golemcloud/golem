@@ -1383,6 +1383,8 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
             requested_key,
         } => format!("Agent {agent_id} has another key than the requested {requested_key}"),
         WorkerExecutorError::ShardingNotReady => "Sharing not ready".to_string(),
+        error @ (WorkerExecutorError::InvocationCancelled
+        | WorkerExecutorError::CannotCancelRunningInvocation) => error.to_string(),
         WorkerExecutorError::FileSystemError { reason, .. } => {
             format!("File system error: {}", reason)
         }

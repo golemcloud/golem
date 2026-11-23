@@ -57,8 +57,8 @@ use golem_common::model::tool::{
     ToolSource,
 };
 use golem_common::model::{
-    AgentFingerprint, AgentId, AgentMetadata, AgentStatusRecord, RetryConfig, Timestamp,
-    TransactionId,
+    AgentFingerprint, AgentId, AgentInvocationPayload, AgentMetadata, AgentStatusRecord,
+    RetryConfig, Timestamp, TransactionId,
 };
 use golem_common::read_only_lock;
 use golem_common::schema::tool::{CommandTree, Tool};
@@ -3404,11 +3404,13 @@ async fn add_invocation_entries(
 ) -> Vec<OplogIndex> {
     let mut started = Vec::new();
     for (ordinal, payload) in payloads.into_iter().enumerate() {
-        let bytes = golem_common::serialization::serialize(&payload).unwrap();
+        let (operation, stored) = payload.into_stored();
+        let bytes = golem_common::serialization::serialize(&stored).unwrap();
         let index = oplog
             .add(OplogEntry::AgentInvocationStarted {
                 timestamp: Timestamp::from(1_000),
                 invocation_id: Uuid::from_u128(0x100 + ordinal as u128).into(),
+                operation: Box::new(operation.clone()),
                 payload: OplogPayload::SerializedInline {
                     bytes: bytes.clone(),
                     cached: None,
@@ -3433,6 +3435,7 @@ async fn add_invocation_entries(
                 timestamp: Timestamp::from(1_000),
                 not_before: None,
                 invocation_id: Uuid::from_u128(0x200 + ordinal as u128).into(),
+                operation: Box::new(operation),
                 payload: OplogPayload::SerializedInline {
                     bytes,
                     cached: None,
@@ -3732,15 +3735,18 @@ async fn the_public_enrich_request_holds_no_raw_entries() {
             authenticated_at: Timestamp::from(1_000),
         }),
     );
+    let (operation, stored) = AgentInvocationPayload::AgentMethod {
+        method_name: "run".to_string(),
+        input: SchemaValue::Record { fields: Vec::new() },
+        caller: bob,
+        scope_card: None,
+    }
+    .into_stored();
     let raw_started = OplogEntry::AgentInvocationStarted {
         timestamp: Timestamp::from(1_000),
         invocation_id: Uuid::from_u128(0x100).into(),
-        payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
-            method_name: "run".to_string(),
-            input: SchemaValue::Record { fields: Vec::new() },
-            caller: bob,
-            scope_card: None,
-        })),
+        operation: Box::new(operation),
+        payload: OplogPayload::Inline(Box::new(stored)),
         trace_id: golem_common::model::invocation_context::TraceId::generate(),
         trace_states: Vec::new(),
         invocation_context: Vec::new(),

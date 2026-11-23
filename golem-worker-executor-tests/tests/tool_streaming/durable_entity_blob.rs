@@ -679,15 +679,17 @@ async fn capture_snapshot(
     let mut payloads = Vec::new();
     for (offset, entry) in raw.iter().enumerate() {
         let payload = match entry {
-            OplogEntry::AgentInvocationStarted { payload, .. }
-            | OplogEntry::PendingAgentInvocation { payload, .. } => {
-                Some(RecordedPayload::Invocation(Box::new(
-                    oplog
-                        .download_payload(payload.clone())
-                        .await
-                        .map_err(anyhow::Error::msg)?,
-                )))
+            OplogEntry::AgentInvocationStarted {
+                operation, payload, ..
             }
+            | OplogEntry::PendingAgentInvocation {
+                operation, payload, ..
+            } => Some(RecordedPayload::Invocation(Box::new(
+                oplog
+                    .download_request(operation.as_ref().clone(), payload.clone())
+                    .await
+                    .map_err(anyhow::Error::msg)?,
+            ))),
             OplogEntry::AgentInvocationFinished { result, .. } => {
                 Some(RecordedPayload::Result(Box::new(
                     oplog
@@ -1017,7 +1019,8 @@ fn oracle_fixture() -> OplogSnapshot {
         OplogEntry::AgentInvocationStarted {
             timestamp,
             invocation_id: key,
-            payload: OplogPayload::Inline(Box::new(payload.clone())),
+            operation: Box::new(payload.request_operation()),
+            payload: OplogPayload::Inline(Box::new(payload.clone().into_stored().1)),
             trace_id: trace_id.clone(),
             trace_states: Vec::new(),
             invocation_context: context.clone(),

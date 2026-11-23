@@ -26,8 +26,8 @@ use futures::stream::SplitStream;
 use futures::{SinkExt, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_client::api::{
-    AgentClient, RegistryServiceClient, RegistryServiceClientLive, WorkerClient, WorkerClientLive,
-    WorkerError,
+    AgentClient, InvocationClient, RegistryServiceClient, RegistryServiceClientLive, WorkerClient,
+    WorkerClientLive, WorkerError,
 };
 use golem_client::model::{
     AgentKeyRequest, CompleteParameters, CreateAgentRequest, UpdateWorkerRequest,
@@ -977,17 +977,14 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         let client = self
             .deps
             .worker_service()
-            .worker_http_client(&self.token)
+            .invocation_http_client(&self.token)
             .await;
-        let result = client
-            .cancel_invocation(
-                &agent_id.environment_id.0,
-                &agent_id.agent_id.0,
-                &idempotency_key.to_string(),
-                None,
-            )
+        let invocation_id =
+            golem_common::model::OwnedInvocationId::new(agent_id.agent_id, *idempotency_key);
+        let invocation = client
+            .cancel_invocation(&agent_id.environment_id.0, &invocation_id.to_string())
             .await?;
-        Ok(result.canceled)
+        Ok(invocation.state == golem_client::model::InvocationState::Cancelled)
     }
 
     async fn get_file_system_node(

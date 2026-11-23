@@ -110,9 +110,24 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         arb_agent_type_list_result
     ),
     registry_entry!(
-        "AgentCancelInvocationResult",
-        "agent.cancel-invocation",
-        arb_agent_cancel_invocation_result
+        "InvocationCancelView",
+        "invocation.cancel",
+        arb_invocation_cancel_result
+    ),
+    registry_entry!(
+        "InvocationGetView",
+        "invocation.get",
+        arb_invocation_get_result
+    ),
+    registry_entry!(
+        "InvocationGetMatchesView",
+        "invocation.get-matches",
+        arb_invocation_get_matches_result
+    ),
+    registry_entry!(
+        "InvocationListView",
+        "invocation.list",
+        arb_invocation_list_result
     ),
     registry_entry!("AgentDeleteView", "agent.delete", arb_agent_delete_result),
     registry_entry!(
@@ -5813,17 +5828,131 @@ fn arb_card_managed_by() -> BoxedStrategy<golem_client::model::CardManagedBy> {
     .boxed()
 }
 
-fn arb_agent_cancel_invocation_result() -> OutputDocumentStrategy {
-    serialized_output(
-        (any::<bool>(), arb_small_string(), arb_small_string()).prop_map(
-            |(canceled, agent, idempotency_key)| {
-                crate::model::agent::action_result::AgentCancelInvocationResult {
-                    canceled,
-                    agent_id: generated_agent_id(&agent),
-                    idempotency_key,
-                }
+fn arb_invocation_summary() -> BoxedStrategy<golem_client::model::InvocationSummary> {
+    use golem_client::model::{InvocationKind, InvocationState, InvocationSummary};
+
+    (
+        arb_uuid(),
+        arb_uuid(),
+        prop_oneof![
+            Just(InvocationState::Scheduled),
+            Just(InvocationState::Pending),
+            Just(InvocationState::Running),
+            Just(InvocationState::Waiting),
+            Just(InvocationState::Retrying),
+            Just(InvocationState::Interrupted),
+            Just(InvocationState::Completed),
+            Just(InvocationState::Failed),
+            Just(InvocationState::Cancelled),
+        ],
+        proptest::option::of(prop_oneof![
+            Just(InvocationKind::Method),
+            Just(InvocationKind::Constructor),
+            Just(InvocationKind::Tool),
+        ]),
+        proptest::option::of(arb_small_string()),
+        proptest::option::of(arb_datetime()),
+        arb_datetime(),
+    )
+        .prop_map(
+            |(uuid, agent, state, kind, operation, accepted_at, changed_at)| InvocationSummary {
+                invocation_id: format!("{agent}.{uuid}"),
+                agent_id: agent,
+                environment_id: uuid,
+                state,
+                kind,
+                operation,
+                accepted_at,
+                changed_at,
             },
-        ),
+        )
+        .boxed()
+}
+
+fn arb_external_typed_schema_value() -> BoxedStrategy<golem_common::schema::ExternalTypedSchemaValue>
+{
+    arb_value_and_type()
+        .prop_filter_map("value has an external form", |typed| {
+            golem_common::schema::ExternalTypedSchemaValue::try_from(typed).ok()
+        })
+        .boxed()
+}
+
+fn arb_invocation_outcome() -> BoxedStrategy<golem_client::model::InvocationOutcome> {
+    use golem_client::model::{
+        InvocationFailure, InvocationMethodResult, InvocationOutcome, InvocationToolResult,
+        NativeToolFailure, NativeToolResult, NativeToolSuccess,
+    };
+    use golem_common::model::tool::SerializableToolRpcError;
+
+    prop_oneof![
+        arb_external_typed_schema_value()
+            .prop_map(|value| InvocationOutcome::Method(InvocationMethodResult { value })),
+        proptest::option::of(arb_external_typed_schema_value()).prop_map(|result| {
+            InvocationOutcome::Tool(InvocationToolResult {
+                result: NativeToolResult::Success(NativeToolSuccess { result }),
+            })
+        }),
+        arb_small_string().prop_map(|message| {
+            InvocationOutcome::Tool(InvocationToolResult {
+                result: NativeToolResult::Failure(NativeToolFailure {
+                    error: SerializableToolRpcError::Denied(message),
+                }),
+            })
+        }),
+        arb_small_string()
+            .prop_map(|error| InvocationOutcome::Failure(InvocationFailure { error })),
+    ]
+    .boxed()
+}
+
+fn arb_invocation_get_result() -> OutputDocumentStrategy {
+    serialized_output(
+        (
+            arb_invocation_summary(),
+            proptest::option::of(arb_invocation_outcome()),
+        )
+            .prop_map(|(summary, result)| {
+                crate::model::invocation::InvocationGetView(golem_client::model::Invocation {
+                    summary,
+                    result,
+                })
+            }),
+    )
+}
+
+fn arb_invocation_get_matches_result() -> OutputDocumentStrategy {
+    serialized_output(
+        proptest::collection::vec(
+            (
+                arb_invocation_summary(),
+                proptest::option::of(arb_invocation_outcome()),
+            )
+                .prop_map(|(summary, result)| golem_client::model::Invocation { summary, result }),
+            2..4,
+        )
+        .prop_map(|invocations| crate::model::invocation::InvocationGetMatchesView { invocations }),
+    )
+}
+
+fn arb_invocation_list_result() -> OutputDocumentStrategy {
+    serialized_output(
+        (
+            proptest::collection::vec(arb_invocation_summary(), 0..4),
+            proptest::option::of(arb_small_string()),
+        )
+            .prop_map(|(invocations, next_cursor)| {
+                crate::model::invocation::InvocationListView(golem_client::model::InvocationPage {
+                    invocations,
+                    next_cursor,
+                })
+            }),
+    )
+}
+
+fn arb_invocation_cancel_result() -> OutputDocumentStrategy {
+    serialized_output(
+        arb_invocation_summary().prop_map(crate::model::invocation::InvocationCancelView),
     )
 }
 

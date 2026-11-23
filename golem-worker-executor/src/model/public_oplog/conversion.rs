@@ -221,15 +221,17 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::AgentInvocationStarted {
                 timestamp,
                 invocation_id: idempotency_key,
+                operation,
                 payload,
                 trace_id,
                 trace_states,
                 invocation_context,
                 wallet_pin,
             } => {
-                let invocation_payload: AgentInvocationPayload = oplog_service
+                let invocation_payload = oplog_service
                     .download_payload(owned_agent_id, agent_mode, payload)
-                    .await?;
+                    .await?
+                    .with_operation(*operation)?;
 
                 let invocation_context_stack = InvocationContextStack::from_oplog_data(
                     trace_id,
@@ -350,14 +352,16 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 not_before,
                 invocation_id: idempotency_key,
+                operation,
                 payload,
                 trace_id,
                 trace_states,
                 invocation_context,
             } => {
-                let invocation_payload: AgentInvocationPayload = oplog_service
+                let invocation_payload = oplog_service
                     .download_payload(owned_agent_id, agent_mode, payload)
-                    .await?;
+                    .await?
+                    .with_operation(*operation)?;
 
                 let invocation_context_stack = InvocationContextStack::from_oplog_data(
                     trace_id,

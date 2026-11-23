@@ -93,9 +93,7 @@ use golem_common::model::oplog::{
     OplogPayload, ReplayDivergence, ReplayStep, SpanAttributes, SpanFinished, SpanKind,
     SpanOutcome, SpanStarted,
 };
-use golem_common::model::{
-    AgentInvocation, AgentInvocationPayload, AgentInvocationResult, OwnedAgentId,
-};
+use golem_common::model::{AgentInvocation, AgentInvocationResult, OwnedAgentId};
 use golem_common::schema::graph::reachable_defs;
 use golem_common::schema::{
     InputSchema, IntoTypedSchemaValue, NamedFieldType, OutputSchema, SchemaGraph, SchemaType,

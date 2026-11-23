@@ -81,12 +81,7 @@ final class MatrixArtifactToolImpl extends MatrixArtifactTool {
           weightedSize =
             request.dimensions.width.value * request.dimensions.height.value * multiplier + request.labels.length,
           labelSummary = request.labels.reverse.mkString("|"),
-          principal = principal match {
-            case Principal.Anonymous                             => "anonymous"
-            case Principal.Oidc(sub, _, _, _, _, _, _, _, _, _) => s"oidc:$sub"
-            case Principal.Agent(_)                              => "agent"
-            case Principal.GolemUser(_)                          => "golem-user"
-          },
+          principal = context.caller.immediate.toString,
           ownerAgentId = HostApi.getSelfMetadata().agentId.toString
         )
       )

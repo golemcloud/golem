@@ -30,7 +30,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::{OplogCursor, OplogScanAllowance};
 use golem_common::model::oplog::{OplogInclude, PublicOplogEntryWithIndex, PublicOplogPageEntry};
-use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey, OwnedAgentId, PromiseId};
+use golem_common::model::{AgentFingerprint, AgentId, OwnedAgentId, PromiseId};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::{AuthCtx, GolemSecurityScheme, WrappedGolemSecuritySchema};
@@ -720,44 +720,6 @@ impl WorkerApi {
             Ok(Json(ForkWorkerResponse {
                 agent_id: forked_agent_id,
             }))
-        }
-        .instrument(record.span.clone())
-        .await;
-
-        record.result(response)
-    }
-
-    /// Cancels a pending invocation if it has not started yet
-    ///
-    /// The invocation to be cancelled is identified by the idempotency key returned when the
-    /// invoke API accepted it.
-    #[oai(
-        path = "/:environment_id/agents/:agent_id/invocations/:idempotency_key",
-        method = "delete",
-        operation_id = "cancel_invocation"
-    )]
-    async fn cancel_invocation(
-        &self,
-        environment_id: Path<EnvironmentId>,
-        agent_id: Path<AgentId>,
-        idempotency_key: Path<IdempotencyKey>,
-        #[oai(name = "expectedFingerprint")] expected_fingerprint: Query<Option<AgentFingerprint>>,
-        token: GolemSecurityScheme,
-    ) -> Result<Json<CancelInvocationResponse>> {
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-        let agent_id = OwnedAgentId::new(environment_id.0, &agent_id.0);
-        let record = recorded_http_api_request!(
-            "cancel_invocation",
-            agent_id = agent_id.to_string(),
-            idempotency_key = idempotency_key.0.to_string(),
-        );
-
-        let response = async {
-            let canceled = self
-                .worker_service
-                .cancel_invocation(&agent_id, &idempotency_key.0, expected_fingerprint.0, auth)
-                .await?;
-            Ok(Json(CancelInvocationResponse { canceled }))
         }
         .instrument(record.span.clone())
         .await;
