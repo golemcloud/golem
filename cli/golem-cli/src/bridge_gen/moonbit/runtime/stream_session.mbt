@@ -2257,17 +2257,31 @@ pub async fn invoke_streaming_agent(
       (input.cancel)()
     }
   })
-  let constructor_parameters = resolved.keyed_parameters()
+  let target = match resolved.target {
+    Some(reference) =>
+      obj([
+        ("kind", Json::string("id")),
+        ("agentId", Json::string(reference.agent_id.to_string())),
+        ("expectedFingerprint", Json::string(reference.agent_fingerprint)),
+      ])
+    None =>
+      obj([
+        ("kind", Json::string("key")),
+        (
+          "constructorParameters",
+          constructor_codec.encode(resolved.keyed_parameters()),
+        ),
+      ])
+  }
   let idempotency_key = fresh_id()
   let selector : Array[(String, Json)] = [
     ("agentType", Json::string(resolved.agent_type_name)),
     ("application", Json::string(resolved.configuration.app_name)),
-    ("constructorParameters", constructor_codec.encode(constructor_parameters)),
+    ("target", target),
     ("environment", Json::string(resolved.configuration.env_name)),
     ("method", Json::string(method_name)),
   ]
-  // The selector names the keyed agent of the constructor parameters, which
-  // carries its own configuration, so a session never overrides it.
+  // The selected agent carries its own configuration, so a session never overrides it.
   let config = Json::array([])
   let clock = ReconnectClock::new(
     resolved.configuration.reconnect,

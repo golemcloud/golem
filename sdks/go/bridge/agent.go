@@ -184,11 +184,7 @@ func Create(ctx context.Context, typeName string, parameters schema.SchemaValue,
 	if err != nil {
 		return nil, err
 	}
-	// Only the keyed agent of the parameters stays reachable by them, which
-	// is what a streaming call needs.
-	if !settings.keyed {
-		a.parameters = nil
-	}
+	a.parameters = nil
 	a.fingerprint = ref.AgentFingerprint
 	a.id.Store(&ref.AgentID)
 	return a, nil
