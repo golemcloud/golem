@@ -11,6 +11,9 @@ importers:
       '@effect/platform-node':
         specifier: 4.1.2
         version: 4.1.2(effect@4.1.2)(redis@6.3.1)
+      '@polar-sh/sdk':
+        specifier: 1.0.2
+        version: 1.0.2
       better-auth:
         specifier: 1.7.16
         version: 1.7.16(pg@8.23.1)(vitest@5.1.0(@types/node@24.19.2)(vite@8.3.5(@types/node@24.19.2)))
@@ -148,6 +151,10 @@ packages:
 
   '@oxc-project/types@0.156.0':
     resolution: {integrity: sha512-1Duyg48TdJNdyhEB8Xn1L36bT9Pv6GUtlKjHxOys8xkaF/rQq3XJE+bAurSK/AgIz5mGFsb77cn9Pb20+WCScw==}
+
+  '@polar-sh/sdk@1.0.2':
+    resolution: {integrity: sha512-c3jdqYloVfcejKsAqYfYcW4bG7KkXj5bXkgdsdx4GHlJPzHFV5tysfeZGf9V7dJReLBirAluchsuHWiAIBco8w==}
+    engines: {node: '>=22'}
 
   '@redis/bloom@6.3.1':
     resolution: {integrity: sha512-dpF9j2yJDoPzSCaZn0MSB3xzmnXQVJeTSAWJcQVcgbmluwhpFeemmII0cF1t+WYfoVS+shEFq79+MmUItgzJLg==}
@@ -949,6 +956,8 @@ snapshots:
   '@noble/hashes@2.4.0': {}
 
   '@oxc-project/types@0.156.0': {}
+
+  '@polar-sh/sdk@1.0.2': {}
 
   '@redis/bloom@6.3.1(@redis/client@6.3.1)':
     dependencies:

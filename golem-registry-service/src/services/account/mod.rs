@@ -19,7 +19,7 @@ use super::plan::{PlanError, PlanService};
 use crate::config::PrecreatedAccount;
 use crate::repo::account::AccountRepo;
 use crate::repo::model::account::{
-    AccountExtRevisionRecord, AccountRepoError, AccountRevisionRecord,
+    AccountDeletionHoldRecord, AccountExtRevisionRecord, AccountRepoError, AccountRevisionRecord,
 };
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::plan::PlanRecord;
@@ -28,8 +28,8 @@ use crate::services::registry_change_notifier::{
 };
 use anyhow::anyhow;
 use golem_common::model::account::{
-    Account, AccountCreation, AccountEmail, AccountId, AccountRevision, AccountSetPlan,
-    AccountUpdate,
+    Account, AccountCreation, AccountDeletionHold, AccountDeletionHoldCreation, AccountEmail,
+    AccountId, AccountRevision, AccountSetPlan, AccountUpdate,
 };
 use golem_common::model::card::owner::{AccountOwnerPattern, EmptyOwnerPattern};
 use golem_common::model::card::{
@@ -57,6 +57,10 @@ pub enum AccountError {
     EmailAlreadyInUse,
     #[error("Concurrent update")]
     ConcurrentUpdate,
+    #[error("The account cannot be deleted while it has deletion holds: {}", .0.join("; "))]
+    DeletionHeld(Vec<String>),
+    #[error("Invalid deletion hold: {0}")]
+    InvalidDeletionHold(String),
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -71,6 +75,8 @@ impl SafeDisplay for AccountError {
             Self::EmailAlreadyInUse => self.to_string(),
             Self::PlanByIdNotFound(_) => self.to_string(),
             Self::ConcurrentUpdate => self.to_string(),
+            Self::DeletionHeld(_) => self.to_string(),
+            Self::InvalidDeletionHold(_) => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
@@ -229,8 +235,85 @@ impl AccountService {
                 Ok(account)
             }
             Err(AccountRepoError::ConcurrentModification) => Err(AccountError::ConcurrentUpdate)?,
+            Err(AccountRepoError::DeletionHeld(holds)) => Err(AccountError::DeletionHeld(
+                holds.into_iter().map(|hold| hold.reason).collect(),
+            ))?,
             Err(other) => Err(other)?,
         }
+    }
+
+    pub async fn list_deletion_holds(
+        &self,
+        account_id: AccountId,
+        auth: &AuthCtx,
+    ) -> Result<Vec<AccountDeletionHold>, AccountError> {
+        self.get(account_id, auth).await?;
+
+        Ok(self
+            .account_repo
+            .list_deletion_holds(account_id.0)
+            .await?
+            .into_iter()
+            .map(AccountDeletionHold::from)
+            .collect())
+    }
+
+    /// Places the deletion hold of `holder_account_id` on the account, or replaces its reason.
+    pub async fn place_deletion_hold(
+        &self,
+        account_id: AccountId,
+        holder_account_id: AccountId,
+        creation: AccountDeletionHoldCreation,
+        auth: &AuthCtx,
+    ) -> Result<AccountDeletionHold, AccountError> {
+        let account = self.get(account_id, auth).await?;
+
+        authorize_deletion_hold_permission(auth, &account.email, holder_account_id)?;
+
+        let reason = validate_deletion_hold_reason(creation.reason)?;
+
+        info!(
+            account_id = %account_id,
+            holder_account_id = %holder_account_id,
+            "Placing a deletion hold"
+        );
+
+        let record = self
+            .account_repo
+            .place_deletion_hold(AccountDeletionHoldRecord::new(
+                account_id,
+                holder_account_id,
+                reason,
+            ))
+            .await?
+            .ok_or(AccountError::AccountNotFound(account_id))?;
+
+        Ok(record.into())
+    }
+
+    /// Removes the deletion hold of `holder_account_id` from the account. Removing a hold that
+    /// does not exist succeeds.
+    pub async fn remove_deletion_hold(
+        &self,
+        account_id: AccountId,
+        holder_account_id: AccountId,
+        auth: &AuthCtx,
+    ) -> Result<(), AccountError> {
+        let account = self.get(account_id, auth).await?;
+
+        authorize_deletion_hold_permission(auth, &account.email, holder_account_id)?;
+
+        info!(
+            account_id = %account_id,
+            holder_account_id = %holder_account_id,
+            "Removing a deletion hold"
+        );
+
+        self.account_repo
+            .remove_deletion_hold(account_id.0, holder_account_id.0)
+            .await?;
+
+        Ok(())
     }
 
     pub async fn get(
@@ -406,6 +489,38 @@ fn authorize_account_permission(
     verb: AccountVerb,
 ) -> Result<(), AuthorizationError> {
     auth.authorize_permission(&account_permission_target(account_email, verb))
+}
+
+/// A caller places and removes its own deletion hold with `AccountVerb::HoldDeletion` on the
+/// account. Only `SystemVerb::OverrideDeletionHold` acts on the hold of another holder, so the
+/// owner of an account, who has every account verb on it, cannot remove the hold of another
+/// account.
+fn authorize_deletion_hold_permission(
+    auth: &AuthCtx,
+    account_email: &AccountEmail,
+    holder_account_id: AccountId,
+) -> Result<(), AuthorizationError> {
+    if holder_account_id == auth.access_account_id() {
+        authorize_account_permission(auth, account_email, AccountVerb::HoldDeletion)
+    } else {
+        authorize_system_permission(auth, SystemVerb::OverrideDeletionHold)
+    }
+}
+
+const MAX_DELETION_HOLD_REASON_CHARS: usize = 1000;
+
+fn validate_deletion_hold_reason(reason: String) -> Result<String, AccountError> {
+    if reason.trim().is_empty() {
+        return Err(AccountError::InvalidDeletionHold(
+            "the reason is empty".to_string(),
+        ));
+    }
+    if reason.chars().count() > MAX_DELETION_HOLD_REASON_CHARS {
+        return Err(AccountError::InvalidDeletionHold(format!(
+            "the reason is longer than {MAX_DELETION_HOLD_REASON_CHARS} characters"
+        )));
+    }
+    Ok(reason)
 }
 
 fn authorize_system_permission(auth: &AuthCtx, verb: SystemVerb) -> Result<(), AuthorizationError> {
