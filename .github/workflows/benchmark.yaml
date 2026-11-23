@@ -33,6 +33,10 @@ on:
         description: Compare two prepared CI bundles on one measurement runner (requires publish=false)
         type: boolean
         default: false
+      paired_deadline_probe:
+        description: Stall paired preparation without measuring to validate cancellation (requires publish=false)
+        type: boolean
+        default: false
       base_run_id:
         description: Successful attempt-1 run with the prepared base bundle
         type: string
@@ -73,7 +77,7 @@ env:
 
 jobs:
   paired-comparison:
-    if: github.event_name == 'workflow_dispatch' && inputs.paired
+    if: github.event_name == 'workflow_dispatch' && (inputs.paired || inputs.paired_deadline_probe)
     permissions:
       contents: read
       actions: write
@@ -86,10 +90,11 @@ jobs:
       suite: ${{ inputs.paired_suite }}
       pairs: ${{ inputs.pairs }}
       deadline: ${{ inputs.deadline }}
+      deadline_probe: ${{ inputs.paired_deadline_probe }}
       isolated: ${{ !inputs.publish && !inputs.prepare_bundle && !inputs.prepare_executor && !inputs.short_validation && !inputs.trace_diagnostic && !inputs.r3_controls }}
 
   short-validation:
-    if: github.event_name == 'workflow_dispatch' && !inputs.paired && !inputs.prepare_bundle && !inputs.prepare_executor && (inputs.short_validation || inputs.trace_diagnostic)
+    if: github.event_name == 'workflow_dispatch' && !inputs.paired && !inputs.paired_deadline_probe && !inputs.prepare_bundle && !inputs.prepare_executor && (inputs.short_validation || inputs.trace_diagnostic)
     permissions:
       contents: read
       actions: read
@@ -103,7 +108,7 @@ jobs:
       executor_source: ${{ inputs.executor_source }}
 
   prepare-executor:
-    if: github.event_name == 'workflow_dispatch' && inputs.prepare_executor && !inputs.paired && !inputs.prepare_bundle
+    if: github.event_name == 'workflow_dispatch' && inputs.prepare_executor && !inputs.paired && !inputs.paired_deadline_probe && !inputs.prepare_bundle
     runs-on: blacksmith-32vcpu-ubuntu-2204
     timeout-minutes: 30
     permissions:
@@ -150,7 +155,7 @@ jobs:
           retention-days: 30
 
   build-benchmarks:
-    if: ${{ !inputs.paired && !inputs.short_validation && !inputs.trace_diagnostic && !inputs.prepare_executor }}
+    if: ${{ !inputs.paired && !inputs.paired_deadline_probe && !inputs.short_validation && !inputs.trace_diagnostic && !inputs.prepare_executor }}
     runs-on: blacksmith-32vcpu-ubuntu-2204
     timeout-minutes: ${{ inputs.prepare_bundle && 45 || 360 }}
     outputs:

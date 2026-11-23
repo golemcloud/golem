@@ -26,6 +26,9 @@ on:
       isolated:
         required: true
         type: boolean
+      deadline_probe:
+        default: false
+        type: boolean
 permissions:
   contents: read
   actions: write
@@ -67,6 +70,7 @@ jobs:
               with urllib.request.urlopen(urllib.request.Request(api + suffix, headers=headers, method=method), timeout=20) as response:
                   return response.read()
           time.sleep(max(0, deadline - time.time() - 120))
+          print(f'Requesting cancellation at {time.time()}; deadline={deadline}', flush=True)
           try:
               request('/cancel', 'POST')
           except Exception as error:
@@ -77,13 +81,22 @@ jobs:
           PY
           python3 "$RUNNER_TEMP/paired-deadline.py" > "$RUNNER_TEMP/paired-deadline.log" 2>&1 &
           echo "$!" > "$RUNNER_TEMP/paired-deadline.pid"
+      - name: Stall preparation to validate deadline cancellation without measuring
+        if: inputs.deadline_probe
+        run: |
+          date -u +%FT%TZ > "$RUNNER_TEMP/paired-deadline-probe.txt"
+          echo "Deliberate preparation stall; no artifacts, services or benchmarks are started."
+          sleep 3600
       - uses: actions/checkout@v5
+        if: ${{ !inputs.deadline_probe }}
         with:
           persist-credentials: false
       - uses: actions/setup-python@v6
+        if: ${{ !inputs.deadline_probe }}
         with:
           python-version: '3.12'
       - name: Validate bundle origins
+        if: ${{ !inputs.deadline_probe }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -95,28 +108,33 @@ jobs:
             jq -e '[.artifacts[] | select(.name == "benchmark-bundle-attempt1" and .expired == false)] | length == 1' "$RUNNER_TEMP/$side-artifacts.json"
           done
       - uses: actions/checkout@v5
+        if: ${{ !inputs.deadline_probe }}
         with:
           ref: ${{ inputs.base_source }}
           path: paired/base
           persist-credentials: false
       - uses: actions/checkout@v5
+        if: ${{ !inputs.deadline_probe }}
         with:
           ref: ${{ inputs.head_source }}
           path: paired/head
           persist-credentials: false
       - uses: actions/download-artifact@v8
+        if: ${{ !inputs.deadline_probe }}
         with:
           github-token: ${{ github.token }}
           run-id: ${{ inputs.base_run_id }}
           name: benchmark-bundle-attempt1
           path: ${{ runner.temp }}/base-bundle
       - uses: actions/download-artifact@v8
+        if: ${{ !inputs.deadline_probe }}
         with:
           github-token: ${{ github.token }}
           run-id: ${{ inputs.head_run_id }}
           name: benchmark-bundle-attempt1
           path: ${{ runner.temp }}/head-bundle
       - name: Install prepared artifacts without building
+        if: ${{ !inputs.deadline_probe }}
         run: |
           python3 - <<'PY'
           import json, os, pathlib, tarfile
@@ -148,16 +166,19 @@ jobs:
           sha256sum "$RUNNER_TEMP/base-bundle/benchmark-bundle.tar.gz" > "$RUNNER_TEMP/base-bundle.sha256"
           sha256sum "$RUNNER_TEMP/head-bundle/benchmark-bundle.tar.gz" > "$RUNNER_TEMP/head-bundle.sha256"
       - uses: shogo82148/actions-setup-redis@v1.49.0
+        if: ${{ !inputs.deadline_probe }}
         with:
           redis-version: '8.0.2'
           auto-start: false
       - name: Pin the measurement database
+        if: ${{ !inputs.deadline_probe }}
         run: |
           image=postgres@sha256:2006493727bd5277eece187319af1ef82b4cf82cf4fc1ed00da0775b646ac2a4
           docker pull "$image"
           docker tag "$image" postgres:17.7
           docker image inspect postgres:17.7 > "$RUNNER_TEMP/postgres-image.json"
       - name: Run interleaved base and head processes
+        if: ${{ !inputs.deadline_probe }}
         run: |
           python3 integration-tests/benchmark_suites/paired_benchmarks.py run \
             --base-root paired/base --base-source "$BASE_SOURCE" --base-origin "$RUNNER_TEMP/base-origin.json" \
@@ -175,6 +196,7 @@ jobs:
             ${{ runner.temp }}/*-bundle.sha256
             ${{ runner.temp }}/postgres-image.json
             ${{ runner.temp }}/paired-deadline.log
+            ${{ runner.temp }}/paired-deadline-probe.txt
           if-no-files-found: warn
           retention-days: 30
       - name: Stop the deadline guard after evidence upload

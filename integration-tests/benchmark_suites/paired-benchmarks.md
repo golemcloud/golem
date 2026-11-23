@@ -57,6 +57,16 @@ inventory difference or a framework network prefix. On failure, the job retains 
 locally and attempts upload; the ephemeral runner teardown releases any remaining containers.
 No further process starts.
 
+Before relying on the deadline guard, dispatch `paired_deadline_probe=true` with
+`publish=false`, valid comparison inputs, and a deadline five minutes after dispatch.
+This mode starts the same guard and deliberately stalls before checkout. It skips every
+download, service setup and measurement step. Confirm that cancellation interrupts the
+stall, the guard log records its request at the cleanup reserve, and the run finishes
+before the deadline. Inspect the actual artifact-upload outcome; cancellation can prevent
+upload completion. Then validate real execution with three A/A pairs using the same
+prepared source on both sides. This checks lifecycle and offline report reproduction,
+not sensitivity to a source change or acceptance of a sample size.
+
 Each ledger identifies successful process results by path and SHA-256. An incomplete
 ledger cannot produce a comparison. Reanalyze a completed downloaded ledger without
 measurement:
