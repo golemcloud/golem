@@ -141,6 +141,7 @@ impl Rpc for HoldResponseRpc {
         &self,
         agent: ResolvedTarget,
         method: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         created_by: AccountId,
         caller: &AgentId,
         env: &[(String, String)],
@@ -165,6 +166,7 @@ impl Rpc for HoldResponseRpc {
             .create_demand(
                 agent,
                 method,
+                invocation,
                 created_by,
                 caller,
                 env,

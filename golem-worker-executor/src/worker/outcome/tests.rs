@@ -5,6 +5,44 @@ use golem_common::model::Timestamp;
 use test_r::test;
 
 #[test]
+fn invocation_rejection_lookup_preserves_the_typed_error() {
+    let key = InvocationId(uuid::Uuid::new_v4());
+    let status = AgentStatusRecord::default();
+    for (error, expected) in [
+        (
+            AgentError::InvalidRequest("method not found".to_string()),
+            WorkerExecutorError::invalid_request("method not found"),
+        ),
+        (
+            AgentError::PermissionDenied("not authorized".to_string()),
+            WorkerExecutorError::permission_denied("not authorized"),
+        ),
+    ] {
+        let actual = lookup_result_from_cached_result(
+            &status,
+            &key,
+            InvocationResult::Cached {
+                result: Err(FailedInvocationResult::Trap {
+                    trap_type: TrapType::Error {
+                        error,
+                        retry_from: OplogIndex::INITIAL,
+                        semantic_trap_retry_override: None,
+                        provenance: crate::model::FailureProvenance::Host,
+                    },
+                    stderr: String::new(),
+                }),
+            },
+        );
+        assert!(matches!(actual, LookupResult::Complete(Err(error)) if error == expected));
+    }
+    assert!(matches!(
+        lookup_result_from_cached_result(&status, &key, InvocationResult::Cancelled),
+        LookupResult::Complete(Err(error))
+            if error == WorkerExecutorError::invalid_request("Invocation was cancelled before execution")
+    ));
+}
+
+#[test]
 async fn a_stop_after_the_ordinary_terminal_check_remains_for_the_invocation_loop() {
     let interrupts = Interrupts::default();
     assert!(interrupts.claim_pending_terminal().await.is_none());

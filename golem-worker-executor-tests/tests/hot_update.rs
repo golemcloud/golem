@@ -2613,6 +2613,150 @@ async fn automatic_and_manual_update_contracts_remain_distinct(
 
 #[test]
 #[timeout("120s")]
+async fn queued_methods_validate_against_the_selected_update_revision(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::caller::Caller;
+    use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::model::{AgentInvocation, InvocationId};
+    use golem_common::schema::SchemaValue;
+    use golem_worker_executor::worker::ResultOrSubscription;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let mut http_server = TestHttpServer::start().await;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_key!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), http_server.port().to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "revision_one_only", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        1
+    );
+    let target = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    let mut control = http_server.f1_control(2117).await;
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_clone = agent_id.clone();
+    let held = spawn(async move {
+        executor_clone
+            .invoke_and_await_agent(
+                &component_clone,
+                &agent_clone,
+                "blocking_stable",
+                data_value!(2117u64),
+            )
+            .await
+    });
+    control.await_reached().await;
+    executor
+        .manual_update_worker(&worker_id, target.revision, false)
+        .await?;
+    let pending = wait_for_update_counts(&executor, &worker_id, (1, 0, 0)).await?;
+    assert_eq!(pending.component_revision, component.revision);
+
+    let invocation = |method_name: &str| AgentInvocation::AgentMethod {
+        idempotency_key: InvocationId(uuid::Uuid::new_v4()),
+        method_name: method_name.to_string(),
+        allow_streams: false,
+        input: SchemaValue::Record { fields: vec![] }.try_into().unwrap(),
+        invocation_context: InvocationContextStack::fresh(),
+        caller: Caller::anonymous(),
+        scope_card: None,
+    };
+    let removed = invocation("revision_one_only");
+    let added = invocation("revision_two_only");
+    let worker = executor.active_agent(&worker_id).await.unwrap().primary();
+    for request in [&removed, &added] {
+        assert!(matches!(
+            worker.clone().invoke(request.clone()).await?,
+            ResultOrSubscription::Pending(_)
+        ));
+    }
+    // Both observations use revision one's read-only policy while the update is
+    // pending. Revision two makes the method mutating, so neither caller may
+    // borrow the other key's execution result.
+    let mut reads = [
+        Box::pin(
+            worker
+                .clone()
+                .invoke_and_await(invocation("revision_cache_probe")),
+        ),
+        Box::pin(
+            worker
+                .clone()
+                .invoke_and_await(invocation("revision_cache_probe")),
+        ),
+    ];
+    for read in &mut reads {
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), read)
+                .await
+                .is_err(),
+            "a cache miss cannot complete while the gate is held"
+        );
+    }
+    assert!(!held.is_finished());
+    control.resume();
+    assert_eq!(held.await??.into_typed::<u32>()?, 100);
+
+    assert!(matches!(
+        worker.clone().invoke_and_await(removed).await,
+        Err(WorkerExecutorError::InvalidRequest { details })
+            if details.contains("revision_one_only") && details.contains("not found")
+    ));
+    let output = worker.clone().invoke_and_await(added).await?;
+    assert_eq!(output.component_revision, Some(target.revision));
+    assert!(matches!(
+        output.result,
+        golem_common::model::AgentInvocationResult::AgentMethod {
+            output: SchemaValue::U32(2)
+        }
+    ));
+    let mut values = Vec::new();
+    for read in reads {
+        let output = read.await?;
+        assert_eq!(output.component_revision, Some(target.revision));
+        let golem_common::model::AgentInvocationResult::AgentMethod {
+            output: SchemaValue::U32(value),
+        } = output.result
+        else {
+            panic!("expected the selected revision's counter result");
+        };
+        values.push(value);
+    }
+    values.sort();
+    assert_eq!(values, vec![101, 102]);
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "accumulated_value", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        102
+    );
+    http_server.abort();
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
 async fn snapshot_assisted_restart_before_attempt_and_later_update_modes_succeed(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

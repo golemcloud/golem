@@ -630,7 +630,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Finds the accepted caller payload. A pending request is read from its pending entry. A
     /// running or finished one is read from the request entry its status or result index holds,
     /// so a duplicate request reads one entry however long the invocation ran.
-    pub(in crate::worker) async fn accepted_invocation_payload(
+    pub(crate) async fn accepted_invocation_payload(
         &self,
         key: &InvocationId,
     ) -> Result<Option<AgentInvocationPayload>, WorkerExecutorError> {

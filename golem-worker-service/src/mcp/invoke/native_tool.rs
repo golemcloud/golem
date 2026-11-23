@@ -407,7 +407,7 @@ fn project_result(
                     )
                     .map_err(|e| invalid(e.to_string()))?;
                     Ok(CallToolResult::error(vec![ContentBlock::text(
-                        serde_json::json!({"name": value.name, "payload": payload}).to_string(),
+                        serde_json::json!({"error": value.name, "payload": payload}).to_string(),
                     )]))
                 }
                 error => Err(invalid(format!("{error:?}"))),
@@ -1122,7 +1122,7 @@ mod tests {
                     .unwrap()
             )
             .unwrap(),
-            json!({"name": "example-error", "payload": "hello"})
+            json!({"error": "example-error", "payload": "hello"})
         );
         let failed = project_result(
             &export,

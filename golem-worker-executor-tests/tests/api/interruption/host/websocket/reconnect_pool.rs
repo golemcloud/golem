@@ -263,9 +263,10 @@ async fn pending_reconnect(
         &InvocationContextStack::fresh(),
         callers::anonymous(),
         golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
-        golem_worker_executor::worker::CreateIntent::Invocation {
+        golem_worker_executor::worker::CreateIntent::Create {
             owner: golem_worker_executor::worker::NewOwner::keyed(component.id, name.clone()),
             idempotency_key: None,
+            exclusive: false,
         },
     )
     .await?;

@@ -1130,6 +1130,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             &remote_agent_id,
             &idempotency_key,
             &prepared.method_name,
+            &prepared.input_value,
+            prepared.streaming,
             freshness,
         )
         .await
@@ -1284,6 +1286,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             &remote_agent_id,
             &idempotency_key,
             &prepared.method_name,
+            &prepared.input_value,
+            prepared.streaming,
             freshness,
         )
         .await
@@ -1776,6 +1780,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             &remote_agent_id,
             &idempotency_key,
             &method_name,
+            &input_value,
+            false,
             freshness,
         )
         .await

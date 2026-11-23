@@ -474,6 +474,11 @@ declare module 'golem:api/oplog@1.5.0' {
   export type AgentMethodInvocationParameters = {
     invocationId: Uuid;
     methodName: string;
+    /**
+     * Component-independent original-method-input diagnostic envelope, not the
+     * executed method's input schema. Includes rejected captured JSON fields;
+     * native values are typed and host capabilities are redacted before encoding.
+     */
     functionInput: TypedSchemaValue;
     traceId: string;
     traceStates: string[];

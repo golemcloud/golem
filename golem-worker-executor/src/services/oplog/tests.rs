@@ -5271,9 +5271,12 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
             AgentInvocation::AgentMethod {
                 idempotency_key: invocation_id,
                 method_name: "f2".to_string(),
+                allow_streams: false,
                 input: SchemaValue::Record {
                     fields: vec![SchemaValue::String("request".to_string())],
-                },
+                }
+                .try_into()
+                .unwrap(),
                 invocation_context: InvocationContextStack::fresh_rounded(),
                 caller: Caller::anonymous(),
                 scope_card: None,
@@ -5398,8 +5401,13 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
                 .unwrap();
             match payload {
                 AgentInvocationPayload::AgentMethod {
-                    method_name, input, ..
-                } if method_name == "f2" => match input {
+                    method_name,
+                    input: golem_common::model::agent::AgentMethodInput::Native(input),
+                    ..
+                } if method_name == "f2" => match input
+                    .decode(|_, _| Err("unexpected stream".into()))
+                    .unwrap()
+                {
                     SchemaValue::Record { fields } => match fields.into_iter().next() {
                         Some(SchemaValue::String(value)) => value,
                         _ => panic!("unexpected element"),
@@ -5577,9 +5585,12 @@ async fn invocation_start_records_executing_context_for_processor_and_method(_tr
         AgentInvocation::AgentMethod {
             idempotency_key: InvocationId(Uuid::new_v4()),
             method_name: "run".to_string(),
+            allow_streams: false,
             input: SchemaValue::Tuple {
                 elements: Vec::new(),
-            },
+            }
+            .try_into()
+            .unwrap(),
             invocation_context: InvocationContextStack::fresh_rounded(),
             caller: Caller::anonymous(),
             scope_card: None,
@@ -5680,10 +5691,13 @@ async fn owned_invocation_payload_upload_failure_writes_no_entry(_tracing: &Trac
             AgentInvocation::AgentMethod {
                 idempotency_key: InvocationId(Uuid::new_v4()),
                 method_name: "large-input".to_string(),
+                allow_streams: false,
                 input: SchemaValue::Binary(BinaryValuePayload {
                     bytes: vec![1_u8; 1024],
                     mime_type: None,
-                }),
+                })
+                .try_into()
+                .unwrap(),
                 invocation_context: InvocationContextStack::fresh_rounded(),
                 caller: Caller::anonymous(),
                 scope_card: None,
@@ -5752,9 +5766,12 @@ async fn external_payload_indeterminate_append_survives_cold_takeover(_tracing: 
             .unwrap();
         let value = AgentInvocationPayload::AgentMethod {
             method_name: "cold-payload".to_string(),
+            allow_streams: false,
             input: SchemaValue::List {
                 elements: (0..513).map(|i| SchemaValue::U8((i % 251) as u8)).collect(),
-            },
+            }
+            .try_into()
+            .unwrap(),
             caller: Caller::anonymous(),
             scope_card: None,
         };
@@ -6125,7 +6142,8 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
         };
         let payload_value = AgentInvocationPayload::AgentMethod {
             method_name: "large-input".to_string(),
-            input,
+            allow_streams: false,
+            input: input.try_into().unwrap(),
             caller: Caller::anonymous(),
             scope_card: None,
         };
@@ -6302,12 +6320,15 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
             AgentInvocation::AgentMethod {
                 idempotency_key: invocation_id,
                 method_name: "f2".to_string(),
+                allow_streams: false,
                 input: SchemaValue::Record {
                     fields: vec![SchemaValue::Binary(BinaryValuePayload {
                         bytes: large_payload2.clone(),
                         mime_type: None,
                     })],
-                },
+                }
+                .try_into()
+                .unwrap(),
                 invocation_context: InvocationContextStack::fresh_rounded(),
                 caller: Caller::anonymous(),
                 scope_card: None,
@@ -6435,8 +6456,13 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
                 .unwrap();
             match payload {
                 AgentInvocationPayload::AgentMethod {
-                    method_name, input, ..
-                } if method_name == "f2" => match input {
+                    method_name,
+                    input: golem_common::model::agent::AgentMethodInput::Native(input),
+                    ..
+                } if method_name == "f2" => match input
+                    .decode(|_, _| Err("unexpected stream".into()))
+                    .unwrap()
+                {
                     SchemaValue::Record { fields } => match fields.into_iter().next() {
                         Some(SchemaValue::Binary(BinaryValuePayload { bytes, .. })) => bytes,
                         _ => panic!("unexpected element"),
