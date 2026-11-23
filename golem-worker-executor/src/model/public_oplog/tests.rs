@@ -712,6 +712,7 @@ async fn checkpoint_after_plugin_removal_uses_recorded_source_revision() {
         None,
         source_revision,
         ClaimVisibility::Hidden,
+        None,
     )
     .await
     .unwrap();
@@ -741,6 +742,7 @@ async fn checkpoint_after_plugin_removal_uses_recorded_source_revision() {
         None,
         updated_revision,
         ClaimVisibility::Hidden,
+        None,
     )
     .await
     .unwrap();
@@ -914,6 +916,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
             None,
             revision,
             ClaimVisibility::Hidden,
+            None,
         )
         .await
         .unwrap();
@@ -947,6 +950,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
             None,
             revision,
             ClaimVisibility::Hidden,
+            None,
         )
         .await;
         assert_eq!(
@@ -988,6 +992,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
         None,
         ComponentRevision::new(9).unwrap(),
         ClaimVisibility::Hidden,
+        None,
     )
     .await
     .unwrap();
@@ -2398,6 +2403,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             None,
             ComponentRevision::new(1).unwrap(),
             ClaimVisibility::Hidden,
+            None,
         )
         .await
         .unwrap_or_else(|err| panic!("rendering oplog entry {index} failed: {err}"));
@@ -2683,6 +2689,7 @@ async fn pending_and_started_methods_expose_original_input_without_component_met
             None,
             ComponentRevision::INITIAL,
             ClaimVisibility::Hidden,
+            None,
         )
         .await
         .unwrap();
@@ -4005,6 +4012,7 @@ async fn the_public_enrich_request_holds_no_raw_entries() {
             None,
             ComponentRevision::INITIAL,
             ClaimVisibility::Hidden,
+            None,
         )
         .await
         .unwrap();
@@ -4232,4 +4240,144 @@ fn a_range_read_never_gets_more_than_the_configured_allowance() {
             millis: 0
         }
     );
+}
+
+/// The public form of a `FailedUpdate` reads the recorded `Start` at the index of its divergence
+/// for the expected request. A guest batch holds that request only when the grant check of the
+/// batch covers the index of the divergence; a remote reader always holds it.
+#[test]
+async fn a_guest_batch_holds_the_expected_request_of_a_divergence_only_inside_its_window() {
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("divergence-window").await;
+    let function_name = HostFunctionName::Custom("divergent-call".to_string());
+    let divergence_start = oplog
+        .add(OplogEntry::Start {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: None,
+            function_name: function_name.clone(),
+            invocation_id: None,
+            observational_owner: None,
+            driver: None,
+            request: Some(OplogPayload::Inline(Box::new(HostRequestNoInput {}.into()))),
+            durable_function_type: DurableFunctionType::ReadLocal,
+            span_started: None,
+            denial: None,
+        })
+        .await
+        .unwrap();
+    let after_start = oplog.add(log_entry(0)).await.unwrap();
+    let failed_update = oplog
+        .add(OplogEntry::FailedUpdate {
+            timestamp: Timestamp::now_utc(),
+            target_revision: ComponentRevision::new(2).unwrap(),
+            details: None,
+            snapshot_assisted_details: None,
+            update_attempt_index: None,
+            snapshot_fault: None,
+            failure_class: golem_common::model::oplog::UpdateFailureClass::Divergence,
+            divergence: Some(Box::new(golem_common::model::oplog::ReplayDivergence {
+                oplog_index: divergence_start,
+                expected: golem_common::model::oplog::ReplayStep::HostCall(
+                    golem_common::model::oplog::ReplayHostCall {
+                        function_name: function_name.to_string(),
+                        durable_function_type: DurableFunctionType::ReadLocal.into(),
+                        parent_start_index: None,
+                        invocation_id: None,
+                        observational_owner: None,
+                        driver: None,
+                        carries_request: true,
+                        request: None,
+                    },
+                ),
+                actual: golem_common::model::oplog::ReplayStep::EndOfHistory(
+                    golem_schema::Empty {},
+                ),
+                mismatched: vec![],
+                replay_start: None,
+            })),
+        })
+        .await
+        .unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+
+    let has_expected_request = |entry: &PublicOplogEntry| {
+        let PublicOplogEntry::FailedUpdate(params) = entry else {
+            panic!("expected a failed update, got {entry:?}");
+        };
+        let divergence = params
+            .divergence
+            .as_ref()
+            .expect("the failed update keeps its divergence");
+        assert_eq!(divergence.oplog_index, divergence_start);
+        match &divergence.expected {
+            golem_common::model::oplog::ReplayStep::HostCall(call) => call.request.is_some(),
+            other => panic!("expected a host call, got {other:?}"),
+        }
+    };
+    let guest_chunk = |from: OplogIndex, count: usize| {
+        get_guest_oplog_chunk(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            from,
+            count,
+            ClaimVisibility::Hidden,
+        )
+    };
+    let failed_update_of = |entries: &[(OplogIndex, PublicOplogEntry)]| {
+        entries
+            .iter()
+            .find(|(index, _)| *index == failed_update)
+            .map(|(_, entry)| entry.clone())
+            .expect("the batch holds the failed update")
+    };
+
+    let outside = guest_chunk(after_start, 2).await.unwrap();
+    assert!(!has_expected_request(&failed_update_of(&outside.entries)));
+    let inside = guest_chunk(divergence_start, 3).await.unwrap();
+    assert!(has_expected_request(&failed_update_of(&inside.entries)));
+
+    let search = |from: OplogIndex, count: usize| {
+        search_guest_oplog(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            from,
+            None,
+            count,
+            "failed-update",
+            ScanBudget::default(),
+            ClaimVisibility::Hidden,
+        )
+    };
+    let outside = search(after_start, 2).await.unwrap();
+    assert!(!has_expected_request(&failed_update_of(&outside.entries)));
+    let inside = search(divergence_start, 3).await.unwrap();
+    assert!(has_expected_request(&failed_update_of(&inside.entries)));
+
+    let remote = get_public_oplog_chunk(
+        Arc::new(PanicComponentService),
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        test_component_id(),
+        OwnerKind::ComponentAgent,
+        None,
+        ComponentRevision::INITIAL,
+        failed_update,
+        1,
+        ClaimVisibility::Hidden,
+    )
+    .await
+    .unwrap();
+    assert!(has_expected_request(&remote.entries[0].entry));
 }

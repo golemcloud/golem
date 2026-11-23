@@ -34,6 +34,12 @@ trait ChunkBuilder {
         entry: PublicOplogEntry,
         component_revision: ComponentRevision,
     ) -> Result<Option<Self::Entry>, String>;
+
+    /// The indexes of the recorded `Start` entries that the expected request of a replay
+    /// divergence can read; `None` for any index.
+    fn expected_request_window(&self) -> Option<&RangeInclusive<OplogIndex>> {
+        None
+    }
 }
 
 /// The origin of an oplog entry, as a chunk holds it.
@@ -92,8 +98,23 @@ impl ChunkBuilder for InProcessChunk {
 
 /// The chunk of a guest, which gets each entry with its index and without attribution. The guest
 /// form of an entry has no attribution, and the oplog grant of the guest covers only the indexes
-/// of the chunk.
-struct GuestChunk;
+/// of its batch.
+struct GuestChunk {
+    /// The indexes that the grant check of the batch covers.
+    window: RangeInclusive<OplogIndex>,
+}
+
+impl GuestChunk {
+    /// The chunk of a guest batch of `count` indexes from `start`.
+    fn new(start: OplogIndex, count: usize) -> Self {
+        let end = start
+            .as_u64()
+            .saturating_add((count as u64).saturating_sub(1));
+        Self {
+            window: start..=OplogIndex::from_u64(end),
+        }
+    }
+}
 
 impl ChunkBuilder for GuestChunk {
     type Entry = (OplogIndex, PublicOplogEntry);
@@ -107,6 +128,10 @@ impl ChunkBuilder for GuestChunk {
         _component_revision: ComponentRevision,
     ) -> Result<Option<Self::Entry>, String> {
         Ok(Some((oplog_index, entry)))
+    }
+
+    fn expected_request_window(&self) -> Option<&RangeInclusive<OplogIndex>> {
+        Some(&self.window)
     }
 }
 
@@ -214,8 +239,10 @@ pub async fn get_public_oplog_chunk(
     Ok(chunk)
 }
 
-/// Reads an oplog chunk for a guest. The chunk holds no attribution, so it reads no owning
-/// `Start` outside the chunk.
+/// Reads an oplog chunk of `count` indexes from `initial_oplog_index` for a guest, whose grant
+/// check covers these indexes. The chunk holds no attribution, so it reads no owning `Start`
+/// outside the chunk, and it holds the expected request of a replay divergence only for a
+/// divergence inside the chunk.
 pub async fn get_guest_oplog_chunk(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
@@ -242,7 +269,7 @@ pub async fn get_guest_oplog_chunk(
         count,
         None,
         claims,
-        &mut GuestChunk,
+        &mut GuestChunk::new(initial_oplog_index, count),
     )
     .await?;
     Ok(chunk)
@@ -371,6 +398,7 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
     } else {
         0
     };
+    let expected_request_window = builder.expected_request_window().cloned();
     let raw_entries = oplog_service
         .read_exact(
             owned_agent_id,
@@ -412,6 +440,7 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
             agent_type_name,
             entry_component_revision,
             claims,
+            expected_request_window.as_ref(),
         )
         .await?;
         if filter.is_none_or(|query| entry.matches(query)) {
@@ -445,8 +474,10 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
 
 /// Searches the oplog for a guest. The search reads no entry after `last_oplog_index`; the guest
 /// passes the `last_index` of its first result, so that its own entries, which every page adds,
-/// do not move the end of the search. The result holds no attribution, so the search reads no
-/// owning `Start` outside the chunks that it scans.
+/// do not move the end of the search. The grant check of the guest covers `count` indexes from
+/// `initial_oplog_index`. The result holds no attribution, so the search reads no owning `Start`
+/// outside the chunks that it scans, and it holds the expected request of a replay divergence
+/// only for a divergence inside the indexes that the grant check covers.
 pub async fn search_guest_oplog(
     component_service: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
@@ -478,7 +509,7 @@ pub async fn search_guest_oplog(
         query,
         budget,
         claims,
-        GuestChunk,
+        GuestChunk::new(initial_oplog_index, count),
     )
     .await
 }

@@ -841,6 +841,7 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
                             agent_type.as_ref(),
                             current_revision,
                             GUEST_CLAIM_VISIBILITY,
+                            None,
                         )
                         .await?,
                     );

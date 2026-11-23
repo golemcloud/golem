@@ -4436,7 +4436,8 @@ the scan budget for that call to the window size before reading entries. A batch
 cursor without finding a match. The first batch pins the oplog end separately, and each new live
 batch checks the grant for its own window. Completed calls replay their recorded results. Guest
 `get-oplog` and `search-oplog` batches hold no attribution, because the guest form of an entry has
-none, so they read no owning `Start` outside the window.
+none, so they read no owning `Start` outside the window. A `FailedUpdate` in a guest batch holds the
+expected request of its divergence only when the window covers the divergence index.
 
 Card events are hints. When replay commits a recorded entry, `skip_forward` publishes every card
 event up to the next recorded entry, and the next authority boundary applies them. A decision that
