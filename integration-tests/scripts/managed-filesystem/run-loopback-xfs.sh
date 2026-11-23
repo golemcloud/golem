@@ -479,7 +479,13 @@ if [[ ${validate_cache_only} == 1 ]]; then
 fi
 
 # Resolve the user's installation before running snapshot or tests as root.
-cargo_test_r=$(run_vm_cargo bash -c 'command -v "$1"' bash "${cargo_test_r}")
+if ! resolved_cargo_test_r=$(run_vm_cargo bash -c 'command -v "$1"' bash "${cargo_test_r}"); then
+  echo "missing required command: ${cargo_test_r}" >&2
+  echo "Install cargo-test-r 2.2.14 in the build user's PATH (inside the VM when using Lima)." >&2
+  echo "Run as that user: cargo install --locked cargo-test-r --version 2.2.14" >&2
+  exit 1
+fi
+cargo_test_r=${resolved_cargo_test_r}
 
 work_dir=$(mktemp -d /tmp/golem-managed-xfs.XXXXXX)
 chmod 0755 "${work_dir}"

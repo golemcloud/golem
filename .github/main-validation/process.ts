@@ -155,8 +155,12 @@ export const supervise = Effect.fn("Process.supervise")(function*(options: Super
       })
       // Attach immediately, including when publication fails before the first wait.
       void exited.catch(() => {})
-      const handoff = launched.stdio[3] as Readable
+      const handoff = launched.stdio[3] as Readable | null
       const identity = (async () => {
+        if (!handoff) {
+          await exited
+          throw new Error("missing native supervisor identity")
+        }
         let text = ""
         for await (const chunk of handoff) {
           text += chunk.toString()
@@ -177,7 +181,7 @@ export const supervise = Effect.fn("Process.supervise")(function*(options: Super
         // Either native scope can drain the workload. If the outer scope died,
         // the published inner scope still owns its descendants and deadline.
         if (child.pid) yield* cleanupGroup(child.pid, options.graceSeconds ?? 15)
-        handoff.destroy()
+        handoff?.destroy()
         yield* io(() => identity).pipe(Effect.ignore)
         if (innerPid) yield* cleanupGroup(innerPid, options.graceSeconds ?? 15)
         yield* io(() => exited).pipe(Effect.timeoutOption("1 second"), Effect.ignore)
@@ -232,7 +236,7 @@ export const supervise = Effect.fn("Process.supervise")(function*(options: Super
         })
         yield* io(() => handle.exited).pipe(Effect.timeoutOption("1 second"), Effect.ignore)
         handle.child.stdin?.destroy()
-        handle.handoff.destroy()
+        handle.handoff?.destroy()
         escalated = true
         return
       }

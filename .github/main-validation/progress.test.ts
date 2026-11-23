@@ -73,6 +73,24 @@ test("complete merged gzip log, argv boundaries, token omission, and exact exits
   expect((await new Response(child.stdout).text()).length).toBeLessThan(2000)
 })
 
+test("missing native runner retains failed terminal evidence and startup errno", async () => {
+  const { report, directory, env } = await fixture()
+  const child = Bun.spawn([process.execPath, helper, "run", "worker", "first", "--", "/bin/true"], {
+    cwd: directory,
+    env: { ...env, PATH: directory },
+    stdout: "pipe",
+    stderr: "pipe"
+  })
+  expect(await child.exited).toBe(127)
+  const task = await state(report)
+  expect(task.status).toBe("failed")
+  expect(task.exit_code).toBe(127)
+  expect(task.log.endsWith(".gz")).toBe(true)
+  expect(gunzipSync(await fs.readFile(join(report, task.log))).toString()).toContain(
+    "Could not start command: ToolingIoError: I/O or parsing failure (ENOENT)"
+  )
+})
+
 test("command signals and missing commands retain their exact shell status", async () => {
   const { report, directory } = await fixture()
   expect(await Effect.runPromise(runTask(report, "worker", "first", ["/bin/sh", "-c", "kill -TERM $$"]))).toBe(143)
