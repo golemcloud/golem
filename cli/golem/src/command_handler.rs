@@ -333,8 +333,12 @@ async fn clean_data_dir(ctx: &Arc<Context>, data_dir: &Path) -> anyhow::Result<(
 /// does not apply default signal dispositions, so without this the standalone
 /// server cannot be stopped by SIGINT/SIGTERM (e.g. Ctrl+C or `docker stop`).
 async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
+    signals::shutdown_signal().await
+}
+
+#[cfg(unix)]
+mod signals {
+    pub(super) async fn shutdown_signal() {
         use tokio::signal::unix::{SignalKind, signal};
 
         let mut sigint = signal(SignalKind::interrupt()).expect("Failed to install SIGINT handler");
@@ -346,8 +350,11 @@ async fn shutdown_signal() {
             _ = sigterm.recv() => {},
         }
     }
-    #[cfg(not(unix))]
-    {
+}
+
+#[cfg(not(unix))]
+mod signals {
+    pub(super) async fn shutdown_signal() {
         tokio::signal::ctrl_c()
             .await
             .expect("Failed to install Ctrl+C handler");
@@ -481,27 +488,32 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn clean_resolves_intermediate_symlink_without_following_final_symlink() {
-        use std::os::unix::fs::symlink;
+    mod unix {
+        use super::*;
+        use test_r::test;
 
-        let test_root =
-            std::env::temp_dir().join(format!("golem-clean-symlink-test-{}", std::process::id()));
-        let actual_parent = test_root.join("actual");
-        let intermediate_link = test_root.join("intermediate-link");
-        let final_link = actual_parent.join("final-link");
-        std::fs::create_dir_all(&actual_parent).unwrap();
-        symlink(&actual_parent, &intermediate_link).unwrap();
-        symlink(actual_parent.join("final-target"), &final_link).unwrap();
+        #[test]
+        fn clean_resolves_intermediate_symlink_without_following_final_symlink() {
+            use std::os::unix::fs::symlink;
 
-        let resolved_intermediate =
-            resolve_clean_data_dir(&intermediate_link.join("data")).unwrap();
-        let resolved_final = resolve_clean_data_dir(&final_link).unwrap();
-        let canonical_parent = std::fs::canonicalize(&actual_parent).unwrap();
+            let test_root = std::env::temp_dir()
+                .join(format!("golem-clean-symlink-test-{}", std::process::id()));
+            let actual_parent = test_root.join("actual");
+            let intermediate_link = test_root.join("intermediate-link");
+            let final_link = actual_parent.join("final-link");
+            std::fs::create_dir_all(&actual_parent).unwrap();
+            symlink(&actual_parent, &intermediate_link).unwrap();
+            symlink(actual_parent.join("final-target"), &final_link).unwrap();
 
-        assert_eq!(resolved_intermediate, canonical_parent.join("data"));
-        assert_eq!(resolved_final, canonical_parent.join("final-link"));
+            let resolved_intermediate =
+                resolve_clean_data_dir(&intermediate_link.join("data")).unwrap();
+            let resolved_final = resolve_clean_data_dir(&final_link).unwrap();
+            let canonical_parent = std::fs::canonicalize(&actual_parent).unwrap();
 
-        std::fs::remove_dir_all(&test_root).unwrap();
+            assert_eq!(resolved_intermediate, canonical_parent.join("data"));
+            assert_eq!(resolved_final, canonical_parent.join("final-link"));
+
+            std::fs::remove_dir_all(&test_root).unwrap();
+        }
     }
 }

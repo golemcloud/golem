@@ -334,37 +334,42 @@ impl BlobStorageBackend for FailingPutBlobStorage {
 /// is not an error of the input of the guest and not one that a retry can pass. The guest
 /// gets a permanent `PermissionDenied` that names the refusal.
 #[cfg(unix)]
-#[test]
-async fn blob_store_error_makes_a_refusal_of_the_storage_a_permanent_permission_error() {
-    use std::os::unix::fs::PermissionsExt;
-    let tempdir = TempDir::new().unwrap();
-    let storage = FileSystemBlobStorage::new(tempdir.path()).await.unwrap();
-    let namespace = BlobStorageNamespace::CustomStorage {
-        environment_id: EnvironmentId::new(),
-    };
-    let path = Path::new("container/object");
-    storage
-        .put_raw("test", "put-raw", namespace.clone(), path, &[1])
-        .await
-        .unwrap();
-    let set_mode = |mode| {
-        std::fs::set_permissions(tempdir.path(), std::fs::Permissions::from_mode(mode)).unwrap()
-    };
+mod unix {
+    use super::*;
+    use test_r::test;
 
-    set_mode(0o000);
-    let read = storage.get_raw("test", "get-raw", namespace, path).await;
-    set_mode(0o755);
-    let error = blob_store_error(read.unwrap_err());
+    #[test]
+    async fn blob_store_error_makes_a_refusal_of_the_storage_a_permanent_permission_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let tempdir = TempDir::new().unwrap();
+        let storage = FileSystemBlobStorage::new(tempdir.path()).await.unwrap();
+        let namespace = BlobStorageNamespace::CustomStorage {
+            environment_id: EnvironmentId::new(),
+        };
+        let path = Path::new("container/object");
+        storage
+            .put_raw("test", "put-raw", namespace.clone(), path, &[1])
+            .await
+            .unwrap();
+        let set_mode = |mode| {
+            std::fs::set_permissions(tempdir.path(), std::fs::Permissions::from_mode(mode)).unwrap()
+        };
 
-    assert_eq!(
-        (
-            matches!(&error, BlobStoreError::PermissionDenied(message)
+        set_mode(0o000);
+        let read = storage.get_raw("test", "get-raw", namespace, path).await;
+        set_mode(0o755);
+        let error = blob_store_error(read.unwrap_err());
+
+        assert_eq!(
+            (
+                matches!(&error, BlobStoreError::PermissionDenied(message)
                     if message.starts_with("the blob storage refused the request (access denied)")),
-            classify_blob_store_error(&error)
-        ),
-        (true, HostFailureKind::Permanent),
-        "{error}"
-    );
+                classify_blob_store_error(&error)
+            ),
+            (true, HostFailureKind::Permanent),
+            "{error}"
+        );
+    }
 }
 
 /// `BlobFailure::of` has one downcast for `BlobNameError`, so each rule of a name is
