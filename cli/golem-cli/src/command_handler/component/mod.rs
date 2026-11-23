@@ -142,7 +142,11 @@ impl ComponentCommandHandler {
                 ComponentSubcommand::ManifestTrace {
                     component_name,
                     resolved,
-                } => self.cmd_manifest_trace(component_name, resolved).await,
+                    build,
+                } => {
+                    self.cmd_manifest_trace(component_name, resolved, build)
+                        .await
+                }
             }
         })
     }
@@ -341,9 +345,28 @@ impl ComponentCommandHandler {
 
     async fn cmd_manifest_trace(
         &self,
-        _component_names: OptionalComponentNames,
+        component_names: OptionalComponentNames,
         resolved: bool,
+        build: bool,
     ) -> anyhow::Result<()> {
+        if build {
+            self.ctx
+                .app_handler()
+                .build(
+                    &BuildConfig::new(),
+                    component_names.component_name.clone(),
+                    &ApplicationComponentSelectMode::All,
+                )
+                .await?;
+        }
+        self.ctx
+            .app_handler()
+            .must_select_components(
+                component_names.component_name,
+                &ApplicationComponentSelectMode::All,
+            )
+            .await?;
+
         let views = self.prepare_manifest_traces(resolved).await?;
 
         for view in views {
@@ -368,19 +391,32 @@ impl ComponentCommandHandler {
         let app_ctx = app_ctx.some_or_err_mut()?;
 
         let component_names = app_ctx
-            .application()
-            .component_names()
+            .selected_component_names()
+            .iter()
             .cloned()
             .collect::<Vec<_>>();
         let mut views = Vec::new();
         for component_name in component_names {
-            let resolved_config = if resolved {
-                let metadata = extract_and_store_component_metadata(
+            let metadata = if resolved
+                || app_ctx
+                    .application()
+                    .component(&component_name)
+                    .wasm()
+                    .exists()
+            {
+                Some(extract_and_store_component_metadata(
                     &BuildContext::new(app_ctx, &BuildConfig::new()),
                     &component_name,
                 )
                 .await
-                .context("Resolved manifest traces require built component Wasm; run `golem build` first")?;
+                .context("Manifest agent traces require built component Wasm; run `golem build` or pass --build")?)
+            } else {
+                None
+            };
+            let resolved_config = if resolved {
+                let metadata = metadata
+                    .as_ref()
+                    .expect("resolved mode extracts component metadata");
                 Some(prepare_static_config(
                     app_ctx.application(),
                     &component_name,
@@ -390,6 +426,34 @@ impl ComponentCommandHandler {
             } else {
                 None
             };
+            let agents = if let Some(metadata) = &metadata {
+                let mapping = metadata
+                    .agent_types
+                    .iter()
+                    .map(|agent_type| (agent_type.type_name.clone(), component_name.clone()))
+                    .collect::<BTreeMap<_, _>>();
+                let resolved_agents = app_ctx.application().resolve_agents(&mapping)?;
+                mapping
+                    .into_keys()
+                    .filter_map(|agent_type_name| {
+                        let properties = resolved_agents
+                            .agent(&agent_type_name)?
+                            .layer_properties()
+                            .with_compacted_traces();
+                        Some((agent_type_name, properties))
+                    })
+                    .collect()
+            } else {
+                log_warn_action(
+                    "Skipping",
+                    format!(
+                        "the agent traces of {}, because the component is not built; build it or pass --build to see them",
+                        component_name.as_str().log_color_highlight()
+                    ),
+                );
+                BTreeMap::new()
+            };
+
             views.push(ComponentManifestTraceView {
                 component_name: component_name.clone(),
                 properties: app_ctx
@@ -397,6 +461,7 @@ impl ComponentCommandHandler {
                     .component(&component_name)
                     .layer_properties()
                     .with_compacted_traces(),
+                agents,
                 resolved_config,
             });
         }
@@ -874,7 +939,7 @@ impl ComponentCommandHandler {
         resolved_tool_grants: &ResolvedToolGrants,
         ambient_tools: &[golem_common::model::deployment::DeploymentPlanAmbientToolEntry],
     ) -> anyhow::Result<ResolvedManifestComponentsAndTools> {
-        let (component_names, declared_agents, has_remote_tools) = {
+        let (component_names, declared_agents, has_remote_tools, package_calls) = {
             let app_ctx = self.ctx.app_context_lock().await;
             let app = app_ctx.some_or_err()?;
             (
@@ -887,6 +952,7 @@ impl ComponentCommandHandler {
                     .remote_release_references()
                     .next()
                     .is_some(),
+                app.installed_package_calls.clone(),
             )
         };
 
@@ -913,6 +979,20 @@ impl ComponentCommandHandler {
                     .push(component_name.clone());
             }
         }
+
+        let mut missing_calls = Vec::new();
+        for (package, calls) in package_calls {
+            for agent in calls {
+                if !exported_agents.contains_key(&agent) {
+                    missing_calls.push(format!("{agent} (required by {package:?})"));
+                }
+            }
+        }
+        anyhow::ensure!(
+            missing_calls.is_empty(),
+            "Missing agent types required by installed packages: {}",
+            missing_calls.join(", ")
+        );
 
         let unknown_declared_agents = declared_agents
             .into_iter()
@@ -1738,7 +1818,7 @@ impl ComponentCommandHandler {
                         owner_account_email: grant.release_owner.email.clone(),
                         metadata_version: grant.release.metadata_version.clone(),
                         metadata_digest: grant.release.metadata_digest,
-                        provision,
+                        provision: (&provision).into(),
                         component_bindings: manifest_config
                             .component_bindings
                             .iter()
@@ -1847,6 +1927,7 @@ impl ComponentCommandHandler {
         provision: &ToolManifestProvisionConfig,
         plugin_grants: &HashMap<PluginGrantKey, EnvironmentPluginGrantWithDetails>,
     ) -> anyhow::Result<(ToolProvisionConfig, Vec<PendingRemoteInitialFile>)> {
+        let installed_by = self.ctx.account_id().await?;
         let plugins = provision
             .plugins
             .iter()
@@ -1874,6 +1955,7 @@ impl ComponentCommandHandler {
                     plugin_version: grant.plugin.version.clone(),
                     oplog_processor_component_id: Some(spec.component_id),
                     oplog_processor_component_revision: Some(spec.component_revision),
+                    installed_by,
                 })
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
@@ -2040,7 +2122,6 @@ impl ComponentCommandHandler {
                                 component_name.0, agent_type.type_name.0
                             )
                         })?,
-                    files_source: component.source().to_path_buf(),
                     files: resolved_agent.files().to_vec(),
                     plugins: plugins(resolved_agent.plugins())?,
                 },
@@ -2148,27 +2229,8 @@ impl ComponentCommandHandler {
                 .files
                 .iter()
                 .map(|f| {
-                    crate::model::app::InitialComponentFileSource::new(
-                        &f.source_path,
-                        &manifest_config.files_source,
-                    )
-                    .map_err(|err| {
-                        anyhow!(
-                            "Failed to resolve source path '{}' for component {} and agent {}: {}",
-                            f.source_path,
-                            component_name.0,
-                            agent_type_name.0,
-                            err
-                        )
-                    })
-                    .map(|source| crate::model::app::InitialComponentFile {
-                        source,
-                        target: crate::model::app::CanonicalFilePathWithPermissions {
-                            path: f.target_path.clone(),
-                            permissions: f.permissions.unwrap_or(
-                                golem_common::model::component::AgentFilePermissions::ReadOnly,
-                            ),
-                        },
+                    staging::resolve_provision_file(f).with_context(|| {
+                        format!("Failed to resolve initial file for component {component_name} and agent {agent_type_name}")
                     })
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?;

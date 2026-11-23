@@ -12,50 +12,57 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! A minimal MCP client over Streamable HTTP, protocol version 2025-03-26. Each request is sent
-//! once; a failed request is an error, never retried.
+//! A minimal MCP client over Streamable HTTP without sessions. Each request is sent once; a failed
+//! request is an error, never retried.
 
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// The MCP protocol version the client negotiates.
+/// The MCP protocol revision that [`McpClient::connect`] asks for.
 pub const PROTOCOL_VERSION: &str = "2025-03-26";
 
-/// The client of one MCP session at one URL.
+/// The client of the MCP endpoint at one URL. It keeps no session: every request after
+/// `initialize` names the negotiated revision in its `MCP-Protocol-Version` header.
 pub struct McpClient {
     http: reqwest::Client,
     url: Box<str>,
     host: Arc<str>,
-    session_id: Option<Arc<str>>,
-    /// The next JSON-RPC request ID of the session.
+    /// The revision that `initialize` negotiated.
+    revision: Option<Arc<str>>,
+    /// The next JSON-RPC request ID of the client.
     next_id: Arc<AtomicU64>,
 }
 
 /// The answer to one POSTed JSON-RPC message.
 pub struct McpResponse {
-    /// The `Mcp-Session-Id` that the response names.
-    pub session_id: Option<Arc<str>>,
+    /// The `Mcp-Session-Id` header of the response. The endpoint never sets it.
+    pub session_id: Option<Box<str>>,
     /// The first JSON-RPC message of the response; `None` for an accepted notification.
     pub message: Option<Value>,
 }
 
 impl McpClient {
-    /// Opens a session at `url` for the domain `host`: `initialize`, then
+    /// Connects to `url` for the domain `host` with [`PROTOCOL_VERSION`]: `initialize`, then
     /// `notifications/initialized`.
     pub async fn connect(http: reqwest::Client, url: &str, host: &str) -> anyhow::Result<Self> {
-        let client = Self::initialize(http, url, host).await?;
+        let client = Self::initialize(http, url, host, PROTOCOL_VERSION).await?;
         client.send_initialized_notification().await?;
         Ok(client)
     }
 
-    /// Sends `initialize` and keeps the session ID that the server issued.
-    pub async fn initialize(http: reqwest::Client, url: &str, host: &str) -> anyhow::Result<Self> {
+    /// Sends `initialize` for `revision` and keeps the revision that the result names.
+    pub async fn initialize(
+        http: reqwest::Client,
+        url: &str,
+        host: &str,
+        revision: &str,
+    ) -> anyhow::Result<Self> {
         let client = Self {
             http,
             url: url.into(),
             host: host.into(),
-            session_id: None,
+            revision: None,
             next_id: Arc::new(AtomicU64::new(1)),
         };
         let response = client
@@ -64,18 +71,25 @@ impl McpClient {
                 "id": client.next_id(),
                 "method": "initialize",
                 "params": {
-                    "protocolVersion": PROTOCOL_VERSION,
+                    "protocolVersion": revision,
                     "capabilities": {},
                     "clientInfo": {"name": "golem-mcp-test-client", "version": "0.0.1"},
                 },
             }))
             .await?;
-        match response.message {
-            Some(message) if message.get("result").is_some() => Ok(Self {
-                session_id: response.session_id,
+        if let Some(session_id) = response.session_id {
+            anyhow::bail!("initialize issued the session ID {session_id}");
+        }
+        match response
+            .message
+            .as_ref()
+            .and_then(|message| message["result"]["protocolVersion"].as_str())
+        {
+            Some(negotiated) => Ok(Self {
+                revision: Some(negotiated.into()),
                 ..client
             }),
-            other => anyhow::bail!("initialize failed: {other:?}"),
+            None => anyhow::bail!("initialize failed: {:?}", response.message),
         }
     }
 
@@ -86,26 +100,27 @@ impl McpClient {
             .map(|_| ())
     }
 
-    /// A client of the same session that sends its requests to `url`.
+    /// A client with the same revision that sends its requests to `url`.
     pub fn at(&self, url: &str) -> Self {
         Self {
             http: self.http.clone(),
             url: url.into(),
             host: self.host.clone(),
-            session_id: self.session_id.clone(),
+            revision: self.revision.clone(),
             next_id: self.next_id.clone(),
         }
     }
 
-    pub fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
+    /// The revision that `initialize` negotiated.
+    pub fn revision(&self) -> Option<&str> {
+        self.revision.as_deref()
     }
 
     fn next_id(&self) -> u64 {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// POSTs one JSON-RPC message in the session and reads the whole response.
+    /// POSTs one JSON-RPC message and reads the whole response.
     pub async fn post(&self, message: &Value) -> anyhow::Result<McpResponse> {
         let request = self
             .http
@@ -114,8 +129,8 @@ impl McpClient {
             .header("Content-Type", "application/json")
             .header("Accept", "application/json, text/event-stream")
             .json(message);
-        let request = match &self.session_id {
-            Some(session_id) => request.header("Mcp-Session-Id", &**session_id),
+        let request = match &self.revision {
+            Some(revision) => request.header("MCP-Protocol-Version", &**revision),
             None => request,
         };
         let response = request.send().await?;
@@ -124,7 +139,7 @@ impl McpClient {
             .headers()
             .get("mcp-session-id")
             .and_then(|value| value.to_str().ok())
-            .map(Arc::from);
+            .map(Box::from);
         let body = response.text().await?;
         if !status.is_success() {
             anyhow::bail!("MCP HTTP request failed with status {status}: {body}");

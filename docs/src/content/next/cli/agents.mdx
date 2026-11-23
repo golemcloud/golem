@@ -181,6 +181,8 @@ golem agent oplog --from 100 'CounterAgent("my-counter")'
 
 Oplog entries are indexed from 1, and the first entry is always a **create** entry that defines the initial state of the agent.
 
+Each invocation entry shows its caller in three lines: `original caller:` is the principal that started the chain of calls, `immediate caller:` is the principal that made this call, and `tokens:` lists the tokens that the call carried. The verified claims of a signed-in user are hidden by default. Add `--show-claims` to show them, in a `claims:` line under the user. In the JSON, YAML and TOON formats, `claims` is an object. The server shows the claims only to a reader who may read the oplog. `--show-claims` cannot be combined with `--obfuscate`, because an obfuscated export never shows claims.
+
 ### Viewing the oplog in a browser
 
 The oplog can be explored in an **interactive HTML viewer** instead of the terminal. The viewer groups the entries by invocation, merges each durable host call's **start** and **end** entries into one foldable row with its duration, nests the entries executed by tool entities under the tool invocation, and marks the regions skipped by a **jump** or a **revert**. It can filter by entry category, log level or index range, search the content of the entries, decode typed payloads, binary and snapshot data, and it shows per-invocation and per-type statistics.
@@ -245,8 +247,9 @@ The terms and fields are interpreted in the following way:
 | `End` (durable host call finished)                           | `end`, match on response value(\*)                                                                                                                            |
 | `Cancelled`                                                  | `cancelled`, match on partial value(\*)                                                                                                                       |
 | `CompletionDiscarded` / `CompletionDelivered`                | `completion-discarded` / `completion-delivered`                                                                                                               |
-| `AgentInvocationStarted`                                     | `agent-invocation-started`, `invoke`, and depending on the invocation kind: `agent-initialization`, `agent-method-invocation`, `external-tool`, `save-snapshot`, `load-snapshot`, `process-oplog-entries`; match on method or tool name, match on idempotency key, match on target revision (manual updates) |
+| `AgentInvocationStarted`                                     | `agent-invocation-started`, `invoke`, and depending on the invocation kind: `agent-initialization`, `agent-method-invocation`, `external-tool`, `save-snapshot`, `load-snapshot`, `process-oplog-entries`; match on method or tool name, match on idempotency key, match on target revision (manual updates), match on the caller and on the requester of a manual update (see below) |
 | `AgentInvocationFinished`                                    | `agent-invocation-finished`, `invoke`, match on consumed fuel                                                                                                 |
+| `AgentInvocationSettled`                                     | `agent-invocation-settled`, match on invocation ID, match on consumed fuel |
 | `PendingAgentInvocation`                                     | `pending-agent-invocation`, `invoke`, and the same invocation kind terms and matches as `AgentInvocationStarted` (pending external tool calls are not matched on idempotency key) |
 | `Suspend`                                                    | `suspend`                                                                                                                                                     |
 | `Error`                                                      | `error`, match on error message                                                                                                                               |
@@ -254,7 +257,7 @@ The terms and fields are interpreted in the following way:
 | `Jump`                                                       | `jump`                                                                                                                                                        |
 | `Interrupted`                                                | `interrupted`                                                                                                                                                 |
 | `Exited`                                                     | `exited`                                                                                                                                                      |
-| `PendingUpdate`                                              | `pending-update`, `update`, match on target revision                                                                                                          |
+| `PendingUpdate`                                              | `pending-update`, `update`, match on target revision, match on the requester (see below)                                                                      |
 | `SuccessfulUpdate`                                           | `successful-update`, `update`, match on target revision                                                                                                       |
 | `FailedUpdate`                                               | `failed-update`, `update`, match on target revision, match on error details                                                                                   |
 | `GrowMemory`                                                 | `grow-memory`                                                                                                                                                 |
@@ -282,6 +285,10 @@ Unquoted terms match substrings: `start` also matches `agent-invocation-started`
 Search does not inspect every displayed field. Displayed metadata such as timestamps, indices, and the host function's name does not automatically provide a field qualifier. Search a host function or agent method name with a bare term, not `function_name:...`. Invocation arguments and results are not searched by the invocation entries above.
 
 The cases marked with **(\*)** support paths into typed values. For host calls, start with `request`, `response`, or `partial`, followed by record field names, for example `request.product-id:123`. Tuple elements use numeric segments, such as `request.0`; list elements share the list's path rather than adding an index. Field paths are case-insensitive and must match the complete exposed path. Tool attachment and stream records start at their own typed root, without a `request` prefix. A stream handle inside a typed value does not cause search to read the stream's contents.
+
+Invocation entries also match on their caller. A bare term matches the kind (`user`, `account`, `agent`, `tool` or `anonymous`), the issuer and the subject of both roles, so `account` matches every call that an account made. The fields `caller`, `original`, `immediate`, `caller.original` and `caller.immediate` restrict the match, for example `original:bob` or `caller.immediate:agent`. Claims never match.
+
+Update entries also match on their requester: a `PendingUpdate` entry, and the manual update of an `AgentInvocationStarted` or `PendingAgentInvocation` entry. A bare term and the fields `original` and `immediate` match the requester as they match a caller, so `account` also matches every update that an account requested. The fields `requester`, `requester.original` and `requester.immediate` match only the requester, for example `requester:account`. The field `caller` does not match a requester.
 
 Span information belongs to host-call entries, not separate `StartSpan`, `FinishSpan`, or `SetSpanAttribute` entries:
 
@@ -329,7 +336,7 @@ golem invocation get --agent 'CounterAgent("my-counter")' --idempotency-key my-k
 golem invocation list --agent 'CounterAgent("my-counter")' --status pending --status scheduled
 ```
 
-`invocation get` shows the state of the invocation (`scheduled`, `pending`, `running`, `waiting`, `retrying`, `interrupted`, `completed`, `failed` or `cancelled`) and, once it finished, its result. When the key was used for more than one method of the agent, it shows the invocation of each method, and `--method` selects one. It exits with code 130 when an invocation it shows was cancelled. `invocation list` lists the invocations of an agent, newest change first, and prints a cursor for the next page.
+`invocation get` shows the state of the invocation (`scheduled`, `pending`, `running`, `waiting`, `retrying`, `interrupted`, `completed`, `background-failed`, `failed` or `cancelled`) and, once it finished, its result. A `background-failed` invocation recorded its result, then the agent failed during the background work that the method started: `invocation get` shows the result and the error, and `agent invoke` with the same idempotency key returns the result (addressed by agent ID, it also prints the error as a warning). When the key was used for more than one method of the agent, it shows the invocation of each method, and `--method` selects one. It exits with code 130 when an invocation it shows was cancelled. `invocation list` lists the invocations of an agent, newest change first, and prints a cursor for the next page.
 
 A key is found only for the account that made the invocation, and invocations made through an HTTP route are not found by their key. An invocation ID is resolved in the current environment; select another one with `--environment`.
 
@@ -339,7 +346,7 @@ If an invocation is enqueued or scheduled for an agent, but it has not been star
 golem invocation cancel --agent 'CounterAgent("my-counter")' --idempotency-key my-key
 ```
 
-A running invocation cannot be cancelled. An invocation that already finished keeps its result.
+A running invocation cannot be cancelled. An invocation that already finished keeps its result, also while the background work it started still runs.
 
 ## Shell access
 

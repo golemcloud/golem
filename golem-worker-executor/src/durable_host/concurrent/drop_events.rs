@@ -550,8 +550,9 @@ pub(crate) async fn cancel_dropped_durable_input_initiation<Ctx: WorkerCtx>(
         .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
 }
 
-/// Waits for the natural end of replay and switches the Store to live there, so a guest drop
-/// whose cancellation the recorded run never persisted can record it live.
+/// Waits for the natural end of replay and for an invocation that drives the live work
+/// ([`ReplayState::await_driving_invocation`]), and switches the Store to live there, so a
+/// guest drop whose cancellation the recorded run never persisted can record it live.
 pub(crate) async fn continue_live_at_natural_tail_end_access<T, D, Ctx>(
     store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
@@ -565,14 +566,16 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
+    let primary =
+        store.with(|mut access| get_ctx(access.data_mut()).runtime == OwnerRuntime::Agent);
     loop {
         replay.await_natural_tail_end(Some(activity)).await?;
-        let (transition, primary) = store.with(|mut access| {
-            let ctx = get_ctx(access.data_mut());
-            (
-                ctx.prepare_live_continuation_at_replay_tail(true, operation.to_string()),
-                ctx.runtime == OwnerRuntime::Agent,
-            )
+        if primary {
+            replay.await_driving_invocation(activity).await;
+        }
+        let transition = store.with(|mut access| {
+            get_ctx(access.data_mut())
+                .prepare_live_continuation_at_replay_tail(true, operation.to_string())
         });
         match transition.await? {
             BeginReplayToLive::ReplayResumed => continue,
@@ -963,6 +966,7 @@ pub(super) mod tests {
                 function_name: golem_common::model::oplog::host_functions::P3HttpClientSend::HOST_FUNCTION_NAME,
                 invocation_id: None,
                 observational_owner: None,
+                driver: None,
                 request: Some(OplogPayload::Inline(Box::new(golem_common::model::oplog::HostRequestNoInput {}.into()))),
                 durable_function_type: DurableFunctionType::WriteRemote,
                 span_started: None,
@@ -1095,6 +1099,7 @@ pub(super) mod tests {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index: None,
                 observational_owner: None,
+                driver: None,
                 function_name: other_name.clone(),
                 invocation_id: None,
                 request: Some(OplogPayload::Inline(Box::new(

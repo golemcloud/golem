@@ -840,6 +840,7 @@ fn arb_agent_model() -> BoxedStrategy<Agent> {
                 (tools_merge_mode, tools),
                 presets,
             )| Agent {
+                package: None,
                 templates,
                 config,
                 initial_card: None,

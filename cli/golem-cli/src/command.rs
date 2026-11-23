@@ -1653,9 +1653,13 @@ pub mod component {
             #[command(flatten)]
             component_name: OptionalComponentNames,
             /// Also resolve static config using the local built component's schemas and code defaults.
-            /// Requires built component Wasm; does not build or inspect deployed state.
+            /// Requires built component Wasm; does not inspect deployed state.
             #[arg(long)]
             resolved: bool,
+            /// Build the selected components first, so that the trace includes the agent types of
+            /// every component. Up-to-date components are not rebuilt.
+            #[clap(long, default_value = "false")]
+            build: bool,
         },
     }
 }
@@ -1963,6 +1967,11 @@ pub mod worker {
             /// response. By default the CLI reads each omitted entry in full.
             #[arg(long, conflicts_with = "obfuscate")]
             omit_payloads: bool,
+            /// Show the verified claims of the users among the callers of each invocation. The
+            /// server shows them only to a reader who may read the oplog. An obfuscated export
+            /// never shows claims.
+            #[arg(long, conflicts_with = "obfuscate")]
+            show_claims: bool,
             /// Read one page of at most the HTTP batch size (50) entries and print it as one
             /// `agent.oplog-page` document, with the `cursor` of the next page when the oplog has
             /// entries after the page. A search page ends early when the server's scan budget ends
@@ -2826,6 +2835,7 @@ pub mod invocation {
         Retrying,
         Interrupted,
         Completed,
+        BackgroundFailed,
         Failed,
         Cancelled,
     }
@@ -3658,6 +3668,24 @@ mod test {
                 "{flag}"
             );
             assert!(parse_oplog(&[flag]).is_ok(), "{flag}");
+        }
+    }
+
+    #[test]
+    fn oplog_show_claims_conflicts_only_with_obfuscate() {
+        // An obfuscated export never shows claims.
+        let error = parse_oplog(&["--show-claims", "--obfuscate"]).unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+        // Every other output of the oplog takes the flag: the text and structured output, one
+        // page, a search, the HTML export and the live viewer.
+        for allowed in [
+            vec!["--show-claims"],
+            vec!["--show-claims", "--page"],
+            vec!["--show-claims", "--query", "error"],
+            vec!["--show-claims", "--html", "report.html"],
+            vec!["--show-claims", "--serve"],
+        ] {
+            assert!(parse_oplog(&allowed).is_ok(), "{allowed:?}");
         }
     }
 

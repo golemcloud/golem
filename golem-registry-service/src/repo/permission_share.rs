@@ -107,6 +107,7 @@ impl<Repo: PermissionShareRepo> LoggedPermissionShareRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: PermissionShareRepo> PermissionShareRepo for LoggedPermissionShareRepo<Repo> {
     async fn create(
         &self,
@@ -249,6 +250,7 @@ impl DbPermissionShareRepo<PostgresPool> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl PermissionShareRepo for DbPermissionShareRepo<PostgresPool> {
     async fn create(
         &self,

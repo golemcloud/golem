@@ -287,6 +287,7 @@ struct ProductionWriteRecovery<Ctx: WorkerCtx> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx> FilesystemWriteRecoveryAuthority for ProductionWriteRecovery<Ctx> {
     async fn recover_write(&self, deadline: Instant) -> FilesystemWriteRecoveryOutcome {
         let Some(active_agents) = self.active_agents.upgrade() else {
@@ -310,6 +311,7 @@ impl<Ctx: WorkerCtx> FilesystemWriteRecoveryAuthority for ProductionWriteRecover
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx> CapacityRecoverySource for ProductionRecovery<'_, Ctx> {
     type Candidate = FilesystemPressureVictim<Ctx>;
 

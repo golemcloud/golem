@@ -35,8 +35,9 @@ use chrono::{DateTime, Utc};
 use golem_common::model::Pod;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::quota::{
-    EnforcementAction, LeaseEpoch, ResourceConcurrencyLimit, ResourceDefinition,
-    ResourceDefinitionId, ResourceDefinitionRevision, ResourceLimit, ResourceName,
+    EnforcementAction, LeaseEpoch, ResourceCapacityLimit, ResourceConcurrencyLimit,
+    ResourceDefinition, ResourceDefinitionId, ResourceDefinitionRevision, ResourceLimit,
+    ResourceName,
 };
 use golem_service_base::model::quota_lease::PendingReservation;
 use golem_service_base::repo::{Blob, NumericU64, SqlDateTime};
@@ -95,6 +96,7 @@ fn resource(definition: &ResourceDefinition, remaining: u64) -> QuotaResourceRec
         resource_definition_id: definition.id.0,
         definition: Blob::new(definition.clone()),
         remaining: NumericU64::new(remaining),
+        deficit: NumericU64::new(0),
         last_refilled_at: SqlDateTime::new(Utc::now()),
         last_refreshed_at: SqlDateTime::new(Utc::now()),
     }
@@ -210,10 +212,12 @@ async fn a_resource_and_its_lease_round_trip(
 ) {
     let repo = persistence.new_store().await.quota_repo().await;
     let definition = definition();
+    let mut record = resource(&definition, SLOTS - 1);
+    record.deficit = NumericU64::new(7);
 
     let revision = repo
         .save_lease_change(
-            &resource(&definition, SLOTS - 1),
+            &record,
             NO_REVISION,
             &lease(&definition, pod(1), 7, in_a_minute()),
             &[],
@@ -227,6 +231,7 @@ async fn a_resource_and_its_lease_round_trip(
         .expect("the resource should be stored");
     assert_eq!(stored.revision, revision);
     assert_eq!(stored.record.remaining.get(), SLOTS - 1);
+    assert_eq!(stored.record.deficit.get(), 7);
     assert_eq!(stored.record.definition.value().id, definition.id);
     assert_eq!(
         stored.record.definition.value().limit,
@@ -970,6 +975,50 @@ async fn a_new_leader_serves_the_leases_the_previous_one_stored(
         BTreeSet::from([pod(1), pod(3)])
     );
     assert_eq!(stored_total(&reader, &definition).await, SLOTS);
+}
+
+#[test]
+#[tracing::instrument]
+// The budget that a Capacity resource owes after its limit shrank below the used budget is
+// stored: a leader that restores the state after the shrink and grows the limit again gives back
+// none of the spent budget.
+async fn a_capacity_deficit_survives_a_new_leader(
+    #[dimension(persistence)] persistence: &Arc<dyn GetRoutingTablePersistence>,
+) {
+    let store = persistence.new_store().await;
+    let mut definition = ResourceDefinition {
+        limit: ResourceLimit::Capacity(ResourceCapacityLimit { value: 100 }),
+        ..definition()
+    };
+    let mut leader_for = async |value: u64| {
+        definition.revision = definition.revision.next().unwrap();
+        definition.limit = ResourceLimit::Capacity(ResourceCapacityLimit { value });
+        let leader = quota_service(
+            store.quota_repo().await,
+            &definition,
+            Duration::from_secs(60),
+        );
+        leader
+            .restore_state()
+            .await
+            .expect("restoring the stored quota state should succeed");
+        leader.on_resource_definition_changed(definition.id).await;
+        (leader, definition.clone())
+    };
+
+    let (first, first_definition) = leader_for(100).await;
+    let (epoch, allocated) = acquire(&first, &first_definition, pod(1)).await;
+    assert_eq!(allocated, 100);
+    // 60 consumed.
+    first
+        .release_lease(first_definition.id, pod(1), epoch, 40)
+        .await
+        .expect("releasing the lease should succeed");
+
+    leader_for(50).await;
+    let (last, last_definition) = leader_for(100).await;
+    let (_, allocated) = acquire(&last, &last_definition, pod(1)).await;
+    assert_eq!(allocated, 40);
 }
 
 #[test]

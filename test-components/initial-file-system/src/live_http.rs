@@ -67,3 +67,43 @@ impl LiveFiles for LiveFilesImpl {
         std::fs::write(path, contents).is_ok()
     }
 }
+
+macro_rules! id_files {
+    ($agent:ident, $implementation:ident, $mount:tt, $create:tt, $($binding:tt)*) => {
+        #[agent_definition(
+            mount = $mount,
+            agent_id($($binding)*),
+            create_route = $create,
+            auth = false,
+            filesystem_bindings = [("/*", "/public/$1"), ("/*", "/fallback/$1")],
+        )]
+        pub trait $agent {
+            fn new(name: String) -> Self;
+        }
+
+        struct $implementation;
+
+        #[agent_implementation]
+        impl $agent for $implementation {
+            fn new(name: String) -> Self {
+                LiveFilesImpl::new(name);
+                Self
+            }
+        }
+    };
+}
+
+id_files!(
+    LiveFilesByPath,
+    LiveFilesByPathImpl,
+    "/files-by-path/{instance}",
+    "/files-by-path/create",
+    path = "instance"
+);
+id_files!(
+    LiveFilesByQuery,
+    LiveFilesByQueryImpl,
+    "/files-by-query",
+    "/files-by-query/create",
+    query = "instance"
+);

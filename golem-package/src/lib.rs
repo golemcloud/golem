@@ -51,12 +51,22 @@ const MAX_ENTRIES: usize = 16_384;
 pub struct PackageIdentity {
     pub name: String,
     pub version: String,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub calls: BTreeSet<AgentTypeName>,
 }
 
 pub fn validate_identity(identity: &PackageIdentity) -> anyhow::Result<()> {
     ensure!(
         valid_name(&identity.name),
         "Invalid package name {:?}",
+        identity.name
+    );
+    ensure!(
+        identity
+            .calls
+            .iter()
+            .all(|name| !name.as_str().trim().is_empty()),
+        "Package {:?} lists an empty agent type name in calls",
         identity.name
     );
     validate_version(&identity.version)
@@ -633,15 +643,14 @@ fn layers_for(config: &PackageConfig) -> anyhow::Result<Vec<(&str, String)>> {
                 );
             }
         }
-        for (name, provision) in &component.agents {
+        for name in component.agents.keys() {
             ensure!(
                 component
                     .metadata
                     .agent_types
                     .iter()
-                    .any(|agent| &agent.type_name == name)
-                    || provision.file_defaults.is_empty(),
-                "File defaults require agent declarations"
+                    .any(|agent| &agent.type_name == name),
+                "Agent provision {name} has no matching exported agent type"
             );
         }
         for provision in component

@@ -76,6 +76,7 @@ impl MockDurabilityHost {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl InFunctionRetryHost for MockDurabilityHost {
     fn current_retry_point(&self) -> OplogIndex {
         OplogIndex::INITIAL
@@ -116,6 +117,7 @@ impl InFunctionRetryHost for MockDurabilityHost {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl DurabilityHost for MockDurabilityHost {
     fn observe_function_call(&self, _interface: &str, _function: &str) {}
 

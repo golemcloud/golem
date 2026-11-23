@@ -466,10 +466,12 @@ impl RunningWorker {
             admission_index,
         } = decision
         {
+            let requester = parent.requester_of_admission(admission_index).await?;
             parent
                 .add_and_commit_oplog(OplogEntry::pending_update(
                     description,
                     Some(admission_index),
+                    Box::new(requester),
                 ))
                 .await
                 .map_err(WorkerExecutorError::from)?;
@@ -481,10 +483,12 @@ impl RunningWorker {
                 description,
                 admission_index,
             } => {
+                let requester = parent.requester_of_admission(admission_index).await?;
                 parent
                     .add_and_commit_oplog(OplogEntry::pending_update(
                         description,
                         Some(admission_index),
+                        Box::new(requester),
                     ))
                     .await
                     .map_err(WorkerExecutorError::from)?;

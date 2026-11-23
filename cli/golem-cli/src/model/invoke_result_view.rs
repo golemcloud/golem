@@ -33,6 +33,10 @@ pub struct InvokeResultView {
     pub result: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub result_format: Option<String>,
+    /// The failure of the agent during the background work of the invocation, after it recorded
+    /// the result.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub background_failure: Option<String>,
     #[serde(skip)]
     pub is_void_result: bool,
 }
@@ -52,6 +56,12 @@ impl TextOutput for InvokeResultView {
                 )),
                 None => logln(format!("Invocation {result_label}:")),
             }
+        }
+
+        if let Some(failure) = &self.background_failure {
+            logln(format_warn(&format!(
+                "The agent failed during the background work of this invocation, after it recorded its result: {failure}"
+            )));
         }
 
         if self.is_void_result {
@@ -121,7 +131,16 @@ impl InvokeResultView {
             result_json,
             result: rendered_result,
             result_format,
+            background_failure: None,
             is_void_result,
+        }
+    }
+
+    /// The view with the background failure that the result lookup reported.
+    pub fn with_background_failure(self, background_failure: Option<String>) -> Self {
+        Self {
+            background_failure,
+            ..self
         }
     }
 
@@ -131,6 +150,7 @@ impl InvokeResultView {
             result_json: None,
             result: None,
             result_format: None,
+            background_failure: None,
             is_void_result: false,
         }
     }

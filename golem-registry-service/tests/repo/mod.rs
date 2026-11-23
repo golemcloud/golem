@@ -21,6 +21,7 @@ use golem_common::model::card::{
 use golem_common::model::environment::EnvironmentId;
 use golem_registry_service::repo::account::{AccountRepo, DbAccountRepo};
 use golem_registry_service::repo::account_resource_override::AccountResourceOverrideRepo;
+use golem_registry_service::repo::account_tree::AccountTreeRepo;
 use golem_registry_service::repo::account_usage::AccountUsageRepo;
 use golem_registry_service::repo::agent_secret::AgentSecretRepo;
 use golem_registry_service::repo::application::ApplicationRepo;
@@ -66,7 +67,9 @@ use std::sync::Arc;
 use test_r::{inherit_test_dep, sequential_suite};
 use uuid::Uuid;
 
+pub mod account_tree;
 pub mod common;
+pub mod notifier_reconnect;
 pub mod postgres;
 pub mod resource_usage_reload;
 pub mod shared_config;
@@ -81,6 +84,7 @@ pub struct Deps {
     pub account_repo: Box<dyn AccountRepo>,
     pub account_usage_repo: std::sync::Arc<dyn AccountUsageRepo>,
     pub account_resource_override_repo: std::sync::Arc<dyn AccountResourceOverrideRepo>,
+    pub account_tree_repo: Arc<dyn AccountTreeRepo>,
     pub agent_secret_repo: Box<dyn AgentSecretRepo>,
     pub retry_policy_repo: Box<dyn RetryPolicyRepo>,
     pub installation_repo: Box<dyn InstallationRepo>,

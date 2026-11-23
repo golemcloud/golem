@@ -94,6 +94,7 @@ fn sample() -> (PackageConfig, BTreeMap<String, Vec<u8>>) {
             package: PackageIdentity {
                 name: "example".into(),
                 version: "1.2.3".into(),
+                calls: BTreeSet::new(),
             },
             components,
         },
@@ -188,8 +189,64 @@ impl PackageEffects for MemoryEffects {
 }
 
 #[test]
+fn package_rejects_blank_calls_and_provisions_for_unexported_agents() {
+    let (mut spec, blobs) = sample();
+    spec.package.calls.insert(AgentTypeName(" ".into()));
+    assert!(
+        pack(&spec, &blobs)
+            .unwrap_err()
+            .to_string()
+            .contains("empty agent type name")
+    );
+    spec.package.calls.clear();
+    spec.components.values_mut().next().unwrap().agents.insert(
+        AgentTypeName("MissingAgent".into()),
+        PackageProvision::default(),
+    );
+    assert!(
+        pack(&spec, &blobs)
+            .unwrap_err()
+            .to_string()
+            .contains("MissingAgent has no matching exported agent type")
+    );
+}
+
+#[test]
+async fn expansion_rejects_duplicate_exported_agent_types_with_both_packages_named() {
+    let (mut spec, blobs) = sample();
+    assert!(
+        spec.components
+            .values()
+            .all(|component| component.agents.is_empty())
+    );
+    let mut effects = MemoryEffects::default();
+    let mut pins = Pins::new();
+    for name in ["first-package", "second-package"] {
+        spec.package.name = name.into();
+        let (digest, bytes) = pack(&spec, &blobs).unwrap();
+        effects.cache.insert(digest.clone(), bytes);
+        pins.insert(
+            name.into(),
+            FilePin {
+                source: format!("{name}.tar"),
+                version: spec.package.version.clone(),
+                digest,
+            },
+        );
+    }
+    let error = expand(&pins, &pins, Path::new("unpack"), &mut effects)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Duplicate installed agent type firstAgent in packages \"first-package\" and \"second-package\""), "{error}");
+}
+
+#[test]
 async fn expansion_verifies_cache_and_materializes_ordinary_declarations() {
     let (mut spec, blobs) = sample();
+    spec.package
+        .calls
+        .insert(AgentTypeName("SupportCall".into()));
     let (digest, bytes) = pack(&spec, &blobs).unwrap();
     spec.package.version = "3.2.1".into();
     let (_, wrong) = pack(&spec, &blobs).unwrap();
@@ -206,6 +263,10 @@ async fn expansion_verifies_cache_and_materializes_ordinary_declarations() {
         ..Default::default()
     };
     let expanded = expand(&pins, &pins, root, &mut effects).await.unwrap();
+    assert_eq!(
+        expanded.calls["example"],
+        BTreeSet::from([AgentTypeName("SupportCall".into())])
+    );
     assert_eq!(effects.cache[&digest], bytes);
     assert!(effects.source.is_none());
     let declaration = serde_json::to_value(expanded.declarations).unwrap();

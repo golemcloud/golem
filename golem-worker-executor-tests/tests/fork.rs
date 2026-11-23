@@ -355,6 +355,7 @@ impl Rpc for StreamingRemoteRpc {
         &self,
         agent: ResolvedTarget,
         method: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         created_by: AccountId,
         caller: &AgentId,
         env: &[(String, String)],
@@ -369,6 +370,7 @@ impl Rpc for StreamingRemoteRpc {
             .create_demand(
                 agent,
                 method,
+                invocation,
                 created_by,
                 caller,
                 env,
@@ -558,6 +560,7 @@ impl WorkerProxy for LocalResumeProxy {
         &self,
         agent: &ResolvedTarget,
         method: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         caller: &AgentId,
         env: HashMap<String, String>,
         stack: InvocationContextStack,
@@ -589,6 +592,7 @@ impl WorkerProxy for LocalResumeProxy {
                 .prepare_worker(CreateWorkerRequest {
                     constructor,
                     unkeyed_id,
+                    invocation,
                     component_id: target.component_id,
                     env,
                     config: config.into_iter().map(Into::into).collect(),
@@ -642,6 +646,7 @@ impl WorkerProxy for LocalResumeProxy {
             .prepare(
                 agent,
                 method,
+                invocation,
                 caller,
                 env,
                 stack,
@@ -883,10 +888,11 @@ impl WorkerProxy for LocalResumeProxy {
         revision: ComponentRevision,
         mode: UpdateMode,
         disable_wakeup: bool,
+        requester: golem_common::model::caller::Caller,
         auth: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         self.inner
-            .update(agent, revision, mode, disable_wakeup, auth)
+            .update(agent, revision, mode, disable_wakeup, requester, auth)
             .await
     }
 
@@ -1006,11 +1012,12 @@ impl WorkerProxy for LocalResumeProxy {
         first: OplogIndex,
         entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
         auth: &AuthCtx,
+        caller: &golem_common::model::caller::Caller,
     ) -> Result<(), WorkerProxyError> {
         self.inner
             .process_oplog_entries(
                 agent, env, component, revision, key, account, config, metadata, first, entries,
-                auth,
+                auth, caller,
             )
             .await
     }

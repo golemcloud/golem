@@ -15,7 +15,9 @@
 use crate::agent_id_display::SourceLanguage;
 use crate::agent_id_display::render_type_for_language;
 use crate::log::LogColorize;
-use crate::model::app::{ComponentLayerId, ComponentLayerProperties, InitialComponentFile};
+use crate::model::app::{
+    AgentLayerProperties, ComponentLayerId, ComponentLayerProperties, InitialComponentFile,
+};
 use crate::model::app_raw;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::config::StaticConfigFieldView;
@@ -282,8 +284,7 @@ pub struct AgentTypeManifestProvisionConfig {
     pub env: BTreeMap<String, String>,
     pub config: Vec<AgentConfigEntryDto>,
     pub initial_card: Option<ParsedInitialPermissionCard>,
-    pub files_source: PathBuf,
-    pub files: Vec<app_raw::InitialComponentFile>,
+    pub files: Vec<crate::model::app::ProvisionFile>,
     pub plugins: Vec<app_raw::PluginInstallation>,
 }
 
@@ -296,6 +297,7 @@ impl AgentTypeManifestProvisionConfig {
         let files = self
             .files
             .iter()
+            .map(|file| &file.file)
             .map(|f| {
                 let archive_path = ArchiveFilePath(f.target_path.clone());
                 let options = AgentFileOptions {
@@ -324,7 +326,7 @@ impl AgentTypeManifestProvisionConfig {
 
 pub fn resolve_initial_permission(
     initial_card: Option<ParsedInitialPermissionCard>,
-    files: &[app_raw::InitialComponentFile],
+    files: &[crate::model::app::ProvisionFile],
     context: &RecipientMonomorphizationContext,
 ) -> AgentTypeInitialPermissions {
     let mut permissions = initial_card
@@ -335,7 +337,7 @@ pub fn resolve_initial_permission(
             ))
         });
     let recipient = initial_permission_recipient(context).render();
-    for file in files {
+    for file in files.iter().map(|file| &file.file) {
         let path = file.target_path.as_abs_str();
         let descendants = if path == "/" {
             "/**".to_string()
@@ -565,7 +567,7 @@ pub struct PendingRemoteInitialFile {
 pub struct ToolManifestProvisionConfig {
     pub config: golem_common::model::json::NormalizedJsonValue,
     pub env: BTreeMap<String, String>,
-    pub files: Vec<crate::model::app::ToolProvisionFile>,
+    pub files: Vec<crate::model::app::ProvisionFile>,
     pub plugins: Vec<app_raw::PluginInstallation>,
 }
 
@@ -1000,10 +1002,13 @@ mod tests {
     fn initial_files_add_matching_filesystem_permissions() {
         let context = test_context();
         let config = AgentTypeManifestProvisionConfig {
-            files: vec![app_raw::InitialComponentFile {
-                source_path: "assets".to_string(),
-                target_path: CanonicalFilePath::from_abs_str("/assets").unwrap(),
-                permissions: Some(AgentFilePermissions::ReadWrite),
+            files: vec![crate::model::app::ProvisionFile {
+                source: "golem.yaml".into(),
+                file: app_raw::InitialComponentFile {
+                    source_path: "assets".to_string(),
+                    target_path: CanonicalFilePath::from_abs_str("/assets").unwrap(),
+                    permissions: Some(AgentFilePermissions::ReadWrite),
+                },
             }],
             ..Default::default()
         };
@@ -1538,6 +1543,10 @@ pub struct ComponentManifestTraceView {
     pub component_name: ComponentName,
     pub properties: ComponentLayerProperties,
     pub resolved_config: Option<Vec<StaticConfigFieldView>>,
+    /// The resolved layers of each agent type of the component. Empty when the component is not
+    /// built, because the agent types come from the built component.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub agents: BTreeMap<AgentTypeName, AgentLayerProperties>,
 }
 
 impl StructuredOutput for ComponentManifestTraceView {
@@ -1555,14 +1564,34 @@ impl StructuredOutput for ComponentManifestTraceView {
 
 impl TextOutput for ComponentManifestTraceView {
     fn log(&self) {
-        match self.to_masked_value(MaskingConfig::show_secrets()) {
-            Ok(value) => log_manifest_trace_value(&value),
-            Err(error) => logln(format!("<failed to render manifest trace: {error:#}>")),
+        log_manifest_trace_properties(&self.properties);
+        for (agent_type_name, properties) in &self.agents {
+            log_manifest_trace_agent_header(agent_type_name);
+            log_manifest_trace_properties(properties);
+        }
+        if let Some(resolved_config) = &self.resolved_config {
+            log_manifest_trace_properties(&serde_json::json!({"resolvedConfig": resolved_config}));
         }
     }
 
     fn log_masked(self, config: MaskingConfig) -> anyhow::Result<()> {
-        log_manifest_trace_value(&self.to_masked_value(config)?);
+        if config.show_secrets {
+            self.log();
+        } else {
+            let value = self.to_masked_value(config)?;
+            log_manifest_trace_value(&value["properties"]);
+            if let Some(agents) = value.get("agents").and_then(Value::as_object) {
+                for (agent_type_name, properties) in agents {
+                    log_manifest_trace_agent_header(&AgentTypeName(agent_type_name.clone()));
+                    log_manifest_trace_value(properties);
+                }
+            }
+            if self.resolved_config.is_some() {
+                log_manifest_trace_value(
+                    &serde_json::json!({"resolvedConfig": value["resolvedConfig"]}),
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -1573,6 +1602,11 @@ impl ComponentManifestTraceView {
         if !config.show_secrets {
             if let Some(properties) = value.get_mut("properties") {
                 mask_component_layer_properties(properties);
+            }
+            if let Some(agents) = value.get_mut("agents").and_then(Value::as_object_mut) {
+                for properties in agents.values_mut() {
+                    mask_component_layer_properties(properties);
+                }
             }
             if let Some(fields) = value
                 .get_mut("resolvedConfig")
@@ -1587,6 +1621,24 @@ impl ComponentManifestTraceView {
         }
         Ok(value)
     }
+}
+
+fn log_manifest_trace_agent_header(agent_type_name: &AgentTypeName) {
+    logln("");
+    logln(format!(
+        "Agent type {}:",
+        agent_type_name.0.log_color_highlight()
+    ));
+}
+
+fn log_manifest_trace_properties(properties: &impl Serialize) {
+    let rendered = if SHOULD_COLORIZE.should_colorize() {
+        to_colored_json(properties)
+    } else {
+        serde_json::to_string_pretty(properties).map_err(Into::into)
+    };
+
+    log_manifest_trace_rendered(rendered);
 }
 
 fn log_manifest_trace_value(properties: &Value) {
@@ -1615,6 +1667,9 @@ fn mask_component_layer_properties(properties: &mut Value) {
         return;
     };
 
+    if let Some(config) = properties.get_mut("config") {
+        mask_config_property_payloads(config);
+    }
     if let Some(inputs) = properties
         .get_mut("configInputs")
         .and_then(Value::as_array_mut)
@@ -1650,6 +1705,32 @@ fn mask_config_schema_defaults(value: &mut Value) {
         Value::Array(values) => {
             for value in values {
                 mask_config_schema_defaults(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn mask_config_property_payloads(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                match key.as_str() {
+                    "value" | "newValue" => mask_json_leaf_values(value),
+                    "insertedEntries" | "updatedEntries" => {
+                        if let Some(object) = value.as_object_mut() {
+                            for value in object.values_mut() {
+                                mask_json_leaf_values(value);
+                            }
+                        }
+                    }
+                    _ => mask_config_property_payloads(value),
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                mask_config_property_payloads(value);
             }
         }
         _ => {}
