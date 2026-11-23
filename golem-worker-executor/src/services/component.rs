@@ -155,6 +155,7 @@ impl ComponentServiceDefault {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentService for ComponentServiceDefault {
     async fn get(
         &self,

@@ -3898,7 +3898,6 @@ impl wasmtime_wasi::p2::bindings::cli::environment::Host for TestWorkerCtx {
     }
 }
 
-#[async_trait]
 impl FuelManagement for TestWorkerCtx {
     fn observe_fuel_execution(&mut self, _current_level: u64, _entering_wasm: bool) -> bool {
         false
@@ -3946,7 +3945,6 @@ impl CallCountManagement for TestWorkerCtx {
     }
 }
 
-#[async_trait]
 impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     type ExtraDeps = AdditionalTestDeps;
 
@@ -4011,7 +4009,6 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     }
 }
 
-#[async_trait]
 impl InvocationManagement for TestWorkerCtx {
     async fn set_current_idempotency_key(&mut self, key: golem_common::model::InvocationId) {
         self.durable_ctx.set_current_idempotency_key(key).await
@@ -4043,7 +4040,6 @@ impl InvocationManagement for TestWorkerCtx {
     }
 }
 
-#[async_trait]
 impl StatusManagement for TestWorkerCtx {
     fn check_interrupt(&self) -> Option<InterruptKind> {
         self.durable_ctx.check_interrupt()
@@ -4058,7 +4054,6 @@ impl StatusManagement for TestWorkerCtx {
     }
 }
 
-#[async_trait]
 impl InvocationHooks for TestWorkerCtx {
     async fn on_agent_invocation_started(
         &mut self,
@@ -4157,7 +4152,6 @@ impl ResourceStore for TestWorkerCtx {
     }
 }
 
-#[async_trait]
 impl UpdateManagement for TestWorkerCtx {
     fn snapshot_boundary_blocker(&self) -> Option<SnapshotBoundaryBlocker> {
         self.durable_ctx.snapshot_boundary_blocker()
@@ -4210,7 +4204,6 @@ struct TestServerBootstrap {
     services: Arc<Mutex<Option<golem_worker_executor::services::All<TestWorkerCtx>>>>,
 }
 
-#[async_trait]
 impl WorkerCtx for TestWorkerCtx {
     type PublicState = PublicDurableWorkerState<TestWorkerCtx>;
 
@@ -4580,7 +4573,6 @@ impl ResourceLimiterAsync for TestWorkerCtx {
     }
 }
 
-#[async_trait]
 impl FileSystemReading for TestWorkerCtx {
     async fn get_file_system_node(
         &self,
@@ -4688,7 +4680,6 @@ impl HostFutureInvokeResult for TestWorkerCtx {
     }
 }
 
-#[async_trait]
 impl InvocationContextManagement for TestWorkerCtx {
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
         self.durable_ctx.remove_span(span_id)

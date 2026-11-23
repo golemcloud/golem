@@ -274,6 +274,7 @@ trait StoreConnector: Send + Sync {
 struct MigratedConnections;
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl StoreConnector for MigratedConnections {
     async fn redis(&self, config: &RedisConfig) -> anyhow::Result<RedisPool> {
         Ok(RedisPool::configured(config).await?)
@@ -457,6 +458,7 @@ mod tests {
     }
 
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl StoreConnector for RecordingConnector {
         async fn redis(&self, config: &RedisConfig) -> anyhow::Result<RedisPool> {
             self.record(format!("redis database {}", config.database));

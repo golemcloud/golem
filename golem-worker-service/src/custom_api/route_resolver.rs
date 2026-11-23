@@ -1546,6 +1546,7 @@ pub(super) mod tests {
     struct ChangingSecurityLookup(std::sync::atomic::AtomicBool);
 
     #[async_trait::async_trait]
+    #[golem_async_trait::region_simple]
     impl HttpApiDefinitionsLookup for ChangingSecurityLookup {
         async fn get(&self, domain: &Domain) -> Result<CompiledRoutes, ApiDefinitionLookupError> {
             let mut routes = LiteralLookup(vec!["protected".into()]).get(domain).await?;

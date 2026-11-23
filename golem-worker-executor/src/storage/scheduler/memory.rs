@@ -47,6 +47,7 @@ impl InMemorySchedulerStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerStorage for InMemorySchedulerStorage {
     async fn insert(
         &self,

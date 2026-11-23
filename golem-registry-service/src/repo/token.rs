@@ -63,6 +63,7 @@ impl<Repo: TokenRepo> LoggedTokenRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: TokenRepo> TokenRepo for LoggedTokenRepo<Repo> {
     async fn create(&self, token: TokenRecord) -> RepoResult<Option<TokenRecord>> {
         let span = Self::span_id(token.token_id);
@@ -141,6 +142,7 @@ impl<DBP: Pool> DbTokenRepo<DBP> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl TokenRepo for DbTokenRepo<PostgresPool> {
     async fn create(&self, token: TokenRecord) -> RepoResult<Option<TokenRecord>> {
         self.with_rw("create")

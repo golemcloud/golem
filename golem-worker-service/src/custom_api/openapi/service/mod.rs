@@ -111,6 +111,7 @@ trait ProviderInvoker: Send + Sync {
 struct WorkerProviderInvoker(Arc<WorkerService>);
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ProviderInvoker for WorkerProviderInvoker {
     async fn invoke(&self, call: &ProviderCall) -> Result<String, OpenApiError> {
         let input = SchemaValue::Record { fields: vec![] }
