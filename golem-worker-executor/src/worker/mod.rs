@@ -23,6 +23,7 @@ mod runtime;
 mod startup;
 mod streaming;
 
+use acquisition::ConstructionError;
 #[cfg(test)]
 use acquisition::snapshot_policy_of_mode;
 #[cfg(test)]
@@ -333,6 +334,7 @@ pub enum CreateIntent {
     Invocation {
         owner: NewOwner,
         idempotency_key: Option<IdempotencyKey>,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
     },
     /// An explicit create request.
     Create {
@@ -360,6 +362,7 @@ impl CreateIntent {
             Self::Invocation {
                 owner,
                 idempotency_key,
+                ..
             } if !owner.keyed => (CreateRequestKind::Unkeyed, idempotency_key.clone()),
             Self::Invocation { .. } => (CreateRequestKind::GetOrCreate, None),
             Self::Create {
@@ -1009,7 +1012,7 @@ impl Drop for WorkerStatusMetric {
 #[derive(Debug)]
 enum WorkerInstance {
     Unresolved,
-    Initializing(Shared<BoxFuture<'static, Result<bool, WorkerExecutorError>>>),
+    Initializing(Shared<BoxFuture<'static, Result<bool, ConstructionError>>>),
     /// No invocation loop runs. `startup_failure` is the failed last start of a durable agent:
     /// admission returns it until the next start, which runs the agent again.
     Unloaded {

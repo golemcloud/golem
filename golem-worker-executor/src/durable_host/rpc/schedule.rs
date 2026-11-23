@@ -352,6 +352,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .create_demand(
                     dispatch_target(&remote_agent_id, ephemeral.as_ref()),
                     &method_name,
+                    Some(crate::worker::invocation::native_invocation_start(
+                        &method_name,
+                        &input_value,
+                        false,
+                    )?),
                     self.created_by(),
                     self.agent_id(),
                     &env,

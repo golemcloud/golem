@@ -23,17 +23,19 @@ from the invocation descriptor. A same-origin retry with a reissued caller-owned
 first acceptance; it does not replace the accepted input binding, even when the attempt ID survived
 the cut. Foreign handles unrelated to the caller still require exact identity.
 
-Method Pending and Started payloads retain the original `AgentMethodInput`, not the decoded
-execution value. Request equality uses that carrier. Live lowering and recovery decode it using
-the loaded Store's method schema. Prepared contributes committed stream endpoints and element
+Method Pending and Started payloads retain the original `AgentMethodInput`, not a replacement
+execution value. Request equality uses that input. HTTP routes decode with their deployed compiled
+schema and dispatch Native values; public JSON is decoded with the loaded Store's schema. Native
+values retain explicit stream paths and ordinal placeholders, never live endpoints. The Store
+validates the resulting input against its selected method. Prepared contributes endpoints and element
 fingerprints only: its scalar values never replace the original request. Native and public JSON
-bindings follow request-local traversal order; HTTP stream arguments match by name so selected
-field reordering cannot exchange their endpoints. Incompatible element schemas or unused bindings
+bindings follow request-local traversal order, including Native values encoded by HTTP routes.
+Execution does not reinterpret HTTP strings or reorder deployed arguments. Incompatible element schemas or unused bindings
 fail reconstruction. An automatic update uses its candidate Store; reconstruction does not pin
 the previous method schema to make the update succeed. The start hook's secret-hold check inspects
 the lowered execution value before guest effects. Public method diagnostics project the original
-carrier without component metadata, retaining rejected raw fields while redacting native host
-capabilities before opaque encoding.
+input without component metadata, retaining rejected JSON fields while redacting native host
+capabilities in a typed SchemaValue field.
 
 Method acceptance commits the original `PendingAgentInvocation` and schema-independent `Attached`
 together. Attached retains public session identity, expiry, authority, execution configuration and

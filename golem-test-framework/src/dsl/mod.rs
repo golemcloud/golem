@@ -66,25 +66,16 @@ use tokio::sync::oneshot::Sender;
 use tracing::{Instrument, debug, info};
 use uuid::Uuid;
 
-/// Reads the schema-independent native request from a public method invocation.
-/// This fixture reader uses Prost's default recursion limit; it is not a decoder
-/// for the full structural-depth domain accepted by native request capture.
+/// Reads the typed native request projection from a public method invocation.
+/// Stream leaves remain ordinal placeholders, not executable endpoints.
 pub fn original_native_method_input(input: &TypedSchemaValue) -> anyhow::Result<SchemaValue> {
     use golem_common::model::agent::PublicMethodInput;
-    use golem_common::schema::stream::SchemaValueStream;
-    use golem_common::schema::streaming::decode_recursive_stream_value;
-    use prost::Message;
 
-    let PublicMethodInput::Native { protobuf_value, .. } =
-        PublicMethodInput::from_value(input.value())?
+    let PublicMethodInput::Native { value, .. } = PublicMethodInput::from_value(input.value())?
     else {
         anyhow::bail!("expected a native method request")
     };
-    let value = golem_schema::proto::golem::schema::SchemaValue::decode(protobuf_value.as_slice())?;
-    decode_recursive_stream_value(value, |ordinal, _| {
-        Ok(SchemaValueStream::from_host_endpoint(ordinal))
-    })
-    .map_err(anyhow::Error::msg)
+    Ok(value)
 }
 
 /// Represents a test component whose analysis cache has been pre-warmed

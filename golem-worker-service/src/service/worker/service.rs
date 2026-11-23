@@ -852,6 +852,7 @@ impl WorkerService {
         invocation_context: Option<InvocationContext>,
         caller: golem_api_grpc::proto::golem::component::Caller,
         expected: Option<golem_schema::proto::golem::common::Uuid>,
+        invocation: InvocationStart,
     ) -> WorkerResult<AgentFingerprint> {
         if expected.is_some() || !target.creates() {
             let expected = expected.map(|expected| AgentFingerprint(uuid::Uuid::from(expected)));
@@ -885,6 +886,7 @@ impl WorkerService {
                 invocation_context,
                 caller,
                 None,
+                Some(invocation),
             )
             .await
             .map(|(_, fingerprint)| fingerprint)
@@ -922,6 +924,7 @@ impl WorkerService {
                 invocation_context,
                 caller,
                 idempotency_key,
+                None,
             )
             .await?;
 
@@ -947,6 +950,7 @@ impl WorkerService {
         caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        invocation: Option<InvocationStart>,
     ) -> WorkerResult<(AgentId, ComponentRevision, AgentFingerprint)> {
         let component = self
             .component_service
@@ -996,6 +1000,7 @@ impl WorkerService {
                 caller,
                 idempotency_key,
                 freshness_disposition,
+                invocation,
             )
             .await
         } else {
@@ -1030,7 +1035,16 @@ impl WorkerService {
         caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        invocation: Option<InvocationStart>,
     ) -> WorkerResult<(AgentId, ComponentRevision, AgentFingerprint)> {
+        if invocation
+            .as_ref()
+            .is_some_and(|start| start.method_name.as_deref() != Some(method_name.as_str()))
+        {
+            return Err(WorkerServiceError::TypeChecker(
+                "creation context does not match the prepared method".into(),
+            ));
+        }
         authorize_target(
             &auth_ctx,
             component,
@@ -1053,6 +1067,7 @@ impl WorkerService {
                 caller,
                 idempotency_key,
                 freshness_disposition,
+                invocation,
             )
             .await?;
 
@@ -2541,6 +2556,7 @@ impl WorkerService {
                         WorkerServiceError::TypeChecker("caller is missing".to_string())
                     })?,
                     start.expected_callee_fingerprint,
+                    start.clone(),
                 )
                 .await?;
             // The resolution created or found the incarnation, so the start names an
@@ -2798,6 +2814,19 @@ impl WorkerService {
                     None,
                     caller.clone(),
                     expected_fingerprint.map(|fingerprint| fingerprint.0.into()),
+                    InvocationStart {
+                        method_name: Some(method_name.clone()),
+                        captured_method_input: Some(
+                            golem_common::serialization::serialize(
+                                &golem_common::model::agent::AgentMethodInput::PublicJson(
+                                    start.method_parameters.clone(),
+                                ),
+                            )
+                            .map_err(WorkerServiceError::Internal)?,
+                        ),
+                        allow_streams: true,
+                        ..Default::default()
+                    },
                 )
                 .await?;
             Some(fingerprint.0.into())
@@ -4809,6 +4838,7 @@ mod tests {
             _: golem_api_grpc::proto::golem::component::Caller,
             _: Option<IdempotencyKey>,
             _: InvocationFreshnessDisposition,
+            _: Option<InvocationStart>,
         ) -> WorkerResult<(AgentId, AgentFingerprint)> {
             self.prepared_agent_ids
                 .lock()
@@ -4829,6 +4859,7 @@ mod tests {
             _: Option<InvocationContext>,
             caller: golem_api_grpc::proto::golem::component::Caller,
             idempotency_key: Option<IdempotencyKey>,
+            _: Option<InvocationStart>,
         ) -> WorkerResult<(AgentId, AgentFingerprint)> {
             self.created_callers
                 .lock()
@@ -6130,6 +6161,7 @@ mod tests {
                     Caller::anonymous().into(),
                     Some(key.clone()),
                     InvocationFreshnessDisposition::MayExist,
+                    None,
                 )
                 .await;
             if allowed {
@@ -6147,6 +6179,53 @@ mod tests {
                 .lock()
                 .unwrap(),
             vec![Some(key)],
+        );
+    }
+
+    #[test]
+    async fn preparation_rejects_a_different_creation_method_before_dispatch() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let result = harness
+            .worker_service
+            .launch_agent(
+                harness.component_id,
+                harness.constructor(),
+                None,
+                Some("WRONG".into()),
+                true,
+                HashMap::new(),
+                Vec::new(),
+                true,
+                AuthCtx::system(),
+                None,
+                Caller::anonymous().into(),
+                None,
+                InvocationFreshnessDisposition::MayExist,
+                Some(InvocationStart {
+                    method_name: Some("run".into()),
+                    input: Some(SchemaValue::Record { fields: vec![] }.try_into().unwrap()),
+                    ..Default::default()
+                }),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(WorkerServiceError::TypeChecker(details)) if details.contains("prepared method"))
+        );
+        assert!(
+            harness
+                .worker_client
+                .prepared_agent_ids
+                .lock()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            harness
+                .worker_client
+                .created_agent_ids
+                .lock()
+                .unwrap()
+                .is_empty()
         );
     }
 
@@ -6180,6 +6259,7 @@ mod tests {
                 Caller::anonymous().into(),
                 key,
                 InvocationFreshnessDisposition::MayExist,
+                None,
             )
         };
 
@@ -8123,7 +8203,6 @@ mod tests {
                 },
                 body: RequestBodySchema::Unused,
                 method_parameters: vec![MethodParameter::Query {
-                    argument_name: "message".into(),
                     query_parameter_name: "message".into(),
                     parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::Str),
                 }],

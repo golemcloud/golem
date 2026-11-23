@@ -227,6 +227,7 @@ impl Rpc for RemoteInvocationRpc {
         &self,
         target: ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         _self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -247,6 +248,7 @@ impl Rpc for RemoteInvocationRpc {
             .prepare(
                 &target,
                 method_name,
+                invocation,
                 self_agent_id,
                 HashMap::from_iter(self_env.to_vec()),
                 self_stack,

@@ -719,6 +719,7 @@ impl TestDsl for TestWorkerExecutor {
                 invocation_context: None,
                 idempotency_key: None,
                 freshness_disposition: 0,
+                invocation: None,
             })
             .await?;
 
@@ -1506,6 +1507,7 @@ impl TestWorkerExecutor {
             invocation_context: None,
             idempotency_key: None,
             freshness_disposition: 0,
+            invocation: None,
         })
     }
 
@@ -1544,6 +1546,7 @@ impl TestWorkerExecutor {
                 invocation_context: None,
                 idempotency_key: None,
                 freshness_disposition: 0,
+                invocation: None,
             })
             .await?
             .into_inner();

@@ -3,6 +3,11 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::durability::DurabilityHost;
 use golem_common::model::InvocationId;
 
+pub(super) enum InvocationFailure {
+    RejectedBeforeGuest(WorkerExecutorError),
+    Execution(WorkerExecutorError),
+}
+
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     pub(super) async fn record_retry_interrupt_failure(
         &self,
@@ -224,7 +229,23 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let result = match result {
             Ok(None) => return CommandOutcome::Continue,
             Ok(Some(result)) => Ok(result),
-            Err(error) => Err(error),
+            Err(InvocationFailure::RejectedBeforeGuest(error))
+                if self.parent.agent_mode() == AgentMode::Durable
+                    && self.store.data().check_interrupt().is_none()
+                    && self
+                        .store
+                        .data()
+                        .durable_ctx()
+                        .selected_tool_owner_failure()
+                        .is_none() =>
+            {
+                return self
+                    .reject_pre_guest_invocation(&display_name, &invocation_idempotency_key, error)
+                    .await;
+            }
+            Err(
+                InvocationFailure::Execution(error) | InvocationFailure::RejectedBeforeGuest(error),
+            ) => Err(error),
         };
 
         match result {
@@ -318,7 +339,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         mut invocation_context: InvocationContextStack,
         idempotency_key: InvocationId,
         invocation: HydratedInvocation,
-    ) -> Result<Option<InvokeResult>, WorkerExecutorError> {
+    ) -> Result<Option<InvokeResult>, InvocationFailure> {
         let (lowered, local_span_ids, inherited_span_ids) = async {
             self.store
                 .data_mut()
@@ -357,32 +378,82 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 &self.store.data().component_metadata().metadata,
                 &self.parent.owner_context,
                 execution_input,
-            )?;
+            );
 
             Ok::<_, WorkerExecutorError>((lowered, local_span_ids, inherited_span_ids))
         }
         .instrument(span!(Level::INFO, "prepare_invocation_context"))
-        .await?;
+        .await
+        .map_err(InvocationFailure::Execution)?;
 
-        let result = invoke_live_observed_and_traced(
-            lowered,
-            self.store,
-            self.instance,
-            invocation,
-            self.uses_streams.then_some(&idempotency_key),
-        )
-        .await;
+        let result = match lowered {
+            Ok(lowered) => invoke_live_observed_and_traced(
+                lowered,
+                self.store,
+                self.instance,
+                invocation,
+                self.uses_streams.then_some(&idempotency_key),
+            )
+            .await
+            .map_err(InvocationFailure::Execution),
+            Err(error @ WorkerExecutorError::InvalidRequest { .. }) => {
+                Err(InvocationFailure::RejectedBeforeGuest(error))
+            }
+            Err(error) => Err(InvocationFailure::Execution(error)),
+        };
 
         // Invocation-owned spans are closed by AgentInvocationFinished in the
         // oplog processor; removing their resident context records no transition.
         for span_id in local_span_ids {
-            self.store.data_mut().remove_span(&span_id)?;
+            self.store
+                .data_mut()
+                .remove_span(&span_id)
+                .map_err(InvocationFailure::Execution)?;
         }
         for span_id in inherited_span_ids {
-            self.store.data_mut().remove_span(&span_id)?;
+            self.store
+                .data_mut()
+                .remove_span(&span_id)
+                .map_err(InvocationFailure::Execution)?;
         }
 
         result
+    }
+
+    async fn reject_pre_guest_invocation(
+        &mut self,
+        function: &str,
+        id: &InvocationId,
+        error: WorkerExecutorError,
+    ) -> CommandOutcome {
+        let details = error.to_string();
+        let trap = TrapType::from_worker_executor_error::<Ctx>(
+            error,
+            OplogIndex::INITIAL,
+            self.parent.agent_mode(),
+        );
+        match self
+            .store
+            .data_mut()
+            .on_invocation_failure(function, &trap)
+            .await
+        {
+            InvocationFailureDecision::Rejected => {
+                if self.uses_streams
+                    && let Err(error) = self
+                        .parent
+                        .fail_durable_streaming_session(id, details)
+                        .await
+                {
+                    return self.invocation_failure_recovery(&error);
+                }
+                CommandOutcome::Continue
+            }
+            InvocationFailureDecision::Infrastructure(error) => {
+                self.invocation_failure_recovery(&error)
+            }
+            InvocationFailureDecision::Retry(decision) => CommandOutcome::BreakInnerLoop(decision),
+        }
     }
 
     /// The logic handling a successfully finished agent invocation

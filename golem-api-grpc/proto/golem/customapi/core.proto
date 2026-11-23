@@ -155,7 +155,6 @@ message ConstructorParameter {
 }
 
 message MethodParameter {
-  string argument_name = 7;
   oneof kind {
     Path path = 1;
     Query query = 2;
@@ -181,7 +180,7 @@ message MethodParameter {
   }
 
   message JsonObjectBodyField {
-    string field_name = 1;
+    uint32 field_index = 1;
   }
 
   message UnstructuredBinaryBody { }

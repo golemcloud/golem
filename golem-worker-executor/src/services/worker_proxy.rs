@@ -133,6 +133,7 @@ pub trait WorkerProxy: Send + Sync {
         &self,
         target: &ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -421,6 +422,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         &self,
         target: &ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -458,6 +460,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     }),
                     caller: Some(caller.clone().into()),
                     method_name: Some(method_name.to_string()),
+                    invocation: invocation.clone(),
                     idempotency_key: idempotency_key.clone().map(Into::into),
                     freshness_disposition: match freshness_disposition {
                         InvocationFreshnessDisposition::KnownFresh => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh as i32,
@@ -518,6 +521,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     }),
                     caller: Some(caller.clone().into()),
                     method_name: None,
+                    invocation: None,
                     idempotency_key: idempotency_key.clone().map(Into::into),
                     freshness_disposition: 0,
                 }))
@@ -1838,6 +1842,7 @@ mod tests {
                 .prepare(
                     &target,
                     "transform",
+                    None,
                     &caller,
                     HashMap::new(),
                     InvocationContextStack::fresh(),

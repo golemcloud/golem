@@ -42,9 +42,10 @@ async fn deletion_cancels_initial_wait_without_acquiring_a_permit(
         &InvocationContextStack::fresh(),
         callers::anonymous(),
         golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
-        golem_worker_executor::worker::CreateIntent::Invocation {
+        golem_worker_executor::worker::CreateIntent::Create {
             owner: golem_worker_executor::worker::NewOwner::keyed(component.id, name.clone()),
             idempotency_key: None,
+            exclusive: false,
         },
     )
     .await?;

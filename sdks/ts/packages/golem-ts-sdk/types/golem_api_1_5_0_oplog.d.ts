@@ -476,8 +476,8 @@ declare module 'golem:api/oplog@1.5.0' {
     methodName: string;
     /**
      * Component-independent original-method-input diagnostic envelope, not the
-     * executed method's input schema. Includes rejected captured JSON/HTTP fields;
-     * native host capabilities are redacted before encoding.
+     * executed method's input schema. Includes rejected captured JSON fields;
+     * native values are typed and host capabilities are redacted before encoding.
      */
     functionInput: TypedSchemaValue;
     traceId: string;

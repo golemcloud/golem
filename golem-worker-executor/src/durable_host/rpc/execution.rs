@@ -176,6 +176,8 @@ pub(super) async fn streaming_target_fingerprint<Ctx: WorkerCtx>(
         remote_agent_id,
         &idempotency_key,
         &prepared.method_name,
+        &prepared.input_value,
+        prepared.streaming,
         freshness_disposition,
     )
     .await?;

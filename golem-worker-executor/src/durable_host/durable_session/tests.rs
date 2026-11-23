@@ -3518,6 +3518,7 @@ impl Rpc for AttachedProducerRpc {
         &self,
         _target: ResolvedTarget,
         _method_name: &str,
+        _invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         _self_created_by: AccountId,
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],

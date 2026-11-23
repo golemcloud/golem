@@ -28,37 +28,6 @@ fn main() -> miette::Result<()> {
     )?;
 
     let mut config = prost_build::Config::new();
-    for name in [
-        ".golem.common.Empty",
-        ".golem.common.UUID",
-        ".golem.schema.SchemaValue",
-        ".golem.schema.SchemaValueStreamReference",
-        ".golem.schema.RecordValue",
-        ".golem.schema.VariantValue",
-        ".golem.schema.FlagsValue",
-        ".golem.schema.TupleValue",
-        ".golem.schema.ListValue",
-        ".golem.schema.FixedListValue",
-        ".golem.schema.MapEntry",
-        ".golem.schema.MapValue",
-        ".golem.schema.OptionValue",
-        ".golem.schema.ResultValue",
-        ".golem.schema.TextValue",
-        ".golem.schema.BinaryValue",
-        ".golem.schema.DatetimeValue",
-        ".golem.schema.DurationValue",
-        ".golem.schema.QuantityValue",
-        ".golem.schema.UnionValue",
-        ".golem.schema.SecretValue",
-        ".golem.schema.QuotaTokenValue",
-        ".golem.schema.PermissionCardValue",
-        ".golem.schema.StringList",
-    ] {
-        config.type_attribute(
-            name,
-            "#[cfg_attr(feature = \"full\", derive(desert_rust::BinaryCodec))]",
-        );
-    }
     config
         .include_file("mod.rs")
         .compile_fds(file_descriptors)

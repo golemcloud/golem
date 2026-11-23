@@ -968,6 +968,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .authority
                 .reach_final_outcome();
             self.rederive_agent_effective_surface_from_wallet();
+            self.clear_invocation_scope_card().await;
             // Terminal worker failures also fail queued invocations. A rejected request completes
             // only its own idempotency key so later queued work remains available.
             if let Some(idempotency_key) = self.state.get_current_idempotency_key() {

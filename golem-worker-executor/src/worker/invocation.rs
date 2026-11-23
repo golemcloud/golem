@@ -2528,6 +2528,50 @@ fn materialize_call<Ctx: WorkerCtx>(
     })
 }
 
+pub(crate) fn native_invocation_start(
+    method_name: &str,
+    input: &SchemaValue,
+    allow_streams: bool,
+) -> Result<golem_api_grpc::proto::golem::worker::InvocationStart, WorkerExecutorError> {
+    let mut ordinal = 0;
+    let input = golem_common::schema::streaming::encode_recursive_stream_value(input, |_, _| {
+        let id = ordinal;
+        ordinal += 1;
+        Ok(id)
+    })
+    .map_err(WorkerExecutorError::invalid_request)?;
+    Ok(golem_api_grpc::proto::golem::worker::InvocationStart {
+        method_name: Some(method_name.to_string()),
+        input: Some(input),
+        allow_streams,
+        ..Default::default()
+    })
+}
+
+/// Checks only the request against the component chosen for a missing owner. This neither
+/// registers streams nor enters a guest, and must run before Create is persisted.
+pub(crate) fn validate_fresh_invocation(
+    start: &golem_api_grpc::proto::golem::worker::InvocationStart,
+    component_metadata: &ComponentMetadata,
+    owner_context: &ResolvedOwnerContext,
+) -> Result<(), WorkerExecutorError> {
+    let input = crate::grpc::capture_method_input(start)?;
+    let invocation = AgentInvocation::AgentMethod {
+        idempotency_key: golem_common::model::InvocationId(uuid::Uuid::nil()),
+        method_name: start
+            .method_name
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("method_name is required"))?,
+        input,
+        allow_streams: start.allow_streams,
+        invocation_context: golem_common::model::invocation_context::InvocationContextStack::fresh(
+        ),
+        caller: golem_common::model::caller::Caller::anonymous(),
+        scope_card: None,
+    };
+    lower_invocation(invocation, component_metadata, owner_context, None).map(|_| ())
+}
+
 pub fn lower_invocation(
     invocation: AgentInvocation,
     component_metadata: &ComponentMetadata,
@@ -2719,7 +2763,6 @@ pub(crate) fn decode_method_input(
 ) -> Result<SchemaValue, WorkerExecutorError> {
     use crate::grpc::stream_element_schema;
     use golem_common::model::agent::AgentMethodInput;
-    use golem_common::model::durable_stream::StreamValuePathStep;
     use golem_common::model::invocation_session_public::PublicErrorCode;
     use golem_common::schema::public_json::{
         PublicSchemaValueError, PublicStreamReferencePolicy, decode_public_schema_value,
@@ -2755,36 +2798,11 @@ pub(crate) fn decode_method_input(
                 let fingerprint = schema_fingerprint_v1(prepared.graph(), element)
                     .map_err(|error| error.to_string())?;
                 let ordinal = bindings.len() as u64;
-                let position = if matches!(input, AgentMethodInput::Http(_)) {
-                    let SchemaType::Record { fields, .. } = prepared
-                        .graph()
-                        .resolve_ref(prepared.root_type())
-                        .map_err(|error| error.to_string())?
-                    else {
-                        return Err("recorded HTTP method input is not a record".into());
-                    };
-                    let [StreamValuePathStep::RecordField(index)] = path else {
-                        return Err("recorded HTTP input stream is not an argument".into());
-                    };
-                    let name = &fields[*index as usize].name;
-                    method
-                        .input_schema
-                        .fields()
-                        .iter()
-                        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
-                        .position(|field| &field.name == name)
-                        .ok_or_else(|| format!("recorded HTTP input stream '{name}' was removed"))?
-                } else {
-                    bindings.len()
-                };
-                bindings.push((stream.clone(), fingerprint, position));
+                bindings.push((stream.clone(), fingerprint));
                 Ok(ordinal)
             },
         )
         .map_err(WorkerExecutorError::invalid_request)?;
-    }
-    if matches!(input, AgentMethodInput::Http(_)) {
-        bindings.sort_by_key(|(_, _, position)| *position);
     }
     let value = match input {
         AgentMethodInput::Native(input) => input.decode(|ordinal, _| {
@@ -2797,7 +2815,7 @@ pub(crate) fn decode_method_input(
             }
             bindings
                 .get(ordinal)
-                .map(|(stream, _, _)| stream.clone())
+                .map(|(stream, _)| stream.clone())
                 .ok_or_else(|| "stream-bearing input requires committed execution bindings".into())
         }),
         AgentMethodInput::PublicJson(input) => {
@@ -2821,7 +2839,7 @@ pub(crate) fn decode_method_input(
                     }
                     streams
                         .next()
-                        .map(|(stream, _, _)| stream.clone())
+                        .map(|(stream, _)| stream.clone())
                         .ok_or_else(|| {
                             PublicSchemaValueError::new(
                                 PublicErrorCode::ValidationError,
@@ -2832,31 +2850,6 @@ pub(crate) fn decode_method_input(
             )
             .map_err(|error| error.to_string())
         }
-        AgentMethodInput::Http(input) => {
-            let mut streams = bindings.iter();
-            let mut ordinal = 0u64;
-            golem_service_base::custom_api::method_input::decode_http_method_input(
-                input,
-                &agent_type.schema,
-                &method.input_schema,
-                |_, _| {
-                    if prepared.is_none() {
-                        let stream =
-                            golem_common::schema::stream::SchemaValueStream::from_host_endpoint(
-                                crate::grpc::TransportStreamId(ordinal),
-                            );
-                        ordinal += 1;
-                        return Ok(stream);
-                    }
-                    streams
-                        .next()
-                        .map(|(stream, _, _)| stream.clone())
-                        .ok_or_else(|| {
-                            "stream-bearing input requires committed execution bindings".into()
-                        })
-                },
-            )
-        }
     };
     let value = value.map_err(WorkerExecutorError::invalid_request)?;
     if !bindings.is_empty() {
@@ -2865,11 +2858,7 @@ pub(crate) fn decode_method_input(
             let element = stream_element_schema(&graph, &graph.root, path)?;
             let fingerprint =
                 schema_fingerprint_v1(&graph, element).map_err(|error| error.to_string())?;
-            if bindings
-                .get(ordinal)
-                .map(|(_, fingerprint, _)| *fingerprint)
-                != Some(fingerprint)
-            {
+            if bindings.get(ordinal).map(|(_, fingerprint)| *fingerprint) != Some(fingerprint) {
                 return Err(
                     "recorded input stream is incompatible with the selected method".into(),
                 );
@@ -3639,11 +3628,8 @@ mod tests {
     }
 
     #[test]
-    fn http_method_input_uses_raw_arguments_and_selected_stream_bindings() {
-        use golem_common::model::agent::{
-            AgentMethodInput, HttpMethodArgument, HttpMethodArgumentSource, HttpMethodBody,
-            HttpMethodInput,
-        };
+    fn deployed_method_input_keeps_its_encoding_and_selected_stream_bindings() {
+        use golem_common::model::agent::{AgentMethodInput, NativeMethodInput};
         use golem_common::schema::stream::SchemaValueStream;
 
         let method = AgentMethodSchema {
@@ -3663,19 +3649,19 @@ mod tests {
         let AgentInvocation::AgentMethod { input, .. } = &mut original else {
             unreachable!()
         };
-        *input = AgentMethodInput::Http(
-            HttpMethodInput::capture(
-                vec![HttpMethodArgument {
-                    argument_name: "count".into(),
-                    source: HttpMethodArgumentSource::Path {
-                        path_segment_index: 3,
-                        value: "7".into(),
-                    },
-                }],
-                HttpMethodBody::Absent,
-            )
-            .unwrap(),
-        );
+        let deployed_input = SchemaValue::Record {
+            fields: vec![
+                SchemaValue::U32(7),
+                SchemaValue::Stream(SchemaValueStream::from_host_endpoint(8u64)),
+                SchemaValue::Stream(SchemaValueStream::from_host_endpoint(9u64)),
+            ],
+        };
+        let proto = golem_common::schema::streaming::encode_recursive_stream_value(
+            &deployed_input,
+            |stream, _| stream.with_host_endpoint::<u64, _>(|id| *id),
+        )
+        .unwrap();
+        *input = AgentMethodInput::Native(NativeMethodInput::capture(proto, vec![]).unwrap().0);
         let prepared = TypedSchemaValue::new(
             SchemaGraph::anonymous(SchemaType::record(
                 method
@@ -3727,8 +3713,18 @@ mod tests {
             }
             let metadata = metadata_with_method(selected);
             let lowered =
-                lower_invocation(original.clone(), &metadata, &owner, Some(prepared.clone()))
-                    .unwrap();
+                lower_invocation(original.clone(), &metadata, &owner, Some(prepared.clone()));
+            if reversed {
+                assert!(
+                    lowered
+                        .err()
+                        .unwrap()
+                        .to_string()
+                        .contains("incompatible with the selected method")
+                );
+                continue;
+            }
+            let lowered = lowered.unwrap();
             let LoweredCall::Invoke {
                 input: SchemaValue::Record { fields },
                 ..
@@ -3737,11 +3733,7 @@ mod tests {
                 panic!("expected method input")
             };
             assert_eq!(fields[0], SchemaValue::U32(7));
-            let expected = if reversed {
-                [91_u64, 42_u64]
-            } else {
-                [42_u64, 91_u64]
-            };
+            let expected = [42_u64, 91_u64];
             for (field, expected) in fields[1..].iter().zip(expected) {
                 let SchemaValue::Stream(stream) = field else {
                     panic!("expected restored stream")

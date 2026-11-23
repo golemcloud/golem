@@ -100,24 +100,6 @@ impl RequestHandlerError {
     }
 }
 
-impl From<golem_service_base::custom_api::parameter_parsing::HttpParameterError>
-    for RequestHandlerError
-{
-    fn from(error: golem_service_base::custom_api::parameter_parsing::HttpParameterError) -> Self {
-        use golem_service_base::custom_api::parameter_parsing::HttpParameterError;
-        match error {
-            HttpParameterError::ValueParsingFailed { value, expected } => {
-                Self::ValueParsingFailed { value, expected }
-            }
-            HttpParameterError::MissingValue { expected } => Self::MissingValue { expected },
-            HttpParameterError::TooManyValues { expected } => Self::TooManyValues { expected },
-            HttpParameterError::InvalidParameter { name, error } => {
-                Self::InvalidParameter { name, error }
-            }
-        }
-    }
-}
-
 impl SafeDisplay for RequestHandlerError {
     fn to_safe_string(&self) -> String {
         match self {

@@ -362,7 +362,14 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
                 self_stack,
                 caller,
                 freshness_disposition,
-                target.invocation_intent(Some(request_key.owner_key(method_name))),
+                target.invocation_intent(
+                    Some(request_key.owner_key(method_name)),
+                    Some(crate::worker::invocation::native_invocation_start(
+                        method_name,
+                        method_parameters,
+                        false,
+                    )?),
+                ),
             )
             .await?),
         }
@@ -554,6 +561,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         &self,
         target: ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -565,6 +573,15 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         let owned_agent_id = &target.owned_agent_id;
+
+        if invocation
+            .as_ref()
+            .is_some_and(|start| start.method_name.as_deref() != Some(method_name))
+        {
+            return Err(RpcError::ProtocolError {
+                details: "creation context does not match the prepared method".into(),
+            });
+        }
 
         if self
             .shard_service()
@@ -597,22 +614,24 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 });
             }
 
-            let worker =
-                Worker::get_or_create_suspended_with_freshness(
-                    self,
-                    owned_agent_id,
-                    Some(self_env.to_vec()),
-                    config,
-                    None,
-                    Some(*self_agent_id),
-                    &self_stack,
-                    caller.clone(),
-                    freshness_disposition,
-                    target.invocation_intent(idempotency_key.as_ref().map(|key| {
+            let worker = Worker::get_or_create_suspended_with_freshness(
+                self,
+                owned_agent_id,
+                Some(self_env.to_vec()),
+                config,
+                None,
+                Some(*self_agent_id),
+                &self_stack,
+                caller.clone(),
+                freshness_disposition,
+                target.invocation_intent(
+                    idempotency_key.as_ref().map(|key| {
                         InvocationRequestKey::Internal(key.clone()).owner_key(method_name)
-                    })),
-                )
-                .await?;
+                    }),
+                    invocation,
+                ),
+            )
+            .await?;
 
             let fingerprint = worker.get_initial_worker_metadata().fingerprint;
             Ok(Box::new(LoggingDemand::new(
@@ -624,6 +643,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .create_demand(
                     target.clone(),
                     method_name,
+                    invocation,
                     self_created_by,
                     self_agent_id,
                     self_env,

@@ -31,11 +31,9 @@ use golem_common::schema::{
 };
 use golem_schema::http as schema_http;
 use golem_schema::http::{HeaderVariable, QueryVariable};
-use golem_service_base::custom_api::parameter_parsing::{
-    schema_type_to_path_segment_type, schema_type_to_query_or_header_type,
-};
 use golem_service_base::custom_api::{
-    CompiledSchema, ConstructorParameter, MethodParameter, PathSegmentType, RequestBodySchema,
+    CompiledSchema, ConstructorParameter, MethodParameter, PathSegmentType, QueryOrHeaderType,
+    RequestBodySchema,
 };
 use golem_service_base::model::SafeIndex;
 use std::collections::HashMap;
@@ -142,7 +140,6 @@ pub fn build_http_agent_method_parameters<E>(
             validate_path_segment_type(segment_kind, &ty, make_error)?;
 
             per_field[idx] = Some(MethodParameter::Path {
-                argument_name: name.clone(),
                 path_segment_index: *path_index,
                 parameter_type: ty,
             });
@@ -157,7 +154,6 @@ pub fn build_http_agent_method_parameters<E>(
             })?;
 
             per_field[idx] = Some(MethodParameter::Query {
-                argument_name: name.clone(),
                 query_parameter_name: query_var.query_param_name.clone(),
                 parameter_type: ty,
             });
@@ -175,7 +171,6 @@ pub fn build_http_agent_method_parameters<E>(
             }
 
             per_field[idx] = Some(MethodParameter::Header {
-                argument_name: name.clone(),
                 header_name: header_var.header_name.clone(),
                 parameter_type: ty,
             });
@@ -188,7 +183,6 @@ pub fn build_http_agent_method_parameters<E>(
                 make_error(format!("Invalid implicit query input '{name}': {error}"))
             })?;
             per_field[idx] = Some(MethodParameter::Query {
-                argument_name: name.clone(),
                 query_parameter_name: name.clone(),
                 parameter_type: ty,
             });
@@ -199,7 +193,11 @@ pub fn build_http_agent_method_parameters<E>(
     // Second pass: classify the remaining (body) fields into `per_field`.
     let body_schema = handle_body_parameters(graph, fields, &consumed, &mut per_field, make_error)?;
 
-    // Retain each argument's name so consumers can resolve bindings independently of order.
+    // Final pass: emit method parameters in user-supplied input declaration
+    // order. The worker-service runtime relies on this ordering to build the
+    // positional `SchemaValue::Record` the executor expects (which validates
+    // the record positionally against the user-supplied fields in declaration
+    // order).
     let method_parameters: Vec<MethodParameter> = per_field.into_iter().flatten().collect();
 
     let mut query_names: Vec<(&str, bool)> = Vec::new();
@@ -210,7 +208,6 @@ pub fn build_http_agent_method_parameters<E>(
         if let MethodParameter::Query {
             query_parameter_name: name,
             parameter_type,
-            ..
         } = parameter
         {
             let map = parameter_type.is_map();
@@ -271,15 +268,11 @@ fn handle_body_parameters<E>(
         };
         return Ok(match kind {
             UnstructuredPayloadKind::Binary => {
-                per_field[input_index] = Some(MethodParameter::UnstructuredBinaryBody {
-                    argument_name: field.name.clone(),
-                });
+                per_field[input_index] = Some(MethodParameter::UnstructuredBinaryBody);
                 RequestBodySchema::BinaryBody { expected }
             }
             UnstructuredPayloadKind::Text => {
-                per_field[input_index] = Some(MethodParameter::UnstructuredTextBody {
-                    argument_name: field.name.clone(),
-                });
+                per_field[input_index] = Some(MethodParameter::UnstructuredTextBody);
                 RequestBodySchema::TextBody { expected }
             }
         });
@@ -287,7 +280,8 @@ fn handle_body_parameters<E>(
 
     // JSON object body: every leftover field must be a structural type (i.e. not
     // a raw unstructured text/binary body, which must be the sole parameter).
-    // Each binding retains the JSON property name independently of record ordering.
+    // `field_index` indexes into the JSON body record (built here in
+    // leftover/declaration order), not into the input field list.
     let mut body_fields = Vec::new();
     for (input_index, field) in &leftovers {
         if unstructured_or_raw_kind(graph, &field.schema)
@@ -301,6 +295,7 @@ fn handle_body_parameters<E>(
             ));
         }
 
+        let field_index = body_fields.len();
         body_fields.push(NamedFieldType {
             name: field.name.clone(),
             body: field.schema.clone(),
@@ -308,8 +303,7 @@ fn handle_body_parameters<E>(
         });
 
         per_field[*input_index] = Some(MethodParameter::JsonObjectBodyField {
-            argument_name: field.name.clone(),
-            field_name: field.name.clone(),
+            field_index: SafeIndex::try_from(field_index).map_err(make_error)?,
         });
     }
 
@@ -404,6 +398,73 @@ fn collect_header_bindings(endpoint: &HttpEndpointDetails) -> HashMap<String, He
         .collect()
 }
 
+/// Classify a (possibly `Ref`) [`SchemaType`] as a scalar HTTP path-segment
+/// type. Refs are resolved against `graph` first.
+fn schema_type_to_path_segment_type<E>(
+    graph: &SchemaGraph,
+    schema: &SchemaType,
+    make_error: &impl Fn(String) -> E,
+) -> Result<PathSegmentType, E> {
+    let resolved = graph
+        .resolve_ref(schema)
+        .map_err(|e| make_error(e.to_string()))?;
+    match resolved {
+        SchemaType::String { .. } => Ok(PathSegmentType::Str),
+        SchemaType::Char { .. } => Ok(PathSegmentType::Chr),
+        SchemaType::F64 { .. } => Ok(PathSegmentType::F64),
+        SchemaType::F32 { .. } => Ok(PathSegmentType::F32),
+        SchemaType::U64 { .. } => Ok(PathSegmentType::U64),
+        SchemaType::S64 { .. } => Ok(PathSegmentType::S64),
+        SchemaType::U32 { .. } => Ok(PathSegmentType::U32),
+        SchemaType::S32 { .. } => Ok(PathSegmentType::S32),
+        SchemaType::U16 { .. } => Ok(PathSegmentType::U16),
+        SchemaType::S16 { .. } => Ok(PathSegmentType::S16),
+        SchemaType::U8 { .. } => Ok(PathSegmentType::U8),
+        SchemaType::S8 { .. } => Ok(PathSegmentType::S8),
+        SchemaType::Bool { .. } => Ok(PathSegmentType::Bool),
+        SchemaType::Enum { cases, .. } => Ok(PathSegmentType::Enum(cases.clone())),
+        _ => Err(make_error(
+            "Only primitive or enum types can be bound to path segments".into(),
+        )),
+    }
+}
+
+/// Classify a (possibly `Ref`) [`SchemaType`] as a query/header parameter
+/// type: a scalar, scalar collection, or optional wrapper. Refs are resolved
+/// against `graph` first.
+fn schema_type_to_query_or_header_type<E>(
+    graph: &SchemaGraph,
+    schema: &SchemaType,
+    make_error: &impl Fn(String) -> E,
+) -> Result<QueryOrHeaderType, E> {
+    let resolved = graph
+        .resolve_ref(schema)
+        .map_err(|e| make_error(e.to_string()))?;
+    match resolved {
+        SchemaType::Option { inner, .. } => Ok(QueryOrHeaderType::Option {
+            name: None,
+            owner: None,
+            inner: Box::new(schema_type_to_query_or_header_type(
+                graph, inner, make_error,
+            )?),
+        }),
+        SchemaType::List { element, .. } => Ok(QueryOrHeaderType::List {
+            name: None,
+            owner: None,
+            inner: Box::new(schema_type_to_path_segment_type(
+                graph, element, make_error,
+            )?),
+        }),
+        SchemaType::Map { key, value, .. } => Ok(QueryOrHeaderType::Map {
+            key: schema_type_to_path_segment_type(graph, key, make_error)?,
+            value: schema_type_to_path_segment_type(graph, value, make_error)?,
+        }),
+        other => Ok(QueryOrHeaderType::Primitive(
+            schema_type_to_path_segment_type(graph, other, make_error)?,
+        )),
+    }
+}
+
 fn validate_path_segment_type<E>(
     segment: &PathSegment,
     ty: &PathSegmentType,
@@ -494,10 +555,10 @@ mod test {
             if bodiless {
                 assert!(matches!(body, RequestBodySchema::Unused));
                 assert!(
-                    matches!(&parameters[0], MethodParameter::Query { query_parameter_name, parameter_type: QueryOrHeaderType::Option { .. }, .. } if query_parameter_name == "tags")
+                    matches!(&parameters[0], MethodParameter::Query { query_parameter_name, parameter_type: QueryOrHeaderType::Option { .. } } if query_parameter_name == "tags")
                 );
                 assert!(
-                    matches!(&parameters[2], MethodParameter::Query { query_parameter_name, parameter_type: QueryOrHeaderType::Map { .. }, .. } if query_parameter_name == "labels")
+                    matches!(&parameters[2], MethodParameter::Query { query_parameter_name, parameter_type: QueryOrHeaderType::Map { .. } } if query_parameter_name == "labels")
                 );
             } else {
                 assert!(matches!(body, RequestBodySchema::JsonBody { .. }));
@@ -842,28 +903,22 @@ mod test {
         .unwrap();
 
         assert!(let RequestBodySchema::JsonBody { .. } = body);
-        assert_eq!(params.len(), 2);
-
         assert_eq!(
             params,
             vec![
                 MethodParameter::JsonObjectBodyField {
-                    argument_name: "a".into(),
-                    field_name: "a".into(),
+                    field_index: 0.into()
                 },
                 MethodParameter::JsonObjectBodyField {
-                    argument_name: "b".into(),
-                    field_name: "b".into(),
+                    field_index: 1.into()
                 },
             ]
         );
-        let wire: Vec<golem_api_grpc::proto::golem::customapi::MethodParameter> =
-            params.iter().cloned().map(Into::into).collect();
-        let restored: Vec<MethodParameter> = wire
-            .into_iter()
-            .map(|parameter| parameter.try_into().unwrap())
-            .collect();
-        assert_eq!(restored, params);
+        for parameter in params {
+            let encoded: golem_api_grpc::proto::golem::customapi::MethodParameter =
+                parameter.clone().into();
+            assert_eq!(MethodParameter::try_from(encoded).unwrap(), parameter);
+        }
     }
 
     #[test]
@@ -886,12 +941,7 @@ mod test {
         .unwrap();
 
         assert!(matches!(body, RequestBodySchema::BinaryBody { .. }));
-        assert_eq!(
-            params,
-            vec![MethodParameter::UnstructuredBinaryBody {
-                argument_name: "return-type".into()
-            }]
-        );
+        assert_eq!(params, vec![MethodParameter::UnstructuredBinaryBody]);
     }
 
     #[test]
@@ -921,12 +971,7 @@ mod test {
         let_assert!(SchemaType::Binary { restrictions, .. } = expected.graph.root);
         assert!(restrictions.mime_types == Some(vec!["application/octet-stream".to_string()]));
 
-        assert_eq!(
-            params,
-            vec![MethodParameter::UnstructuredBinaryBody {
-                argument_name: "return-type".into()
-            }]
-        );
+        assert_eq!(params, vec![MethodParameter::UnstructuredBinaryBody]);
     }
 
     #[test]
@@ -1236,12 +1281,7 @@ mod test {
         .unwrap();
 
         assert!(matches!(body, RequestBodySchema::TextBody { .. }));
-        assert_eq!(
-            params,
-            vec![MethodParameter::UnstructuredTextBody {
-                argument_name: "body".into()
-            }]
-        );
+        assert_eq!(params, vec![MethodParameter::UnstructuredTextBody]);
     }
 
     #[test]
@@ -1272,11 +1312,6 @@ mod test {
         let_assert!(SchemaType::Text { restrictions, .. } = expected.graph.root);
         assert!(restrictions.languages == Some(vec!["en".to_string(), "de".to_string()]));
 
-        assert_eq!(
-            params,
-            vec![MethodParameter::UnstructuredTextBody {
-                argument_name: "body".into()
-            }]
-        );
+        assert_eq!(params, vec![MethodParameter::UnstructuredTextBody]);
     }
 }

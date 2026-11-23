@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod method_input;
-pub mod parameter_parsing;
 mod protobuf;
 pub mod router;
 
@@ -357,43 +355,22 @@ pub enum ConstructorParameter {
 #[desert(evolution())]
 pub enum MethodParameter {
     Path {
-        argument_name: String,
         path_segment_index: SafeIndex,
         parameter_type: PathSegmentType,
     },
     Query {
-        argument_name: String,
         query_parameter_name: String,
         parameter_type: QueryOrHeaderType,
     },
     Header {
-        argument_name: String,
         header_name: String,
         parameter_type: QueryOrHeaderType,
     },
     JsonObjectBodyField {
-        argument_name: String,
-        field_name: String,
+        field_index: SafeIndex,
     },
-    UnstructuredBinaryBody {
-        argument_name: String,
-    },
-    UnstructuredTextBody {
-        argument_name: String,
-    },
-}
-
-impl MethodParameter {
-    pub fn argument_name(&self) -> &str {
-        match self {
-            Self::Path { argument_name, .. }
-            | Self::Query { argument_name, .. }
-            | Self::Header { argument_name, .. }
-            | Self::JsonObjectBodyField { argument_name, .. }
-            | Self::UnstructuredBinaryBody { argument_name }
-            | Self::UnstructuredTextBody { argument_name } => argument_name,
-        }
-    }
+    UnstructuredBinaryBody,
+    UnstructuredTextBody,
 }
 
 #[derive(Debug)]

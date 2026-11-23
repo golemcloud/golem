@@ -330,6 +330,7 @@ impl Rpc for StreamingRemoteRpc {
         &self,
         agent: ResolvedTarget,
         method: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         created_by: AccountId,
         caller: &AgentId,
         env: &[(String, String)],
@@ -344,6 +345,7 @@ impl Rpc for StreamingRemoteRpc {
             .create_demand(
                 agent,
                 method,
+                invocation,
                 created_by,
                 caller,
                 env,
@@ -530,6 +532,7 @@ impl WorkerProxy for LocalResumeProxy {
         &self,
         agent: &ResolvedTarget,
         method: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         caller: &AgentId,
         env: HashMap<String, String>,
         stack: InvocationContextStack,
@@ -561,6 +564,7 @@ impl WorkerProxy for LocalResumeProxy {
                 .prepare_worker(CreateWorkerRequest {
                     constructor,
                     unkeyed_id,
+                    invocation,
                     component_id: target.component_id,
                     env,
                     config: config.into_iter().map(Into::into).collect(),
@@ -614,6 +618,7 @@ impl WorkerProxy for LocalResumeProxy {
             .prepare(
                 agent,
                 method,
+                invocation,
                 caller,
                 env,
                 stack,

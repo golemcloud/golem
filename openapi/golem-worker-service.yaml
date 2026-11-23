@@ -3323,13 +3323,13 @@ components:
         functionInput:
           description: |-
             Component-independent original-method-input diagnostic envelope, not the executed
-            method's input schema. Captured JSON/HTTP fields include rejected values; native
+            method's input schema. Captured JSON fields include rejected values; native
             host capabilities are redacted before encoding.
           allOf:
           - $ref: '#/components/schemas/TypedSchemaValue'
           - description: |-
               Component-independent original-method-input diagnostic envelope, not the executed
-              method's input schema. Captured JSON/HTTP fields include rejected values; native
+              method's input schema. Captured JSON fields include rejected values; native
               host capabilities are redacted before encoding.
         traceId:
           type: string

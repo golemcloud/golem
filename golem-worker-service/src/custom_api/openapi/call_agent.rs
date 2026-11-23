@@ -27,7 +27,6 @@ pub fn get_header_variable_and_types(
             if let MethodParameter::Header {
                 header_name,
                 parameter_type,
-                ..
             } = p
             {
                 Some((header_name.as_str(), parameter_type))
@@ -74,7 +73,6 @@ fn collect_path_variable_types<'a>(
             MethodParameter::Path {
                 parameter_type,
                 path_segment_index,
-                ..
             } => Some((*path_segment_index, parameter_type)),
             _ => None,
         })

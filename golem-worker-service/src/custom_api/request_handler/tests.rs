@@ -214,11 +214,10 @@ async fn typed_cache_privacy_follows_authentication_not_principal_usage() {
 }
 
 #[test]
-async fn http_method_arguments_follow_binding_names_not_binding_order() {
+async fn http_method_arguments_use_the_deployed_schema() {
     use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
-    use golem_common::model::agent::{AgentMethodInput, HttpMethodArgumentSource};
-    use golem_common::schema::{AgentMethodSchema, NamedField};
+    use golem_common::schema::{AgentMethodSchema, NamedField, SchemaValue};
     use golem_service_base::custom_api::{MethodParameter, PathSegmentType, QueryOrHeaderType};
 
     let input = InputSchema::parameters([
@@ -233,7 +232,10 @@ async fn http_method_arguments_follow_binding_names_not_binding_order() {
             name: "run".into(),
             description: String::new(),
             prompt_hint: None,
-            input_schema: input.clone(),
+            input_schema: InputSchema::parameters([NamedField::user_supplied(
+                "count",
+                SchemaType::string(),
+            )]),
             output_schema: OutputSchema::Unit,
             http_endpoint: vec![],
             read_only: None,
@@ -258,20 +260,18 @@ async fn http_method_arguments_follow_binding_names_not_binding_order() {
         },
     };
     call.method_parameters = vec![
-        MethodParameter::JsonObjectBodyField {
-            argument_name: "suffix".into(),
-            field_name: "tail".into(),
-        },
         MethodParameter::Query {
-            argument_name: "count".into(),
             query_parameter_name: "wire".into(),
             parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::U32),
         },
         MethodParameter::JsonObjectBodyField {
-            argument_name: "message".into(),
-            field_name: "text".into(),
+            field_index: 0.into(),
+        },
+        MethodParameter::JsonObjectBodyField {
+            field_index: 1.into(),
         },
     ];
+    let durable_call = call.clone();
     let handler = request_handler_with_worker(
         test_resolver(vec![route]),
         Arc::new(InitialAgentFilesService::new(Arc::new(
@@ -296,35 +296,96 @@ async fn http_method_arguments_follow_binding_names_not_binding_order() {
         "{}",
         response.into_body().into_string().await.unwrap()
     );
-    let inputs = harness.recorded_method_inputs();
-    let Some(AgentMethodInput::Http(input)) = &inputs[0] else {
-        panic!("expected captured HTTP arguments")
-    };
     assert_eq!(
-        input
-            .arguments()
-            .iter()
-            .map(|argument| argument.argument_name.as_str())
-            .collect::<Vec<_>>(),
-        vec!["count", "message", "suffix"]
+        harness.recorded_method_params(),
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::U32(7),
+                SchemaValue::String("hello".into()),
+                SchemaValue::String("!".into())
+            ],
+        }
     );
-    assert!(
-        matches!(&input.arguments()[0].source, HttpMethodArgumentSource::Query { parameter_name, entries } if parameter_name == "wire" && entries["wire"] == ["7"])
-    );
-    assert!(
-        matches!(&input.arguments()[1].source, HttpMethodArgumentSource::JsonProperty { property_name } if property_name == "text")
-    );
-    assert!(
-        matches!(&input.arguments()[2].source, HttpMethodArgumentSource::JsonProperty { property_name } if property_name == "tail")
-    );
-    let golem_common::model::agent::HttpMethodBody::Json(body) = input.body() else {
-        panic!("expected captured JSON body")
+
+    let mut route = test_route(1, "/run", Some("PUT"), "typed");
+    route.behavior = RouteBehaviour::CallAgent(durable_call);
+    let RouteBehaviour::CallAgent(call) = &mut route.behavior else {
+        unreachable!()
     };
-    assert_eq!(body.as_str(), r#"{"tail":"!","text":"hello"}"#);
+    call.route_mode = AgentRouteMode::DurableStreams;
+    call.method_input.input_schema = InputSchema::parameters([
+        NamedField::user_supplied("numbers", SchemaType::stream(Some(SchemaType::u32()))),
+        NamedField::user_supplied("count", SchemaType::u32()),
+        NamedField::user_supplied("message", SchemaType::string()),
+        NamedField::user_supplied("labels", SchemaType::stream(Some(SchemaType::string()))),
+        NamedField::user_supplied("suffix", SchemaType::string()),
+    ]);
+    call.durable_streams = Some(DurableStreamRoutePolicy {
+        family_id: 1,
+        slots: ["numbers", "labels"]
+            .into_iter()
+            .map(|name| DurableStreamSlot {
+                canonical_name: name.into(),
+                public_name: name.into(),
+                direction: DurableStreamSlotDirection::Input,
+                content_type: "application/json".into(),
+                representation: DurableStreamRepresentation::Json,
+            })
+            .collect(),
+        allow_external_writes: true,
+        allow_stream_delete: false,
+        allow_invocation_delete: false,
+        load: None,
+    });
+    let handler = request_handler_with_worker(
+        test_resolver(vec![route]),
+        Arc::new(InitialAgentFilesService::new(Arc::new(
+            golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+        ))),
+        harness.worker_service.clone(),
+    );
+    let response = CustomApiPoemEndpoint::new(Arc::new(handler))
+        .execute(
+            Request::builder()
+                .method(http::Method::PUT)
+                .uri("/run?wire=7".parse().unwrap())
+                .header("host", "example.com")
+                .header("content-type", "application/json")
+                .body(r#"{"tail":"!","text":"hello"}"#),
+        )
+        .await;
+    // The harness records dispatch, then deliberately refuses session creation.
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let inputs = harness.recorded_method_inputs();
+    assert_eq!(inputs.len(), 2);
+    let Some(golem_common::model::agent::AgentMethodInput::Native(input)) = &inputs[1] else {
+        panic!("expected deployed native input")
+    };
+    let value = input
+        .decode(|ordinal, handle| {
+            assert!(handle.is_none());
+            Ok(golem_common::schema::stream::SchemaValueStream::from_host_endpoint(ordinal as u64))
+        })
+        .unwrap();
+    let SchemaValue::Record { fields } = value else {
+        panic!("expected deployed argument order")
+    };
+    assert_eq!(fields[1], SchemaValue::U32(7));
+    assert_eq!(fields[2], SchemaValue::String("hello".into()));
+    assert_eq!(fields[4], SchemaValue::String("!".into()));
+    for (index, ordinal) in [(0, 0u64), (3, 1u64)] {
+        let SchemaValue::Stream(stream) = &fields[index] else {
+            panic!("expected interleaved stream")
+        };
+        assert_eq!(
+            stream.with_host_endpoint::<u64, _>(|id| *id).unwrap(),
+            ordinal
+        );
+    }
 }
 
 #[test]
-async fn bound_http_inputs_reach_execution_without_route_schema_validation() {
+async fn bound_input_errors_preserve_codes_names_and_protocol_bodies() {
     use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
     use golem_common::schema::NamedField;
@@ -332,6 +393,7 @@ async fn bound_http_inputs_reach_execution_without_route_schema_validation() {
     use golem_service_base::custom_api::{MethodParameter, PathSegmentType, QueryOrHeaderType};
     use golem_service_base::model::SafeIndex;
 
+    let mut failures = Vec::new();
     for durable in [false, true] {
         for binding in ["query", "header", "path", "map", "optional-map"] {
             if durable && binding == "path" {
@@ -380,7 +442,6 @@ async fn bound_http_inputs_reach_execution_without_route_schema_validation() {
                         value: PathSegmentType::Bool,
                     };
                     MethodParameter::Query {
-                        argument_name: "amount".into(),
                         query_parameter_name: "wire".into(),
                         parameter_type: if binding == "optional-map" {
                             QueryOrHeaderType::Option {
@@ -398,17 +459,14 @@ async fn bound_http_inputs_reach_execution_without_route_schema_validation() {
                     }
                 }
                 "query" => MethodParameter::Query {
-                    argument_name: "amount".into(),
                     query_parameter_name: "wire".into(),
                     parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::U32),
                 },
                 "header" => MethodParameter::Header {
-                    argument_name: "amount".into(),
                     header_name: "x-wire".into(),
                     parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::U32),
                 },
                 _ => MethodParameter::Path {
-                    argument_name: "amount".into(),
                     path_segment_index: SafeIndex::new(0),
                     parameter_type: PathSegmentType::U32,
                 },
@@ -438,26 +496,50 @@ async fn bound_http_inputs_reach_execution_without_route_schema_validation() {
                 harness.worker_service.clone(),
             );
             let endpoint = CustomApiPoemEndpoint::new(Arc::new(handler));
-            let cases: &[(&str, &[&str])] = match binding {
+            let cases: &[(&str, &[&str], &str, &str)] = match binding {
                 "map" | "optional-map" => &[
-                    ("/run?wire[env]=bad", &[]),
-                    ("/run?wire[env]=true&wire[env]=false", &[]),
+                    ("/run?wire=x", &[], "REQUEST_VALUE_PARSING_FAILED", "amount"),
+                    (
+                        "/run?w%69re=x&wire[env]=true",
+                        &[],
+                        "REQUEST_VALUE_PARSING_FAILED",
+                        "amount",
+                    ),
                 ],
                 "query" => &[
-                    ("/run", &[]),
-                    ("/run?wire=3&wire=4", &[]),
-                    ("/run?wire=bad", &[]),
-                    ("/run?wire=1", &[]),
+                    ("/run", &[], "REQUEST_MISSING_VALUE", "amount"),
+                    (
+                        "/run?wire=3&wire=4",
+                        &[],
+                        "REQUEST_TOO_MANY_VALUES",
+                        "amount",
+                    ),
+                    (
+                        "/run?wire=bad",
+                        &[],
+                        "REQUEST_VALUE_PARSING_FAILED",
+                        "amount",
+                    ),
+                    ("/run?wire=1", &[], "REQUEST_VALUE_PARSING_FAILED", "amount"),
+                    (
+                        "/run?surprise=3",
+                        &[],
+                        "REQUEST_VALUE_PARSING_FAILED",
+                        "surprise",
+                    ),
                 ],
                 "header" => &[
-                    ("/run", &[]),
-                    ("/run", &["3", "4"]),
-                    ("/run", &["bad"]),
-                    ("/run", &["1"]),
+                    ("/run", &[], "REQUEST_MISSING_VALUE", "amount"),
+                    ("/run", &["3", "4"], "REQUEST_TOO_MANY_VALUES", "amount"),
+                    ("/run", &["bad"], "REQUEST_VALUE_PARSING_FAILED", "amount"),
+                    ("/run", &["1"], "REQUEST_VALUE_PARSING_FAILED", "amount"),
                 ],
-                _ => &[("/bad", &[]), ("/1", &[])],
+                _ => &[
+                    ("/bad", &[], "REQUEST_VALUE_PARSING_FAILED", "amount"),
+                    ("/1", &[], "REQUEST_VALUE_PARSING_FAILED", "amount"),
+                ],
             };
-            for (index, (target, headers)) in cases.iter().enumerate() {
+            for (target, headers, code, detail) in cases {
                 let mut request = Request::builder()
                     .method(if durable {
                         http::Method::PUT
@@ -470,77 +552,52 @@ async fn bound_http_inputs_reach_execution_without_route_schema_validation() {
                     request = request.header("x-wire", *value);
                 }
                 let response = endpoint.execute(request.finish()).await;
+                assert_eq!(
+                    response.status(),
+                    StatusCode::BAD_REQUEST,
+                    "{durable} {binding} {target}"
+                );
                 if durable {
-                    // The harness deliberately refuses the dispatched session.
-                    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-                    assert_eq!(harness.native_session_keys().len(), index + 1);
+                    let has_content_type =
+                        response.headers().contains_key(http::header::CONTENT_TYPE);
+                    let body = response.into_body().into_bytes().await.unwrap();
+                    if has_content_type || !body.is_empty() {
+                        failures.push(format!(
+                            "DurableStreams {binding} {target}: expected empty 400, got {body:?}"
+                        ));
+                    }
                 } else {
-                    assert_eq!(
-                        response.status(),
-                        StatusCode::NO_CONTENT,
-                        "{binding} case {index}: {target}"
-                    );
-                }
-                let inputs = harness.recorded_method_inputs();
-                let Some(golem_common::model::agent::AgentMethodInput::Http(input)) =
-                    &inputs[index]
-                else {
-                    panic!("expected captured HTTP input")
-                };
-                assert_eq!(input.arguments()[0].argument_name, "amount");
-                match &input.arguments()[0].source {
-                    golem_common::model::agent::HttpMethodArgumentSource::Header {
-                        header_name,
-                        values,
-                    } => {
-                        assert_eq!(header_name, "x-wire");
-                        assert_eq!(values, headers);
+                    let body: serde_json::Value = response.into_body().into_json().await.unwrap();
+                    if body["code"] != *code {
+                        failures.push(format!("{binding} {target}: expected {code}, got {body}"));
                     }
-                    golem_common::model::agent::HttpMethodArgumentSource::Path {
-                        path_segment_index,
-                        value,
-                    } => {
-                        assert_eq!(*path_segment_index, 0);
-                        assert_eq!(value, target.trim_start_matches('/'));
-                    }
-                    golem_common::model::agent::HttpMethodArgumentSource::Query {
-                        parameter_name,
-                        entries,
-                    } => {
-                        let expected: &[(&str, &[&str])] = match (binding, index) {
-                            ("query", 0) => &[],
-                            ("query", 1) => &[("wire", &["3", "4"])],
-                            ("query", 2) => &[("wire", &["bad"])],
-                            ("query", 3) => &[("wire", &["1"])],
-                            (_, 0) => &[("wire[env]", &["bad"])],
-                            (_, 1) => &[("wire[env]", &["true", "false"])],
-                            _ => unreachable!(),
-                        };
-                        let expected = expected
+                    assert!(
+                        body["errors"]
+                            .as_array()
+                            .unwrap()
                             .iter()
-                            .map(|(key, values)| {
-                                (
-                                    key.to_string(),
-                                    values
-                                        .iter()
-                                        .map(|value| value.to_string())
-                                        .collect::<Vec<_>>(),
-                                )
-                            })
-                            .collect::<std::collections::BTreeMap<_, _>>();
-                        assert_eq!(parameter_name, "wire");
-                        assert_eq!(entries, &expected);
+                            .any(|error| error.as_str().unwrap().contains(detail)),
+                        "{body}"
+                    );
+                    if map {
+                        assert!(
+                            body["errors"].as_array().unwrap().iter().any(|error| {
+                                error.as_str().unwrap().contains("maps require name[key]")
+                            }),
+                            "{body}"
+                        );
                     }
-                    other => panic!("unexpected HTTP source: {other:?}"),
                 }
             }
+            assert!(harness.contexts.lock().unwrap().is_empty());
             assert!(harness.metadata_reads.lock().unwrap().is_empty());
         }
     }
+    assert!(failures.is_empty(), "{failures:#?}");
 }
 
 #[test]
-async fn http_api_json_syntax_errors_preserve_details_and_cors() {
+async fn http_api_request_validation_errors_preserve_json_details_and_cors() {
     use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
 
@@ -587,11 +644,18 @@ async fn http_api_json_syntax_errors_preserve_details_and_cors() {
     );
     let endpoint = CustomApiPoemEndpoint::new(Arc::new(handler));
 
-    for (body, code, detail) in [(
-        r#"{"email":"ada@example.com""#,
-        "REQUEST_BODY_INVALID_JSON",
-        "Request body was not valid json",
-    )] {
+    for (body, code, detail) in [
+        (
+            r#"{"email":"ada@example.com","additionalProp1":{}}"#,
+            "REQUEST_JSON_BODY_PARSING_FAILED",
+            "additionalProp1",
+        ),
+        (
+            r#"{"email":"ada@example.com""#,
+            "REQUEST_BODY_INVALID_JSON",
+            "Request body was not valid json",
+        ),
+    ] {
         let response = endpoint
             .execute(
                 Request::builder()
@@ -1201,7 +1265,12 @@ fn durable_stream_routes() -> CompiledRoutes {
         method_name: "stream".to_string(),
         method_input: CompiledInputSchema {
             graph: SchemaGraph::empty(),
-            input_schema: InputSchema::Parameters(vec![]),
+            input_schema: InputSchema::parameters([
+                golem_common::schema::NamedField::user_supplied(
+                    "input",
+                    SchemaType::stream(Some(SchemaType::u8())),
+                ),
+            ]),
         },
         body: RequestBodySchema::Unused,
         method_parameters: vec![],
@@ -1628,6 +1697,185 @@ async fn durable_stream_unknown_and_canonical_slot_names_are_not_probed() {
         let response = handler.handle_request(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
+}
+
+#[test]
+async fn invalid_lazy_appends_do_not_create_sessions() {
+    use crate::custom_api::route_resolver::tests::test_resolver;
+
+    let cases = vec![
+        (
+            vec![("producer-id", "p")],
+            Some("application/json"),
+            "1".into(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            vec![
+                ("producer-id", "p"),
+                ("producer-epoch", "x"),
+                ("producer-seq", "0"),
+            ],
+            Some("application/json"),
+            "1".into(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            vec![
+                ("producer-id", "p"),
+                ("producer-id", "q"),
+                ("producer-epoch", "0"),
+                ("producer-seq", "0"),
+            ],
+            Some("application/json"),
+            "1".into(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (vec![], None, "1".into(), StatusCode::BAD_REQUEST),
+        (vec![], Some("text/plain"), "1".into(), StatusCode::CONFLICT),
+        (
+            vec![],
+            Some("application/json"),
+            r#""not-a-number""#.into(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            vec![],
+            Some("application/json"),
+            r#"[7,"not-a-number",19]"#.into(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            vec![],
+            Some("application/json"),
+            "[".into(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            vec![],
+            Some("application/json"),
+            "[]".into(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            vec![],
+            Some("application/json"),
+            String::new(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            vec![],
+            Some("application/json"),
+            format!("[{}]", vec!["1"; 4097].join(",")),
+            StatusCode::PAYLOAD_TOO_LARGE,
+        ),
+        (
+            vec![],
+            Some("application/json"),
+            " ".repeat(1024 * 1024 + 1),
+            StatusCode::PAYLOAD_TOO_LARGE,
+        ),
+    ];
+    for (headers, content_type, body, expected) in cases {
+        let harness = invocation_harness();
+        let mut routes = durable_stream_routes().routes;
+        for route in &mut routes {
+            if let RouteBehaviour::CallAgent(call) = &mut route.behavior {
+                call.method_input.input_schema =
+                    InputSchema::parameters([golem_common::schema::NamedField::user_supplied(
+                        "input",
+                        SchemaType::stream(Some(SchemaType::u32())),
+                    )]);
+                for slot in &mut call.durable_streams.as_mut().unwrap().slots {
+                    if slot.public_name == "requests" {
+                        slot.content_type = "application/json".into();
+                        slot.representation = DurableStreamRepresentation::Json;
+                    }
+                }
+            }
+        }
+        let handler = request_handler_with_worker(
+            test_resolver(routes),
+            Arc::new(InitialAgentFilesService::new(Arc::new(
+                golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+            ))),
+            harness.worker_service.clone(),
+        );
+        harness.script_durable_stream_reads(vec![None]);
+        let session =
+            golem_common::model::invocation_session_public::new_durable_stream_session_id();
+        let mut builder = Request::builder()
+            .method(http::Method::POST)
+            .uri(
+                format!("http://example.com/writable/invocations/{session}/streams/requests")
+                    .parse()
+                    .unwrap(),
+            )
+            .header(http::header::HOST, "example.com")
+            .header("x-golem-session", "{}");
+        for (name, value) in headers {
+            builder = builder.header(name, value);
+        }
+        if let Some(content_type) = content_type {
+            builder = builder.content_type(content_type);
+        }
+        let response = handler.handle_request(builder.body(body)).await.unwrap();
+        assert_eq!(response.status(), expected);
+        let log = harness.native_sessions.lock().unwrap();
+        assert!(log.starts.is_empty());
+        assert!(log.appends.is_empty());
+    }
+}
+
+#[test]
+async fn valid_lazy_append_creates_once_and_preserves_body() {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        CreateStreamSessionSuccess, ReadStreamSlotSuccess, append_to_stream_slot_request::Payload,
+    };
+
+    let (handler, harness) = request_handler_and_harness();
+    let session = golem_common::model::invocation_session_public::new_durable_stream_session_id();
+    harness
+        .native_sessions
+        .lock()
+        .unwrap()
+        .public_session_creation = Some(CreateStreamSessionSuccess {
+        session: session.clone(),
+        ..Default::default()
+    });
+    harness.script_durable_stream_reads(vec![
+        None,
+        None,
+        Some(ReadStreamSlotSuccess {
+            writable: true,
+            element_schema: Some(SchemaGraph::anonymous(SchemaType::u8()).into()),
+            ..Default::default()
+        }),
+    ]);
+    let response = handler
+        .handle_request(
+            Request::builder()
+                .method(http::Method::POST)
+                .uri(
+                    format!("http://ds.example/writable/invocations/{session}/streams/requests")
+                        .parse()
+                        .unwrap(),
+                )
+                .header(http::header::HOST, "ds.example")
+                .header("x-golem-session", "{}")
+                .content_type("application/vnd.golem.fragment")
+                .body(vec![7u8, 19, 41]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let log = harness.native_sessions.lock().unwrap();
+    assert_eq!(log.starts.len(), 1);
+    assert_eq!(log.appends.len(), 1);
+    assert_eq!(
+        log.appends[0].payload,
+        Some(Payload::PackedU8(vec![7, 19, 41]))
+    );
 }
 
 #[test]

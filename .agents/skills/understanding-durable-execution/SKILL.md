@@ -2557,12 +2557,27 @@ reads queued on the same state actor wait behind it. Actual traps and constructo
 `on_invocation_failure`; decoded outer method errors take the separate path below.
 
 Method Pending and Started share the original `AgentMethodInput` payload: Native values with
-request-local stream ordinals and foreign handles, PublicJson, or named raw HTTP arguments/body.
-Do not validate or replace it with a schema selected from deployment metadata or a pending update.
-The loaded Store owns method/input/output schemas and authorization of the lowered input. Recorded
-Prepared bindings restore endpoints, not scalar values; HTTP bindings follow argument names.
+request-local stream ordinals and foreign handles, or PublicJson. HTTP routes encode Native values
+using their deployed compiled input schema before dispatch; public JSON is decoded by the loaded
+Store. The Store validates the resulting input against its selected method schema, not a predicted
+pending update. Recorded Prepared bindings restore endpoints, not scalar values or argument order.
 Same-key matching compares the original request. Public oplog projection needs no method metadata
-and redacts Native host capabilities before encoding the diagnostic envelope.
+and redacts Native host capabilities in its typed value. Explicit stream paths distinguish ordinal
+placeholders from ordinary integer values; live endpoints are never persisted.
+
+Invocation-driven creation validates the method and original input against the component chosen
+in the missing-owner branch, under the existing creation guard and before persisting Create.
+This includes public-session fingerprint resolution and local/remote RPC preparation. Invalid fresh
+calls leave no incarnation. A waiter whose shared initialization rejected another caller's request
+retries with its own request; existing owners skip this creation check and retain selected-execution
+validation and recorded-result precedence. Explicit creation remains a separate operation.
+
+A proven lowering rejection before guest entry commits the keyed rejection and settles that
+invocation without tearing down a healthy durable runtime. A failed or fenced rejection commit,
+guest-entered failure, interruption or infrastructure error keeps its recovery path. Lazy HTTP
+appends validate producer headers, body limits, content type, JSON syntax, item count and values
+against the deployed element schema before creating a missing session. After readiness, the retained
+body is also converted against the session's element schema before append.
 
 Read-only cache observations are a resident exception, not durable admission for each follower.
 Establish hits and joins under the existing lifecycle boundary after rechecking the captured

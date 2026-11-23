@@ -168,6 +168,9 @@ message CreateWorkerRequest {
   // checked against it.
   optional golem.worker.IdempotencyKey idempotency_key = 10;
   golem.worker.InvocationFreshnessDisposition freshness_disposition = 11;
+  // For invocation-driven creation, validate this request against the creation component before
+  // writing Create. Existing owners still validate when execution selects their component.
+  optional golem.worker.InvocationStart invocation = 15;
 }
 
 message CreateWorkerSuccessResponse {

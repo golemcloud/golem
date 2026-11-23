@@ -1,12 +1,10 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1 (https://license.golem.cloud/LICENSE).
 
-use crate::base_model::durable_stream::DurableStreamHandle;
+use crate::base_model::durable_stream::{DurableStreamHandle, StreamMapSide, StreamValuePathStep};
 pub use crate::model::invocation_session_public::JsonMethodInput;
-use crate::model::invocation_session_public::{MAX_COLLECTION_SIZE, MAX_LOGICAL_VALUE_SIZE};
 use crate::schema::streaming::{
-    decode_recursive_stream_value, encode_recursive_stream_value,
-    preflight_proto_recursive_stream_value, remap_recursive_stream_references,
+    decode_recursive_stream_value, preflight_proto_recursive_stream_value,
 };
 use crate::schema::{
     FromSchema, IntoSchema, IntoTypedSchemaValue, SchemaValue, TypedSchemaValue,
@@ -15,8 +13,7 @@ use crate::schema::{
 use desert_rust::BinaryCodec;
 use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_schema::schema::host_managed::redact_host_managed_value;
-use prost::Message;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 
 /// The original method input, before interpreting it against an execution schema.
@@ -25,7 +22,6 @@ use std::fmt::{Debug, Formatter};
 pub enum AgentMethodInput {
     Native(NativeMethodInput),
     PublicJson(JsonMethodInput),
-    Http(HttpMethodInput),
 }
 
 impl TryFrom<SchemaValue> for AgentMethodInput {
@@ -39,75 +35,30 @@ impl TryFrom<SchemaValue> for AgentMethodInput {
 }
 
 /// Component-independent public oplog representation of the original request.
-/// Native values use the public golem.schema.SchemaValue protobuf with stream IDs
-/// replaced by request-local ordinals. Capability leaves are redacted before encoding.
+/// Native stream leaves are replaced by request-local ordinals at the recorded paths.
+/// Capability leaves are redacted before projection.
 #[derive(IntoSchema, FromSchema)]
 #[schema(named = "original-method-input")]
 pub enum PublicMethodInput {
     Native {
-        /// Encoded golem.schema.SchemaValue. Decoders must support structural depth
-        /// 128, including the additional protobuf container messages; the default
-        /// Prost recursion limit does not cover the full accepted input domain.
-        protobuf_value: Vec<u8>,
+        value: SchemaValue,
+        stream_paths: Vec<Vec<StreamValuePathStep>>,
         streams: Vec<Option<DurableStreamHandle>>,
     },
     PublicJson(String),
-    Http {
-        arguments: Vec<HttpMethodArgument>,
-        body: PublicHttpMethodBody,
-    },
-}
-
-#[derive(IntoSchema, FromSchema)]
-#[schema(named = "original-http-method-body")]
-pub enum PublicHttpMethodBody {
-    Absent,
-    Json(String),
-    Binary {
-        value: Vec<u8>,
-        mime_type: Option<String>,
-    },
-    Text {
-        value: String,
-        language: Option<String>,
-    },
 }
 
 impl AgentMethodInput {
     /// Projects captured input without resolving a method or an execution revision.
-    /// Raw JSON/HTTP values include fields that execution can subsequently reject.
+    /// Raw JSON values include fields that execution can subsequently reject.
     pub fn to_public_value(&self) -> Result<TypedSchemaValue, String> {
         let public = match self {
-            Self::Native(input) => {
-                let value = input
-                    .decode(|ordinal, _| Ok(SchemaValueStream::from_host_endpoint(ordinal)))?;
-                let value = redact_host_managed_value(value);
-                let value = encode_recursive_stream_value(&value, |stream, _| {
-                    stream.with_host_endpoint::<usize, _>(|ordinal| *ordinal as u64)
-                })?;
-                PublicMethodInput::Native {
-                    protobuf_value: value.encode_to_vec(),
-                    streams: input.streams.clone(),
-                }
-            }
-            Self::PublicJson(input) => PublicMethodInput::PublicJson(input.as_str().to_owned()),
-            Self::Http(input) => PublicMethodInput::Http {
-                arguments: input.arguments.clone(),
-                body: match &input.body {
-                    HttpMethodBody::Absent => PublicHttpMethodBody::Absent,
-                    HttpMethodBody::Json(value) => {
-                        PublicHttpMethodBody::Json(value.as_str().to_owned())
-                    }
-                    HttpMethodBody::Binary { value, mime_type } => PublicHttpMethodBody::Binary {
-                        value: value.clone(),
-                        mime_type: mime_type.clone(),
-                    },
-                    HttpMethodBody::Text { value, language } => PublicHttpMethodBody::Text {
-                        value: value.clone(),
-                        language: language.clone(),
-                    },
-                },
+            Self::Native(input) => PublicMethodInput::Native {
+                value: redact_host_managed_value(input.value.clone()),
+                stream_paths: input.stream_paths.clone(),
+                streams: input.streams.clone(),
             },
+            Self::PublicJson(input) => PublicMethodInput::PublicJson(input.as_str().to_owned()),
         };
         public
             .into_typed_schema_value()
@@ -116,20 +67,28 @@ impl AgentMethodInput {
 }
 
 /// Schema-native data with request-local stream ordinals instead of transport endpoints.
-#[derive(Clone, PartialEq, Eq, BinaryCodec)]
+#[derive(Clone, BinaryCodec)]
 #[desert(evolution())]
 pub struct NativeMethodInput {
-    value: Vec<u8>,
+    value: SchemaValue,
+    stream_paths: Vec<Vec<StreamValuePathStep>>,
     streams: Vec<Option<DurableStreamHandle>>,
     external_rest: bool,
 }
 
+impl PartialEq for NativeMethodInput {
+    fn eq(&self, other: &Self) -> bool {
+        self.same_unbound_value(other) && self.streams == other.streams
+    }
+}
+
+impl Eq for NativeMethodInput {}
+
 impl Debug for NativeMethodInput {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NativeMethodInput")
-            .field("bytes", &self.value.len())
             .field("streams", &self.streams.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -154,15 +113,20 @@ impl NativeMethodInput {
             return Err("method input contains duplicate foreign stream mappings".into());
         }
         let mut streams = Vec::with_capacity(transport_ids.len());
-        let value = remap_recursive_stream_references(input, |transport_id, _| {
+        let mut stream_paths = Vec::with_capacity(transport_ids.len());
+        let mut value = decode_recursive_stream_value(input, |transport_id, path| {
             let handle = foreign_streams.remove(&transport_id);
             if has_foreign_streams && handle.is_none() {
                 return Err("method input references an unmapped foreign stream".into());
             }
             let ordinal = streams.len() as u64;
             streams.push(handle);
-            Ok(ordinal)
+            stream_paths.push(path.to_vec());
+            Ok(SchemaValueStream::from_host_endpoint(ordinal))
         })?;
+        for (ordinal, path) in stream_paths.iter().enumerate() {
+            *value_at_path_mut(&mut value, path)? = SchemaValue::U64(ordinal as u64);
+        }
         if !foreign_streams.is_empty() {
             return Err("method input contains unreferenced foreign stream mappings".into());
         }
@@ -172,7 +136,8 @@ impl NativeMethodInput {
         }
         Ok((
             Self {
-                value: crate::serialization::serialize(&value)?,
+                value,
+                stream_paths,
                 streams,
                 external_rest: false,
             },
@@ -186,7 +151,9 @@ impl NativeMethodInput {
 
     /// Compares the captured value and stream ordinals, excluding foreign handle identities.
     pub fn same_unbound_value(&self, other: &Self) -> bool {
-        self.value == other.value && self.external_rest == other.external_rest
+        self.value.bitwise_eq(&other.value)
+            && self.stream_paths == other.stream_paths
+            && self.external_rest == other.external_rest
     }
 
     /// Retains the external REST restriction on host-managed result capabilities.
@@ -203,168 +170,75 @@ impl NativeMethodInput {
         &self,
         mut stream: impl FnMut(usize, Option<&DurableStreamHandle>) -> Result<SchemaValueStream, String>,
     ) -> Result<SchemaValue, String> {
-        let value: ProtoSchemaValue = crate::serialization::decode(&self.value)
-            .map_err(|error| format!("invalid stored method input: {error}"))?;
-        decode_recursive_stream_value(value, |ordinal, _| {
-            let ordinal = usize::try_from(ordinal)
-                .map_err(|_| "stored method input stream ordinal is out of range".to_string())?;
-            let handle = self
-                .streams
-                .get(ordinal)
-                .ok_or_else(|| "stored method input stream ordinal is out of range".to_string())?;
-            stream(ordinal, handle.as_ref())
-        })
+        if self.stream_paths.len() != self.streams.len() {
+            return Err("stored method input stream mappings do not match its paths".into());
+        }
+        let mut value = self.value.clone();
+        for (ordinal, (path, handle)) in self.stream_paths.iter().zip(&self.streams).enumerate() {
+            let leaf = value_at_path_mut(&mut value, path)?;
+            if !matches!(leaf, SchemaValue::U64(index) if *index == ordinal as u64) {
+                return Err("stored method input stream path does not contain its ordinal".into());
+            }
+            *leaf = SchemaValue::Stream(stream(ordinal, handle.as_ref())?);
+        }
+        Ok(value)
     }
 }
 
-/// A captured route extraction contract and its raw values, without a method schema.
-#[derive(Clone, PartialEq, Eq, BinaryCodec)]
-#[desert(evolution())]
-pub struct HttpMethodInput {
-    arguments: Vec<HttpMethodArgument>,
-    body: HttpMethodBody,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec, IntoSchema, FromSchema)]
-#[desert(evolution())]
-pub struct HttpMethodArgument {
-    pub argument_name: String,
-    pub source: HttpMethodArgumentSource,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec, IntoSchema, FromSchema)]
-#[desert(evolution())]
-pub enum HttpMethodArgumentSource {
-    Path {
-        path_segment_index: u32,
-        value: String,
-    },
-    Query {
-        parameter_name: String,
-        entries: BTreeMap<String, Vec<String>>,
-    },
-    Header {
-        header_name: String,
-        values: Vec<String>,
-    },
-    JsonProperty {
-        property_name: String,
-    },
-    BinaryBody,
-    TextBody,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
-#[desert(evolution())]
-pub enum HttpMethodBody {
-    Absent,
-    Json(JsonMethodInput),
-    Binary {
-        value: Vec<u8>,
-        mime_type: Option<String>,
-    },
-    Text {
-        value: String,
-        language: Option<String>,
-    },
-}
-
-impl Debug for HttpMethodInput {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HttpMethodInput")
-            .field("arguments", &self.arguments.len())
-            .finish_non_exhaustive()
-    }
-}
-
-impl HttpMethodInput {
-    pub fn capture(
-        mut arguments: Vec<HttpMethodArgument>,
-        body: HttpMethodBody,
-    ) -> Result<Self, String> {
-        if arguments.len() > MAX_COLLECTION_SIZE {
-            return Err("HTTP method input contains too many argument bindings".into());
-        }
-        arguments.sort_by(|a, b| a.argument_name.cmp(&b.argument_name));
-        if arguments
-            .iter()
-            .any(|argument| argument.argument_name.is_empty())
-            || arguments
-                .windows(2)
-                .any(|pair| pair[0].argument_name == pair[1].argument_name)
-        {
-            return Err("HTTP method input requires unique, nonempty argument names".into());
-        }
-        let mut bytes = 0usize;
-        let mut items = arguments.len();
-        let mut add = |size: usize| {
-            bytes = bytes
-                .checked_add(size)
-                .filter(|bytes| *bytes <= MAX_LOGICAL_VALUE_SIZE)
-                .ok_or_else(|| {
-                    "HTTP method input exceeds the 16 MiB logical value limit".to_string()
-                })?;
-            Ok::<_, String>(())
-        };
-        for argument in &arguments {
-            add(argument.argument_name.len())?;
-            match &argument.source {
-                HttpMethodArgumentSource::Path { value, .. } => add(value.len())?,
-                HttpMethodArgumentSource::Query {
-                    parameter_name,
-                    entries,
-                } => {
-                    add(parameter_name.len())?;
-                    items = items.saturating_add(entries.len());
-                    for (name, values) in entries {
-                        add(name.len())?;
-                        items = items.saturating_add(values.len());
-                        for value in values {
-                            add(value.len())?;
-                        }
+fn value_at_path_mut<'a>(
+    mut value: &'a mut SchemaValue,
+    path: &[StreamValuePathStep],
+) -> Result<&'a mut SchemaValue, String> {
+    use crate::schema::ResultValuePayload;
+    for step in path {
+        value =
+            match (step, value) {
+                (StreamValuePathStep::RecordField(index), SchemaValue::Record { fields }) => {
+                    fields.get_mut(*index as usize)
+                }
+                (StreamValuePathStep::VariantCasePayload(index), SchemaValue::Variant(variant)) => {
+                    if *index == variant.case {
+                        variant.payload.as_deref_mut()
+                    } else {
+                        None
                     }
                 }
-                HttpMethodArgumentSource::Header {
-                    header_name,
-                    values,
-                } => {
-                    add(header_name.len())?;
-                    items = items.saturating_add(values.len());
-                    for value in values {
-                        add(value.len())?;
-                    }
+                (StreamValuePathStep::TupleElement(index), SchemaValue::Tuple { elements })
+                | (StreamValuePathStep::ListElement(index), SchemaValue::List { elements })
+                | (
+                    StreamValuePathStep::FixedListElement(index),
+                    SchemaValue::FixedList { elements },
+                ) => elements.get_mut(*index as usize),
+                (StreamValuePathStep::MapEntry { index, side }, SchemaValue::Map { entries }) => {
+                    entries
+                        .get_mut(*index as usize)
+                        .map(|(key, value)| match side {
+                            StreamMapSide::Key => key,
+                            StreamMapSide::Value => value,
+                        })
                 }
-                HttpMethodArgumentSource::JsonProperty { property_name } => {
-                    add(property_name.len())?
+                (StreamValuePathStep::OptionSome, SchemaValue::Option { inner }) => {
+                    inner.as_deref_mut()
                 }
-                HttpMethodArgumentSource::BinaryBody | HttpMethodArgumentSource::TextBody => {}
+                (
+                    StreamValuePathStep::ResultOk,
+                    SchemaValue::Result(ResultValuePayload::Ok { value }),
+                )
+                | (
+                    StreamValuePathStep::ResultErr,
+                    SchemaValue::Result(ResultValuePayload::Err { value }),
+                ) => value.as_deref_mut(),
+                // Without a schema the recursive transport codec uses branch zero for unions.
+                (StreamValuePathStep::UnionBranch(0), SchemaValue::Union(union)) => {
+                    Some(union.body.as_mut())
+                }
+                _ => None,
             }
-        }
-        if items > MAX_COLLECTION_SIZE {
-            return Err("HTTP method input contains too many captured values".into());
-        }
-        match &body {
-            HttpMethodBody::Absent => {}
-            HttpMethodBody::Json(value) => add(value.as_str().len())?,
-            HttpMethodBody::Binary { value, mime_type } => {
-                add(value.len())?;
-                add(mime_type.as_deref().map_or(0, str::len))?;
-            }
-            HttpMethodBody::Text { value, language } => {
-                add(value.len())?;
-                add(language.as_deref().map_or(0, str::len))?;
-            }
-        }
-        Ok(Self { arguments, body })
+            .ok_or_else(|| {
+                "stored method input stream path does not match its value".to_string()
+            })?;
     }
-
-    pub fn arguments(&self) -> &[HttpMethodArgument] {
-        &self.arguments
-    }
-
-    pub fn body(&self) -> &HttpMethodBody {
-        &self.body
-    }
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -389,49 +263,11 @@ mod tests {
     }
 
     #[test]
-    fn public_method_input_keeps_uninterpreted_json_and_http_fields() {
+    fn public_method_input_keeps_uninterpreted_json() {
         let raw = JsonMethodInput::capture(br#"{"rejected":1e400,"value":-0.0}"#).unwrap();
         assert_eq!(
             public_json(&AgentMethodInput::PublicJson(raw.clone())),
             serde_json::json!({"PublicJson": r#"{"rejected":1e400,"value":-0.0}"#})
-        );
-        let http = HttpMethodInput::capture(
-            vec![
-                HttpMethodArgument {
-                    argument_name: "count".into(),
-                    source: HttpMethodArgumentSource::Query {
-                        parameter_name: "wire-count".into(),
-                        entries: BTreeMap::from([(
-                            "wire-count".into(),
-                            vec!["0007".into(), "invalid".into()],
-                        )]),
-                    },
-                },
-                HttpMethodArgument {
-                    argument_name: "title".into(),
-                    source: HttpMethodArgumentSource::JsonProperty {
-                        property_name: "wire-title".into(),
-                    },
-                },
-            ],
-            HttpMethodBody::Json(raw),
-        )
-        .unwrap();
-        let rendered = public_json(&AgentMethodInput::Http(http));
-        assert_eq!(
-            rendered,
-            serde_json::json!({"Http": {
-                "arguments": [
-                    {"argument_name": "count", "source": {"Query": {
-                        "parameter_name": "wire-count",
-                        "entries": [["wire-count", ["0007", "invalid"]]]
-                    }}},
-                    {"argument_name": "title", "source": {"JsonProperty": {
-                        "property_name": "wire-title"
-                    }}}
-                ],
-                "body": {"Json": r#"{"rejected":1e400,"value":-0.0}"#}
-            }})
         );
     }
 
@@ -482,21 +318,24 @@ mod tests {
             ],
         };
         let (input, _) = NativeMethodInput::capture(native(value, 93), vec![]).unwrap();
-        let rendered = public_json(&AgentMethodInput::Native(input));
-        assert_eq!(rendered["Native"]["streams"], serde_json::json!([null]));
-        let bytes: Vec<u8> =
-            serde_json::from_value(rendered["Native"]["protobuf_value"].clone()).unwrap();
-        let proto = ProtoSchemaValue::decode(bytes.as_slice()).unwrap();
-        let mut ordinals = vec![];
-        let decoded = decode_recursive_stream_value(proto, |ordinal, _| {
-            ordinals.push(ordinal);
-            Ok(SchemaValueStream::from_host_endpoint(()))
-        })
-        .unwrap();
-        assert_eq!(ordinals, vec![0]);
+        let projected = AgentMethodInput::Native(input).to_public_value().unwrap();
+        let PublicMethodInput::Native {
+            value: decoded,
+            stream_paths,
+            streams,
+        } = PublicMethodInput::from_value(projected.value()).unwrap()
+        else {
+            panic!("expected native public input")
+        };
+        assert_eq!(streams, vec![None]);
+        assert_eq!(
+            stream_paths,
+            vec![vec![StreamValuePathStep::RecordField(1)]]
+        );
         let SchemaValue::Record { fields } = decoded else {
             panic!("expected a record")
         };
+        assert_eq!(fields[1], SchemaValue::U64(0));
         let SchemaValue::Record { fields } = &fields[0] else {
             panic!("expected nested data")
         };
@@ -551,7 +390,9 @@ mod tests {
             assert_eq!(first, retry);
             assert_eq!(first_ids, vec![93]);
             assert_eq!(retry_ids, vec![7]);
-            let decoded = first
+            let stored: NativeMethodInput = deserialize(&serialize(&first).unwrap()).unwrap();
+            assert_eq!(first, stored);
+            let decoded = stored
                 .decode(|ordinal, handle| {
                     assert_eq!(ordinal, 0);
                     assert!(handle.is_none());
@@ -568,6 +409,85 @@ mod tests {
         let (negative_zero, _) =
             NativeMethodInput::capture(native(SchemaValue::F64(-0.0), 7), vec![]).unwrap();
         assert_ne!(positive_zero, negative_zero);
+        let (first_nan, _) = NativeMethodInput::capture(
+            native(SchemaValue::F64(f64::from_bits(0x7ff8_0000_0000_0031)), 7),
+            vec![],
+        )
+        .unwrap();
+        let (other_nan, _) = NativeMethodInput::capture(
+            native(SchemaValue::F64(f64::from_bits(0x7ff8_0000_0000_0032)), 7),
+            vec![],
+        )
+        .unwrap();
+        assert_ne!(first_nan, other_nan);
+    }
+
+    #[test]
+    fn native_stream_positions_survive_storage_without_claiming_scalar_ordinals() {
+        use crate::schema::streaming::encode_recursive_stream_value;
+        use crate::schema::{ResultValuePayload, UnionValuePayload, VariantValuePayload};
+        let stream = |id: u64| SchemaValue::Stream(SchemaValueStream::from_host_endpoint(id));
+        let value = SchemaValue::Record {
+            fields: vec![
+                SchemaValue::U64(0),
+                SchemaValue::Variant(VariantValuePayload {
+                    case: 3,
+                    payload: Some(Box::new(SchemaValue::Tuple {
+                        elements: vec![stream(91), SchemaValue::U64(1)],
+                    })),
+                }),
+                SchemaValue::Map {
+                    entries: vec![(
+                        stream(17),
+                        SchemaValue::Option {
+                            inner: Some(Box::new(SchemaValue::List {
+                                elements: vec![SchemaValue::Result(ResultValuePayload::Ok {
+                                    value: Some(Box::new(stream(58))),
+                                })],
+                            })),
+                        },
+                    )],
+                },
+                SchemaValue::Union(UnionValuePayload {
+                    tag: "other".into(),
+                    body: Box::new(SchemaValue::FixedList {
+                        elements: vec![SchemaValue::Result(ResultValuePayload::Err {
+                            value: Some(Box::new(stream(32))),
+                        })],
+                    }),
+                }),
+            ],
+        };
+        let original = encode_recursive_stream_value(&value, |stream, _| {
+            stream.with_host_endpoint::<u64, _>(|id| *id)
+        })
+        .unwrap();
+        let (input, ids) = NativeMethodInput::capture(original.clone(), vec![]).unwrap();
+        assert_eq!(ids, vec![91, 17, 58, 32]);
+        let stored: NativeMethodInput = deserialize(&serialize(&input).unwrap()).unwrap();
+        let decoded = stored
+            .decode(|ordinal, _| Ok(SchemaValueStream::from_host_endpoint(ids[ordinal])))
+            .unwrap();
+        let restored = encode_recursive_stream_value(&decoded, |stream, _| {
+            stream.with_host_endpoint::<u64, _>(|id| *id)
+        })
+        .unwrap();
+        assert_eq!(original, restored);
+        let projected = AgentMethodInput::Native(stored).to_public_value().unwrap();
+        let PublicMethodInput::Native {
+            value,
+            stream_paths,
+            streams,
+        } = PublicMethodInput::from_value(projected.value()).unwrap()
+        else {
+            panic!("expected native projection")
+        };
+        assert_eq!(stream_paths.len(), 4);
+        assert_eq!(streams, vec![None; 4]);
+        let SchemaValue::Record { fields } = value else {
+            panic!("expected record")
+        };
+        assert_eq!(fields[0], SchemaValue::U64(0));
     }
 
     #[test]
@@ -684,50 +604,5 @@ mod tests {
         let input = AgentMethodInput::PublicJson(first);
         let stored: AgentMethodInput = deserialize(&serialize(&input).unwrap()).unwrap();
         assert_eq!(input, stored);
-    }
-
-    #[test]
-    fn http_request_identity_retains_named_raw_sources_and_presence() {
-        let query = HttpMethodArgument {
-            argument_name: "count".into(),
-            source: HttpMethodArgumentSource::Query {
-                parameter_name: "wire".into(),
-                entries: BTreeMap::from([("wire".into(), vec!["0007".into(), "9".into()])]),
-            },
-        };
-        let text = HttpMethodArgument {
-            argument_name: "message".into(),
-            source: HttpMethodArgumentSource::JsonProperty {
-                property_name: "text".into(),
-            },
-        };
-        let body = HttpMethodBody::Json(JsonMethodInput::capture(br#"{"text":"hello"}"#).unwrap());
-        let first =
-            HttpMethodInput::capture(vec![text.clone(), query.clone()], body.clone()).unwrap();
-        let retry =
-            HttpMethodInput::capture(vec![query.clone(), text.clone()], body.clone()).unwrap();
-        assert_eq!(first, retry);
-        assert_eq!(first.arguments()[0], query);
-        let input = AgentMethodInput::Http(first);
-        let stored: AgentMethodInput = deserialize(&serialize(&input).unwrap()).unwrap();
-        assert_eq!(input, stored);
-        let mut absent = query.clone();
-        let HttpMethodArgumentSource::Query { entries, .. } = &mut absent.source else {
-            unreachable!()
-        };
-        entries.clear();
-        let absent = HttpMethodInput::capture(vec![absent, text.clone()], body.clone()).unwrap();
-        assert_ne!(retry, absent);
-        assert!(HttpMethodInput::capture(vec![text.clone(), text], body).is_err());
-        assert!(
-            HttpMethodInput::capture(
-                vec![query],
-                HttpMethodBody::Binary {
-                    value: vec![0; MAX_LOGICAL_VALUE_SIZE],
-                    mime_type: None,
-                },
-            )
-            .is_err()
-        );
     }
 }

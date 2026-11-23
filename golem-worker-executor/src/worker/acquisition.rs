@@ -20,6 +20,40 @@ use golem_common::model::InvocationId;
 
 use crate::worker::*;
 
+#[derive(Clone, Debug)]
+pub(crate) enum ConstructionError {
+    RequestRejected(WorkerExecutorError),
+    Failed(WorkerExecutorError),
+}
+
+impl ConstructionError {
+    fn error(&self) -> &WorkerExecutorError {
+        match self {
+            Self::RequestRejected(error) | Self::Failed(error) => error,
+        }
+    }
+}
+
+impl From<WorkerExecutorError> for ConstructionError {
+    fn from(error: WorkerExecutorError) -> Self {
+        Self::Failed(error)
+    }
+}
+
+impl From<ConstructionError> for WorkerExecutorError {
+    fn from(error: ConstructionError) -> Self {
+        match error {
+            ConstructionError::RequestRejected(error) | ConstructionError::Failed(error) => error,
+        }
+    }
+}
+
+impl From<OplogError> for ConstructionError {
+    fn from(error: OplogError) -> Self {
+        Self::Failed(error.into())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CreateDecision {
     Created,
@@ -641,8 +675,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             };
             let (started, result) = self.initialize_with(build).await;
             let newly_created = match result {
-                Err(WorkerExecutorError::AgentNotFound { .. }) if !started => continue,
-                result => result?,
+                Err(
+                    ConstructionError::RequestRejected(_)
+                    | ConstructionError::Failed(WorkerExecutorError::AgentNotFound { .. }),
+                ) if !started => continue,
+                result => result.map_err(WorkerExecutorError::from)?,
             };
             if self.initial_worker_metadata.owner_kind != creation_mode.owner_kind() {
                 return Err(WorkerExecutorError::invalid_request(
@@ -825,15 +862,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             WorkerExecutorError::worker_not_found(worker.owned_agent_id.agent_id())
                         })
                     });
-                worker.finish_construction(start, metadata).await
+                worker
+                    .finish_construction(start, metadata.map_err(Into::into))
+                    .await
             }
             .boxed();
             let (started, result) = self.initialize_with(build).await;
             match result {
                 // A load another caller started answers that caller's expected fingerprint,
                 // not this one's, so this caller loads again with its own.
-                Err(WorkerExecutorError::AgentNotFound { .. }) if !started => continue,
-                result => return result.map(|_| ()),
+                Err(
+                    ConstructionError::RequestRejected(_)
+                    | ConstructionError::Failed(WorkerExecutorError::AgentNotFound { .. }),
+                ) if !started => continue,
+                result => return result.map(|_| ()).map_err(Into::into),
             }
         }
     }
@@ -841,8 +883,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// can use that provenance to admit a newly created agent; followers still see an existing one.
     pub(in crate::worker) async fn initialize_with(
         self: &Arc<Self>,
-        build: BoxFuture<'static, Result<ConstructedWorker<Ctx>, WorkerExecutorError>>,
-    ) -> (bool, Result<bool, WorkerExecutorError>) {
+        build: BoxFuture<'static, Result<ConstructedWorker<Ctx>, ConstructionError>>,
+    ) -> (bool, Result<bool, ConstructionError>) {
         let (started, completion) = {
             let mut instance = self.instance.lock().await;
             match instance.transition() {
@@ -852,7 +894,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         receiver.await.unwrap_or_else(|_| {
                             Err(WorkerExecutorError::runtime(
                                 "Worker initialization task ended without a result",
-                            ))
+                            )
+                            .into())
                         })
                     }
                     .boxed()
@@ -882,6 +925,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                     worker.resolved.set(data).map(|()| newly_created).map_err(
                                         |_| {
                                             WorkerExecutorError::runtime("Worker initialized twice")
+                                                .into()
                                         },
                                     )
                                 }
@@ -892,7 +936,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             },
                             _ => Err(WorkerExecutorError::runtime(
                                 "Worker initialization no longer owns its lifecycle phase",
-                            )),
+                            )
+                            .into()),
                         };
                         if published.is_ok() {
                             Self::start_durable_stream_attachment_reconciler(&worker);
@@ -913,7 +958,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             false,
                             Err(WorkerExecutorError::runtime(
                                 "Worker initialization rejected because its executor is stopping",
-                            )),
+                            )
+                            .into()),
                         );
                     }
                     (true, completion)
@@ -921,14 +967,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 LifecycleTransition::Initializing(initializing) => {
                     (false, initializing.completion())
                 }
-                LifecycleTransition::CleanupFailed(error) => return (false, Err(error.clone())),
+                LifecycleTransition::CleanupFailed(error) => {
+                    return (false, Err(error.clone().into()));
+                }
                 _ if self.resolved.get().is_some() => return (false, Ok(false)),
                 _ => {
                     return (
                         false,
                         Err(WorkerExecutorError::runtime(
                             "Worker initialization entered an invalid lifecycle state",
-                        )),
+                        )
+                        .into()),
                     );
                 }
             }
@@ -956,12 +1005,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(in crate::worker) async fn finish_construction(
         self: &Arc<Self>,
         start: std::time::Instant,
-        metadata: Result<GetOrCreateWorkerResult, WorkerExecutorError>,
-    ) -> Result<ConstructedWorker<Ctx>, WorkerExecutorError> {
+        metadata: Result<GetOrCreateWorkerResult, ConstructionError>,
+    ) -> Result<ConstructedWorker<Ctx>, ConstructionError> {
         let mut metadata = match metadata {
             Ok(result) => result,
             Err(err) => {
-                crate::metrics::wasm::record_create_worker_failure(&err);
+                crate::metrics::wasm::record_create_worker_failure(err.error());
                 return Err(err);
             }
         };
@@ -984,7 +1033,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     )),
                 };
                 crate::metrics::wasm::record_create_worker_failure(&error);
-                return Err(error);
+                return Err(error.into());
             }
         };
         crate::metrics::wasm::record_create_worker(start.elapsed());
@@ -1455,7 +1504,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         freshness_disposition: InvocationFreshnessDisposition,
         creation_mode: WorkerCreationMode,
         create_intent: &CreateIntent,
-    ) -> Result<GetOrCreateWorkerResult, WorkerExecutorError> {
+    ) -> Result<GetOrCreateWorkerResult, ConstructionError> {
         // Captured once, here, and cached for the life of the oplog. One live oplog is one
         // ownership generation. Re-reading the epoch per write would only let a losing executor
         // talk itself back into ownership. A renewal never moves an epoch. A delivery that raises
@@ -1481,16 +1530,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 if existing.initial_worker_metadata.owner_kind != owner_kind {
                     return Err(WorkerExecutorError::invalid_request(
                         "execution owner kind does not match the requested creation mode",
-                    ));
+                    )
+                    .into());
                 }
                 Ok(existing)
             }
             None => {
                 // A request that names an agent only by ID never creates it.
                 let Some(new_owner) = create_intent.owner() else {
-                    return Err(WorkerExecutorError::worker_not_found(
-                        owned_agent_id.agent_id(),
-                    ));
+                    return Err(
+                        WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()).into(),
+                    );
                 };
                 let component_id = new_owner.component_id;
                 let component = this
@@ -1508,7 +1558,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 if component.environment_id != owned_agent_id.environment_id {
                     return Err(WorkerExecutorError::invalid_request(
                         "owner environment does not match the component environment",
-                    ));
+                    )
+                    .into());
+                }
+                if owner_kind == OwnerKind::ComponentAgent
+                    && let CreateIntent::Invocation { invocation, .. } = create_intent
+                {
+                    let invocation = invocation.as_ref().ok_or_else(|| {
+                        ConstructionError::RequestRejected(WorkerExecutorError::invalid_request(
+                            "invocation-driven creation requires method input",
+                        ))
+                    })?;
+                    crate::worker::invocation::validate_fresh_invocation(
+                        invocation,
+                        &component.metadata,
+                        &owner_context,
+                    )
+                    .map_err(ConstructionError::RequestRejected)?;
                 }
                 let agent_id = owner_context.agent().cloned();
 

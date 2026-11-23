@@ -237,7 +237,8 @@ fn lower_call_agent(
     })
     .collect::<Result<Vec<_>, String>>()?;
 
-    // HTTP bindings refer to user-supplied arguments, excluding stream resource slots.
+    // Compiled parameters follow user input order, excluding injected fields
+    // and stream resource slots, just as runtime argument resolution does.
     let fields: Vec<_> = inner
         .method_input
         .input_schema
@@ -254,18 +255,17 @@ fn lower_call_agent(
     let mut query_params = inner
         .method_parameters
         .iter()
-        .filter_map(|parameter| match parameter {
+        .enumerate()
+        .filter_map(|(index, parameter)| match parameter {
             MethodParameter::Query {
-                argument_name,
                 query_parameter_name,
                 parameter_type,
-            } => Some((argument_name, query_parameter_name, parameter_type)),
+            } => Some((index, query_parameter_name, parameter_type)),
             _ => None,
         })
-        .map(|(argument_name, name, parameter_type)| {
+        .map(|(index, name, parameter_type)| {
             let field = fields
-                .iter()
-                .find(|field| &field.name == argument_name)
+                .get(index)
                 .ok_or("Query parameter has no input field")?;
             let mut schema = field.schema.clone();
             let metadata = schema.metadata_mut();

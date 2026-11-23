@@ -1496,6 +1496,7 @@ impl WorkerProxy for RecordingWorkerProxy {
         &self,
         target: &ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -1509,6 +1510,7 @@ impl WorkerProxy for RecordingWorkerProxy {
             .prepare(
                 target,
                 method_name,
+                invocation,
                 caller_agent_id,
                 caller_env,
                 caller_stack,
@@ -8519,6 +8521,155 @@ async fn invocation_queue_is_persistent(
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
+async fn invalid_fresh_invocations_leave_no_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::agent::{AgentMethodInput, JsonMethodInput};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let counter = agent_key!("Counter", "invalid-fresh-call");
+    let worker_id = executor.keyed_agent_id(component.environment_id, &counter)?;
+    for (method, params) in [
+        ("WRONG", data_value!()),
+        ("increment", data_value!("unexpected")),
+    ] {
+        assert!(
+            executor
+                .invoke_and_await_agent(&component, &counter, method, params)
+                .await
+                .is_err()
+        );
+        assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+        assert!(executor.stored_oplog(&worker_id.agent_id).await.is_empty());
+        assert_eq!(executor.instance_load_count(&worker_id.agent_id), 0);
+    }
+    let json =
+        AgentMethodInput::PublicJson(JsonMethodInput::capture(br#"{"unexpected":7}"#).unwrap());
+    let start = golem_api_grpc::proto::golem::worker::InvocationStart {
+        target: Some(golem_api_grpc::proto::golem::worker::AgentTarget {
+            target: Some(
+                golem_api_grpc::proto::golem::worker::agent_target::Target::Key(
+                    counter.clone().try_into().map_err(anyhow::Error::msg)?,
+                ),
+            ),
+        }),
+        method_name: Some("increment".into()),
+        captured_method_input: Some(
+            golem_common::serialization::serialize(&json).map_err(anyhow::Error::msg)?,
+        ),
+        component_id: Some(component.id.into()),
+        environment_id: Some(component.environment_id.into()),
+        component_owner_account_id: Some(component.account_id.into()),
+        auth_ctx: Some(executor.auth_ctx().into()),
+        caller: Some(golem_common::model::caller::Caller::anonymous().into()),
+        request_key: Some(golem_common::model::InvocationRequestKey::external(None, None).into()),
+        mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+        ..Default::default()
+    };
+    assert!(executor.invoke_agent_session(start).await.is_err());
+    assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+    assert!(executor.stored_oplog(&worker_id.agent_id).await.is_empty());
+    assert_eq!(executor.instance_load_count(&worker_id.agent_id), 0);
+
+    let (valid, invalid) = tokio::join!(
+        executor.invoke_and_await_agent(&component, &counter, "increment", data_value!()),
+        executor.invoke_and_await_agent(&component, &counter, "WRONG", data_value!()),
+    );
+    assert_eq!(valid?.into_typed::<u32>()?, 1);
+    assert!(invalid.is_err());
+    assert_eq!(executor.instance_load_count(&worker_id.agent_id), 1);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn fenced_pre_guest_rejection_does_not_publish_a_recorded_rejection(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::OplogEntry;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.oplog.max_operations_before_commit = 100_000;
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let name = agent_key!("Counter", "fenced-pre-guest-rejection");
+    executor
+        .invoke_and_await_agent(&component, &name, "count", data_value!())
+        .await?;
+    let id = executor.keyed_agent_id(component.environment_id, &name)?;
+    let mut rejection = executor
+        .gate_before_next_oplog_commit(&id.agent_id, |entry| {
+            matches!(
+                entry,
+                OplogEntry::Error {
+                    error: golem_common::model::oplog::AgentError::InvalidRequest(_),
+                    ..
+                }
+            )
+        })
+        .await;
+    let invoke = {
+        let executor = executor.clone();
+        let component = component.clone();
+        let name = name.clone();
+        tokio::spawn(async move {
+            executor
+                .invoke_and_await_agent(&component, &name, "WRONG", data_value!())
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(20), rejection.entered()).await?;
+    take_agent_oplog_over_at_epoch(deps, &context, &id, 1).await?;
+    rejection.release();
+    let error = tokio::time::timeout(Duration::from_secs(20), invoke)
+        .await??
+        .expect_err("a refused rejection commit must not succeed");
+    let details = format!("{error:#}");
+    assert!(
+        details.contains("fenced") || details.contains("Sharding not ready"),
+        "{details}"
+    );
+    assert!(
+        !executor
+            .stored_oplog(&id.agent_id)
+            .await
+            .iter()
+            .any(|entry| matches!(
+                entry,
+                OplogEntry::Error {
+                    error: golem_common::model::oplog::AgentError::InvalidRequest(_),
+                    ..
+                }
+            ))
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
 async fn invoke_with_non_existing_function(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -8549,7 +8700,12 @@ async fn invoke_with_non_existing_function(
         .start_agent(&component.id, counter_id.clone())
         .await?;
 
-    // Bypass ingress validation so the loaded Store rejects this queued method.
+    executor
+        .invoke_and_await_agent(&component, &counter_id, "count", data_value!())
+        .await?;
+    let loads = executor.instance_load_count(&worker_id.agent_id);
+
+    // Queue directly so the selected Store rejects this method.
     let rejected_key = InvocationId(uuid::Uuid::new_v4());
     let cancelled_key = InvocationId(uuid::Uuid::new_v4());
     let invocation = |key, method_name: &str| AgentInvocation::AgentMethod {
@@ -8604,6 +8760,32 @@ async fn invoke_with_non_existing_function(
 
     assert!(failure.is_err());
     assert_eq!(success.into_typed::<u32>()?, 1);
+    assert_eq!(executor.instance_load_count(&worker_id.agent_id), loads);
+
+    for input in [
+        SchemaValue::Record {
+            fields: vec![SchemaValue::String("unexpected".into())],
+        }
+        .try_into()
+        .unwrap(),
+        golem_common::model::agent::AgentMethodInput::PublicJson(
+            golem_common::model::agent::JsonMethodInput::capture(br#"{"unexpected":7}"#).unwrap(),
+        ),
+    ] {
+        let mut rejected = invocation(InvocationId(uuid::Uuid::new_v4()), "increment");
+        if let AgentInvocation::AgentMethod { input: value, .. } = &mut rejected {
+            *value = input;
+        }
+        assert!(worker.clone().invoke_and_await(rejected).await.is_err());
+    }
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &counter_id, "count", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        1
+    );
+    assert_eq!(executor.instance_load_count(&worker_id.agent_id), loads);
 
     drop(worker);
     executor.release().await?;
@@ -10544,6 +10726,7 @@ async fn worker_created_by_reflects_component_owner_not_caller(
             invocation_context: None,
             idempotency_key: None,
             freshness_disposition: 0,
+            invocation: None,
         })
         .await?
         .into_inner();
@@ -10641,6 +10824,7 @@ async fn create_rejects_an_environment_that_does_not_own_the_component(
             invocation_context: None,
             idempotency_key: None,
             freshness_disposition: 0,
+            invocation: None,
         })
         .await?
         .into_inner();
@@ -10781,6 +10965,7 @@ async fn resource_limits_initialized_for_component_owner_not_caller(
             invocation_context: None,
             idempotency_key: None,
             freshness_disposition: 0,
+            invocation: None,
         })
         .await?
         .into_inner();

@@ -744,11 +744,7 @@ pub(super) mod tests {
                     .filter(|segment| segment.starts_with('{'))
                     .enumerate()
                     .map(
-                        |(index, segment)| golem_service_base::custom_api::MethodParameter::Path {
-                            argument_name: segment
-                                .trim_start_matches("{*")
-                                .trim_matches(['{', '}'])
-                                .into(),
+                        |(index, _)| golem_service_base::custom_api::MethodParameter::Path {
                             path_segment_index: golem_service_base::model::SafeIndex::new(
                                 index as u32,
                             ),
