@@ -20,36 +20,53 @@ use crate::filesystem::sandbox::SandboxFollow;
 use crate::filesystem::sandbox::SandboxObjectKind;
 use crate::filesystem::sandbox::SandboxOpenOptions;
 use crate::filesystem::sandbox::errors::FilesystemStorageError;
+#[cfg(target_os = "linux")]
 use crate::filesystem::sandbox::host_adapter::NativeNameModeSource;
+#[cfg(target_os = "linux")]
 use crate::filesystem::sandbox::host_adapter::NativeRoot;
+#[cfg(target_os = "linux")]
 use crate::filesystem::sandbox::host_adapter::QuotaAuthority;
 use crate::filesystem::sandbox::host_adapter::SandboxFilesystem;
 use crate::filesystem::sandbox::host_adapter::directory_for;
 #[cfg(target_os = "linux")]
 use crate::filesystem::sandbox::host_adapter::path_resolution::linux_name_comparison_mode;
+#[cfg(target_os = "linux")]
 use crate::filesystem::sandbox::host_adapter::sandbox_cleanup::LeaseState;
+#[cfg(target_os = "linux")]
 use crate::filesystem::sandbox::host_adapter::sandbox_cleanup::NativeCleanup;
 use crate::filesystem::sandbox::host_adapter::sandbox_provisioning::SandboxFilesystemName;
 use crate::filesystem::sandbox::host_adapter::sandbox_provisioning::SandboxFilesystemProvisioning;
+#[cfg(target_os = "linux")]
 use crate::filesystem::sandbox::host_adapter::tree_copy;
+#[cfg(target_os = "linux")]
 use crate::filesystem::sandbox::name_comparison::NativeNameComparisonMode;
+#[cfg(target_os = "linux")]
 use crate::filesystem::sandbox::object_identity::NativeFileIdentity;
+#[cfg(target_os = "linux")]
 use crate::filesystem::sandbox::object_identity::SandboxDirectoryId;
+#[cfg(target_os = "linux")]
 use crate::filesystem::sandbox::object_identity::directory_identity;
+#[cfg(target_os = "linux")]
 use crate::filesystem::sandbox::open_handles::NativeDirectoryHandle;
+#[cfg(target_os = "linux")]
 use crate::filesystem::sandbox::open_handles::SandboxDirectory;
 use crate::filesystem::sandbox::open_handles::SandboxHandle;
 use crate::filesystem::sandbox::sandbox_paths::SandboxPath;
+#[cfg(target_os = "linux")]
 use crate::filesystem::volume::FilesystemVolume;
 #[cfg(target_os = "linux")]
 use crate::filesystem::volume::validated_xfs_name_mode_for_test;
 use crate::services::golem_config::FilesystemStorageMode;
 use golem_common::model::RetryConfig;
+#[cfg(target_os = "linux")]
 use std::fs::File;
+#[cfg(target_os = "linux")]
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(target_os = "linux")]
 use std::sync::Arc;
 use test_r::test;
+#[cfg(target_os = "linux")]
 use tokio::sync::Mutex as AsyncMutex;
 
 #[cfg(target_os = "linux")]
