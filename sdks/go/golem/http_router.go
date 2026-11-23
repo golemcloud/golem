@@ -297,6 +297,9 @@ func checkRouterScope(ctx context.Context, router, accessor string) {
 // buildRouterHTTP compiles a router's mount: literal segments only, its static
 // files, the handler's catch-all binding and the OpenAPI provider's role.
 func buildRouterHTTP(e *agentEntry, mp parsedPath, rec func(method, format string, args ...any)) (witTypes.Option[common.HttpMountDetails], map[string][]common.HttpEndpointDetails) {
+	if e.mount.AgentID.declared() || e.mount.CreateRoute != "" {
+		rec("", "router mount cannot declare AgentID or CreateRoute")
+	}
 	for _, s := range mp.segs {
 		if s.kind != literalSeg {
 			rec("", "router mount %q must be made of literal segments; a router has no identity to capture", e.mount.Path)
@@ -316,11 +319,13 @@ func buildRouterHTTP(e *agentEntry, mp parsedPath, rec func(method, format strin
 		provider = witTypes.Some(routerOpenAPIMethod)
 	}
 	mount := common.HttpMountDetails{
-		PathPrefix:    witSegments(mp.segs),
-		AuthDetails:   witTypes.Some(common.AuthDetails{Required: e.mount.Auth}),
-		PhantomAgent:  false,
-		CorsOptions:   common.CorsOptions{AllowedPatterns: e.mount.CORS},
-		WebhookSuffix: []common.PathSegment{},
+		PathPrefix:     witSegments(mp.segs),
+		AuthDetails:    witTypes.Some(common.AuthDetails{Required: e.mount.Auth}),
+		PhantomAgent:   false,
+		AgentIdBinding: witTypes.None[common.AgentIdBinding](),
+		CreateRoute:    witTypes.None[[]common.PathSegment](),
+		CorsOptions:    common.CorsOptions{AllowedPatterns: e.mount.CORS},
+		WebhookSuffix:  []common.PathSegment{},
 
 		StaticBindings:        files,
 		FilesystemBindings:    []coreHTTP.FileMapping{},

@@ -16,7 +16,7 @@
  */
 import type { Schema, SchemaAST } from "effect"
 import type { WitSchemaKind } from "../WitTypes.js"
-import type { MountDef } from "../Http.js"
+import type { AgentIdSpec, MountDef } from "../Http.js"
 // Multimodal / ElementSpec are matched by brand below
 // (the discriminating `_effectGolem` literal-string field) so we no
 // longer need the nominal types — keeping the comments / JSDoc links
@@ -488,9 +488,9 @@ export type QueryOrHeaderBindableKeys<C> = {
 // ---------------------------------------------------------------------------
 
 /**
- * Resolves to `MountDef<V>` when every `keyof C & string` is present
- * in `V` (i.e. the mount path covers every constructor parameter),
- * else to `MountDef<V> & Invalid<"…">`.
+ * Key mounts require every `keyof C & string` in `V` (the path covers
+ * every constructor parameter). ID mounts select an existing agent
+ * without binding constructor input.
  *
  * The intersection trick is what makes this useful at the
  * `defineAgent` call site: TypeScript infers `V` from the mount
@@ -507,10 +507,13 @@ export type QueryOrHeaderBindableKeys<C> = {
  * @since 1.5.0
  * @category models
  */
-export type MountDefCovering<C, V extends string, W extends string = never> =
-  Exclude<keyof C & string, V> extends never
-    ? MountDef<V, W>
-    : MountDef<V, W> & Invalid<`mount path missing var '${Exclude<keyof C & string, V> & string}'`>
+export type MountDefCovering<C, V extends string, W extends string = never> = MountDef<V, W> &
+  (
+    | { readonly agentIdBinding: AgentIdSpec }
+    | (Exclude<keyof C & string, V> extends never
+        ? unknown
+        : Invalid<`mount path missing var '${Exclude<keyof C & string, V> & string}'`>)
+  )
 
 // ---------------------------------------------------------------------------
 // WebhookVarsValid — every webhook-suffix {var} must match a bindable constructor param

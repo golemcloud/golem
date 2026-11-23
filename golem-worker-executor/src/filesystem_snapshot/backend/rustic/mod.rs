@@ -271,6 +271,7 @@ impl RusticSnapshotStore {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl FilesystemSnapshotStore for RusticSnapshotStore {
     async fn save(
         &self,

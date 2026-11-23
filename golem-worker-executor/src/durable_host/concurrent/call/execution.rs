@@ -25,6 +25,7 @@ pub(in crate::durable_host::concurrent) fn ambient_trap_context<Ctx: WorkerCtx>(
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx> InFunctionRetryHost for ContextRetryHost<'_, Ctx> {
     fn current_retry_point(&self) -> OplogIndex {
         self.task.current_retry_point()
@@ -83,6 +84,7 @@ impl<'a, H> ScopedRetryHost<'a, H> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<H: InFunctionRetryHost + Send + Sync> InFunctionRetryHost for ScopedRetryHost<'_, H> {
     fn current_retry_point(&self) -> OplogIndex {
         self.retry_point()
@@ -116,6 +118,7 @@ impl<H: InFunctionRetryHost + Send + Sync> InFunctionRetryHost for ScopedRetryHo
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<H: DurabilityHost + Send + Sync> DurabilityHost for ScopedRetryHost<'_, H> {
     fn observe_function_call(&self, interface: &str, function: &str) {
         self.inner.observe_function_call(interface, function);

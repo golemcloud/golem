@@ -111,6 +111,7 @@ aws-runtime = { workspace = true }
 aws-smithy-runtime-api = { workspace = true }
 criterion = { workspace = true }
 pretty_assertions = { workspace = true }
+proptest = { workspace = true }
 rcgen = { workspace = true, features = ["pem"] }
 tempfile = { workspace = true }
 test-r = { workspace = true }

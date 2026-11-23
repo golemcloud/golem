@@ -14,8 +14,8 @@
 
 use crate::config::DurableStreamRouteLimits;
 use golem_common::model::agent::{
-    DurableStreamRouteOptions, DurableStreamSlotSource, HttpEndpointDetails, HttpMountDetails,
-    PathSegment, PhantomIdBinding,
+    AgentIdBinding, DurableStreamRouteOptions, DurableStreamSlotSource, HttpEndpointDetails,
+    HttpMountDetails, PathSegment,
 };
 use golem_common::schema::agent::contains_stream_in_graph;
 use golem_common::schema::{
@@ -49,11 +49,11 @@ pub(super) fn validate_route(
     family_id: golem_service_base::custom_api::RouteId,
 ) -> Result<(InputSchema, DurableStreamRoutePolicy), String> {
     validate_path(mount, endpoint)?;
-    if let Some(PhantomIdBinding::Query(details)) = &mount.phantom_id_binding
+    if let Some(AgentIdBinding::Query(details)) = &mount.agent_id_binding
         && ["offset", "live", "cursor"].contains(&details.name.as_str())
     {
         return Err(format!(
-            "Phantom selector '{}' conflicts with a Durable Streams query control",
+            "Agent ID selector '{}' conflicts with a Durable Streams query control",
             details.name
         ));
     }
@@ -653,7 +653,8 @@ mod tests {
                 ))],
                 auth_details: None,
                 phantom_agent: false,
-                phantom_id_binding: None,
+                agent_id_binding: None,
+                create_route: None,
                 cors_options: CorsOptions {
                     allowed_patterns: vec![],
                 },

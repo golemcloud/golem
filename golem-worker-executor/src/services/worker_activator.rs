@@ -143,6 +143,7 @@ impl<Ctx: WorkerCtx> Default for LazyWorkerActivator<Ctx> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
     async fn archive_oplog(
         &self,
@@ -379,6 +380,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerActivator<Ctx, Svcs> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<Ctx>
     for DefaultWorkerActivator<Ctx, Svcs>
 {
@@ -391,7 +393,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         match self
             .all
             .active_agents()
-            .get_existing(&self.all, owned_agent_id, Caller::anonymous())
+            .get_existing(&self.all, owned_agent_id)
             .await
         {
             Ok(worker) => worker.archive_oplog(last_oplog_index, wait).await,
@@ -411,7 +413,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         let worker = match self
             .all
             .active_agents()
-            .get_existing(&self.all, owned_agent_id, Caller::anonymous())
+            .get_existing(&self.all, owned_agent_id)
             .await
         {
             Ok(worker) => worker,
@@ -434,7 +436,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
                 match self
                     .all
                     .active_agents()
-                    .get_existing(&self.all, owned_agent_id, Caller::anonymous())
+                    .get_existing(&self.all, owned_agent_id)
                     .await
                 {
                     Ok(worker) => worker,
@@ -576,12 +578,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         let worker = match self
             .all
             .active_agents()
-            .get_existing_with_fingerprint(
-                &self.all,
-                owned_agent_id,
-                Caller::anonymous(),
-                Some(expected_fingerprint),
-            )
+            .get_existing_with_fingerprint(&self.all, owned_agent_id, Some(expected_fingerprint))
             .await
         {
             Ok(worker) => worker,

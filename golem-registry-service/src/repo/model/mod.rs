@@ -14,6 +14,7 @@
 
 pub mod account;
 pub mod account_resource_override;
+pub mod account_tree;
 pub mod account_usage;
 pub mod agent_secrets;
 pub mod application;

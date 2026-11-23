@@ -18,10 +18,11 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use bytes::Bytes;
 use golem_client::api::RegistryServiceClient;
-use golem_common::model::agent::{AgentMode, OwnedAgentId, OwnerKind};
+use golem_common::model::agent::{AgentMode, AgentTypeName, OwnedAgentId, OwnerKind};
 use golem_common::model::base64::Base64;
 use golem_common::model::component::{
-    PluginInstallation, PluginInstallationAction, PluginPriority, PluginUninstallation,
+    AgentTypeProvisionConfigUpdate, PluginInstallation, PluginInstallationAction,
+    PluginInstallationUpdate, PluginPriority, PluginUninstallation,
 };
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
 use golem_common::model::oplog::PublicOplogEntry;
@@ -69,12 +70,40 @@ struct BatchCallback {
     /// plugin after calling `enrich-oplog-entries` on the batch
     #[serde(default)]
     durable_entries: Vec<DurableEntryRecord>,
+    /// The caller that the processor guest observes for this batch
+    caller: CallerRecord,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+struct CallerRecord {
+    original: PrincipalRecord,
+    immediate: PrincipalRecord,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+struct PrincipalRecord {
+    kind: String,
+    account_id: Option<String>,
+    agent_id: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
 struct InvocationRecord {
     oplog_index: u64,
     fn_name: String,
+    /// The principal that started the chain, when the start was in the same batch
+    #[serde(default)]
+    original_caller: Option<CallerRoleRecord>,
+    /// The principal that made the call, when the start was in the same batch
+    #[serde(default)]
+    immediate_caller: Option<CallerRoleRecord>,
+}
+
+/// One role of an invocation's caller, as the oplog processor saw it.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+struct CallerRoleRecord {
+    kind: String,
+    subject: Option<String>,
 }
 
 /// Post-enrichment evidence of a durable host-call entry, as observed by the
@@ -490,6 +519,25 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
     assert_function_names(&batches, &["agent-initialization", "add", "add", "add"]);
     assert_unique_oplog_indices(&batches);
 
+    // The processor sees the calling account in both roles of the REST invocations.
+    let account = CallerRoleRecord {
+        kind: "account".to_string(),
+        subject: Some(format!("account:{}", user.account_id)),
+    };
+    let adds = batches
+        .iter()
+        .flat_map(|batch| batch.invocations.iter())
+        .filter(|invocation| invocation.fn_name == "add" && invocation.original_caller.is_some())
+        .collect::<Vec<_>>();
+    assert!(
+        !adds.is_empty(),
+        "no invocation with a caller in {batches:?}"
+    );
+    for invocation in adds {
+        assert_eq!(invocation.original_caller.as_ref(), Some(&account));
+        assert_eq!(invocation.immediate_caller.as_ref(), Some(&account));
+    }
+
     // E2: Verify oplog entries exist for the worker
     let oplog = user.get_oplog(&worker_id, OplogIndex::from_u64(0)).await?;
     assert!(!oplog.is_empty(), "Worker oplog should not be empty");
@@ -525,6 +573,209 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
             )),
             "processor dispatch must not run an agent constructor"
         );
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// The caller of a batch: the installing account and the processed agent
+// ============================================================================
+
+/// One account owns the environment and creates the agent. Another account installs the
+/// processor in that environment. Every batch runs with the installing account as the original
+/// caller and the processed agent as the immediate caller, as the processor guest observes it.
+#[test]
+#[tracing::instrument]
+async fn oplog_processor_runs_as_the_installer_and_the_processed_agent(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    assert_batches_run_as_the_installer(deps, false).await
+}
+
+/// The owner of the environment changes the priority and the parameters of a processor that
+/// another account installed. The installing account stays the installer: the component still
+/// names it, and every batch still runs with it as the original caller.
+#[test]
+#[tracing::instrument]
+async fn oplog_processor_keeps_its_installer_when_another_account_updates_it(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    assert_batches_run_as_the_installer(deps, true).await
+}
+
+/// The account `installer` installs the processor on a component of the account `owner`. With
+/// `owner_updates_the_installation`, the owner then changes the installation. The processor guest
+/// must observe the installer as the original caller of every batch.
+async fn assert_batches_run_as_the_installer(
+    deps: &EnvBasedTestDependencies,
+    owner_updates_the_installation: bool,
+) -> anyhow::Result<()> {
+    let owner = deps.user().await?;
+    let (_, env) = owner.app_and_env().await?;
+    let installer = deps.user().await?;
+    let installer_client = installer.registry_service_client().await;
+
+    let environment = format!(
+        "{}/{}/{}",
+        owner.account_email.as_str(),
+        env.application_name.0,
+        env.name.0
+    );
+    let grantee = installer.account_email.as_str();
+    owner
+        .registry_service_client()
+        .await
+        .create_permission_share(
+            &owner.account_id.0,
+            &PermissionShareCreation {
+                target_account_email: installer.account_email.clone(),
+                name: PermissionShareName("plugin-installer-access".to_string()),
+                data: PermissionShareData {
+                    lower_positive: vec![
+                        format!("environment({environment}) @ {grantee} : view :"),
+                        format!("environment({environment}) @ {grantee} : view-deployment-plan :"),
+                        format!("environment({environment}) @ {grantee} : deploy :"),
+                        format!("component({environment}/*) @ {grantee} : create : *"),
+                        format!("component({environment}/*) @ {grantee} : view : *"),
+                        format!("component({environment}/*) @ {grantee} : update : *"),
+                        format!("environment.plugin-grant({environment}) @ {grantee} : create : *"),
+                        format!("environment.plugin-grant({environment}) @ {grantee} : view : *"),
+                    ],
+                    lower_negative: Vec::new(),
+                    upper_positive: Vec::new(),
+                    upper_negative: Vec::new(),
+                },
+            },
+        )
+        .await?;
+
+    let (callback_url, received_batches, _http_server) = start_callback_server().await;
+
+    let plugin_component = installer
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
+    let oplog_processor_plugin = installer_client
+        .create_plugin(
+            &installer.account_id.0,
+            &PluginRegistrationCreation {
+                name: "oplog-processor-caller".to_string(),
+                version: "v1".to_string(),
+                description: "A test".to_string(),
+                icon: Base64(Vec::new()),
+                homepage: "none".to_string(),
+                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                    component_id: plugin_component.id,
+                    component_revision: plugin_component.revision,
+                }),
+            },
+        )
+        .await?;
+    let oplog_processor_plugin_grant = installer_client
+        .create_environment_plugin_grant(
+            &env.id.0,
+            &EnvironmentPluginGrantCreation {
+                plugin_registration_id: oplog_processor_plugin.id,
+            },
+        )
+        .await?;
+
+    let mut plugin_params = BTreeMap::new();
+    plugin_params.insert("callback-url".to_string(), callback_url.clone());
+    let unplugged_component = owner
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+    let component = installer
+        .update_component_with(
+            &unplugged_component.id,
+            unplugged_component.revision,
+            None,
+            Some(BTreeMap::from([(
+                AgentTypeName("Repository".to_string()),
+                AgentTypeProvisionConfigUpdate {
+                    plugin_updates: vec![PluginInstallationAction::Install(PluginInstallation {
+                        environment_plugin_grant_id: oplog_processor_plugin_grant.id,
+                        priority: PluginPriority(0),
+                        parameters: plugin_params,
+                    })],
+                    ..Default::default()
+                },
+            )])),
+            Vec::new(),
+        )
+        .await?;
+
+    let component = if owner_updates_the_installation {
+        let updated = owner
+            .update_component_with(
+                &component.id,
+                component.revision,
+                None,
+                Some(BTreeMap::from([(
+                    AgentTypeName("Repository".to_string()),
+                    AgentTypeProvisionConfigUpdate {
+                        plugin_updates: vec![PluginInstallationAction::Update(
+                            PluginInstallationUpdate {
+                                environment_plugin_grant_id: oplog_processor_plugin_grant.id,
+                                new_priority: Some(PluginPriority(1)),
+                                new_parameters: Some(BTreeMap::from([
+                                    ("callback-url".to_string(), callback_url.clone()),
+                                    ("updated".to_string(), "yes".to_string()),
+                                ])),
+                            },
+                        )],
+                        ..Default::default()
+                    },
+                )])),
+                Vec::new(),
+            )
+            .await?;
+        // The update is in effect, and it did not change the installer.
+        let plugins = &updated.metadata.agent_type_provision_configs
+            [&AgentTypeName("Repository".to_string())]
+            .plugins;
+        assert_eq!(plugins.len(), 1, "{plugins:?}");
+        assert_eq!(plugins[0].priority, PluginPriority(1));
+        assert_eq!(
+            plugins[0].parameters.get("updated").map(String::as_str),
+            Some("yes")
+        );
+        assert_eq!(plugins[0].installed_by, installer.account_id);
+        updated
+    } else {
+        component
+    };
+
+    let repo_id = agent_key!("Repository", "installer-caller");
+    let worker_id = owner.start_agent(&component.id, repo_id.clone()).await?;
+    owner
+        .invoke_and_await_agent(
+            &component,
+            &repo_id,
+            "add",
+            data_value!("G1000", "Golem T-Shirt M"),
+        )
+        .await?;
+
+    let batches = wait_for_invocations(&received_batches, 2, Duration::from_secs(300)).await;
+    let expected = CallerRecord {
+        original: PrincipalRecord {
+            kind: "account".to_string(),
+            account_id: Some(installer.account_id.0.to_string()),
+            agent_id: None,
+        },
+        immediate: PrincipalRecord {
+            kind: "agent".to_string(),
+            account_id: None,
+            agent_id: Some(worker_id.agent_id.to_string()),
+        },
+    };
+    for batch in &batches {
+        assert_eq!(batch.source_worker_id, worker_id.agent_id.to_string());
+        assert_eq!(batch.caller, expected);
     }
 
     Ok(())

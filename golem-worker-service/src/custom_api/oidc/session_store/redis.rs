@@ -97,6 +97,7 @@ return value
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SessionStore for RedisSessionStore {
     async fn store_pending_oidc_login(
         &self,

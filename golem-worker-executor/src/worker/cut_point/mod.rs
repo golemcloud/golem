@@ -167,6 +167,41 @@ impl Display for SpanningConstruct {
     }
 }
 
+/// The cut point that drops the last `number_of_invocations` invocations of an oplog whose last
+/// entry is at `last_index`: the index just before the `number_of_invocations`-th
+/// `AgentInvocationStarted`, counted back from `last_index`. Invocations in the region that a
+/// `Revert` entry dropped are not counted: the walk continues before that region. `None` when the
+/// oplog holds fewer invocations. A failed `read` ends the walk with its error.
+pub async fn cut_before_last_invocations<Read, ReadFut, E>(
+    read: Read,
+    last_index: OplogIndex,
+    number_of_invocations: u64,
+) -> Result<Option<OplogIndex>, E>
+where
+    Read: Fn(OplogIndex) -> ReadFut,
+    ReadFut: Future<Output = Result<OplogEntry, E>>,
+{
+    let mut current = last_index;
+    let mut found = 0;
+    loop {
+        let continue_before = match read(current).await? {
+            OplogEntry::AgentInvocationStarted { .. } => {
+                found += 1;
+                if found == number_of_invocations {
+                    return Ok(Some(current.previous()));
+                }
+                current
+            }
+            OplogEntry::Revert { dropped_region, .. } => dropped_region.start.min(current),
+            _ => current,
+        };
+        if continue_before == OplogIndex::INITIAL {
+            return Ok(None);
+        }
+        current = continue_before.previous();
+    }
+}
+
 /// Scans `(cut_point, scan_end]` for a remote-transaction outcome that
 /// references an opening entry at or before the cut. Ordinary call terminals and completion
 /// markers may lie beyond the cut: replay recovers from precisely the retained prefix.
@@ -221,6 +256,7 @@ where
             | OplogEntry::CompletionDelivered { .. }
             | OplogEntry::AgentInvocationStarted { .. }
             | OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::AgentInvocationSettled { .. }
             | OplogEntry::AgentInvocationFailed { .. }
             | OplogEntry::Suspend { .. }
             | OplogEntry::Error { .. }

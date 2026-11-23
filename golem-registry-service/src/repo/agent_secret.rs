@@ -100,6 +100,7 @@ impl<Repo: AgentSecretRepo> LoggedAgentSecretRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: AgentSecretRepo> AgentSecretRepo for LoggedAgentSecretRepo<Repo> {
     async fn create(
         &self,
@@ -336,6 +337,7 @@ impl DbAgentSecretRepo<PostgresPool> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl AgentSecretRepo for DbAgentSecretRepo<PostgresPool> {
     async fn create(
         &self,

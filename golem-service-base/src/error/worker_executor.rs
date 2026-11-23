@@ -20,7 +20,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{AgentError, ReplayDivergence};
 use golem_common::model::quota::ResourceName;
-use golem_common::model::{AgentId, OplogIndex, PromiseId, ShardId, Timestamp};
+use golem_common::model::{AgentId, BackgroundFailure, OplogIndex, PromiseId, ShardId, Timestamp};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -825,6 +825,32 @@ impl WorkerExecutorError {
             .ok()?
             .try_into()
             .ok()
+    }
+}
+
+/// A background failure is reported as the error that a fresh invocation of the failed agent gets.
+impl From<BackgroundFailure> for WorkerExecutorError {
+    fn from(value: BackgroundFailure) -> Self {
+        match value {
+            BackgroundFailure::Trapped { error, stderr } => {
+                WorkerExecutorError::PreviousInvocationFailed { error, stderr }
+            }
+            BackgroundFailure::Exited => WorkerExecutorError::PreviousInvocationExited,
+        }
+    }
+}
+
+impl TryFrom<WorkerExecutorError> for BackgroundFailure {
+    type Error = WorkerExecutorError;
+
+    fn try_from(value: WorkerExecutorError) -> Result<Self, Self::Error> {
+        match value {
+            WorkerExecutorError::PreviousInvocationFailed { error, stderr } => {
+                Ok(BackgroundFailure::Trapped { error, stderr })
+            }
+            WorkerExecutorError::PreviousInvocationExited => Ok(BackgroundFailure::Exited),
+            other => Err(other),
+        }
     }
 }
 

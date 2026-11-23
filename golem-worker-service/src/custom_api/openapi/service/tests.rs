@@ -75,6 +75,7 @@ type Call = (
 );
 struct ControlledInvoker(mpsc::UnboundedSender<Call>);
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ProviderInvoker for ControlledInvoker {
     async fn invoke(&self, call: &ProviderCall) -> Result<String, OpenApiError> {
         let (tx, rx) = oneshot::channel();
@@ -183,6 +184,7 @@ async fn worker_adapter_uses_derived_private_identity_and_canonical_input() {
             idempotency_key: None,
             oplog_index: None,
             agent_fingerprint: None,
+            background_failure: None,
         },
         AgentMode::Ephemeral,
         AgentConstructorSchema {

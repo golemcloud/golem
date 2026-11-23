@@ -87,6 +87,7 @@ impl<Repo: RetryPolicyRepo> LoggedRetryPolicyRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: RetryPolicyRepo> RetryPolicyRepo for LoggedRetryPolicyRepo<Repo> {
     async fn create(
         &self,
@@ -268,6 +269,7 @@ impl DbRetryPolicyRepo<PostgresPool> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl RetryPolicyRepo for DbRetryPolicyRepo<PostgresPool> {
     async fn create(
         &self,
