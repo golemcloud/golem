@@ -170,13 +170,8 @@ type sessionResult struct {
 }
 
 // openSession starts a call. The call is sent once the connection is up; the
-// result arrives on s.result. A session names its agent by constructor
-// arguments, so only an agent that its arguments reach can stream: one of
-// [Upsert], or one that [Create] made with [Keyed].
+// result arrives on s.result.
 func openSession(a *Agent, method string, params schema.SchemaValue) (*session, error) {
-	if a.parameters == nil {
-		return nil, fmt.Errorf("golem: %s.%s: a streaming call needs an agent addressed by its constructor arguments", a.typeName, method)
-	}
 	life, end := context.WithCancel(context.Background())
 	s := &session{
 		agent:         a,
@@ -247,20 +242,29 @@ func (s *session) prepareStart() error {
 		return err
 	}
 	a := s.agent
-	constructor, err := schema.MarshalWireValue(a.parameters)
-	if err != nil {
-		return fmt.Errorf("golem: %s constructor arguments: %w", a.typeName, err)
+	var target map[string]any
+	if a.byID {
+		target = map[string]any{"kind": "id", "agentId": a.id.Load()}
+		if a.fingerprint != "" {
+			target["expectedFingerprint"] = a.fingerprint
+		}
+	} else {
+		constructor, err := schema.MarshalWireValue(a.parameters)
+		if err != nil {
+			return fmt.Errorf("golem: %s constructor arguments: %w", a.typeName, err)
+		}
+		target = map[string]any{"kind": "key", "constructorParameters": json.RawMessage(constructor)}
 	}
 	methodParams, err := schema.MarshalWireValue(params)
 	if err != nil {
 		return fmt.Errorf("golem: %s.%s arguments: %w", a.typeName, s.method, err)
 	}
 	selector := map[string]any{
-		"agentType":             a.typeName,
-		"application":           a.configuration.AppName,
-		"constructorParameters": json.RawMessage(constructor),
-		"environment":           a.configuration.EnvName,
-		"method":                s.method,
+		"agentType":   a.typeName,
+		"application": a.configuration.AppName,
+		"target":      target,
+		"environment": a.configuration.EnvName,
+		"method":      s.method,
 	}
 	s.attempt = newUUID()
 	s.descriptor, err = encodeMessage("invocationStart", map[string]any{

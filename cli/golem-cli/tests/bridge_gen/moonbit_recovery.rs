@@ -557,10 +557,22 @@ impl Peer {
         let mut conn = self.connect().await?;
         let start = receive(&mut conn).await?;
         assert_eq!(start["type"], "invocationStart");
+        let target = if mode == "success-id" {
+            json!({"kind":"id", "agentId":"00000000-0000-8000-8000-000000000abc",
+                "expectedFingerprint":"pinned"})
+        } else {
+            json!({"kind":"key", "constructorParameters":{"kind":"tuple", "value":{"elements":[]}}})
+        };
+        assert_eq!(
+            start["selector"],
+            json!({"application":"app", "environment":"env", "agentType":"RecoveryAgent",
+                "method":"run", "target":target}),
+        );
         if let Some(first) = first_start {
             assert_ne!(start["attemptId"], first["attemptId"]);
             assert_eq!(start["idempotencyKey"], first["idempotencyKey"]);
             assert_eq!(start["methodParameters"], first["methodParameters"]);
+            assert_eq!(start["selector"], first["selector"]);
         }
         if mode == "initial" {
             send(&mut conn, json!({"type":"invocationRejected", "attemptId":start["attemptId"], "code":"invalid-attachment-state", "message":"terminal rejection", "retryable":false})).await?;

@@ -840,9 +840,12 @@ object StreamSession {
       }
     }
     val base = resolved.configuration.server.url.stripSuffix("/").replaceFirst("^http", "ws")
-    val selector = Json.obj("agentType" -> Json.string(resolved.agentTypeName), "application" -> Json.string(resolved.configuration.appName), "constructorParameters" -> constructorCodec.encode(resolved.keyedParameters), "environment" -> Json.string(resolved.configuration.envName), "method" -> Json.string(method))
-    // The selector names the keyed agent of the constructor parameters, which carries its own
-    // configuration, so a session never overrides it.
+    val target = resolved.target match {
+      case Some(reference) => Json.obj("kind" -> Json.string("id"), "agentId" -> Json.string(reference.agentId.uuid), "expectedFingerprint" -> Json.string(reference.agentFingerprint))
+      case None => Json.obj("kind" -> Json.string("key"), "constructorParameters" -> constructorCodec.encode(resolved.keyedParameters))
+    }
+    val selector = Json.obj("agentType" -> Json.string(resolved.agentTypeName), "application" -> Json.string(resolved.configuration.appName), "target" -> target, "environment" -> Json.string(resolved.configuration.envName), "method" -> Json.string(method))
+    // The selected agent carries its own configuration, so a session never overrides it.
     val config = Json.arr(Vector.empty)
     var startParameters = inputCodec.encode(encodedParameters)
     def freezeStart(): Unit = {

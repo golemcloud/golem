@@ -74,8 +74,8 @@ use golem_common::model::filesystem::{
 };
 use golem_common::model::golem_issuer::GolemIssuer;
 use golem_common::model::invocation_session_public::{
-    InvocationSelector, PublicConfigEntry, PublicErrorCode, PublicNativeToolTarget,
-    PublicTypedValue,
+    InvocationSelector, PublicAgentTarget, PublicConfigEntry, PublicErrorCode,
+    PublicNativeToolTarget, PublicTypedValue,
 };
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
@@ -2820,41 +2820,93 @@ impl WorkerService {
         }
         let component_id = registered_agent_type.implemented_by.component_id;
         let agent_type = &registered_agent_type.agent_type;
+        if !start.config.is_empty()
+            && (agent_type.mode == AgentMode::Durable
+                || matches!(start.selector.target, PublicAgentTarget::Id { .. }))
+        {
+            return Err(WorkerServiceError::TypeChecker(
+                "Configuration overrides are only accepted by create".to_string(),
+            )
+            .into());
+        }
         let config =
             decode_public_agent_config(&agent_type.schema, &agent_type.config, start.config)?;
-        let constructor_graph =
-            public_input_graph(&agent_type.schema, &agent_type.constructor.input_schema);
-        let constructor_parameters = decode_public_json_schema_value(
-            &constructor_graph,
-            &constructor_graph.root,
-            &start.selector.constructor_parameters,
-            PublicStreamReferencePolicy::None,
-            |_, _| unreachable!("constructor stream references are disabled by policy"),
-        )?;
-        let constructor_parameters = json_input_schema_value_to_typed_schema_value(
-            constructor_parameters,
-            &agent_type.schema,
-            &agent_type.constructor.input_schema,
-        )
-        .map_err(WorkerServiceError::TypeChecker)?;
-        let component = self
-            .component_service
-            .get_revision(
-                component_id,
-                registered_agent_type.implemented_by.component_revision,
-            )
-            .await
-            .map_err(WorkerServiceError::from)?;
         let component_owner_account_id = registered_agent_type.implemented_by.account_id;
-        let constructor = ParsedAgentKey::new(agent_type_name.clone(), constructor_parameters);
-        let (target, mut freshness_disposition) = Self::invocation_target(
-            environment_id,
-            registered_agent_type,
-            &component,
-            &constructor,
-            &request_key,
-            &method_name,
-        )?;
+        let (target, component, mut freshness_disposition, expected_fingerprint) = match start
+            .selector
+            .target
+        {
+            PublicAgentTarget::Key {
+                constructor_parameters,
+            } => {
+                let constructor_graph =
+                    public_input_graph(&agent_type.schema, &agent_type.constructor.input_schema);
+                let constructor_parameters = decode_public_json_schema_value(
+                    &constructor_graph,
+                    &constructor_graph.root,
+                    &constructor_parameters,
+                    PublicStreamReferencePolicy::None,
+                    |_, _| unreachable!("constructor stream references are disabled by policy"),
+                )?;
+                let constructor_parameters = json_input_schema_value_to_typed_schema_value(
+                    constructor_parameters,
+                    &agent_type.schema,
+                    &agent_type.constructor.input_schema,
+                )
+                .map_err(WorkerServiceError::TypeChecker)?;
+                let component = self
+                    .component_service
+                    .get_revision(
+                        component_id,
+                        registered_agent_type.implemented_by.component_revision,
+                    )
+                    .await
+                    .map_err(WorkerServiceError::from)?;
+                let constructor =
+                    ParsedAgentKey::new(agent_type_name.clone(), constructor_parameters);
+                let (target, freshness) = Self::invocation_target(
+                    environment_id,
+                    registered_agent_type,
+                    &component,
+                    &constructor,
+                    &request_key,
+                    &method_name,
+                )?;
+                (target, component, freshness, None)
+            }
+            PublicAgentTarget::Id {
+                agent_id,
+                expected_fingerprint,
+            } => {
+                if agent_id.type_id() != Some(registered_agent_type.type_id) {
+                    return Err(WorkerServiceError::AgentNotFound(agent_id).into());
+                }
+                let (target, component) = self
+                    .resolve_requested_target(
+                        environment_id,
+                        AgentTarget::Id(agent_id),
+                        None,
+                        None,
+                        false,
+                        expected_fingerprint,
+                        &auth,
+                        AgentPermission::Agent(
+                            AgentVerb::Invoke,
+                            AgentResourcePattern::Method(AgentMethodName(method_name.clone())),
+                        ),
+                    )
+                    .await?;
+                if target.agent_type.as_ref() != Some(&agent_type_name) {
+                    return Err(WorkerServiceError::AgentNotFound(agent_id).into());
+                }
+                (
+                    target,
+                    component,
+                    InvocationFreshnessDisposition::MayExist,
+                    expected_fingerprint,
+                )
+            }
+        };
         authorize_target(
             &auth,
             &component,
@@ -2869,7 +2921,7 @@ impl WorkerService {
                 environment_id,
                 &auth,
                 freshness_disposition,
-                None,
+                expected_fingerprint,
             )
             .await?;
         let invocation_agent_type = invocation_component
@@ -2927,7 +2979,7 @@ impl WorkerService {
                     auth.clone(),
                     None,
                     caller.clone(),
-                    None,
+                    expected_fingerprint.map(|fingerprint| fingerprint.0.into()),
                 )
                 .await?;
             // The resolution created or found the incarnation, so the start names an existing
@@ -2935,7 +2987,7 @@ impl WorkerService {
             freshness_disposition = InvocationFreshnessDisposition::MayExist;
             Some(fingerprint.0.into())
         } else {
-            None
+            expected_fingerprint.map(|fingerprint| fingerprint.0.into())
         };
         let output_schema = method.output_schema.schema().cloned();
         let schema = public_invocation_graph(
@@ -4504,7 +4556,9 @@ mod tests {
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
     use golem_common::model::filesystem::{FileByteSelection, FileReadHead};
     use golem_common::model::golem_issuer::GolemIssuer;
-    use golem_common::model::invocation_session_public::{InvocationSelector, PublicConfigEntry};
+    use golem_common::model::invocation_session_public::{
+        InvocationSelector, PublicAgentTarget, PublicConfigEntry,
+    };
     use golem_common::model::json::NormalizedJsonValue;
     use golem_common::model::oplog::{OplogCursor, OplogIndex};
     use golem_common::model::tool::{ToolBindingOwner, ToolName};
@@ -6093,10 +6147,12 @@ mod tests {
                     application: "weather-app".to_string(),
                     environment: "prod".to_string(),
                     agent_type: self.agent_type_name.0.clone(),
-                    constructor_parameters: serde_json::json!({
-                        "kind": "record",
-                        "value": {"fields": []}
-                    }),
+                    target: PublicAgentTarget::Key {
+                        constructor_parameters: serde_json::json!({
+                            "kind": "record",
+                            "value": {"fields": []}
+                        }),
+                    },
                     method: "run".to_string(),
                 },
                 config: vec![],
@@ -7621,6 +7677,166 @@ mod tests {
         );
         assert!(start.attempt_id.is_some());
         assert!(start.expected_callee_fingerprint.is_none());
+    }
+
+    #[test]
+    async fn public_invocation_session_id_never_creates_and_pins_the_incarnation() {
+        for case in [
+            "missing",
+            "wrong-type",
+            "other-environment",
+            "stale",
+            "existing",
+        ] {
+            let harness = RestHarness::new_with_output(
+                AgentMode::Durable,
+                OutputSchema::Single(Box::new(SchemaType::stream(Some(SchemaType::u32())))),
+            );
+            if case != "missing" {
+                harness
+                    .worker_client
+                    .set_metadata_component_revision(harness.component_revision);
+            }
+            if case == "other-environment" {
+                *harness
+                    .worker_client
+                    .metadata_environment_id
+                    .lock()
+                    .unwrap() = Some(EnvironmentId::new());
+            }
+            let mut start = harness.public_invocation_start(IdempotencyKey::fresh());
+            let agent_id = if case == "wrong-type" {
+                AgentId::keyed(
+                    harness.environment_id,
+                    TypeId::try_from(43u32).unwrap(),
+                    &harness.agent_key(),
+                )
+            } else {
+                harness.keyed_agent_id()
+            };
+            start.selector.target = PublicAgentTarget::Id {
+                agent_id,
+                expected_fingerprint: Some(if case == "stale" {
+                    AgentFingerprint::new()
+                } else {
+                    harness.worker_client.fingerprint
+                }),
+            };
+            let result = harness
+                .worker_service
+                .invoke_public_agent_session_v1(
+                    start,
+                    Box::pin(stream::empty()),
+                    AuthCtx::system(),
+                    |_, _| panic!("stream-free input"),
+                )
+                .await;
+            if case == "existing" {
+                assert_eq!(result.unwrap().agent_id, agent_id);
+                let (_, trusted) = harness.worker_client.invocation_session_start();
+                assert!(trusted.constructor.is_none());
+                assert_eq!(
+                    trusted.expected_callee_fingerprint.map(Uuid::from),
+                    Some(harness.worker_client.fingerprint.0)
+                );
+            } else {
+                assert!(
+                    matches!(
+                        result,
+                        Err(PublicAgentSessionStartError::Worker(
+                            WorkerServiceError::AgentNotFound(_)
+                        ))
+                    ),
+                    "{case}: {:?}",
+                    result.err()
+                );
+                assert_eq!(
+                    harness.worker_client.invocation_session_start_count(),
+                    0,
+                    "{case}"
+                );
+            }
+            assert!(
+                harness
+                    .worker_client
+                    .created_agent_ids
+                    .lock()
+                    .unwrap()
+                    .is_empty(),
+                "{case} must not create"
+            );
+        }
+    }
+
+    #[test]
+    async fn public_invocation_session_rejects_create_only_overrides() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        for target in [
+            harness
+                .public_invocation_start(IdempotencyKey::fresh())
+                .selector
+                .target,
+            PublicAgentTarget::Id {
+                agent_id: harness.keyed_agent_id(),
+                expected_fingerprint: None,
+            },
+        ] {
+            let mut start = harness.public_invocation_start(IdempotencyKey::fresh());
+            start.selector.target = target;
+            start.config.push(PublicConfigEntry {
+                path: vec!["limit".to_string()],
+                value: serde_json::json!({"kind": "u32", "value": 3}),
+            });
+            let result = harness
+                .worker_service
+                .invoke_public_agent_session_v1(
+                    start,
+                    Box::pin(stream::empty()),
+                    AuthCtx::system(),
+                    |_, _| panic!("rejected input"),
+                )
+                .await;
+            assert!(matches!(
+                result,
+                Err(PublicAgentSessionStartError::Worker(
+                    WorkerServiceError::TypeChecker(_)
+                ))
+            ));
+        }
+        assert_eq!(harness.worker_client.invocation_session_start_count(), 0);
+        assert!(
+            harness
+                .worker_client
+                .created_agent_ids
+                .lock()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    async fn public_invocation_session_uses_the_existing_agents_recorded_output_schema() {
+        let harness = RestHarness::new_with_pinned_and_latest_output(
+            OutputSchema::Single(Box::new(SchemaType::string())),
+            OutputSchema::Single(Box::new(SchemaType::u32())),
+        );
+        let mut start = harness.public_invocation_start(IdempotencyKey::fresh());
+        start.selector.target = PublicAgentTarget::Id {
+            agent_id: harness.keyed_agent_id(),
+            expected_fingerprint: None,
+        };
+        let started = harness
+            .worker_service
+            .invoke_public_agent_session_v1(
+                start,
+                Box::pin(stream::empty()),
+                AuthCtx::system(),
+                |_, _| panic!("stream-free input"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(started.component_revision, ComponentRevision::INITIAL);
+        assert_eq!(started.output_schema, Some(SchemaType::string()));
     }
 
     #[test]

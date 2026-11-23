@@ -1777,8 +1777,15 @@ mod tests {
             ))),
             ErrorCode::NotPermitted
         );
-        #[cfg(target_os = "linux")]
-        {
+    }
+
+    #[cfg(target_os = "linux")]
+    mod linux {
+        use super::*;
+        use test_r::test;
+
+        #[test]
+        fn p2_link_maps_native_cross_device_without_trapping() {
             let sandbox = FilesystemStorageError::io(
                 "hard link",
                 None,

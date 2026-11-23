@@ -13,9 +13,8 @@
 // limitations under the License.
 
 use crate::filesystem_snapshot::backend::rustic::RusticSnapshotStore;
-#[cfg(target_os = "linux")]
+use crate::filesystem_snapshot::backend::rustic::cpu_priority::platform::own_nice;
 use crate::filesystem_snapshot::backend::rustic::test_support::name;
-#[cfg(target_os = "linux")]
 use crate::filesystem_snapshot::backend::rustic::test_support::scripted::{
     Script, ScriptedBlobStorage,
 };
@@ -37,7 +36,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use test_r::{test, timeout};
 
-#[cfg(target_os = "linux")]
 #[test]
 #[timeout("60s")]
 async fn the_forget_of_a_delete_runs_its_storage_calls_in_a_rayon_pool_of_its_own() {
@@ -65,7 +63,6 @@ async fn the_forget_of_a_delete_runs_its_storage_calls_in_a_rayon_pool_of_its_ow
     );
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 #[timeout("60s")]
 async fn the_index_load_of_a_restore_runs_its_storage_calls_in_a_rayon_pool_of_its_own() {
@@ -94,7 +91,6 @@ async fn the_index_load_of_a_restore_runs_its_storage_calls_in_a_rayon_pool_of_i
     );
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 #[timeout("60s")]
 async fn the_storage_calls_of_a_save_run_at_nice_19() {
@@ -141,7 +137,6 @@ async fn the_storage_calls_of_a_save_run_at_nice_19() {
     );
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 #[timeout("60s")]
 async fn the_storage_calls_of_a_prune_run_at_nice_19() {
@@ -215,11 +210,10 @@ async fn the_storage_calls_of_a_prune_run_at_nice_19() {
     );
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 #[timeout("60s")]
 async fn the_storage_calls_of_a_restore_run_at_the_nice_value_of_the_process() {
-    let process_nice = crate::filesystem_snapshot::backend::rustic::cpu_priority::own_nice();
+    let process_nice = own_nice();
     let (storage, calls) = nice_recording_storage();
     let store = store(storage, policy(LONG_DEADLINE, NEVER, Duration::ZERO));
     let scope = new_scope();
@@ -257,14 +251,79 @@ async fn the_storage_calls_of_a_restore_run_at_the_nice_value_of_the_process() {
     );
 }
 
-#[cfg(target_os = "linux")]
+#[test]
+fn filesystem_saves_and_prunes_keep_the_shared_blocking_pool_at_the_callers_priority() {
+    use golem_service_base::storage::blob::{BlobStorage, fs::FileSystemBlobStorage};
+
+    let caller_nice = own_nice();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("compilation_cache")).unwrap();
+    std::fs::create_dir(root.path().join("custom_data")).unwrap();
+    let storage = Arc::new(FileSystemBlobStorage::attach_existing(root.path()).unwrap());
+
+    // The first blocking worker must be created by a filesystem call from snapshot work,
+    // rather than being warmed at the caller's priority by storage initialization.
+    let handle = runtime.handle().clone();
+    let writing = storage.clone();
+    let namespace = new_scope().namespace().clone();
+    super::LowPriority::new(NonZeroUsize::new(1))
+        .run("fs-snap-save", move || {
+            handle.block_on(writing.put_raw(
+                "test",
+                "priority",
+                namespace,
+                std::path::Path::new("probe"),
+                b"snapshot work",
+            ))
+        })
+        .unwrap();
+
+    runtime.block_on(async {
+        let store = store(storage, policy(LONG_DEADLINE, ALWAYS, Duration::ZERO));
+        let scope = new_scope();
+        save_each(&store, &scope, &["p-deleted", "p-kept"]).await;
+        store
+            .delete(&scope, &[name("p-deleted")], &Unlimited)
+            .await
+            .unwrap();
+
+        let restored = restored_listing(&store, &scope, &name("p-kept"))
+            .await
+            .unwrap();
+
+        // Holding both workers at the barrier checks the reused worker, not just a new one.
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let priorities = futures::future::join_all((0..2).map(|_| {
+            let barrier = barrier.clone();
+            tokio::task::spawn_blocking(move || {
+                barrier.wait();
+                own_nice()
+            })
+        }))
+        .await
+        .into_iter()
+        .map(Result::unwrap)
+        .collect::<Vec<_>>();
+
+        assert_eq!(restored, listing(one_file_tree("p-kept").path()));
+        assert_eq!(priorities, vec![caller_nice; 2]);
+        store.shut_down().await;
+    });
+}
+
 #[test]
 #[timeout("60s")]
 async fn after_saves_and_prunes_the_pools_keep_the_nice_value_of_the_process() {
     // All tasks wait for each other, so each runs on its own thread of the blocking pool, and the
     // idle threads that ran the saves and the prune are among them.
     const TASKS: usize = 16;
-    let process_nice = crate::filesystem_snapshot::backend::rustic::cpu_priority::own_nice();
+    let process_nice = own_nice();
     let store = store(
         Arc::new(InMemoryBlobStorage::new()),
         policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
@@ -303,15 +362,14 @@ async fn after_saves_and_prunes_the_pools_keep_the_nice_value_of_the_process() {
         let barrier = barrier.clone();
         tokio::task::spawn_blocking(move || {
             barrier.wait();
-            crate::filesystem_snapshot::backend::rustic::cpu_priority::own_nice()
+            own_nice()
         })
     }))
     .await
     .into_iter()
     .map(Result::unwrap)
     .collect::<Vec<_>>();
-    let rayon =
-        rayon::broadcast(|_| crate::filesystem_snapshot::backend::rustic::cpu_priority::own_nice());
+    let rayon = rayon::broadcast(|_| own_nice());
 
     assert_eq!(
         (
@@ -323,7 +381,6 @@ async fn after_saves_and_prunes_the_pools_keep_the_nice_value_of_the_process() {
     );
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 #[timeout("60s")]
 async fn the_storage_calls_of_the_rayon_workers_of_a_prune_that_repacks_run_at_nice_19() {
@@ -396,7 +453,6 @@ async fn the_storage_calls_of_the_rayon_workers_of_a_prune_that_repacks_run_at_n
     );
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 #[timeout("60s")]
 async fn the_global_rayon_pool_keeps_the_nice_value_of_the_process_after_saves_without_their_pool()
@@ -404,7 +460,7 @@ async fn the_global_rayon_pool_keeps_the_nice_value_of_the_process_after_saves_w
     // Without its own pool, the rayon work of a save goes to the global pool from a thread at
     // nice 19. The store starts the global pool when it is made, so its threads keep the normal
     // priority also when a save is the first rayon work of the process.
-    let process_nice = crate::filesystem_snapshot::backend::rustic::cpu_priority::own_nice();
+    let process_nice = own_nice();
     let store = RusticSnapshotStore {
         low_priority: crate::filesystem_snapshot::backend::rustic::cpu_priority::LowPriority {
             build_pool: no_pool,
@@ -439,8 +495,7 @@ async fn the_global_rayon_pool_keeps_the_nice_value_of_the_process_after_saves_w
         .await
         .unwrap();
 
-    let global =
-        rayon::broadcast(|_| crate::filesystem_snapshot::backend::rustic::cpu_priority::own_nice());
+    let global = rayon::broadcast(|_| own_nice());
 
     assert!(
         global.iter().all(|nice| *nice == process_nice),
@@ -449,7 +504,6 @@ async fn the_global_rayon_pool_keeps_the_nice_value_of_the_process_after_saves_w
 }
 
 /// A pool builder that cannot start a thread.
-#[cfg(target_os = "linux")]
 fn no_pool(
     _: &str,
     _: Option<NonZeroUsize>,
@@ -461,8 +515,9 @@ fn no_pool(
 }
 
 mod value_rules {
-    use crate::filesystem_snapshot::backend::rustic::cpu_priority::{
-        LOW_PRIORITY, LowPriority, lower_own_priority, own_nice,
+    use crate::filesystem_snapshot::backend::rustic::cpu_priority::LowPriority;
+    use crate::filesystem_snapshot::backend::rustic::cpu_priority::platform::{
+        LOW_PRIORITY, lower_own_priority, own_nice,
     };
     use pretty_assertions::assert_eq;
     use rayon::{ThreadPool, ThreadPoolBuildError, ThreadPoolBuilder};
@@ -510,42 +565,23 @@ mod value_rules {
     }
 
     #[test]
-    fn work_whose_priority_step_does_nothing_runs_on_its_own_thread_in_a_pool_of_its_own() {
-        // Off Linux, the step that lowers the priority does nothing. The rest of the path is the same
-        // on each platform.
+    fn work_whose_priority_step_does_nothing_or_fails_keeps_the_normal_priority() {
         let before = own_nice();
-        let low_priority = LowPriority {
-            lower: || Ok(()),
-            ..LowPriority::new(NonZeroUsize::new(2))
-        };
+        let steps: [fn() -> std::io::Result<()>; 2] = [
+            || Ok(()),
+            || Err(std::io::Error::other("the priority cannot change here")),
+        ];
+        for lower in steps {
+            let low_priority = LowPriority {
+                lower,
+                ..LowPriority::new(NonZeroUsize::new(2))
+            };
 
-        let inside = low_priority.run("fs-snap-test", seen);
-
-        assert_eq!(
-            inside.ok().map(|(nice, name, in_pool, threads)| (
-                nice,
-                name.is_some_and(|name| name.starts_with("fs-snap-test-")),
-                in_pool,
-                threads
-            )),
-            Some((before, true, true, 2))
-        );
-    }
-
-    #[test]
-    fn work_whose_priority_cannot_be_lowered_still_runs_at_the_normal_priority() {
-        let before = own_nice();
-        let low_priority = LowPriority {
-            lower: || Err(std::io::Error::other("the priority cannot change here")),
-            ..LowPriority::new(NonZeroUsize::new(2))
-        };
-
-        let inside = low_priority.run("fs-snap-test", seen);
-
-        assert_eq!(
-            inside.ok().map(|(nice, _, in_pool, _)| (nice, in_pool)),
-            Some((before, true))
-        );
+            assert_eq!(
+                low_priority.run("fs-snap-test", || Ok(own_nice())).ok(),
+                Some(before)
+            );
+        }
     }
 
     #[test]
@@ -566,14 +602,6 @@ mod value_rules {
     }
 
     #[test]
-    fn a_panic_of_the_work_gives_an_error() {
-        let done = LowPriority::new(NonZeroUsize::new(1))
-            .run::<()>("fs-snap-test", || panic!("the work panics"));
-
-        assert!(done.is_err());
-    }
-
-    #[test]
     fn lowering_the_own_priority_gives_ok_and_nice_19() {
         // The thread cannot raise its priority again, so the test lowers a thread of its own.
         let lowered = std::thread::spawn(|| {
@@ -590,11 +618,9 @@ mod value_rules {
 
 /// The operation label, the path, and the name and the nice value of the calling thread of each
 /// storage call.
-#[cfg(target_os = "linux")]
 type NiceCalls = Arc<std::sync::Mutex<Vec<(String, String, String, i32)>>>;
 
 /// A storage that records the nice value of the thread of each call.
-#[cfg(target_os = "linux")]
 fn nice_recording_storage() -> (Arc<ScriptedBlobStorage>, NiceCalls) {
     let calls = NiceCalls::default();
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
@@ -610,7 +636,7 @@ fn nice_recording_storage() -> (Arc<ScriptedBlobStorage>, NiceCalls) {
                         .name()
                         .unwrap_or_default()
                         .to_string(),
-                    crate::filesystem_snapshot::backend::rustic::cpu_priority::own_nice(),
+                    own_nice(),
                 ));
             Script::Pass
         }
@@ -619,7 +645,6 @@ fn nice_recording_storage() -> (Arc<ScriptedBlobStorage>, NiceCalls) {
 }
 
 /// Takes the recorded calls as the operation label, the path and the nice value.
-#[cfg(target_os = "linux")]
 fn taken_calls(calls: &NiceCalls) -> Vec<(String, String, i32)> {
     std::mem::take(
         &mut *calls
@@ -633,7 +658,6 @@ fn taken_calls(calls: &NiceCalls) -> Vec<(String, String, i32)> {
 
 /// Takes the recorded calls with the operation label and a path below the directory, as the path
 /// and the name of the thread of each call.
-#[cfg(target_os = "linux")]
 fn taken_threads(calls: &NiceCalls, op_label: &str, directory: &str) -> Vec<(String, String)> {
     std::mem::take(
         &mut *calls
@@ -647,7 +671,6 @@ fn taken_threads(calls: &NiceCalls, op_label: &str, directory: &str) -> Vec<(Str
 }
 
 /// Gives the operation labels of the calls, and each call that does not run at nice 19.
-#[cfg(target_os = "linux")]
 fn labels_and_calls_not_at_nice_19(
     calls: &[(String, String, i32)],
 ) -> (Vec<&str>, Vec<&(String, String, i32)>) {

@@ -14,12 +14,6 @@
 
 use super::*;
 use crate::services::golem_config::FilesystemStorageMode;
-#[cfg(unix)]
-use file_creation_mask::mask_without_owner_write;
-#[cfg(target_os = "linux")]
-use file_creation_mask::{probed_file_creation_mask, status_umask};
-#[cfg(target_os = "linux")]
-use file_creation_mask_for_test::{thread_file_creation_mask, with_private_file_creation_mask};
 use test_r::test;
 
 #[test]
@@ -97,95 +91,105 @@ fn initial_files_service() -> Arc<InitialAgentFilesService> {
 }
 
 #[cfg(unix)]
-#[test]
-fn the_file_mode_creation_mask_loses_only_the_owner_write_bit() {
-    [
-        (0o022, 0o022),
-        (0o077, 0o077),
-        (0o222, 0o022),
-        (0o277, 0o077),
-    ]
-    .into_iter()
-    .for_each(|(mask, expected)| {
+mod unix {
+    use super::file_creation_mask::mask_without_owner_write;
+    use test_r::test;
+
+    #[test]
+    fn the_file_mode_creation_mask_loses_only_the_owner_write_bit() {
+        [
+            (0o022, 0o022),
+            (0o077, 0o077),
+            (0o222, 0o022),
+            (0o277, 0o077),
+        ]
+        .into_iter()
+        .for_each(|(mask, expected)| {
+            assert_eq!(
+                mask_without_owner_write(mask),
+                expected,
+                "the mask {mask:o} must become {expected:o}"
+            );
+        });
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod linux {
+    use super::*;
+    use file_creation_mask::{platform::status_umask, probed_file_creation_mask};
+    use file_creation_mask_for_test::{thread_file_creation_mask, with_private_file_creation_mask};
+    use test_r::test;
+
+    #[test]
+    fn the_file_mode_creation_mask_comes_from_the_umask_line_of_a_status_text() {
         assert_eq!(
-            mask_without_owner_write(mask),
-            expected,
-            "the mask {mask:o} must become {expected:o}"
+            status_umask("Name:\tworker-executor\nUmask:\t0277\nState:\tR (running)\n"),
+            Some(0o277)
         );
-    });
-}
+        assert_eq!(
+            status_umask("Name:\tworker-executor\nState:\tR (running)\n"),
+            None
+        );
+    }
 
-#[cfg(target_os = "linux")]
-#[test]
-fn the_file_mode_creation_mask_comes_from_the_umask_line_of_a_status_text() {
-    assert_eq!(
-        status_umask("Name:\tworker-executor\nUmask:\t0277\nState:\tR (running)\n"),
-        Some(0o277)
-    );
-    assert_eq!(
-        status_umask("Name:\tworker-executor\nState:\tR (running)\n"),
-        None
-    );
-}
+    /// The test makes its temporary root under the mask that the process has. Then it binds the
+    /// filesystems on a thread with the mask 0o227, which must stay as it is.
+    #[test]
+    fn agent_filesystems_binding_leaves_the_file_mode_creation_mask_as_it_is() {
+        let root = tempfile::tempdir().unwrap();
+        let settings = FilesystemStorageConfig {
+            mode: FilesystemStorageMode::Directory {
+                root: root.path().into(),
+            },
+            ..FilesystemStorageConfig::default()
+        };
 
-/// The test makes its temporary root under the mask that the process has. Then it binds the
-/// filesystems on a thread with the mask 0o227, which must stay as it is.
-#[cfg(target_os = "linux")]
-#[test]
-fn agent_filesystems_binding_leaves_the_file_mode_creation_mask_as_it_is() {
-    let root = tempfile::tempdir().unwrap();
-    let settings = FilesystemStorageConfig {
-        mode: FilesystemStorageMode::Directory {
-            root: root.path().into(),
-        },
-        ..FilesystemStorageConfig::default()
-    };
+        let (bound, mask) = with_private_file_creation_mask(0o227, move || {
+            let bound = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(AgentFilesystems::new(&settings, initial_files_service()));
+            (bound, thread_file_creation_mask())
+        });
 
-    let (bound, mask) = with_private_file_creation_mask(0o227, move || {
-        let bound = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(AgentFilesystems::new(&settings, initial_files_service()));
-        (bound, thread_file_creation_mask())
-    });
+        bound.unwrap();
+        assert_eq!(
+            mask, 0o227,
+            "binding must leave the mask 227 as it is, and the mask is {mask:o}"
+        );
+    }
 
-    bound.unwrap();
-    assert_eq!(
-        mask, 0o227,
-        "binding must leave the mask 227 as it is, and the mask is {mask:o}"
-    );
-}
+    #[test]
+    fn the_file_mode_creation_mask_probe_masks_group_and_other_and_gives_the_mask_before_the_call()
+    {
+        let (probed, after) = with_private_file_creation_mask(0o227, || {
+            (probed_file_creation_mask(), thread_file_creation_mask())
+        });
 
-#[cfg(target_os = "linux")]
-#[test]
-fn the_file_mode_creation_mask_probe_masks_group_and_other_and_gives_the_mask_before_the_call() {
-    let (probed, after) = with_private_file_creation_mask(0o227, || {
-        (probed_file_creation_mask(), thread_file_creation_mask())
-    });
+        assert_eq!(
+            probed, 0o227,
+            "the call must give the mask 227 from before the call, and it gave {probed:o}"
+        );
+        assert_eq!(
+            after, 0o077,
+            "the call must set the mask 77, and the mask is {after:o}"
+        );
+    }
 
-    assert_eq!(
-        probed, 0o227,
-        "the call must give the mask 227 from before the call, and it gave {probed:o}"
-    );
-    assert_eq!(
-        after, 0o077,
-        "the call must set the mask 77, and the mask is {after:o}"
-    );
-}
-
-/// The executor reads the mask of its thread and clears only the owner write bit of it.
-#[cfg(target_os = "linux")]
-#[test]
-fn keeping_the_owner_write_permission_clears_only_the_owner_write_bit_of_the_mask() {
-    let mask = with_private_file_creation_mask(0o277, || {
-        keep_owner_write_permission();
-        thread_file_creation_mask()
-    });
-    assert_eq!(
-        mask, 0o077,
-        "the mask 277 must become 77, and the mask is {mask:o}"
-    );
+    /// The executor reads the mask of its thread and clears only the owner write bit of it.
+    #[test]
+    fn keeping_the_owner_write_permission_clears_only_the_owner_write_bit_of_the_mask() {
+        let mask = with_private_file_creation_mask(0o277, || {
+            keep_owner_write_permission();
+            thread_file_creation_mask()
+        });
+        assert_eq!(
+            mask, 0o077,
+            "the mask 277 must become 77, and the mask is {mask:o}"
+        );
+    }
 }
 
 struct BindingSpaceObservationGuard(Option<FilesystemSpace>);

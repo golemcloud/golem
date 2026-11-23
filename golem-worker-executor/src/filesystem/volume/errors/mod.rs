@@ -15,8 +15,6 @@
 use crate::filesystem::errors::CleanupFailure;
 use crate::filesystem::errors::OperationContext;
 use std::fmt::{Display, Formatter};
-#[cfg(any(test, target_os = "linux"))]
-use std::path::Path;
 
 #[derive(Debug)]
 pub(crate) struct StorageVolumeError {
@@ -31,35 +29,45 @@ impl From<OperationContext> for StorageVolumeError {
     }
 }
 
-impl StorageVolumeError {
-    #[cfg(any(test, target_os = "linux"))]
-    pub(crate) fn cleanup_io(
-        operation: &'static str,
-        path: Option<&Path>,
-        source: std::io::Error,
-    ) -> Self {
-        Self::from(OperationContext::io(operation, path, source)).during_cleanup()
-    }
+#[cfg(any(test, target_os = "linux"))]
+mod cleanup_io {
+    use super::*;
+    use std::path::Path;
 
-    #[cfg(any(test, target_os = "linux", target_os = "macos"))]
-    pub(super) fn during_cleanup(mut self) -> Self {
-        self.failure = self.failure.during_cleanup();
-        self
+    impl StorageVolumeError {
+        pub(crate) fn cleanup_io(
+            operation: &'static str,
+            path: Option<&Path>,
+            source: std::io::Error,
+        ) -> Self {
+            Self::from(OperationContext::io(operation, path, source)).during_cleanup()
+        }
     }
+}
 
-    /// A probe failure is primary. Only failure of its subsequent removal is cleanup failure.
-    #[cfg(any(test, target_os = "linux", target_os = "macos"))]
-    pub(super) fn after_cleanup(
-        result: Result<(), Self>,
-        cleanup: Result<(), Self>,
-    ) -> Result<(), Self> {
-        match (result, cleanup) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(())) => Err(error),
-            (Ok(()), Err(cleanup)) => Err(cleanup.during_cleanup()),
-            (Err(error), Err(mut cleanup)) => {
-                cleanup.failure = cleanup.failure.with_original(error);
-                Err(cleanup.during_cleanup())
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+mod native_cleanup {
+    use super::*;
+
+    impl StorageVolumeError {
+        pub(in crate::filesystem::volume) fn during_cleanup(mut self) -> Self {
+            self.failure = self.failure.during_cleanup();
+            self
+        }
+
+        /// A probe failure is primary. Only failure of its subsequent removal is cleanup failure.
+        pub(in crate::filesystem::volume) fn after_cleanup(
+            result: Result<(), Self>,
+            cleanup: Result<(), Self>,
+        ) -> Result<(), Self> {
+            match (result, cleanup) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Err(error), Ok(())) => Err(error),
+                (Ok(()), Err(cleanup)) => Err(cleanup.during_cleanup()),
+                (Err(error), Err(mut cleanup)) => {
+                    cleanup.failure = cleanup.failure.with_original(error);
+                    Err(cleanup.during_cleanup())
+                }
             }
         }
     }
