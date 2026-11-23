@@ -205,14 +205,21 @@ impl FileSystemBlobStorage {
     }
 }
 
-/// Submits blocking filesystem work from a runtime task, not from the polling thread, whose
-/// scheduling priority a newly created blocking worker would otherwise inherit. Dropping this
-/// future detaches the task and its blocking work; callers that must stop a commit keep their
-/// drop flag outside this task.
+/// On multithreaded runtimes, submits blocking filesystem work from a runtime task so new
+/// blocking workers do not inherit the polling thread's scheduling priority. Current-thread
+/// runtimes submit directly because `Handle::block_on` does not drive their scheduler.
+/// Dropping this future detaches the work; callers that must stop a commit keep their drop flag
+/// outside this task.
 async fn filesystem_work<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, tokio::task::JoinError> {
-    tokio::spawn(async move { tokio::task::spawn_blocking(work).await }).await?
+    if tokio::runtime::Handle::current().runtime_flavor()
+        == tokio::runtime::RuntimeFlavor::CurrentThread
+    {
+        tokio::task::spawn_blocking(work).await
+    } else {
+        tokio::spawn(async move { tokio::task::spawn_blocking(work).await }).await?
+    }
 }
 
 /// Sets its flag when it is dropped.

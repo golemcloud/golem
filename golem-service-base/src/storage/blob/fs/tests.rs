@@ -39,6 +39,47 @@ fn namespace() -> BlobStorageNamespace {
     }
 }
 
+#[test]
+fn filesystem_operations_finish_with_an_idle_current_thread_runtime() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("compilation_cache")).unwrap();
+    std::fs::create_dir(root.path().join("custom_data")).unwrap();
+    let storage = FileSystemBlobStorage::attach_existing(root.path()).unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let handle = runtime.handle().clone();
+    let (done, finished) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let result = handle.block_on(async {
+            storage
+                .put_raw("test", "put", namespace(), Path::new("blob"), b"abcdef")
+                .await?;
+            assert_eq!(
+                storage
+                    .get_raw("test", "get", namespace(), Path::new("blob"))
+                    .await?,
+                Some(b"abcdef".to_vec())
+            );
+            assert_eq!(
+                storage
+                    .get_raw_slice("test", "slice", namespace(), Path::new("blob"), 1, 3)
+                    .await?,
+                Some(b"bcd".to_vec())
+            );
+            Ok::<_, anyhow::Error>(())
+        });
+        let _ = done.send(result);
+    });
+    let result = finished.recv_timeout(Duration::from_secs(10));
+    runtime.shutdown_background();
+    worker.join().unwrap();
+    result
+        .expect("filesystem operations must finish without driving the runtime scheduler")
+        .unwrap();
+}
+
 /// Makes a blob storage in a new temporary directory with the blob `ranges/blob`, which holds
 /// `abcdef`, and the empty blob `ranges/empty`.
 async fn storage_with_blobs() -> (tempfile::TempDir, FileSystemBlobStorage) {
