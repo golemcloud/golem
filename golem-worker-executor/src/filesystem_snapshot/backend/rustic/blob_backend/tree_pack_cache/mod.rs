@@ -34,8 +34,6 @@ pub(super) struct TreePackCache {
     state: Mutex<State>,
     /// Wakes the threads that wait for the read of a pack when that read ends.
     read_ended: Condvar,
-    #[cfg(test)]
-    wait_observer: Mutex<Option<std::sync::mpsc::Sender<()>>>,
 }
 
 #[derive(Debug, Default)]
@@ -106,16 +104,7 @@ impl TreePackCache {
             limit,
             state: Mutex::default(),
             read_ended: Condvar::new(),
-            #[cfg(test)]
-            wait_observer: Mutex::default(),
         }
-    }
-
-    #[cfg(test)]
-    pub(super) fn observe_waits(&self) -> std::sync::mpsc::Receiver<()> {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        *self.wait_observer.lock().unwrap() = Some(sender);
-        receiver
     }
 
     /// Gives the kept pack, or reads it with `read`. While one thread reads a pack, the other
@@ -132,15 +121,7 @@ impl TreePackCache {
         let mut state = self
             .read_ended
             .wait_while(self.state(), |state| {
-                let waiting = want(state, id, self.limit) == Want::Wait;
-                #[cfg(test)]
-                if waiting {
-                    // Observe the real wait decision without delaying or replacing the wait.
-                    if let Some(observer) = &*self.wait_observer.lock().unwrap() {
-                        let _ = observer.send(());
-                    }
-                }
-                waiting
+                want(state, id, self.limit) == Want::Wait
             })
             .unwrap_or_else(PoisonError::into_inner);
         match want(&state, id, self.limit) {
