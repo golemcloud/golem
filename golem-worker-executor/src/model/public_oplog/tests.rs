@@ -504,6 +504,7 @@ fn test_tool_definition() -> Tool {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentService for PanicComponentService {
     async fn get(
         &self,
@@ -585,6 +586,7 @@ async fn checkpoint_after_plugin_removal_uses_recorded_source_revision() {
     struct RevisionComponentService(Component);
 
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl ComponentService for RevisionComponentService {
         async fn get(
             &self,
@@ -785,6 +787,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
     struct MetadataComponentService(Component);
 
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl ComponentService for MetadataComponentService {
         async fn get(
             &self,
@@ -1077,6 +1080,7 @@ fn test_entity_activation(entity: &AgentEntity) -> EntityActivation {
                     component_revision,
                     component_name: ComponentName("tools".to_string()),
                 },
+                shell: false,
             }),
         },
         AgentEntity::ToolMiddleware(middleware_name) => EntityActivationPolicy::ToolMiddleware {
@@ -3334,6 +3338,7 @@ fn external_tool_activation(
             secret_keys_readable: Default::default(),
             secret_keys_revealable: Default::default(),
             filesystem_access: ToolFilesystemAccess::Denied,
+            shell: false,
             source,
         },
         filesystem: FilesystemCapability::Incapable,

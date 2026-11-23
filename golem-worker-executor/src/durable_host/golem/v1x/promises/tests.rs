@@ -76,6 +76,7 @@ impl FlakyPromiseService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl PromiseService for FlakyPromiseService {
     async fn create(
         &self,

@@ -5596,7 +5596,9 @@ components:
             enum:
             - char
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
       - type: object
         required:
         - kind
@@ -9665,7 +9667,9 @@ components:
             enum:
             - delimited
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
       - type: object
         required:
         - kind
@@ -9676,7 +9680,9 @@ components:
             enum:
             - either
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
     ReplayDivergence:
       type: object
       title: ReplayDivergence
@@ -10830,7 +10836,9 @@ components:
             enum:
             - char
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
       - type: object
         required:
         - kind

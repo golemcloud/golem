@@ -1064,6 +1064,7 @@ impl HasWorkerExecutorClients for WorkerExecutorWorkerClient {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl WorkerClient for WorkerExecutorWorkerClient {
     async fn prepare(
         &self,
@@ -2187,7 +2188,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     expected_fingerprint: expected_fingerprint.map(|fingerprint| fingerprint.0.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     caller: Some(Caller::anonymous().into()),
-                    scheduled,
+                    scheduled: scheduled.clone(),
                 }))
             },
             |response| match response.into_inner() {
@@ -3784,6 +3785,7 @@ mod rejection_mapping_tests {
     struct StaticShardManager(RoutingTable);
 
     #[async_trait::async_trait]
+    #[golem_async_trait::region_simple]
     impl ShardManager for StaticShardManager {
         async fn get_routing_table(&self) -> Result<RoutingTable, ShardManagerError> {
             Ok(self.0.clone())
@@ -3903,6 +3905,7 @@ mod rejection_mapping_tests {
     }
 
     #[tonic::async_trait]
+    #[golem_async_trait::region_simple]
     impl WorkerExecutor for RejectingExecutor {
         type ConnectWorkerStream = Pin<
             Box<

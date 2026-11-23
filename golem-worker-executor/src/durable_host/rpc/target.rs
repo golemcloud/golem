@@ -255,7 +255,7 @@ pub(super) async fn prepare_rpc_invocation_identity<Ctx: WorkerCtx>(
         let result = loop {
             let rpc = ctx.rpc();
             let interrupt = ctx.create_interrupt_signal().map(Error::from);
-            let caller = Caller::entry(ctx.self_principal());
+            let caller = ctx.outgoing_caller();
             let demand = rpc.create_demand(
                 dispatch_target(remote_agent_id, ephemeral.as_ref()),
                 method_name,
@@ -322,7 +322,7 @@ where
     let rpc = ctx.rpc();
     let created_by = ctx.created_by();
     let agent_id = *ctx.agent_id();
-    let caller = Caller::entry(ctx.self_principal());
+    let caller = ctx.outgoing_caller();
     let stack = ctx.clone_as_inherited_stack(span.span_id());
     let key = handle
         .idempotency_key_position(ctx)
@@ -544,7 +544,7 @@ pub(super) async fn ensure_rpc_target_activated<Ctx: WorkerCtx>(
     let demand = {
         let created_by = ctx.created_by();
         let agent_id = *ctx.agent_id();
-        let caller = Caller::entry(ctx.self_principal());
+        let caller = ctx.outgoing_caller();
         let interrupt_signal = ctx.create_interrupt_signal().map(Error::from);
         let activation = activate_rpc_target(
             rpc.as_ref(),

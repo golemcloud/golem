@@ -245,6 +245,7 @@ impl DbSessionStore<SqlitePool> {
 
 #[trait_gen(SqlitePool -> SqlitePool, PostgresPool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SessionStore for DbSessionStore<SqlitePool> {
     async fn store_pending_oidc_login(
         &self,

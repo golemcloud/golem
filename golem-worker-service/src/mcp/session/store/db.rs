@@ -233,6 +233,7 @@ impl DbMcpSessionStore<SqlitePool> {
 
 #[trait_gen(SqlitePool -> SqlitePool, PostgresPool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl McpSessionStore for DbMcpSessionStore<SqlitePool> {
     async fn create(
         &self,

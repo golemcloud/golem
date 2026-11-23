@@ -14,16 +14,22 @@
 
 use super::object_identity::SandboxDirectoryId;
 use std::ffi::OsString;
-use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(in crate::filesystem::sandbox) enum NativeNameComparisonMode {
-    Exact,
-    Conservative,
-    #[cfg(any(test, windows))]
-    WindowsInsensitive,
-}
+#[cfg(any(test, windows))]
+mod insensitive_mode;
+
+#[cfg(windows)]
+#[path = "windows.rs"]
+mod platform;
+#[cfg(all(test, not(windows)))]
+#[path = "scripted.rs"]
+mod platform;
+#[cfg(all(not(test), not(windows)))]
+#[path = "other.rs"]
+mod platform;
+
+pub(in crate::filesystem::sandbox) use platform::NativeNameComparisonMode;
 
 #[derive(Clone)]
 pub(in crate::filesystem::sandbox) struct NativeNameCoordinationKey {
@@ -37,51 +43,16 @@ pub(crate) struct SandboxNameComparisonKey {
     pub(in crate::filesystem::sandbox) name: NativeNameCoordinationKey,
 }
 
-#[cfg(windows)]
-pub(in crate::filesystem::sandbox) fn windows_names_equal(
-    left: &std::ffi::OsStr,
-    right: &std::ffi::OsStr,
-) -> bool {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
-
-    let left = left.encode_wide().collect::<Vec<_>>();
-    let right = right.encode_wide().collect::<Vec<_>>();
-    unsafe {
-        CompareStringOrdinal(
-            left.as_ptr(),
-            left.len() as i32,
-            right.as_ptr(),
-            right.len() as i32,
-            1,
-        ) == CSTR_EQUAL
-    }
-}
-
-#[cfg(all(test, not(windows)))]
-pub(in crate::filesystem::sandbox) fn windows_names_equal(
-    left: &std::ffi::OsStr,
-    right: &std::ffi::OsStr,
-) -> bool {
-    left.to_string_lossy()
-        .eq_ignore_ascii_case(&right.to_string_lossy())
-}
-
 impl PartialEq for NativeNameCoordinationKey {
     fn eq(&self, other: &Self) -> bool {
-        match (self.mode, other.mode) {
-            (NativeNameComparisonMode::Exact, NativeNameComparisonMode::Exact) => {
-                self.name == other.name
-            }
-            (NativeNameComparisonMode::Conservative, NativeNameComparisonMode::Conservative) => {
-                true
-            }
-            #[cfg(any(test, windows))]
-            (
-                NativeNameComparisonMode::WindowsInsensitive,
-                NativeNameComparisonMode::WindowsInsensitive,
-            ) => windows_names_equal(&self.name, &other.name),
-            _ => false,
+        if self.mode != other.mode {
+            false
+        } else if self.mode == NativeNameComparisonMode::Exact {
+            self.name == other.name
+        } else if self.mode == NativeNameComparisonMode::Conservative {
+            true
+        } else {
+            platform::names_equal(&self.name, &other.name)
         }
     }
 }
@@ -99,19 +70,17 @@ impl Hash for NativeNameCoordinationKey {
 
 impl NativeNameCoordinationKey {
     fn may_be_equivalent(&self, other: &Self) -> bool {
-        match (self.mode, other.mode) {
-            (NativeNameComparisonMode::Exact, NativeNameComparisonMode::Exact) => {
-                self.name == other.name
-            }
-            (NativeNameComparisonMode::Conservative, _)
-            | (_, NativeNameComparisonMode::Conservative) => true,
-            #[cfg(any(test, windows))]
-            (
-                NativeNameComparisonMode::WindowsInsensitive,
-                NativeNameComparisonMode::WindowsInsensitive,
-            ) => windows_names_equal(&self.name, &other.name),
-            #[cfg(any(test, windows))]
-            _ => true,
+        if self.mode == NativeNameComparisonMode::Exact
+            && other.mode == NativeNameComparisonMode::Exact
+        {
+            self.name == other.name
+        } else if self.mode == NativeNameComparisonMode::Conservative
+            || other.mode == NativeNameComparisonMode::Conservative
+            || self.mode != other.mode
+        {
+            true
+        } else {
+            platform::names_equal(&self.name, &other.name)
         }
     }
 }

@@ -208,7 +208,7 @@ struct CliExportSink {
 impl OplogExportSink for CliExportSink {
     fn header(&mut self, header: &OplogExportHeader) -> anyhow::Result<()> {
         if let Some(path) = &self.html_path {
-            let mut writer = OplogExportHtmlWriter::create(path, &header.root.pseudonym())?;
+            let mut writer = OplogExportHtmlWriter::create(path, &header.root.label())?;
             writer.header(header)?;
             self.html = Some(writer);
         }

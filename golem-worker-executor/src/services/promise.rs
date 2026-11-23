@@ -231,6 +231,7 @@ impl LazyPromiseService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl PromiseService for LazyPromiseService {
     async fn create(
         &self,
@@ -427,6 +428,7 @@ impl DefaultPromiseService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl PromiseService for DefaultPromiseService {
     async fn create(
         &self,
@@ -805,6 +807,7 @@ impl PromiseServiceMock {
 
 #[cfg(test)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl PromiseService for PromiseServiceMock {
     async fn create(
         &self,

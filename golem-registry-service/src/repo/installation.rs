@@ -55,6 +55,7 @@ impl<Repo: InstallationRepo> LoggedInstallationRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: InstallationRepo> InstallationRepo for LoggedInstallationRepo<Repo> {
     async fn get(&self) -> RepoResult<Option<InstallationRecord>> {
         self.repo.get().instrument(info_span!(SPAN_NAME)).await
@@ -100,6 +101,7 @@ impl<DBP: Pool> DbInstallationRepo<DBP> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl InstallationRepo for DbInstallationRepo<PostgresPool> {
     async fn get(&self) -> RepoResult<Option<InstallationRecord>> {
         self.with_ro("get")

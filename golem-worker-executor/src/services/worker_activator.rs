@@ -143,6 +143,7 @@ impl<Ctx: WorkerCtx> Default for LazyWorkerActivator<Ctx> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
     async fn archive_oplog(
         &self,
@@ -379,6 +380,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerActivator<Ctx, Svcs> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<Ctx>
     for DefaultWorkerActivator<Ctx, Svcs>
 {

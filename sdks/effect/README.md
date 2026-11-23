@@ -21,7 +21,7 @@ also apply to collection elements and map keys and values.
 Other declared verbs keep remaining inputs in the body; explicit query templates still
 work on those verbs. Inference uses the declared verb, not expanded DurableStreams
 resource verbs. In 2.0, typed agent endpoints reject unknown query keys with a named `400`,
-including on body methods and cache hits. Declared phantom selectors and applicable
+including on body methods and cache hits. Declared agent ID bindings and applicable
 DurableStreams read controls remain recognized. File routes still ignore query strings;
 raw handlers receive them unchanged.
 
@@ -327,7 +327,7 @@ Config is never stored in snapshots. Restoration reads current host values.
 
 Snapshotting agents initialize runtime state with `init(id)`. The implementation's snapshot
 strategy restores that state before `methods(state)` constructs handlers. Custom restoration
-receives a `SnapshotRestorationContext` containing `id`, `principal`, the typed `agentId`, and
+receives a `SnapshotRestorationContext` containing `id`, the typed `agentId`, and
 current `config`; it must not perform fresh-instance initialization effects. `id` is the
 constructor input that the host passes to `load-snapshot`, decoded as `initialize` decodes it.
 

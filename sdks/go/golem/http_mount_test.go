@@ -332,37 +332,43 @@ func TestBuildHTTPValidations(t *testing.T) {
 	}
 }
 
-func TestPhantomSelectorCompilesToTheMount(t *testing.T) {
-	path := agent("Decision", &Mount{Path: "/decisions/{decision}/{instance}", PhantomID: PhantomIDPath("instance").Optional()},
+func TestAgentIDBindingCompilesToTheMount(t *testing.T) {
+	path := agent("Decision", &Mount{Path: "/decisions/{instance}", AgentID: AgentIDPath("instance"), CreateRoute: "/decisions"},
 		fields("decision"), method("state", nil, GET("/state")))
 	mount, _, errs := buildHTTP(path)
 	if len(errs) != 0 {
 		t.Fatalf("unexpected definition errors: %v", errs)
 	}
-	b := mount.Some().PhantomIdBinding
-	if !b.IsSome() || b.Some().Tag() != common.PhantomIdBindingPath || b.Some().Path() != (common.PhantomIdBindingDetails{Name: "instance", Optional: true}) {
+	b := mount.Some().AgentIdBinding
+	if !b.IsSome() || b.Some().Tag() != common.AgentIdBindingPath || b.Some().Path() != (common.AgentIdBindingDetails{Name: "instance"}) {
 		t.Errorf("path selector = %+v", b)
 	}
+	if !mount.Some().CreateRoute.IsSome() || renderSegs(mount.Some().CreateRoute.Some()) != "/decisions" {
+		t.Errorf("create route = %+v", mount.Some().CreateRoute)
+	}
 
-	query := agent("Decision", &Mount{Path: "/decisions/{decision}", PhantomID: PhantomIDQuery("instance")},
+	query := agent("Decision", &Mount{Path: "/decisions", AgentID: AgentIDQuery("instance"), CreateRoute: "/{agent-type}/{agent-version}/create"},
 		fields("decision"), method("state", nil, GET("/state")))
 	mount, _, errs = buildHTTP(query)
 	if len(errs) != 0 {
 		t.Fatalf("unexpected definition errors: %v", errs)
 	}
-	b = mount.Some().PhantomIdBinding
-	if !b.IsSome() || b.Some().Tag() != common.PhantomIdBindingQuery || b.Some().Query() != (common.PhantomIdBindingDetails{Name: "instance"}) {
+	b = mount.Some().AgentIdBinding
+	if !b.IsSome() || b.Some().Tag() != common.AgentIdBindingQuery || b.Some().Query() != (common.AgentIdBindingDetails{Name: "instance"}) {
 		t.Errorf("query selector = %+v", b)
+	}
+	if !mount.Some().CreateRoute.IsSome() || renderSegs(mount.Some().CreateRoute.Some()) != "/{agent-type}/{agent-version}/create" {
+		t.Errorf("create route = %+v", mount.Some().CreateRoute)
 	}
 
 	none, _, _ := buildHTTP(agent("Decision", &Mount{Path: "/decisions/{decision}"}, fields("decision")))
-	if none.Some().PhantomIdBinding.IsSome() {
-		t.Errorf("a mount without PhantomID declares a selector")
+	if none.Some().AgentIdBinding.IsSome() || none.Some().CreateRoute.IsSome() {
+		t.Errorf("a key mount declares an ID binding or create route")
 	}
 }
 
-func TestPhantomSelectorValidations(t *testing.T) {
-	ephemeral := agent("A", &Mount{Path: "/a/{id}", PhantomID: PhantomIDQuery("instance")}, fields("id"))
+func TestAgentIDBindingValidations(t *testing.T) {
+	ephemeral := agent("A", &Mount{Path: "/a", AgentID: AgentIDQuery("instance")}, fields("id"))
 	ephemeral.mode = common.AgentModeEphemeral
 	streams := method("events", []engine.Field{{Name: "uploads", Typ: reflect.TypeFor[AgentStream[byte]]()}},
 		POST("/events", DurableStreams(StreamRoute{})))
@@ -371,27 +377,36 @@ func TestPhantomSelectorValidations(t *testing.T) {
 		e    *agentEntry
 		want string
 	}{
-		{"empty name", agent("A", &Mount{Path: "/a/{id}", PhantomID: PhantomIDQuery("")}, fields("id")), "nonempty name"},
+		{"empty name", agent("A", &Mount{Path: "/a", AgentID: AgentIDQuery("")}, fields("id")), "nonempty name"},
 		{"ephemeral agent", ephemeral, "requires a durable agent"},
 		{
-			"file exposure",
-			agent("A", &Mount{Path: "/a/{id}", PhantomID: PhantomIDQuery("instance"), ExposeFiles: []FileMapping{{Route: "/files", Path: "/data"}}}, fields("id")),
-			"cannot be combined with ExposeFiles",
+			"fresh agent",
+			agent("A", &Mount{Path: "/a", AgentID: AgentIDQuery("instance"), PhantomAgent: true}, fields("id")),
+			"cannot be combined with PhantomAgent",
 		},
-		{"path selector names no capture", agent("A", &Mount{Path: "/a/{id}", PhantomID: PhantomIDPath("instance")}, fields("id")), "exactly one mount capture"},
-		{"path selector names an Id field", agent("A", &Mount{Path: "/a/{id}", PhantomID: PhantomIDPath("id")}, fields("id")), "not a constructor (Id) field"},
-		{"query selector with a mount capture of the same name", agent("A", &Mount{Path: "/a/{id}/{instance}", PhantomID: PhantomIDQuery("instance")}, fields("id")), "{instance} is not a constructor"},
+		{"path binding names no capture", agent("A", &Mount{Path: "/a", AgentID: AgentIDPath("instance")}, fields("id")), "exactly one mount capture"},
+		{"duplicate ID capture", agent("A", &Mount{Path: "/a/{instance}/{instance}", AgentID: AgentIDPath("instance")}, fields("id")), "exactly one mount capture"},
+		{"mixed constructor binding", agent("A", &Mount{Path: "/a/{id}/{instance}", AgentID: AgentIDPath("instance")}, fields("id")), "cannot be combined with constructor"},
+		{"query binding with a mount capture", agent("A", &Mount{Path: "/a/{instance}", AgentID: AgentIDQuery("instance")}, fields("id")), "cannot be combined with constructor"},
+		{"key-bound create", agent("A", &Mount{Path: "/a/{id}", CreateRoute: "/a"}, fields("id")), "CreateRoute requires AgentID"},
+		{"create capture", agent("A", &Mount{Path: "/a/{id}", AgentID: AgentIDPath("id"), CreateRoute: "/a/{id}"}, fields("seed")), "only literal and system"},
+		{"create catch-all", agent("A", &Mount{Path: "/a", AgentID: AgentIDQuery("id"), CreateRoute: "/a/{*rest}"}, fields("seed")), "only literal and system"},
+		{"create query", agent("A", &Mount{Path: "/a", AgentID: AgentIDQuery("id"), CreateRoute: "/a?x={x}"}, fields("seed")), "query parameters are not allowed"},
+		{"create relative", agent("A", &Mount{Path: "/a", AgentID: AgentIDQuery("id"), CreateRoute: "create"}, fields("seed")), "path must start"},
 		{
 			"endpoint path variable",
-			agent("A", &Mount{Path: "/a/{id}/{instance}", PhantomID: PhantomIDPath("instance")}, fields("id"), method("m", fields("instance"), POST("/m/{instance}"))),
-			"is the mount's phantom selector",
+			agent("A", &Mount{Path: "/a/{instance}", AgentID: AgentIDPath("instance")}, fields("id"), method("m", fields("instance"), POST("/m/{instance}"))),
+			"is the mount's AgentID binding",
 		},
 		{
 			"endpoint query parameter",
-			agent("A", &Mount{Path: "/a/{id}", PhantomID: PhantomIDQuery("instance")}, fields("id"), method("m", fields("x"), POST("/m?instance={x}"))),
-			"is the mount's phantom selector",
+			agent("A", &Mount{Path: "/a", AgentID: AgentIDQuery("instance")}, fields("id"), method("m", fields("x"), POST("/m?instance={x}"))),
+			"is the mount's AgentID binding",
 		},
-		{"durable streams control", agent("A", &Mount{Path: "/a/{id}", PhantomID: PhantomIDQuery("offset")}, fields("id"), streams), "Durable Streams control"},
+		{"implicit query", agent("A", &Mount{Path: "/a", AgentID: AgentIDQuery("instance")}, fields("id"), method("m", fields("instance"), GET("/m"))), "implicit query input"},
+		{"implicit HEAD query", agent("A", &Mount{Path: "/a", AgentID: AgentIDQuery("instance")}, fields("id"), method("m", fields("instance"), HEAD("/m"))), "implicit query input"},
+		{"implicit DELETE query", agent("A", &Mount{Path: "/a", AgentID: AgentIDQuery("instance")}, fields("id"), method("m", fields("instance"), DELETE("/m"))), "implicit query input"},
+		{"durable streams control", agent("A", &Mount{Path: "/a", AgentID: AgentIDQuery("offset")}, fields("id"), streams), "Durable Streams control"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -400,6 +415,140 @@ func TestPhantomSelectorValidations(t *testing.T) {
 				t.Errorf("errors %v, want one mentioning %q", errs, c.want)
 			}
 		})
+	}
+}
+
+func TestAgentIDBindingAllowsFilesWithoutConstructorCaptures(t *testing.T) {
+	for _, mount := range []*Mount{
+		{Path: "/a/{instance}", AgentID: AgentIDPath("instance"), CreateRoute: "/a"},
+		{Path: "/a", AgentID: AgentIDQuery("instance"), CreateRoute: "/a/create"},
+	} {
+		mount.ExposeFiles = []FileMapping{{Route: "/files", Path: "/data"}}
+		// Even rich constructor inputs are irrelevant to ID-based addressing.
+		e := agent("A", mount, []engine.Field{{Name: "seed", Typ: reflect.TypeFor[map[string]string]()}},
+			method("state", fields("limit"), GET("/state")))
+		got, endpoints, errs := buildHTTP(e)
+		if len(errs) != 0 {
+			t.Fatalf("%s: unexpected errors: %v", mount.Path, errs)
+		}
+		if len(got.Some().FilesystemBindings) != 1 || len(endpoints["state"]) != 1 {
+			t.Fatalf("file or method metadata missing: %+v, %+v", got, endpoints)
+		}
+	}
+}
+
+func TestAgentIDQueryControlsFollowEffectiveTransport(t *testing.T) {
+	for _, name := range []string{"offset", "cursor", "live"} {
+		for _, output := range []bool{false, true} {
+			for _, mode := range []RouteMode{"", RouteDurableStreams, RouteSSE} {
+				if !output && mode == RouteSSE {
+					continue // SSE requires an output stream.
+				}
+				ep := GET("/events")
+				if mode != "" {
+					ep = GET("/events", WithRouteMode(mode))
+				}
+				m := method("events", nil, ep)
+				if output {
+					m.outType = reflect.TypeFor[AgentStream[string]]()
+				} else {
+					m.inFields = []engine.Field{{Name: "uploads", Typ: reflect.TypeFor[AgentStream[byte]]()}}
+				}
+				_, _, errs := buildHTTP(agent("A", &Mount{Path: "/a", AgentID: AgentIDQuery(name)}, fields("seed"), m))
+				conflict := mode != RouteSSE
+				if containsDefErr(errs, "Durable Streams control") != conflict || !conflict && len(errs) != 0 {
+					t.Errorf("%s output=%v mode=%s: errors %v, want conflict=%v", name, output, mode, errs, conflict)
+				}
+			}
+		}
+		_, _, errs := buildHTTP(agent("A", &Mount{Path: "/a", AgentID: AgentIDQuery(name)}, fields("seed"), method("plain", nil, GET("/plain"))))
+		if len(errs) != 0 {
+			t.Errorf("plain route with %s: %v", name, errs)
+		}
+	}
+}
+
+func TestAgentIDBindingExcludesInputStreams(t *testing.T) {
+	for _, verb := range []func(string, ...EndpointOpt) Endpoint{GET, HEAD, DELETE} {
+		for _, typ := range []reflect.Type{reflect.TypeFor[AgentStream[byte]](), reflect.TypeFor[AgentStream[string]]()} {
+			for _, explicit := range []bool{false, true} {
+				ep := verb("/events")
+				if explicit {
+					ep = verb("/events", Query("instance", "instance"))
+				}
+				e := agent("A", &Mount{Path: "/a", AgentID: AgentIDQuery("instance")}, fields("seed"),
+					method("events", []engine.Field{{Name: "instance", Typ: typ}}, ep))
+				_, _, errs := buildHTTP(e)
+				if (len(errs) != 0) != explicit {
+					t.Errorf("%s stream %s explicit=%v: errors %v", ep.method, typ, explicit, errs)
+				}
+			}
+		}
+	}
+}
+
+func TestAgentIDBindingStreamDeclarationPublishes(t *testing.T) {
+	type Id struct{ Seed string }
+	type State struct{}
+	type Input struct{ Instance AgentStream[string] }
+	withDefs(t, func(d *definitions) {
+		a := defineAgentInto[Id, NoConfig](d, Spec{Name: "StreamSelected", HTTP: &Mount{Path: "/a", AgentID: AgentIDQuery("instance")}})
+		m := a.Method[Input, Unit]("events", HTTP(GET("/events")))
+		impl := implementInto[Id, State, NoConfig](d, a, simpleNewState[Id, State](func(Id) *State { return &State{} }), false)
+		impl.Handle(m, func(*Context[State], Input) Unit { return Unit{} })
+		types, errs := d.discover()
+		if len(errs) != 0 || len(types) != 1 || len(types[0].Methods[0].HttpEndpoint) != 1 {
+			t.Fatalf("stream declaration failed to publish: %v, %v", types, errs)
+		}
+	})
+}
+
+func TestAgentIDBindingDoesNotReserveOtherInputSources(t *testing.T) {
+	for _, ep := range []Endpoint{
+		POST("/state"), GET("/state/{instance}"),
+		GET("/state", Header("X-Instance", "instance")),
+		GET("/state", Query("other", "instance")),
+	} {
+		e := agent("A", &Mount{Path: "/a", AgentID: AgentIDQuery("instance")}, fields("seed"),
+			method("state", fields("instance"), ep))
+		_, _, errs := buildHTTP(e)
+		if len(errs) != 0 {
+			t.Errorf("%s %s: unexpected errors: %v", ep.method, ep.path, errs)
+		}
+	}
+	// A capture with the same name as a constructor field is still an ID
+	// binding; it does not bind that constructor field.
+	e := agent("A", &Mount{Path: "/a/{id}", AgentID: AgentIDPath("id"), CreateRoute: "/"}, fields("id"))
+	mount, _, errs := buildHTTP(e)
+	if len(errs) != 0 || !mount.Some().CreateRoute.IsSome() || len(mount.Some().CreateRoute.Some()) != 0 {
+		t.Fatalf("root create route and ID binding: %+v, %v", mount, errs)
+	}
+}
+
+func TestNonIDMountLifecycleIsUnchanged(t *testing.T) {
+	for _, mode := range []common.AgentMode{common.AgentModeDurable, common.AgentModeEphemeral} {
+		for _, fresh := range []bool{false, true} {
+			e := agent("A", &Mount{Path: "/a/{seed}", PhantomAgent: fresh}, fields("seed"))
+			e.mode = mode
+			mount, _, errs := buildHTTP(e)
+			if len(errs) != 0 || mount.Some().PhantomAgent != fresh || mount.Some().AgentIdBinding.IsSome() {
+				t.Errorf("mode=%v fresh=%v: %+v, %v", mode, fresh, mount, errs)
+			}
+		}
+	}
+}
+
+func TestRouterRejectsIDBindingAndCreate(t *testing.T) {
+	for _, mount := range []*Mount{
+		{Path: "/a", AgentID: AgentIDQuery("id")},
+		{Path: "/a", CreateRoute: "/create"},
+	} {
+		e := agent("A", mount, nil)
+		e.router = &routerEntry{}
+		_, _, errs := buildHTTP(e)
+		if !containsDefErr(errs, "router mount cannot declare AgentID or CreateRoute") {
+			t.Errorf("expected router ownership error, got %v", errs)
+		}
 	}
 }
 
@@ -451,6 +600,22 @@ func renderSegs(segs []common.PathSegment) string {
 		}
 	}
 	return "/" + strings.Join(parts, "/")
+}
+
+func TestToolMountRejectsAgentSelectionAndCreation(t *testing.T) {
+	plain, err := (Mount{Path: "/reports"}).ToolDeclaration()
+	if err != nil || !reflect.DeepEqual(plain.PathPrefix, []coreHTTP.PathSegment{coreHTTP.MakePathSegmentLiteral("reports")}) {
+		t.Fatalf("plain tool mount: %v, %v", plain, err)
+	}
+	for _, mount := range []Mount{
+		{Path: "/reports", AgentID: AgentIDQuery("instance")},
+		{Path: "/reports/{instance}", AgentID: AgentIDPath("instance"), CreateRoute: "/reports"},
+		{Path: "/reports", CreateRoute: "/"},
+	} {
+		if _, err := mount.ToolDeclaration(); err == nil || !strings.Contains(err.Error(), "only a path") {
+			t.Errorf("agent-only tool mount accepted: %+v, %v", mount, err)
+		}
+	}
 }
 
 // renderSegs2 renders parsed (pre-WIT) segments for parser tests.

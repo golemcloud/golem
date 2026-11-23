@@ -2672,12 +2672,8 @@ fn config_constructors_are_generated() {
     assert!(client.contains(
         "@runtime.create_agent(configuration, \"ConfigAgent\", parameters, keyed~, config=agent_config, env~)"
     ));
-    // Only a keyed create keeps the parameters for streaming calls.
-    assert!(
-        client.contains(
-            "parameters=if keyed { Some(parameters) } else { None }, target=Some(response)"
-        )
-    );
+    // Every create pins its ID and fingerprint without retaining the constructor.
+    assert!(client.contains("parameters=None, target=Some(response)"));
 }
 
 #[test]
@@ -3371,6 +3367,8 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
     const STABLE: &str = "5000";
     for (mode, expected_error, reconnect, stable) in [
         ("success", "", window, STABLE),
+        ("success-id", "", window, STABLE),
+        ("success-key-known", "", window, STABLE),
         ("resume-retryable", "", window, STABLE),
         ("initial", "terminal rejection", window, STABLE),
         ("other", "terminal rejection", window, STABLE),
@@ -3422,6 +3420,22 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
         std::fs::write(
             pkg.module_dir().join("runtime/recovery_wbtest.mbt"),
             include_str!("moonbit_recovery.mbt")
+                .replace(
+                    "parameters=Some(TupleValue([])),\n    target=None,",
+                    if mode == "success-id" {
+                        "parameters=None,\n    target=Some({ agent_id: try! AgentId::parse(\"00000000-0000-8000-8000-000000000abc\"), agent_fingerprint: \"pinned\" }),"
+                    } else {
+                        "parameters=Some(TupleValue([])),\n    target=None,"
+                    },
+                )
+                .replace(
+                    "let resolved = recovery_agent()",
+                    if mode == "success-key-known" {
+                        "let resolved = recovery_agent()\n  resolved.known_agent_id = Some(AgentId::parse(\"00000000-0000-8000-8000-000000000abc\"))"
+                    } else {
+                        "let resolved = recovery_agent()"
+                    },
+                )
                 .replace("__PORT__", &server.port.to_string())
                 .replace("__MODE__", mode)
                 .replace("__ERROR__", expected_error)

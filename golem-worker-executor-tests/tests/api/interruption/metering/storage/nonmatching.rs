@@ -3,7 +3,6 @@ use golem_worker_executor_test_utils::callers;
 use pretty_assertions::assert_eq;
 use test_r::test;
 
-#[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires the privileged managed XFS test runner"]
 #[timeout("2m")]
@@ -16,7 +15,6 @@ async fn durable_pending_nonmatching_managed_xfs_storage_remains_running(
     nonmatching_storage(last_unique_id, deps, host_api_tests, AgentMode::Durable).await
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires the privileged managed XFS test runner"]
 #[timeout("2m")]

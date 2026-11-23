@@ -218,9 +218,12 @@ jobs:
         with:
           cache-shared-key: main-validation-apfs
           cache-save-if: 'true'
+          install-cargo-binstall: 'true'
       - uses: oven-sh/setup-bun@v2
       - name: Install validation tooling
-        run: npm ci --ignore-scripts --prefix .github/main-validation
+        run: |
+          npm ci --ignore-scripts --prefix .github/main-validation
+          cargo binstall --no-confirm --force --locked cargo-test-r@2.2.14
       - name: Execute same-source native APFS coverage
         env:
           MAIN_VALIDATION_REPORT_DIR: ${{ runner.temp }}/main-validation-apfs

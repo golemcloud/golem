@@ -4366,6 +4366,50 @@ async fn streaming_output_resume_restores_exact_cursors(
             caller: start.caller.clone(),
         })),
     };
+
+    // A resume whose caller differs from the pinned one, here only in its original caller, is
+    // refused: no resume replaces the recorded caller.
+    let mut changed_caller = golem_common::model::caller::Caller::try_from(
+        start
+            .caller
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("the start names its caller"))?,
+    )
+    .map_err(anyhow::Error::msg)?;
+    changed_caller.original = callers::account_principal(AccountId::new());
+    let mut changed_request = resume_request.clone();
+    if let Some(invocation_request::Request::ResumeAttach(resume)) =
+        changed_request.request.as_mut()
+    {
+        resume.caller = Some(changed_caller.into());
+        resume.attempt_id = Some(uuid::Uuid::new_v4().into());
+    }
+    let (changed_requests, changed_receiver) = mpsc::channel(1);
+    changed_requests.send(changed_request).await?;
+    let refusal = match executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(changed_receiver))
+        .await
+    {
+        Err(status) => status.message().to_string(),
+        Ok(responses) => {
+            let mut responses = responses.into_inner();
+            match responses.message().await {
+                Err(status) => status.message().to_string(),
+                Ok(Some(InvocationResponse {
+                    response: Some(invocation_response::Response::Rejected(rejected)),
+                })) => rejected.error,
+                other => anyhow::bail!("a resume with another caller was not refused: {other:?}"),
+            }
+        }
+    };
+    assert!(
+        refusal.contains("resume identity differs from the pinned caller"),
+        "{refusal}"
+    );
+    drop(changed_requests);
+
     let mut recovered_state = InvocationSessionState::default();
     recovered_state
         .validate_trusted_request(&resume_request)

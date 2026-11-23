@@ -1783,6 +1783,7 @@ fn system_durable_stream_cancellation_is_a_permanent_stream_error() {
 struct TestConsumerJournal(Arc<dyn Oplog>);
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl DurableStreamConsumerJournal for TestConsumerJournal {
     async fn commit(&self) -> Result<(), SessionError> {
         self.0.commit(CommitLevel::Always).await.unwrap();
@@ -3357,6 +3358,7 @@ impl LagRecordingSource {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl AttachedStreamSegmentSource for LagRecordingSource {
     async fn journal_lag_events(
         &self,
@@ -3415,6 +3417,7 @@ struct AttachedProducerRpc {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl Rpc for AttachedProducerRpc {
     async fn create_and_initialize(
         &self,
@@ -3437,7 +3440,7 @@ impl Rpc for AttachedProducerRpc {
         _target: &OwnedAgentId,
         _key: golem_common::model::InvocationId,
         _receipt: golem_common::model::ScheduleId,
-        _owner: &golem_common::model::AgentId,
+        _canceller: &golem_common::model::caller::Principal,
         _auth: &AuthCtx,
     ) -> Result<bool, RpcError> {
         Err(RpcError::ProtocolError {
@@ -3452,6 +3455,7 @@ impl Rpc for AttachedProducerRpc {
         _request_key: golem_common::model::InvocationRequestKey,
         _invocation: golem_common::model::AgentInvocation,
         _scheduled_at: chrono::DateTime<chrono::Utc>,
+        _self_agent_id: &golem_common::model::AgentId,
         _auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, RpcError> {
         Err(RpcError::ProtocolError {
@@ -6823,6 +6827,7 @@ async fn root_union_stream_coordinates_use_the_selected_branch_and_survive_reloa
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl DurableStreamConsumerJournal for RecordingConsumerJournal {
     async fn commit(&self) -> Result<(), SessionError> {
         self.oplog.commit(CommitLevel::Always).await.unwrap();
@@ -13780,6 +13785,7 @@ async fn finalization_after_retirement_requires_matching_committed_finished() {
     }
 
     #[async_trait::async_trait]
+    #[golem_async_trait::region_simple]
     impl DurableStreamConsumerJournal for FinishedJournal {
         async fn commit(&self) -> Result<(), SessionError> {
             panic!("a repeated finalization must not commit buffered entries")

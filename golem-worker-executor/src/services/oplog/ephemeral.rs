@@ -1001,6 +1001,7 @@ impl Debug for EphemeralOplog {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Oplog for EphemeralOplog {
     fn executor_shutdown_handle(&self) -> super::OplogShutdownHandle {
         let executor_shutdown = self.executor_shutdown.clone();

@@ -6,7 +6,7 @@ use test_r::test;
 
 macro_rules! cross_case {
     ($name:ident, Storage, $mode:ident) => {
-        cross_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
+        cross_case!(#[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
     };
     ($(#[$attr:meta])* $name:ident, $resource:ident, $mode:ident) => {
         $(#[$attr])*
@@ -46,16 +46,22 @@ cross_case!(
     Compute,
     Ephemeral
 );
-cross_case!(
-    durable_p2_cross_socket_splice_managed_xfs_storage_quota,
-    Storage,
-    Durable
-);
-cross_case!(
-    ephemeral_p2_cross_socket_splice_managed_xfs_storage_quota,
-    Storage,
-    Ephemeral
-);
+#[cfg(target_os = "linux")]
+mod storage {
+    use super::*;
+    use test_r::test;
+
+    cross_case!(
+        durable_p2_cross_socket_splice_managed_xfs_storage_quota,
+        Storage,
+        Durable
+    );
+    cross_case!(
+        ephemeral_p2_cross_socket_splice_managed_xfs_storage_quota,
+        Storage,
+        Ephemeral
+    );
+}
 
 const METHOD: &str = "tcp_cross_socket_blocking_splice_p2";
 

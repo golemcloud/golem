@@ -512,60 +512,74 @@ fn delegated_to_namespace(test: &str) -> bool {
         return false;
     }
 
-    if !cfg!(target_os = "linux") {
+    platform::delegated_to_namespace(test)
+}
+
+#[cfg(not(target_os = "linux"))]
+mod platform {
+    pub(super) fn delegated_to_namespace(test: &str) -> bool {
         eprintln!(
             "[{test}] not run: dropping packets needs Linux network namespaces. \
              CI runs Linux, so this is covered there."
         );
-        return true;
+        true
     }
-
-    let binary = std::env::current_exe().expect("the running test binary");
-    // Spawning from this multithreaded process keeps every live socket alive in
-    // the child until exec closes its inherited descriptors. Host-process tests
-    // must not assume a dropped listener's port is immediately free.
-    let child = std::process::Command::new("unshare")
-        .args(["--user", "--map-root-user", "--net", "--"])
-        .arg("sh")
-        .arg("-c")
-        .arg(format!(
-            // tcp_retries2 is per namespace. Left at its default, the kernel
-            // spends about fifteen minutes giving up on an established
-            // connection whose peer has gone silent, and that wait is precisely
-            // what some of these tests are timing.
-            "ip link set lo up \
-             && echo 4 > /proc/sys/net/ipv4/tcp_retries2 \
-             && exec {} {test} --nocapture",
-            shell_quoted(&binary)
-        ))
-        .env(IN_OWN_NAMESPACE, "1")
-        .output()
-        .unwrap_or_else(|err| {
-            panic!("could not run `unshare` to isolate {test}: {err}. It ships with util-linux.")
-        });
-
-    let stdout = String::from_utf8_lossy(&child.stdout);
-    let stderr = String::from_utf8_lossy(&child.stderr);
-
-    // Held back unless it is needed, so concurrent children do not interleave
-    // their output into nonsense.
-    assert!(
-        child.status.success(),
-        "{test} failed inside its own network namespace. If `unshare` itself \
-         failed, this kernel may have unprivileged user namespaces switched off: \
-         check `sysctl kernel.unprivileged_userns_clone`.\n\n{stdout}\n{stderr}"
-    );
-    assert!(
-        stderr.contains(&format!("{RAN_MARKER} {test}")),
-        "{test} never ran in its namespace. The harness filters by substring and \
-         exits successfully when nothing matches, so without this a run that \
-         tested nothing would be reported as a pass.\n\n{stdout}\n{stderr}"
-    );
-    true
 }
 
-fn shell_quoted(path: &std::path::Path) -> String {
-    format!("'{}'", path.display().to_string().replace('\'', r"'\''"))
+#[cfg(target_os = "linux")]
+mod platform {
+    use super::{IN_OWN_NAMESPACE, RAN_MARKER};
+
+    pub(super) fn delegated_to_namespace(test: &str) -> bool {
+        let binary = std::env::current_exe().expect("the running test binary");
+        // Spawning from this multithreaded process keeps every live socket alive in
+        // the child until exec closes its inherited descriptors. Host-process tests
+        // must not assume a dropped listener's port is immediately free.
+        let child = std::process::Command::new("unshare")
+            .args(["--user", "--map-root-user", "--net", "--"])
+            .arg("sh")
+            .arg("-c")
+            .arg(format!(
+                // tcp_retries2 is per namespace. Left at its default, the kernel
+                // spends about fifteen minutes giving up on an established
+                // connection whose peer has gone silent, and that wait is precisely
+                // what some of these tests are timing.
+                "ip link set lo up \
+             && echo 4 > /proc/sys/net/ipv4/tcp_retries2 \
+             && exec {} {test} --nocapture",
+                shell_quoted(&binary)
+            ))
+            .env(IN_OWN_NAMESPACE, "1")
+            .output()
+            .unwrap_or_else(|err| {
+                panic!(
+                    "could not run `unshare` to isolate {test}: {err}. It ships with util-linux."
+                )
+            });
+
+        let stdout = String::from_utf8_lossy(&child.stdout);
+        let stderr = String::from_utf8_lossy(&child.stderr);
+
+        // Held back unless it is needed, so concurrent children do not interleave
+        // their output into nonsense.
+        assert!(
+            child.status.success(),
+            "{test} failed inside its own network namespace. If `unshare` itself \
+         failed, this kernel may have unprivileged user namespaces switched off: \
+         check `sysctl kernel.unprivileged_userns_clone`.\n\n{stdout}\n{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("{RAN_MARKER} {test}")),
+            "{test} never ran in its namespace. The harness filters by substring and \
+         exits successfully when nothing matches, so without this a run that \
+         tested nothing would be reported as a pass.\n\n{stdout}\n{stderr}"
+        );
+        true
+    }
+
+    fn shell_quoted(path: &std::path::Path) -> String {
+        format!("'{}'", path.display().to_string().replace('\'', r"'\''"))
+    }
 }
 
 /// A network namespace with no default route, which is what the child above gets.

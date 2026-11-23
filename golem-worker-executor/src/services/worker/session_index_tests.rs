@@ -71,6 +71,7 @@ fn local_reader(introducing_oplog_index: OplogIndex, binding_slot: u32) -> Local
 pub(crate) struct UnusedComponentService;
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentService for UnusedComponentService {
     async fn get(
         &self,

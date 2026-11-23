@@ -319,6 +319,11 @@ async fn postgres_storage(
 /// A compressed level no other test writes to, so a walk over it sees a fixed set of keys.
 const SCAN_STABLE_LEVEL: usize = 97;
 
+const KEY1: &str = "12345678-0000-0000-0000-000000000000/00000001-0000-8000-8000-000000000001";
+const KEY2: &str = "12345678-0000-0000-0000-000000000000/00000002-0000-8000-8000-000000000002";
+const KEY3: &str = "12345678-0000-0000-0000-000000000000/00000001-0000-8000-8000-000000000003";
+const KEY_PREFIX: &str = "12345678-0000-0000-0000-000000000000/00000001-";
+
 #[derive(Debug, Clone)]
 struct IndexedStorageNamespaces {
     ns: IndexedStorageNamespace,
@@ -535,10 +540,11 @@ async fn committed_oplog_records_survive_cold_reopen(
 
     // Independent clients race to publish different complete stages into the same target.
     let competitor = open().await;
+    let competitor_key = format!("{target_key}#{}", Uuid::new_v4());
     append_record(
         competitor.as_ref(),
         &staged,
-        "competitor",
+        &competitor_key,
         1,
         b"other",
         None,
@@ -550,7 +556,7 @@ async fn committed_oplog_records_survive_cold_reopen(
         publish_staged_records(
             competitor.as_ref(),
             &staged,
-            "competitor",
+            &competitor_key,
             &visible,
             &target_key,
             1
@@ -563,7 +569,7 @@ async fn committed_oplog_records_survive_cold_reopen(
         vec![(1, b"other".to_vec())]
     };
     let (loser, tip) = if published {
-        ("competitor", 1)
+        (competitor_key.as_str(), 1)
     } else {
         (key.as_str(), 2)
     };
@@ -666,13 +672,15 @@ async fn staged_publication_preserves_atomic_visibility(
         owned_agent_id: agent.clone(),
         agent_mode: mode,
     };
-    for (key, ids, expected) in [
+    for (_case, ids, expected) in [
         ("missing", vec![], 1),
         ("gap", vec![1, 3], 3),
         ("shifted", vec![2, 3], 2),
         ("wrong-tip", vec![1, 2, 3], 2),
         ("zero-tip", vec![1], 0),
     ] {
+        let key = crate::fresh_owned_agent_id().storage_key();
+        let key = key.as_str();
         for id in ids {
             storage
                 .append(
@@ -709,7 +717,9 @@ async fn staged_publication_preserves_atomic_visibility(
                 .unwrap()
         );
     }
-    for (key, value) in [("first", 17u8), ("second", 39)] {
+    let first_stage = format!("{KEY1}#{}", Uuid::new_v4());
+    let second_stage = format!("{KEY1}#{}", Uuid::new_v4());
+    for (key, value) in [(first_stage.as_str(), 17u8), (second_stage.as_str(), 39)] {
         storage
             .append_many(
                 "test",
@@ -746,32 +756,32 @@ async fn staged_publication_preserves_atomic_visibility(
             "test",
             "publish",
             staged.clone(),
-            "first",
+            &first_stage,
             visible.clone(),
-            "target",
+            KEY1,
             3,
         ),
         storage.move_if_absent(
             "test",
             "publish",
             staged.clone(),
-            "second",
+            &second_stage,
             visible.clone(),
-            "target",
+            KEY1,
             3,
         ),
     );
     let first = first.unwrap();
     assert_ne!(first, second.unwrap());
     let (winner, loser, value) = if first {
-        ("first", "second", 17)
+        (first_stage.as_str(), second_stage.as_str(), 17)
     } else {
-        ("second", "first", 39)
+        (second_stage.as_str(), first_stage.as_str(), 39)
     };
     let expected: Vec<_> = (1..=3).map(|id| (id, vec![value, id as u8])).collect();
     assert_eq!(
         storage
-            .read("test", "read", "entry", visible.clone(), "target", 1, 3)
+            .read("test", "read", "entry", visible.clone(), KEY1, 1, 3)
             .await
             .unwrap(),
         expected
@@ -796,7 +806,7 @@ async fn staged_publication_preserves_atomic_visibility(
                 staged.clone(),
                 loser,
                 visible.clone(),
-                "target",
+                KEY1,
                 3,
             )
             .await
@@ -808,13 +818,13 @@ async fn staged_publication_preserves_atomic_visibility(
         .unwrap();
     assert_eq!(
         storage
-            .read("test", "read", "entry", visible.clone(), "target", 1, 3)
+            .read("test", "read", "entry", visible.clone(), KEY1, 1, 3)
             .await
             .unwrap(),
         expected
     );
 
-    for (key, first_id) in [("archived", 1), ("archived-arbitrary", 17)] {
+    for (key, first_id) in [(KEY2, 1), (KEY3, 17)] {
         storage
             .append(
                 "test",
@@ -918,31 +928,27 @@ async fn staged_publication_preserves_atomic_visibility(
             vec![(1, vec![23])]
         );
     }
+    let absent = crate::fresh_owned_agent_id().storage_key();
     storage
-        .drop_prefix(
-            "test",
-            "archive",
-            visible.clone(),
-            "never-existed",
-            50,
-            None,
-        )
+        .drop_prefix("test", "archive", visible.clone(), &absent, 50, None)
         .await
         .unwrap();
     assert!(
         !storage
-            .exists("test", "exists", visible.clone(), "never-existed")
+            .exists("test", "exists", visible.clone(), &absent)
             .await
             .unwrap()
     );
 
+    let race = crate::fresh_owned_agent_id().storage_key();
+    let ordinary_key = crate::fresh_owned_agent_id().storage_key();
     storage
         .append(
             "test",
             "stage",
             "entry",
             staged.clone(),
-            "race",
+            &race,
             1,
             vec![51],
             None,
@@ -954,9 +960,9 @@ async fn staged_publication_preserves_atomic_visibility(
             "test",
             "publish",
             staged,
-            "race",
+            &race,
             visible.clone(),
-            "ordinary",
+            &ordinary_key,
             1,
         ),
         storage.append(
@@ -964,7 +970,7 @@ async fn staged_publication_preserves_atomic_visibility(
             "create",
             "entry",
             visible.clone(),
-            "ordinary",
+            &ordinary_key,
             1,
             vec![77],
             None,
@@ -974,7 +980,7 @@ async fn staged_publication_preserves_atomic_visibility(
     assert_ne!(published, ordinary.is_ok());
     assert_eq!(
         storage
-            .read("test", "read", "entry", visible, "ordinary", 1, 2)
+            .read("test", "read", "entry", visible, &ordinary_key, 1, 2)
             .await
             .unwrap(),
         vec![(1, vec![if published { 51 } else { 77 }])]
@@ -992,10 +998,7 @@ async fn postgres_singleton_append_many_preserves_storage_contract(
     // Once asserting no epoch, which is a lone autocommit INSERT, and once asserting the recorded
     // one, which goes through the fenced transaction. A caller must not be able to tell the two
     // paths apart.
-    for (key, shard_epoch) in [
-        ("singleton", None),
-        ("fenced-singleton", Some(ShardEpoch(1))),
-    ] {
+    for (key, shard_epoch) in [(KEY1, None), (KEY2, Some(ShardEpoch(1)))] {
         for ns in [primary, compressed] {
             if let Some(epoch) = shard_epoch {
                 storage
@@ -1113,7 +1116,7 @@ async fn postgres_append_many_rolls_back_across_statement_chunks(
     let storage = storage.get_indexed_storage().await;
     for count in [1024, 1025] {
         for epoch in [None, Some(ShardEpoch(7))] {
-            let key = format!("atomic-{count}-{epoch:?}");
+            let key = crate::fresh_owned_agent_id().storage_key();
             if let Some(epoch) = epoch {
                 storage
                     .set_key_epoch("svc", "api", ns.ns.clone(), &key, epoch)
@@ -1170,11 +1173,7 @@ async fn postgres_fenced_append_observes_locked_epoch_and_commit_errors(
         .await
         .unwrap();
 
-    for (key, actual) in [
-        ("takeover", Some(8i64)),
-        ("deleted", None),
-        ("corrupt", Some(-1)),
-    ] {
+    for (key, actual) in [(KEY1, Some(8i64)), (KEY2, None), (KEY3, Some(-1))] {
         storage
             .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
             .await
@@ -1195,17 +1194,20 @@ async fn postgres_fenced_append_observes_locked_epoch_and_commit_errors(
             u64::MAX,
             Some(7),
         );
+        let owned = golem_common::model::OwnedAgentId::from_storage_key(key).unwrap();
         let mut tx = pool.begin().await.unwrap();
         if let Some(epoch) = actual {
-            sqlx::query("UPDATE indexed_key_epoch SET epoch = $1 WHERE key = $2")
+            sqlx::query("UPDATE indexed_key_epoch SET epoch = $1 WHERE namespace = 'durable-worker-oplog' AND env = $2 AND agent = $3")
                 .bind(epoch)
-                .bind(key)
+                .bind(owned.environment_id.0)
+                .bind(owned.agent_id.as_uuid())
                 .execute(&mut *tx)
                 .await
                 .unwrap();
         } else {
-            sqlx::query("DELETE FROM indexed_key_epoch WHERE key = $1")
-                .bind(key)
+            sqlx::query("DELETE FROM indexed_key_epoch WHERE namespace = 'durable-worker-oplog' AND env = $1 AND agent = $2")
+                .bind(owned.environment_id.0)
+                .bind(owned.agent_id.as_uuid())
                 .execute(&mut *tx)
                 .await
                 .unwrap();
@@ -1258,8 +1260,15 @@ async fn postgres_fenced_append_observes_locked_epoch_and_commit_errors(
         "CREATE FUNCTION reject_append_at_commit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'deferred append conflict' USING ERRCODE = '23505'; END $$;
          CREATE CONSTRAINT TRIGGER reject_append AFTER INSERT ON index_storage DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_append_at_commit();",
     ).execute(&pool).await.unwrap();
+    let commit_error_key = crate::fresh_owned_agent_id().storage_key();
     storage
-        .set_key_epoch("svc", "api", ns.ns.clone(), "commit-error", ShardEpoch(7))
+        .set_key_epoch(
+            "svc",
+            "api",
+            ns.ns.clone(),
+            &commit_error_key,
+            ShardEpoch(7),
+        )
         .await
         .unwrap();
     assert!(matches!(
@@ -1269,7 +1278,7 @@ async fn postgres_fenced_append_observes_locked_epoch_and_commit_errors(
                 "api",
                 "entity",
                 ns.ns.clone(),
-                "commit-error",
+                &commit_error_key,
                 1,
                 vec![31],
                 Some(ShardEpoch(7))
@@ -1279,7 +1288,7 @@ async fn postgres_fenced_append_observes_locked_epoch_and_commit_errors(
     ));
     assert_eq!(
         storage
-            .length("svc", "api", ns.ns.clone(), "commit-error")
+            .length("svc", "api", ns.ns.clone(), &commit_error_key)
             .await
             .unwrap(),
         0
@@ -1296,7 +1305,7 @@ async fn exists_append(
 ) {
     let is = is.get_indexed_storage().await;
 
-    let key1 = "key1";
+    let key1 = KEY1;
     let value1 = "value1".as_bytes().to_vec();
 
     let result1 = is.exists("svc", "api", ns.ns.clone(), key1).await.unwrap();
@@ -1319,7 +1328,7 @@ async fn namespaces_are_separate(
 ) {
     let is = is.get_indexed_storage().await;
 
-    let key1 = "key1";
+    let key1 = KEY1;
     let value1 = "value1".as_bytes().to_vec();
 
     is.append(
@@ -1349,7 +1358,7 @@ async fn can_append_and_get(
 ) {
     let is = is.get_indexed_storage().await;
 
-    let key1 = "key1";
+    let key1 = KEY1;
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
     let value3 = "value3".as_bytes().to_vec();
@@ -1409,7 +1418,7 @@ async fn append_cannot_overwrite(
 ) {
     let is = is.get_indexed_storage().await;
 
-    let key1 = "key1";
+    let key1 = KEY1;
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
 
@@ -1433,7 +1442,7 @@ async fn append_can_skip(
 ) {
     let is = is.get_indexed_storage().await;
 
-    let key1 = "key1";
+    let key1 = KEY1;
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
 
@@ -1480,7 +1489,7 @@ async fn length(
 ) {
     let is = is.get_indexed_storage().await;
 
-    let key1 = "key1";
+    let key1 = KEY1;
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
 
@@ -1536,8 +1545,8 @@ async fn scan_with_no_pattern_single_paged(
 ) {
     let is = is.get_indexed_storage().await;
 
-    let key1 = "key1";
-    let key2 = "key2";
+    let key1 = KEY1;
+    let key2 = KEY2;
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
 
@@ -1577,9 +1586,9 @@ async fn scan_with_no_pattern_paginated(
 ) {
     let is = is.get_indexed_storage().await;
 
-    let key1 = "key1";
-    let key2 = "key2";
-    let key3 = "key2";
+    let key1 = KEY1;
+    let key2 = KEY2;
+    let key3 = KEY2;
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
     let value3 = "value3".as_bytes().to_vec();
@@ -1707,8 +1716,9 @@ async fn scan_stable_resumes_past_deleted_keys(
 
     // One agent per key, so a backend that shards by agent has six shards to walk.
     let planted: Vec<(IndexedStorageNamespace, IndexedStorageNamespace, String)> = (0..6)
-        .map(|i| {
+        .map(|_| {
             let agent = crate::fresh_owned_agent_id();
+            let key = agent.storage_key();
             let swept = IndexedStorageNamespace::CompressedOpLog {
                 owned_agent_id: agent.clone(),
                 agent_mode: AgentMode::Durable,
@@ -1719,7 +1729,7 @@ async fn scan_stable_resumes_past_deleted_keys(
                 agent_mode: AgentMode::Durable,
                 level: SCAN_STABLE_LEVEL + 1,
             };
-            (swept, below, format!("{}-swept-{i}", Uuid::new_v4()))
+            (swept, below, key)
         })
         .collect();
 
@@ -1959,7 +1969,7 @@ async fn last_id_matches_last_without_the_value(
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
-    let key = format!("{}-last-id", Uuid::new_v4());
+    let key = crate::fresh_owned_agent_id().storage_key();
 
     assert_eq!(
         is.with_entity("svc", "api", "entity")
@@ -2009,9 +2019,9 @@ async fn scan_with_prefix_pattern_single_paged(
 ) {
     let is = is.get_indexed_storage().await;
 
-    let key1 = "key1";
-    let key2 = "other2";
-    let key3 = "key3";
+    let key1 = KEY1;
+    let key2 = KEY2;
+    let key3 = KEY3;
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
     let value3 = "value3".as_bytes().to_vec();
@@ -2030,7 +2040,7 @@ async fn scan_with_prefix_pattern_single_paged(
     let mut resume = None;
     loop {
         let (next, chunk) = is
-            .scan_stable("svc", "api", ns.meta.clone(), Some("key"), resume, 10)
+            .scan_stable("svc", "api", ns.meta.clone(), Some(KEY_PREFIX), resume, 10)
             .await
             .unwrap();
         result.extend(chunk);
@@ -2048,7 +2058,7 @@ async fn scan_with_prefix_pattern_single_paged(
 #[test]
 #[tracing::instrument]
 async fn sql_scan_prefix_is_literal_bounded_and_deletion_safe(
-    #[dimension(sql_is)] storage: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("sqlite")] storage: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
     let storage = storage.get_indexed_storage().await;
@@ -2180,6 +2190,241 @@ async fn sql_scan_prefix_is_literal_bounded_and_deletion_safe(
 }
 
 #[test]
+async fn sql_canonical_key_prefixes_and_resume_match_text_order(
+    #[dimension(sql_is)] storage: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let storage = storage.get_indexed_storage().await;
+    let keys = [
+        "00000000-0000-0000-0000-000000000000/00000000-0000-8000-8000-000000000000",
+        KEY1,
+        KEY3,
+        KEY2,
+        "12345678-0000-0000-0000-000000000000/ffffffff-ffff-8fff-bfff-ffffffffffff",
+        "ffffffff-ffff-ffff-ffff-ffffffffffff/ffffffff-ffff-8fff-bfff-ffffffffffff",
+    ];
+    for key in keys {
+        append_fenced(&storage, &ns.ns, key, &[1, 3], None)
+            .await
+            .unwrap();
+    }
+    let mut prefixes = vec![
+        "".to_string(),
+        "%".into(),
+        "_".into(),
+        "\\".into(),
+        "é".into(),
+        "\u{10ffff}".into(),
+    ];
+    for key in keys {
+        prefixes.extend((1..=key.len()).map(|end| key[..end].to_string()));
+        prefixes.push(format!("{key}x"));
+        prefixes.push(key.to_uppercase());
+    }
+    prefixes.sort();
+    prefixes.dedup();
+    for prefix in prefixes {
+        for marker in [
+            None,
+            Some(""),
+            Some(KEY1),
+            Some(KEY2),
+            Some("z"),
+            // Bounds on either side of the environment/agent separator.
+            Some("12345678-0000-0000-0000-000000000000."),
+            Some("12345678-0000-0000-0000-0000000000000"),
+            // Carry past an agent separator, a hex digit, and an entire agent UUID.
+            Some("12345678-0000-0000-0000-000000000000/00000001."),
+            Some("12345678-0000-0000-0000-000000000000/00000001-0000-8000-8000-00000000000g"),
+            Some("12345678-0000-0000-0000-000000000000/00000001-ffff-ffff-ffff-ffffffffffffx"),
+            // A suffix must exclude an exact key; carrying past the largest agent advances env.
+            Some("12345678-0000-0000-0000-000000000000/00000001-0000-8000-8000-000000000001x"),
+            Some("12345678-0000-0000-0000-000000000000/ffffffff-ffff-ffff-ffff-ffffffffffffx"),
+            Some("ffffffff-ffff-ffff-ffff-ffffffffffff/ffffffff-ffff-ffff-ffff-ffffffffffff"),
+            Some("ffffffff-ffff-ffff-ffff-ffffffffffff/ffffffff-ffff-ffff-ffff-ffffffffffffx"),
+        ] {
+            let mut expected: Vec<_> = keys
+                .iter()
+                .filter(|key| {
+                    key.starts_with(&prefix) && marker.is_none_or(|marker| **key > marker)
+                })
+                .map(|key| key.to_string())
+                .collect();
+            expected.sort();
+            let (resume, actual) = storage
+                .scan_stable(
+                    "svc",
+                    "api",
+                    ns.meta.clone(),
+                    Some(&prefix),
+                    marker.map(|marker| ScanResume::Marker(marker.into())),
+                    20,
+                )
+                .await
+                .unwrap();
+            assert_eq!(actual, expected, "prefix={prefix:?}, marker={marker:?}");
+            assert!(resume.is_none());
+        }
+    }
+    let (resume, first) = storage
+        .scan_stable("svc", "api", ns.meta.clone(), Some(KEY_PREFIX), None, 1)
+        .await
+        .unwrap();
+    assert_eq!(first, [KEY1]);
+    storage
+        .delete("svc", "api", ns.ns.clone(), KEY1)
+        .await
+        .unwrap();
+    let (_, second) = storage
+        .scan_stable("svc", "api", ns.meta.clone(), Some(KEY_PREFIX), resume, 1)
+        .await
+        .unwrap();
+    assert_eq!(second, [KEY3]);
+    assert_eq!(
+        storage
+            .scan_stable("svc", "api", ns.meta.clone(), None, None, 0)
+            .await
+            .unwrap(),
+        (None, vec![])
+    );
+    for resume in [ScanResume::Cursor(0), ScanResume::Marker("\0".into())] {
+        assert!(matches!(
+            storage
+                .scan_stable("svc", "api", ns.meta.clone(), None, Some(resume), 1)
+                .await,
+            Err(IndexedStorageError::InvalidResume(_))
+        ));
+    }
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn postgres_binary_key_migration_refuses_populated_storage() {
+    let wrapper = PostgresIndexedStorageWrapper {
+        postgres: DockerPostgresRdb::new(&Uuid::new_v4().to_string(), false).await,
+    };
+    for seed in [None, Some("entry"), Some("presence"), Some("epoch")] {
+        let config = wrapper.fresh_database().await;
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(config.postgres.connect_options())
+            .await
+            .unwrap();
+        let mut old = sqlx::migrate::Migrator::new(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../golem-worker-executor/db/migration/indexed/postgres"
+        )))
+        .await
+        .unwrap();
+        old.migrations.to_mut().truncate(3);
+        old.run(&pool).await.unwrap();
+        match seed {
+            Some("epoch") => {
+                sqlx::query("INSERT INTO indexed_key_epoch (namespace, key, epoch) VALUES ('durable-worker-oplog', $1, 7)")
+                    .bind(KEY1).execute(&pool).await.unwrap();
+            }
+            Some(kind) => {
+                sqlx::query("INSERT INTO index_storage (namespace, key, id, value) VALUES ($1, $2, 0, 'payload'::bytea)")
+                    .bind(if kind == "presence" { "durable-worker-oplog-present" } else { "durable-worker-oplog" })
+                    .bind(KEY1).execute(&pool).await.unwrap();
+            }
+            None => {}
+        }
+        let result = PostgresIndexedStorage::configured(&config).await;
+        if seed.is_some() {
+            assert!(result.unwrap_err().contains("requires empty tables"));
+            let (version,): (i64,) = sqlx::query_as("SELECT MAX(version) FROM _sqlx_migrations")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(version, 3);
+            if seed == Some("epoch") {
+                let (key, epoch): (String, i64) =
+                    sqlx::query_as("SELECT key, epoch FROM indexed_key_epoch")
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                assert_eq!(key, KEY1);
+                assert_eq!(epoch, 7);
+            } else {
+                let (key, value): (String, Vec<u8>) =
+                    sqlx::query_as("SELECT key, value FROM index_storage")
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                assert_eq!(key, KEY1);
+                assert_eq!(value, b"payload");
+            }
+        } else {
+            let storage = result.unwrap();
+            let namespace = ns();
+            append_fenced(
+                &(Arc::new(storage) as Arc<dyn IndexedStorage + Send + Sync>),
+                &namespace.ns,
+                KEY1,
+                &[1],
+                None,
+            )
+            .await
+            .unwrap();
+            let (env, agent): (Uuid, Uuid) = sqlx::query_as("SELECT env, agent FROM index_storage")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(format!("{env}/{agent}"), KEY1);
+        }
+    }
+}
+
+#[test]
+async fn postgres_rejects_noncanonical_keys_and_isolates_staged_epochs(
+    #[tagged_as("postgres")] storage: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let storage = storage.get_indexed_storage().await;
+    for key in [
+        "key",
+        &KEY1.replacen("12345678", "ABCDEFAB", 1),
+        &KEY1.replace('-', ""),
+        &format!("{KEY1}#{}", Uuid::new_v4()),
+    ] {
+        assert!(matches!(
+            append_fenced(&storage, &ns.ns, key, &[1], None).await,
+            Err(IndexedStorageError::Other(_))
+        ));
+    }
+    let staged = IndexedStorageNamespace::StagedOpLog {
+        owned_agent_id: crate::fresh_owned_agent_id(),
+        agent_mode: AgentMode::Durable,
+    };
+    let first = format!("{KEY1}#{}", Uuid::new_v4());
+    let second = format!("{KEY1}#{}", Uuid::new_v4());
+    storage
+        .set_key_epoch("svc", "api", staged.clone(), &first, ShardEpoch(7))
+        .await
+        .unwrap();
+    storage
+        .set_key_epoch("svc", "api", staged.clone(), &second, ShardEpoch(11))
+        .await
+        .unwrap();
+    append_fenced(&storage, &staged, &first, &[1], Some(ShardEpoch(7)))
+        .await
+        .unwrap();
+    assert_fenced(
+        append_fenced(&storage, &staged, &second, &[1], Some(ShardEpoch(7))).await,
+        7,
+        Some(11),
+    );
+    storage
+        .delete_with_epoch("svc", "api", staged.clone(), &first, Some(ShardEpoch(7)))
+        .await
+        .unwrap();
+    append_fenced(&storage, &staged, &second, &[1], Some(ShardEpoch(11)))
+        .await
+        .unwrap();
+}
+
+#[test]
 #[tracing::instrument]
 async fn scan_with_prefix_pattern_paginated(
     deps: &WorkerExecutorTestDependencies,
@@ -2189,9 +2434,9 @@ async fn scan_with_prefix_pattern_paginated(
 ) {
     let is = is.get_indexed_storage().await;
 
-    let key1 = "key1";
-    let key2 = "other2";
-    let key3 = "key3";
+    let key1 = KEY1;
+    let key2 = KEY2;
+    let key3 = KEY3;
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
     let value3 = "value3".as_bytes().to_vec();
@@ -2210,7 +2455,7 @@ async fn scan_with_prefix_pattern_paginated(
     let mut resume = None;
     loop {
         let (next, chunk) = is
-            .scan_stable("svc", "api", ns.meta.clone(), Some("key"), resume, 1)
+            .scan_stable("svc", "api", ns.meta.clone(), Some(KEY_PREFIX), resume, 1)
             .await
             .unwrap();
         r1.extend(chunk);
@@ -2224,7 +2469,7 @@ async fn scan_with_prefix_pattern_paginated(
     let mut r2: Vec<String> = Vec::new();
     loop {
         let (next, chunk) = is
-            .scan_stable("svc", "api", ns.meta.clone(), Some("key"), resume, 1)
+            .scan_stable("svc", "api", ns.meta.clone(), Some(KEY_PREFIX), resume, 1)
             .await
             .unwrap();
         r2.extend(chunk);
@@ -2257,7 +2502,7 @@ async fn exists_append_delete(
 ) {
     let is = is.get_indexed_storage().await;
 
-    let key1 = "key1";
+    let key1 = KEY1;
     let value1 = "value1".as_bytes().to_vec();
 
     let result1 = is.exists("svc", "api", ns.ns.clone(), key1).await.unwrap();
@@ -2281,7 +2526,7 @@ async fn delete_is_per_namespace(
 ) {
     let is = is.get_indexed_storage().await;
 
-    let key1 = "key1";
+    let key1 = KEY1;
     let value1 = "value1".as_bytes().to_vec();
 
     is.append(
@@ -2312,7 +2557,7 @@ async fn delete_non_existing(
 ) {
     let is = is.get_indexed_storage().await;
 
-    let key1 = "key1";
+    let key1 = KEY1;
 
     let result = is.delete("svc", "api", ns.ns.clone(), key1).await;
 
@@ -2329,7 +2574,7 @@ async fn first(
 ) {
     let is = is.get_indexed_storage().await;
 
-    let key1 = "key1";
+    let key1 = KEY1;
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
 
@@ -2380,7 +2625,7 @@ async fn last(
 ) {
     let is = is.get_indexed_storage().await;
 
-    let key1 = "key1";
+    let key1 = KEY1;
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
 
@@ -2431,7 +2676,7 @@ async fn closest_low(
 ) {
     let is = is.get_indexed_storage().await;
 
-    let key1 = "key1";
+    let key1 = KEY1;
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
 
@@ -2482,7 +2727,7 @@ async fn closest_match(
 ) {
     let is = is.get_indexed_storage().await;
 
-    let key1 = "key1";
+    let key1 = KEY1;
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
 
@@ -2533,7 +2778,7 @@ async fn closest_mid(
 ) {
     let is = is.get_indexed_storage().await;
 
-    let key1 = "key1";
+    let key1 = KEY1;
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
 
@@ -2584,7 +2829,7 @@ async fn closest_high(
 ) {
     let is = is.get_indexed_storage().await;
 
-    let key1 = "key1";
+    let key1 = KEY1;
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
 
@@ -2617,7 +2862,7 @@ async fn drop_prefix_no_match(
 ) {
     let is = is.get_indexed_storage().await;
 
-    let key1 = "key1";
+    let key1 = KEY1;
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
     let value3 = "value3".as_bytes().to_vec();
@@ -2680,7 +2925,7 @@ async fn drop_prefix_partial(
 ) {
     let is = is.get_indexed_storage().await;
 
-    let key1 = "key1";
+    let key1 = KEY1;
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
     let value3 = "value3".as_bytes().to_vec();
@@ -2743,7 +2988,7 @@ async fn drop_prefix_full(
 ) {
     let is = is.get_indexed_storage().await;
 
-    let key1 = "key1";
+    let key1 = KEY1;
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
     let value3 = "value3".as_bytes().to_vec();
@@ -2827,7 +3072,7 @@ async fn append_with_the_recorded_epoch_is_accepted(
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
-    let key = "fence-match";
+    let key = KEY1;
 
     is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
         .await
@@ -2862,7 +3107,7 @@ async fn a_stale_epoch_append_is_refused_and_writes_nothing(
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
-    let key = "fence-stale";
+    let key = KEY1;
 
     is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
         .await
@@ -2899,7 +3144,7 @@ async fn an_owner_re_opens_at_the_epoch_it_holds(
     // One process re-opening an oplog it already holds, at the epoch it already holds, which
     // happens on every cache eviction.
     let is = is.get_indexed_storage().await;
-    let key = "fence-reopen";
+    let key = KEY1;
 
     is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
         .await
@@ -2930,7 +3175,7 @@ async fn a_higher_epoch_takes_the_oplog_over(
     // A new owner at a higher epoch takes the oplog over, at which point the old owner is the one
     // being refused.
     let (owner, newcomer) = is.get_two_writers().await;
-    let key = "fence-re-mint";
+    let key = KEY1;
 
     owner
         .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
@@ -2980,7 +3225,7 @@ async fn an_append_ahead_of_the_recorded_epoch_is_refused(
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
-    let key = "fence-ahead";
+    let key = KEY1;
 
     is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
         .await
@@ -3036,7 +3281,7 @@ async fn an_append_without_a_recorded_epoch_is_refused(
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
-    let key = "fence-absent";
+    let key = KEY1;
 
     // No upsert. Epoch 0 is a perfectly valid epoch, so this also pins that an absent row is not
     // silently treated as zero.
@@ -3066,7 +3311,7 @@ async fn an_unfenced_append_ignores_the_recorded_epoch(
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
-    let key = "fence-none";
+    let key = KEY1;
 
     is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(9))
         .await
@@ -3099,7 +3344,7 @@ async fn the_recorded_epoch_only_ever_climbs(
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
-    let key = "fence-monotonic";
+    let key = KEY1;
 
     // Rising and repeated epochs are accepted ...
     is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
@@ -3157,7 +3402,7 @@ async fn deleting_the_recorded_epoch_fences_later_writes(
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
-    let key = "fence-deleted";
+    let key = KEY1;
 
     is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(3))
         .await
@@ -3194,7 +3439,7 @@ async fn a_deleted_record_does_not_remember_its_epoch(
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
-    let key = "fence-forgotten";
+    let key = KEY1;
 
     is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(9))
         .await
@@ -3251,7 +3496,7 @@ async fn the_recorded_writer_deletes_the_key_and_its_record(
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
-    let key = "fence-delete-owner";
+    let key = KEY1;
 
     is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
         .await
@@ -3286,7 +3531,7 @@ async fn a_delete_by_a_writer_that_lost_the_key_deletes_nothing(
     // A deletion that outlived its writer's hold on the key: the new holder took it at a higher
     // epoch and wrote to it. The stale delete must leave both the record and the entries alone.
     let (stale, owner) = is.get_two_writers().await;
-    let key = "fence-delete-stale";
+    let key = KEY1;
 
     stale
         .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
@@ -3332,7 +3577,7 @@ async fn a_delete_asserting_an_epoch_on_a_key_without_a_record_deletes_nothing(
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
-    let key = "fence-delete-unrecorded";
+    let key = KEY1;
 
     append_fenced(&is, &ns.ns, key, &[1], None).await.unwrap();
 
@@ -3358,7 +3603,7 @@ async fn a_delete_asserting_an_epoch_on_a_key_that_is_already_gone_is_accepted(
     // Neither a record nor entries: nothing is left for a writer that lost the key to destroy, so
     // a deletion retried after its own earlier attempt removed the key can finish.
     let is = is.get_indexed_storage().await;
-    let key = "fence-delete-gone";
+    let key = KEY1;
 
     is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(3))
         .await
@@ -3372,15 +3617,9 @@ async fn a_delete_asserting_an_epoch_on_a_key_that_is_already_gone_is_accepted(
     is.delete_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(3)))
         .await
         .expect("a repeated delete of a key that is already gone is accepted");
-    is.delete_with_epoch(
-        "svc",
-        "api",
-        ns.ns.clone(),
-        "fence-delete-never-written",
-        Some(ShardEpoch(3)),
-    )
-    .await
-    .expect("a delete of a key that was never written is accepted");
+    is.delete_with_epoch("svc", "api", ns.ns.clone(), KEY2, Some(ShardEpoch(3)))
+        .await
+        .expect("a delete of a key that was never written is accepted");
 
     assert!(!is.exists("svc", "api", ns.ns.clone(), key).await.unwrap());
     // Accepting the delete recorded nothing: the old epoch still writes nothing back.
@@ -3399,7 +3638,7 @@ async fn an_unfenced_delete_removes_the_key_and_its_record(
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
     let (first, second) = is.get_two_writers().await;
-    let key = "fence-delete-unfenced";
+    let key = KEY1;
 
     first
         .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
@@ -3438,7 +3677,7 @@ async fn an_empty_batch_is_accepted_whatever_epoch_it_asserts(
 ) {
     // Nothing to write is nothing to fence: every backend agrees, stale epoch or not.
     let is = is.get_indexed_storage().await;
-    let key = "fence-empty-batch";
+    let key = KEY1;
 
     is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
         .await
@@ -3466,7 +3705,7 @@ async fn a_repeated_id_in_a_staged_batch_is_a_conflict(
         owned_agent_id: crate::fresh_owned_agent_id(),
         agent_mode: AgentMode::Durable,
     };
-    let key = "staged-conflict";
+    let key = KEY1;
 
     append_fenced(&is, &staged, key, &[1, 2], None)
         .await
@@ -3495,7 +3734,7 @@ async fn a_held_index_in_the_blob_manifest_is_a_conflict(
         agent_mode: AgentMode::Durable,
         level: BLOB_MANIFEST_LEVEL,
     };
-    let key = format!("{}-manifest-conflict", Uuid::new_v4());
+    let key = crate::fresh_owned_agent_id().storage_key();
 
     is.set_key_epoch("svc", "api", manifest.clone(), &key, ShardEpoch(6))
         .await
@@ -3545,7 +3784,7 @@ async fn a_failed_batch_leaves_no_partial_write(
     // What makes "the fence is checked once per batch" true rather than "once per entry": a
     // backend that loops single appends would leave the entries before the failure behind.
     let is = is.get_indexed_storage().await;
-    let key = "batch-atomicity";
+    let key = KEY1;
 
     is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(1))
         .await
@@ -3618,7 +3857,7 @@ async fn a_trim_with_the_recorded_epoch_removes_the_prefix(
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
-    let key = "trim-match";
+    let key = KEY1;
 
     is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
         .await
@@ -3647,7 +3886,7 @@ async fn a_stale_epoch_trim_is_refused_and_removes_nothing(
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
-    let key = "trim-stale";
+    let key = KEY1;
 
     is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
         .await
@@ -3678,7 +3917,7 @@ async fn a_trim_asserting_an_epoch_on_a_key_without_a_record_is_refused(
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
-    let key = "trim-no-record";
+    let key = KEY1;
 
     for (id, value) in [(1, b"a"), (2, b"b"), (3, b"c")] {
         is.append(
@@ -3714,7 +3953,7 @@ async fn an_unfenced_trim_ignores_the_recorded_epoch(
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
-    let key = "trim-unfenced";
+    let key = KEY1;
 
     is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
         .await
@@ -3739,7 +3978,7 @@ async fn deleting_an_emptied_key_keeps_its_recorded_epoch(
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
-    let key = "delete-empty-owner";
+    let key = KEY1;
 
     is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
         .await
@@ -3792,7 +4031,7 @@ async fn a_key_that_still_holds_entries_is_not_deleted(
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
-    let key = "delete-empty-non-empty";
+    let key = KEY1;
 
     is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
         .await
@@ -3819,7 +4058,7 @@ async fn a_stale_epoch_delete_of_an_emptied_key_deletes_nothing(
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
-    let key = "delete-empty-stale";
+    let key = KEY1;
 
     is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
         .await
@@ -3886,7 +4125,7 @@ async fn the_blob_manifest_is_fenced_apart_from_the_compressed_level(
         agent_mode: AgentMode::Durable,
         level: BLOB_MANIFEST_LEVEL,
     };
-    let key = format!("{}-manifest", Uuid::new_v4());
+    let key = crate::fresh_owned_agent_id().storage_key();
 
     // The compressed level's record does not stand in for the manifest's.
     is.set_key_epoch("svc", "api", compressed.clone(), &key, ShardEpoch(9))
