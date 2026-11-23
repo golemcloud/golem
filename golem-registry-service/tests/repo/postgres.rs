@@ -1345,6 +1345,11 @@ async fn test_plan_operating_defaults_are_validated(#[dimension(postgres_variant
 }
 
 #[test]
+async fn test_plan_bounds_round_trip_above_i64_max(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_plan_bounds_round_trip_above_i64_max(deps).await;
+}
+
+#[test]
 async fn test_plan_edit_scales_with_members(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::plan_storage::test_plan_edit_scales_with_members(deps).await;
 }
@@ -1364,6 +1369,16 @@ async fn test_plan_guard_scope_timeout_and_cancellation(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
     crate::repo::plan_storage::test_plan_guard_scope_timeout_and_cancellation(deps).await;
+}
+
+#[test]
+async fn test_tree_writes_retry_guard_timeouts(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_tree_writes_retry_guard_timeouts(deps).await;
+}
+
+#[test]
+async fn test_tree_purge_rediscovers_plan_links(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_tree_purge_rediscovers_plan_links(deps).await;
 }
 
 #[test]

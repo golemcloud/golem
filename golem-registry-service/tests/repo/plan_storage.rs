@@ -24,7 +24,10 @@ use golem_common::model::plan_dimension::{
 use golem_registry_service::repo::account_guard::{
     DbGuards, GuardClass, GuardMode, GuardSet, guard_key,
 };
-use golem_registry_service::repo::model::account_tree::{AccountLifecycleState, AccountNodeRecord};
+use golem_registry_service::repo::account_tree::{AccountTreeRepo, DbAccountTreeRepo};
+use golem_registry_service::repo::model::account_tree::{
+    AccountLifecycleState, AccountNodeChange, AccountNodeRecord, AccountTreeRepoError,
+};
 use golem_registry_service::repo::model::plan_storage::{PlanPolicy, PlanStorageRepoError};
 use golem_registry_service::repo::plan_storage::{DbPlanStorageRepo, PlanStorageRepo};
 use golem_service_base::db::postgres::PostgresPool;
@@ -663,6 +666,44 @@ pub async fn test_plan_operating_defaults_are_validated(deps: &Deps) {
     }
 }
 
+/// Values above `i64::MAX` keep every digit through create, edit and history reads.
+pub async fn test_plan_bounds_round_trip_above_i64_max(deps: &Deps) {
+    use DeclaredMax::Finite;
+    let repo = &deps.plan_storage_repo;
+    let root = root(deps).await;
+    let above = i64::MAX as u64 + 2;
+    let first = with_default(
+        DIMENSION,
+        Some(above),
+        Some(Finite(above + 2)),
+        Finite(above + 1),
+    );
+    let second = with_default(
+        DIMENSION,
+        Some(above + 3),
+        Some(Finite(u64::MAX)),
+        Finite(u64::MAX - 1),
+    );
+    let plan_id = Uuid::new_v4();
+    let plan_name = name();
+    repo.create_definition(
+        root.account_id,
+        plan_id,
+        plan_name.clone(),
+        first.clone(),
+        actor(),
+    )
+    .await
+    .unwrap();
+    assert!(repo.get_definition(plan_id).await.unwrap().unwrap().policy == first);
+    repo.edit_definition(plan_id, 0, plan_name, second.clone(), actor())
+        .await
+        .unwrap();
+    assert!(repo.get_definition(plan_id).await.unwrap().unwrap().policy == second);
+    assert!(repo.get_definition_revision(plan_id, 0).await.unwrap() == Some(first));
+    assert!(repo.get_definition_revision(plan_id, 1).await.unwrap() == Some(second));
+}
+
 pub async fn test_plan_edit_scales_with_members(deps: &Deps) {
     let repo = &deps.plan_storage_repo;
     let root = root(deps).await;
@@ -693,6 +734,31 @@ pub async fn test_tree_purge_releases_plan_records(deps: &Deps) {
     let repo = &deps.plan_storage_repo;
     let setup = branch(deps, range(None, 100), range(None, 20)).await;
     let owned = define(deps, setup.b.account_id, range(None, 5)).await;
+    // `a` owns the definition its child `b` is assigned to; the purge refuses the non-leaf node
+    // and changes nothing.
+    let a = update(deps, &setup.a, None, AccountLifecycleState::DeletionGrace)
+        .await
+        .unwrap();
+    let_assert!(
+        Err(AccountTreeRepoError::HasChildren) = deps
+            .account_tree_repo
+            .purge(a.account_id, a.current_revision as u64, actor())
+            .await
+    );
+    assert!(
+        repo.get_assignment(setup.b.account_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .plan_id
+            == setup.child_plan
+    );
+    assert!(
+        repo.get_definition(setup.child_plan)
+            .await
+            .unwrap()
+            .is_some()
+    );
     let b = update(deps, &setup.b, None, AccountLifecycleState::DeletionGrace)
         .await
         .unwrap();
@@ -870,6 +936,131 @@ pub async fn test_plan_guard_scope_timeout_and_cancellation(deps: &Deps) {
         .edit_definition(plan_id, 1, plan_name, range(None, 60), actor())
         .await
         .unwrap();
+}
+
+fn short_tree_repo(
+    deps: &Deps,
+    timeout: Duration,
+    attempts: usize,
+) -> DbAccountTreeRepo<PostgresPool> {
+    DbAccountTreeRepo::with_limits(postgres(deps).clone(), timeout, attempts)
+}
+
+/// An account-tree write that times out on a held guard retries with the revision the caller
+/// named, and succeeds once the guard is released; it fails with `Contention` only after its
+/// attempt limit, without effects.
+pub async fn test_tree_writes_retry_guard_timeouts(deps: &Deps) {
+    let root = root(deps).await;
+    let node = child(deps, root.account_id, &unique_segment(20)).await;
+    let change = |own_state| AccountNodeChange {
+        segment: None,
+        display_name: None,
+        own_state,
+    };
+
+    let mut held = GuardSet::new();
+    held.add(GuardClass::Account, node.account_id, GuardMode::Exclusive);
+    let tx = hold_guard(deps, held.clone()).await;
+    let exhausted = short_tree_repo(deps, Duration::from_millis(200), 2);
+    let_assert!(
+        Err(AccountTreeRepoError::Contention) = exhausted
+            .update(
+                node.account_id,
+                0,
+                change(AccountLifecycleState::DeletionGrace),
+                actor()
+            )
+            .await
+    );
+    let retrying = short_tree_repo(deps, Duration::from_millis(200), 50);
+    let write = tokio::spawn(async move {
+        retrying
+            .update(
+                node.account_id,
+                0,
+                change(AccountLifecycleState::DeletionGrace),
+                actor(),
+            )
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(!write.is_finished());
+    tx.rollback().await.unwrap();
+    let_assert!(Ok(updated) = write.await.unwrap());
+    updated.signal_new_events_available_for_test(deps);
+
+    let current = deps
+        .account_tree_repo
+        .get(node.account_id)
+        .await
+        .unwrap()
+        .unwrap();
+    // Only the retried write committed; the exhausted one left the revision at 0.
+    assert!(current.current_revision == 1);
+    assert!(
+        deps.account_tree_repo
+            .get_history(node.account_id)
+            .await
+            .unwrap()
+            .len()
+            == 2
+    );
+}
+
+/// A definition created for the account while a purge waits for its guards changes the plan
+/// links but not the node revision; the purge rediscovers the links and removes the new
+/// definition with the node.
+pub async fn test_tree_purge_rediscovers_plan_links(deps: &Deps) {
+    let root = root(deps).await;
+    let node = child(deps, root.account_id, &unique_segment(20)).await;
+    let node = update(deps, &node, None, AccountLifecycleState::DeletionGrace)
+        .await
+        .unwrap();
+
+    let mut held = GuardSet::new();
+    held.add(GuardClass::Account, node.account_id, GuardMode::Exclusive);
+    let mut tx = hold_guard(deps, held).await;
+    let purger = short_tree_repo(deps, Duration::from_secs(10), 8);
+    let purge = tokio::spawn({
+        let revision = node.current_revision as u64;
+        async move { purger.purge(node.account_id, revision, actor()).await }
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!purge.is_finished());
+
+    let late_plan = Uuid::new_v4();
+    tx.execute(
+        sqlx::query(
+            "INSERT INTO account_plans \
+             (plan_id, owner_account_id, name, selectable, current_revision, created_at, \
+              updated_at, modified_by) \
+             VALUES ($1, $2, $3, true, 0, now(), now(), $4)",
+        )
+        .bind(late_plan)
+        .bind(node.account_id)
+        .bind(name())
+        .bind(Uuid::new_v4()),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let_assert!(Ok(purged) = purge.await.unwrap());
+    purged.signal_new_events_available_for_test(deps);
+    assert!(
+        deps.account_tree_repo
+            .get(node.account_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        deps.plan_storage_repo
+            .get_definition(late_plan)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 /// Colliding keys merge before acquisition, so one transaction never waits for itself, and

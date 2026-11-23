@@ -722,6 +722,11 @@ async fn test_plan_operating_defaults_are_validated(deps: &Deps) {
 }
 
 #[test]
+async fn test_plan_bounds_round_trip_above_i64_max(deps: &Deps) {
+    crate::repo::plan_storage::test_plan_bounds_round_trip_above_i64_max(deps).await;
+}
+
+#[test]
 async fn test_plan_edit_scales_with_members(deps: &Deps) {
     crate::repo::plan_storage::test_plan_edit_scales_with_members(deps).await;
 }

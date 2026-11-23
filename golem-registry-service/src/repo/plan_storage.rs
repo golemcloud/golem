@@ -370,7 +370,7 @@ impl From<PlanStorageRepoError> for AttemptError {
     }
 }
 
-async fn backoff(attempt: usize) {
+pub(crate) async fn backoff(attempt: usize) {
     tokio::time::sleep(Duration::from_millis(5 * attempt as u64)).await;
 }
 

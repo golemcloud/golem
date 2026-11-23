@@ -50,16 +50,17 @@ CREATE TABLE account_plan_revisions
 );
 
 -- The typed declaration of one dimension in one revision. A dimension without a row is not
--- declared by the revision.
+-- declared by the revision. The values are u64 stored as TEXT: NUMERIC affinity would convert a
+-- value above i64::MAX to REAL and lose precision.
 CREATE TABLE account_plan_revision_bounds
 (
     plan_id           UUID     NOT NULL,
     revision          BIGINT   NOT NULL,
     dimension         SMALLINT NOT NULL,
-    min_value         NUMERIC,
-    max_value         NUMERIC,
+    min_value         TEXT,
+    max_value         TEXT,
     max_unlimited     BOOLEAN  NOT NULL,
-    default_value     NUMERIC,
+    default_value     TEXT,
     default_unlimited BOOLEAN  NOT NULL,
     user_configurable BOOLEAN,
 
