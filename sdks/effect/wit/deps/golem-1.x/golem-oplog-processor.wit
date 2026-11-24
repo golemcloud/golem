@@ -23,5 +23,6 @@ interface oplog-processor {
     /// Retries of that batch retain the same metadata.
     /// The `first-entry-index` parameter contains the index of the first entry in the list of `entries`.
     /// The `entries` parameter always contains at least one element.
+    /// The entries hold no user's verified claims and no processor's delivery state; the agent's stored oplog keeps both.
     process: async func(account-info: account-info, config: list<tuple<string, string>>, agent-id: agent-id, metadata: agent-metadata, first-entry-index: oplog-index, entries: list<oplog-entry>) -> result<_, string>;
 }

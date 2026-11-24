@@ -1274,7 +1274,8 @@ declare module 'golem:api/oplog@1.5.0' {
     updateAttemptIndex?: OplogIndex;
     /**
      * Who requested the update, in the oplog's binary encoding, as an `oplog-payload` holds the
-     * caller of an invocation. `enrich-oplog-entries` gives it as a `public-caller`.
+     * caller of an invocation, without a user's verified claims. `enrich-oplog-entries` gives
+     * it as a `public-caller`.
      */
     requester: Uint8Array;
   };
