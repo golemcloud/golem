@@ -160,7 +160,9 @@ pub struct AgentSecretAuthExtRevisionRecord {
 
     pub environment_name: String,
     pub application_name: String,
+    pub application_id: Uuid,
     pub owner_account_email: String,
+    pub owner_account_id: Uuid,
 }
 
 impl TryFrom<AgentSecretExtRevisionRecord> for AgentSecret {

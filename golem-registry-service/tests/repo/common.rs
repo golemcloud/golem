@@ -3006,6 +3006,9 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 plan_service,
                 golem_common::model::plan::PlanId(deps.test_plan_id()),
                 notifier.clone(),
+                golem_registry_service::services::decision::Decisions::new(
+                    "https://golem.test".parse().unwrap(),
+                ),
             ));
             let account_usage_service = Arc::new(AccountUsageService::new(
                 Arc::new(DbAccountUsageRepo::new(pool.clone())),
@@ -3020,6 +3023,9 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 account_service.clone(),
                 account_usage_service.clone(),
                 notifier.clone(),
+                golem_registry_service::services::decision::Decisions::new(
+                    "https://golem.test".parse().unwrap(),
+                ),
             ));
             let environment_service = EnvironmentService::new(
                 Arc::new(DbEnvironmentRepo::new(pool.clone())),
@@ -3028,6 +3034,9 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 Arc::new(DbPluginRepo::new(pool.clone())),
                 AccountId::SYSTEM,
                 notifier.clone(),
+                golem_registry_service::services::decision::Decisions::new(
+                    "https://golem.test".parse().unwrap(),
+                ),
             );
             let environment_service = Arc::new(environment_service);
             let permission_share_service = Arc::new(PermissionShareService::new(
@@ -3058,6 +3067,9 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 component_service.clone(),
                 environment_service.clone(),
                 notifier,
+                golem_registry_service::services::decision::Decisions::new(
+                    "https://golem.test".parse().unwrap(),
+                ),
             );
 
             EnvironmentServiceDeps {
@@ -3074,6 +3086,9 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 plan_service,
                 golem_common::model::plan::PlanId(deps.test_plan_id()),
                 notifier.clone(),
+                golem_registry_service::services::decision::Decisions::new(
+                    "https://golem.test".parse().unwrap(),
+                ),
             ));
             let account_usage_service = Arc::new(AccountUsageService::new(
                 Arc::new(DbAccountUsageRepo::new(pool.clone())),
@@ -3088,6 +3103,9 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 account_service.clone(),
                 account_usage_service.clone(),
                 notifier.clone(),
+                golem_registry_service::services::decision::Decisions::new(
+                    "https://golem.test".parse().unwrap(),
+                ),
             ));
             let environment_service = EnvironmentService::new(
                 Arc::new(DbEnvironmentRepo::new(pool.clone())),
@@ -3096,6 +3114,9 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 Arc::new(DbPluginRepo::new(pool.clone())),
                 AccountId::SYSTEM,
                 notifier.clone(),
+                golem_registry_service::services::decision::Decisions::new(
+                    "https://golem.test".parse().unwrap(),
+                ),
             );
             let environment_service = Arc::new(environment_service);
             let permission_share_service = Arc::new(PermissionShareService::new(
@@ -3126,6 +3147,9 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 component_service.clone(),
                 environment_service.clone(),
                 notifier,
+                golem_registry_service::services::decision::Decisions::new(
+                    "https://golem.test".parse().unwrap(),
+                ),
             );
 
             EnvironmentServiceDeps {

@@ -388,7 +388,9 @@ impl AgentSecretRepo for DbAgentSecretRepo<PostgresPool> {
                     SELECT sec.environment_id, sec.path, sec.agent_secret_data, sec.created_at AS entity_created_at, secr.agent_secret_id, secr.revision_id, secr.agent_secret_revision_data, secr.created_at, secr.created_by, secr.deleted,
                         er.name AS environment_name,
                         ap.name AS application_name,
-                        a.email AS owner_account_email
+                        ap.application_id,
+                        a.email AS owner_account_email,
+                        a.account_id AS owner_account_id
                     FROM agent_secrets sec
                     JOIN environments e ON e.environment_id = sec.environment_id
                     JOIN environment_revisions er

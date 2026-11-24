@@ -121,6 +121,9 @@ impl Fixture {
                             16,
                             Arc::new(DbRegistryChangeRepo::new(pool.clone())),
                         )),
+                        crate::services::decision::Decisions::new(
+                            "https://golem.test".parse().unwrap(),
+                        ),
                     )),
                     Arc::new(DbEnvironmentRepo::new(pool.clone())),
                     Arc::new(InMemoryBlobStorage::new()),
