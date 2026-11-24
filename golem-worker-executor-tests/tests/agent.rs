@@ -1266,6 +1266,49 @@ async fn agent_self_rpc_is_not_allowed(
     Ok(())
 }
 
+/// Looks the invocation up until it has a recorded failure that contains `expected`, and returns
+/// that failure. A delayed schedule is not found before it starts.
+async fn await_recorded_failure(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    worker: &OwnedAgentId,
+    invocation_id: InvocationId,
+    expected: &str,
+) -> anyhow::Result<String> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let lookup = executor
+            .invoke_agent_session(InvocationStart {
+                target: Some(id_target(worker)),
+                component_id: Some(component.id.into()),
+                mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
+                idempotency_key: Some(IdempotencyKey::new(invocation_id.to_string()).into()),
+                component_owner_account_id: Some(component.account_id.into()),
+                environment_id: Some(component.environment_id.into()),
+                auth_ctx: Some(executor.auth_ctx().into()),
+                freshness_disposition:
+                    golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                        as i32,
+                caller: Some(callers::anonymous().into()),
+                ..Default::default()
+            })
+            .await;
+        let observed = match lookup {
+            Err(error) if format!("{error:#}").contains(expected) => {
+                return Ok(format!("{error:#}"));
+            }
+            other => format!("{other:?}"),
+        };
+        if tokio::time::Instant::now() > deadline {
+            anyhow::bail!("no recorded failure containing {expected:?}; last lookup: {observed}");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+/// A scheduled call that creates its agent is checked against the revision that the creation
+/// selects, even when it is delayed, so a call to a stream method creates nothing. A call to an
+/// existing agent is checked only when it executes.
 #[test]
 #[timeout("60s")]
 #[tracing::instrument]
@@ -1337,7 +1380,7 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
         assert!(
             error
                 .to_string()
-                .contains("require an attached Await invocation session"),
+                .contains("requires a streaming invocation"),
             "unexpected error: {error}"
         );
     }
@@ -1361,6 +1404,47 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
         blobs_before,
         "rejection must not upload an invocation or result payload"
     );
+
+    // An existing agent may change revision before the call runs, so the call is accepted and
+    // fails when it executes.
+    let existing_id = agent_key!("StreamingRpcTarget", "existing-schedule");
+    let existing_worker = executor
+        .start_agent(&component.id, existing_id.clone())
+        .await?;
+    let key = IdempotencyKey::fresh();
+    executor
+        .invoke_agent_session(InvocationStart {
+            target: Some(id_target(&existing_worker)),
+            component_id: Some(component.id.into()),
+            method_name: Some("produce".to_string()),
+            allow_streams: true,
+            input: Some(input.clone()),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
+            idempotency_key: Some(key.clone().into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            caller: Some(callers::anonymous().into()),
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
+            request_key: Some(
+                InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key))
+                    .into(),
+            ),
+            ..Default::default()
+        })
+        .await?;
+    let invocation_id =
+        external_invocation_id(&executor, &existing_worker, &key, "produce").await?;
+    await_recorded_failure(
+        &executor,
+        &component,
+        &existing_worker,
+        invocation_id,
+        "requires a streaming invocation",
+    )
+    .await?;
     Ok(())
 }
 
@@ -1390,7 +1474,8 @@ async fn invocation_classification_uses_the_existing_workers_component_revision(
         .await?;
 
     let (_, input) = data_value!(vec![1_u32, 2, 3]).into_parts();
-    let error = executor
+    let key = IdempotencyKey::fresh();
+    executor
         .invoke_agent_session(InvocationStart {
             target: Some(id_target(&streaming_worker_id)),
             constructor: None,
@@ -1401,7 +1486,7 @@ async fn invocation_classification_uses_the_existing_workers_component_revision(
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
             schedule_at: None,
-            idempotency_key: Some(IdempotencyKey::fresh().into()),
+            idempotency_key: Some(key.clone().into()),
             component_owner_account_id: Some(streaming_component.account_id.into()),
             environment_id: Some(streaming_component.environment_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
@@ -1417,16 +1502,24 @@ async fn invocation_classification_uses_the_existing_workers_component_revision(
             scope_card: None,
             origin_invocation: None,
             external_tool: None,
-            request_key: Some(InvocationRequestKey::external(None, None).into()),
+            request_key: Some(
+                InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key))
+                    .into(),
+            ),
         })
-        .await
-        .expect_err("the old streaming schema must still reject scheduling");
-    assert!(
-        error
-            .to_string()
-            .contains("require an attached Await invocation session"),
-        "unexpected error: {error}"
-    );
+        .await?;
+    // The old revision declares `produce` as a stream method, so its scheduled execution fails
+    // even though the current revision has no such stream.
+    let invocation_id =
+        external_invocation_id(&executor, &streaming_worker_id, &key, "produce").await?;
+    await_recorded_failure(
+        &executor,
+        &streaming_component,
+        &streaming_worker_id,
+        invocation_id,
+        "requires a streaming invocation",
+    )
+    .await?;
     let streaming_metadata = executor.get_worker_metadata(&streaming_worker_id).await?;
     assert_eq!(
         streaming_metadata.component_revision,

@@ -963,7 +963,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerExecutorError::invalid_request("Invocation has no idempotency key")
         })
     }
-    pub(crate) async fn lookup_matching_invocation(
+    pub(in crate::worker) async fn lookup_matching_invocation(
         &self,
         invocation: &AgentInvocation,
     ) -> Result<LookupResult, WorkerExecutorError> {

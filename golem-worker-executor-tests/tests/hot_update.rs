@@ -2746,7 +2746,7 @@ async fn queued_methods_validate_against_the_selected_update_revision(
 }
 
 /// A repeated trigger with an accepted key is answered by the retained invocation, even after an
-/// update removed its method: only a new admission validates against the selected revision.
+/// update removed its method.
 #[test]
 #[timeout("120s")]
 async fn repeated_trigger_after_an_update_keeps_the_retained_invocation(
@@ -2838,19 +2838,6 @@ async fn repeated_trigger_after_an_update_keeps_the_retained_invocation(
         "the repeated trigger must not execute the method again"
     );
 
-    // A new key still validates against the selected revision, which removed the method.
-    let error = executor
-        .invoke_agent_session(InvocationStart {
-            idempotency_key: Some(IdempotencyKey::fresh().into()),
-            request_key: Some(InvocationRequestKey::external(None, None).into()),
-            ..trigger("revision_one_only")?
-        })
-        .await
-        .expect_err("a new trigger of a removed method must be rejected");
-    assert!(
-        error.to_string().contains("revision_one_only"),
-        "unexpected error: {error}"
-    );
     http_server.abort();
     Ok(())
 }

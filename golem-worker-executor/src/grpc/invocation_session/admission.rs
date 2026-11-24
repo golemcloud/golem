@@ -518,7 +518,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule => {
                 // A caller that names an incarnation is answered for that incarnation alone, so
-                // it is pinned first, and its revision and method are validated against it.
+                // it is pinned first. The method and its input are validated only when the
+                // invocation executes, against the revision that the agent selects then.
                 let pinned = match (expected_fingerprint, schedule_at) {
                     // A delayed schedule for a named incarnation is not refused because that
                     // incarnation failed, the same as a guest's local scheduled call.
@@ -544,83 +545,27 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                     (None, _) => None,
                 };
-                // An existing agent's component comes from its Create entry and executes the
-                // revision of its latest pending update; the request's component and
-                // constructor are used only when it creates the agent.
-                let existing_metadata = if let Some((worker, _)) = &pinned {
-                    Some(
-                        worker
-                            .deleted_incarnation_as_not_found(
-                                expected_fingerprint,
-                                worker.try_get_latest_worker_metadata().await,
-                            )
-                            .await?,
-                    )
-                } else if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
-                    None
-                } else {
-                    Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await?
-                };
-                let component_revision = existing_metadata.as_ref().map(|metadata| {
-                    let status = &metadata.last_known_status;
-                    status
-                        .pending_invocations
-                        .iter()
-                        .rev()
-                        .find_map(|invocation| invocation.manual_update_target_revision)
-                        .or_else(|| {
-                            status
-                                .pending_updates
-                                .back()
-                                .map(|update| update.target_revision)
-                        })
-                        .unwrap_or(status.component_revision)
-                });
-                let new_owner = resolved.new_owner.as_ref();
-                let component_id = match (&existing_metadata, new_owner) {
-                    (Some(metadata), _) => metadata.component_id,
-                    (None, Some(owner)) => owner.component_id,
-                    (None, None) => {
-                        return Err(WorkerExecutorError::worker_not_found(
-                            owned_agent_id.agent_id(),
-                        ));
-                    }
-                };
-                let component = self
-                    .component_service()
-                    .get_metadata(component_id, component_revision)
-                    .await?;
-                let parsed_agent_id = match (&existing_metadata, new_owner) {
-                    (Some(metadata), _) => metadata
-                        .parse_agent_id(&component.metadata)
-                        .map_err(WorkerExecutorError::invalid_request)?,
-                    (None, Some(owner)) => owner.constructor.clone().ok_or_else(|| {
-                        WorkerExecutorError::invalid_request("the target has no agent type")
-                    })?,
-                    (None, None) => unreachable!("a missing agent without an owner is rejected"),
-                };
-                let input = super::capture_method_input(request)?;
-                let validate = || {
-                    crate::worker::invocation::validate_detached_invocation(
-                        &method_name,
-                        &input,
-                        &component.metadata,
-                        &golem_common::model::agent::ResolvedOwnerContext::Agent(Box::new(
-                            parsed_agent_id.clone(),
-                        )),
-                    )
-                };
-                // A missing agent is validated before it is created. An existing agent can hold
-                // the key already, and then its retained invocation answers the request, even
-                // when the selected revision no longer accepts it.
-                if existing_metadata.is_none() {
-                    validate()?;
+                // A pinned incarnation that is being deleted refuses the request before its
+                // scope is bound, as a deletion can already have stopped its state actor.
+                if let Some((worker, _)) = &pinned {
+                    worker
+                        .deleted_incarnation_as_not_found(
+                            expected_fingerprint,
+                            worker.try_get_latest_worker_metadata().await,
+                        )
+                        .await?;
                 }
                 let (worker, _response_lease) = match pinned {
                     Some(pinned) => pinned,
                     None => {
+                        // A scheduled call never attaches streams, so the revision that a
+                        // missing agent is created with validates it without them.
+                        let detached = golem_api_grpc::proto::golem::worker::InvocationStart {
+                            allow_streams: false,
+                            ..request.clone()
+                        };
                         self.get_or_create_pending_with_freshness(
-                            request,
+                            &detached,
                             &resolved,
                             freshness_disposition,
                             None,
@@ -641,19 +586,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .id();
                 let invocation = AgentInvocation::AgentMethod {
                     idempotency_key: ik,
-                    method_name: method_name.clone(),
+                    method_name,
                     allow_streams: false,
-                    input: input.clone(),
+                    input: super::capture_method_input(request)?,
                     invocation_context,
                     caller,
                     scope_card,
                 };
-                if existing_metadata.is_some()
-                    && worker.lookup_matching_invocation(&invocation).await?
-                        == crate::model::LookupResult::New
-                {
-                    validate()?;
-                }
 
                 match schedule_at {
                     Some(scheduled_time) => {
@@ -666,7 +605,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             accepted,
                             &final_agent_id,
                             &ik,
-                            Some(component.revision),
+                            None,
                         )?;
                         Ok(AgentInvocationOutput {
                             result: AgentInvocationResult::AgentInitialization,
@@ -690,7 +629,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             accepted,
                             &final_agent_id,
                             &ik,
-                            Some(component.revision),
+                            None,
                         )?;
                         match result {
                             crate::worker::ResultOrSubscription::Finished(Err(err)) => {
