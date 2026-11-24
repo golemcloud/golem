@@ -5694,6 +5694,179 @@ async fn start_oplog_enrichment_grant_agent(
     Ok((component, agent, worker))
 }
 
+#[test]
+#[timeout("2m")]
+async fn guest_oplog_search_stops_at_the_granted_window(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("GolemHostApi")
+        .try_update_agent_provision_config("GolemHostApi", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .push(parse_polymorphic_permission(
+                    "oplog(?env/*/*) @ * : read : start=1:end=100",
+                )?);
+            Ok::<_, golem_common::model::card::CardParseError>(())
+        })?
+        .store()
+        .await?;
+    let agent = agent_key!("GolemHostApi", "oplog-search-window");
+    configure_scope_card_root(&authority, &component, &agent)?;
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    let target_agent = agent_key!("GolemHostApi", "oplog-search-target");
+    configure_scope_card_root(&authority, &component, &target_agent)?;
+    let target = executor
+        .start_agent(&component.id, target_agent.clone())
+        .await?;
+
+    let tip = executor.get_oplog_last_index(&target).await?;
+    assert!(tip < 100);
+    for index in (tip + 1)..=101 {
+        let entry = OplogEntry::Log {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            parent_start_index: None,
+            level: golem_common::model::oplog::LogLevel::Stderr,
+            context: String::new(),
+            message: match index {
+                100 => "windowmarker",
+                101 => "windowmarker nextmarker",
+                _ => "filler",
+            }
+            .to_string(),
+            trace_context: None,
+        };
+        let added = executor
+            .add_and_commit_oplog_entry(&target.agent_id(), entry)
+            .await?;
+        assert_eq!(added.as_u64(), index);
+    }
+
+    // Seeded Log entries mark the target Running. Complete an invocation so restart leaves it
+    // idle; with no kept search, this method returns without reading the target's oplog.
+    let unopened = executor
+        .invoke_and_await_agent(
+            &component,
+            &target_agent,
+            "continue_kept_oplog_search",
+            data_value!(1u64),
+        )
+        .await?
+        .into_typed::<Result<Vec<u64>, String>>()?;
+    assert_eq!(
+        unopened,
+        Err("open_kept_oplog_search must be called first".to_string())
+    );
+    executor
+        .wait_for_status(&target, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+
+    // Use fresh read counters so the old executor's asynchronous status flush (which also
+    // reads the oplog to catch up its invocation-result index) cannot count as a search read.
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+
+    let reads = executor.oplog_service_call_count(&target.agent_id(), "service_read_exact");
+    let found = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "search_oplog_result",
+            data_value!(target.agent_id(), "windowmarker"),
+        )
+        .await?
+        .into_typed::<Result<Option<Vec<u64>>, String>>()?
+        .map_err(anyhow::Error::msg)?;
+    assert_eq!(found, Some(vec![100]));
+    assert_eq!(
+        executor.oplog_service_call_count(&target.agent_id(), "service_read_exact"),
+        reads + 1
+    );
+
+    // Lose the End after scanning an empty window, so the executor must scan again on repair.
+    let (entered, release) = executor.gate_next_oplog_function_end(
+        &worker.agent_id(),
+        HostFunctionName::GolemApiSearchOplogNext,
+        true,
+    );
+    let invocation = executor.invoke_and_await_agent(
+        &component,
+        &agent,
+        "search_oplog_result",
+        data_value!(target.agent_id(), "nextmarker"),
+    );
+    let lose_end = async {
+        entered.await.expect("the search must reach its End");
+        release.send(()).expect("the End must still be waiting");
+    };
+    let (empty, ()) = tokio::join!(invocation, lose_end);
+    assert_eq!(
+        empty?.into_typed::<Result<Option<Vec<u64>>, String>>()?,
+        Ok(Some(vec![]))
+    );
+    assert_eq!(
+        executor.oplog_service_call_count(&target.agent_id(), "service_read_exact"),
+        reads + 3
+    );
+
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let searches = oplog
+        .iter()
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "golem::api::search-oplog::get-next"))
+        .map(|entry| entry.oplog_index)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        searches.len(),
+        2,
+        "repair must reuse the second search's Start"
+    );
+    let repaired_ends = oplog.iter().filter(|entry| match &entry.entry {
+        PublicOplogEntry::End(end) => end.start_index == searches[1],
+        _ => false,
+    });
+    assert_eq!(repaired_ends.count(), 1);
+
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority).await?;
+    let denied = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "continue_kept_oplog_search",
+            data_value!(1u64),
+        )
+        .await?
+        .into_typed::<Result<Vec<u64>, String>>()?;
+    assert_eq!(denied, Err("OplogReadError::PermissionDenied".to_string()));
+    assert_eq!(
+        executor.oplog_service_call_count(&target.agent_id(), "service_read_exact"),
+        0
+    );
+
+    let new_search = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "search_oplog_result",
+            data_value!(target.agent_id(), "windowmarker"),
+        )
+        .await?
+        .into_typed::<Result<Option<Vec<u64>>, String>>()?;
+    assert_eq!(new_search, Ok(Some(vec![100])));
+    Ok(())
+}
+
 /// `enrich-oplog-entries` reads the recorded `Start` at the divergence index of a raw failed
 /// update, which the guest supplies, so the oplog grant must cover that index as well as the
 /// index of the entry. A grant for the entry's index alone refuses a forged divergence outside it.
@@ -5985,18 +6158,26 @@ async fn every_protected_rdbms_agent_rpc_tool_and_oplog_import_enforces_permissi
         assert!(denied.is_err(), "agent operation {method} must be denied");
     }
 
-    for method in ["read_oplog_result", "search_oplog_result"] {
-        let params = if method == "read_oplog_result" {
-            data_value!(target_id.clone())
-        } else {
-            data_value!(target_id.clone(), "payload")
-        };
-        let denied = executor
-            .invoke_and_await_agent(&component, &caller, method, params)
-            .await?
-            .into_typed::<Result<(), String>>()?;
-        assert!(denied.is_err(), "oplog operation {method} must be denied");
-    }
+    let denied_read = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "read_oplog_result",
+            data_value!(target_id.clone()),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert!(denied_read.is_err(), "oplog read must be denied");
+    let denied_search = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "search_oplog_result",
+            data_value!(target_id, "payload"),
+        )
+        .await?
+        .into_typed::<Result<Option<Vec<u64>>, String>>()?;
+    assert!(denied_search.is_err(), "oplog search must be denied");
     let denied_config = executor
         .invoke_and_await_agent(
             &component,
