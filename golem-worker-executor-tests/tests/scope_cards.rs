@@ -2648,6 +2648,119 @@ async fn outbound_rpc_create_requires_whole_agent_authority_for_the_concrete_chi
     Ok(())
 }
 
+/// Calls an unkeyed and a keyed `GolemHostApi` agent over RPC from a caller whose card grants
+/// agent invocation only through `type_grant`, and returns both results.
+async fn rpc_with_only_a_type_invoke_grant(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    host_api_tests: &PrecompiledComponent,
+    type_grant: Option<&str>,
+) -> anyhow::Result<(Result<(), String>, Result<(), String>)> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let type_grant = type_grant
+        .map(|grant| parse_polymorphic_permission(grant).expect("valid type invoke grant"));
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("GolemHostApi")
+        .update_agent_provision_config("GolemHostApi", |config| {
+            let positive = &mut config.initial_permissions.lower_bound.positive;
+            positive
+                .retain(|permission| !matches!(permission, PolymorphicPermissionPattern::Agent(_)));
+            positive.push(
+                parse_polymorphic_permission("agent(?agent) @ * : view : *")
+                    .expect("valid self-view permission"),
+            );
+            positive.extend(type_grant);
+        })
+        .store()
+        .await?;
+    let caller = agent_key!("GolemHostApi", "type-grant-rpc-caller");
+    configure_scope_card_root(&authority, &component, &caller)?;
+    executor.start_agent(&component.id, caller.clone()).await?;
+    let unkeyed_target = executor
+        .create_unkeyed_agent(
+            &component.id,
+            None,
+            agent_key!("GolemHostApi", "type-grant-rpc-target"),
+            HashMap::new(),
+        )
+        .await?;
+
+    let unkeyed = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "outbound_agent_rpc_invoke_by_id_and_await_result",
+            data_value!("GolemHostApi", unkeyed_target.agent_id.0, "get_self_uri"),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    let keyed = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "outbound_agent_rpc_invoke_and_await_result",
+            data_value!("GolemHostApi", "type-grant-rpc-target", "get_self_uri"),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    Ok((unkeyed, keyed))
+}
+
+/// Guards the type-name match of `Type(*)` owners: an unkeyed agent of the type is covered like
+/// a keyed one.
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn type_wildcard_invoke_grant_covers_unkeyed_and_keyed_rpc_targets(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let (unkeyed, keyed) = rpc_with_only_a_type_invoke_grant(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        Some("agent(?component/GolemHostApi(*)) @ * : invoke : *"),
+    )
+    .await?;
+    assert_eq!(
+        unkeyed,
+        Ok(()),
+        "a GolemHostApi(*) grant must reach an unkeyed agent"
+    );
+    assert_eq!(
+        keyed,
+        Ok(()),
+        "a GolemHostApi(*) grant must reach a keyed agent"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn unkeyed_rpc_target_is_denied_without_an_invoke_grant(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let (unkeyed, keyed) =
+        rpc_with_only_a_type_invoke_grant(last_unique_id, deps, host_api_tests, None).await?;
+    for (target, result) in [("unkeyed", unkeyed), ("keyed", keyed)] {
+        assert!(
+            result.as_ref().is_err_and(|error| error.contains("Denied")),
+            "RPC to a {target} agent without an invoke grant must be denied, got {result:?}"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]

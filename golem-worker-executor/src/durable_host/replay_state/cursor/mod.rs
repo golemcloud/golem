@@ -131,6 +131,7 @@ pub(super) fn boundary_divergence(
         expected: ReplayStep::described(recorded),
         actual: ReplayStep::invocation_end(),
         mismatched: Vec::new(),
+        replay_start: None,
     })
 }
 

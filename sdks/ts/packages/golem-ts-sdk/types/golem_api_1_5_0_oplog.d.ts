@@ -661,6 +661,35 @@ declare module 'golem:api/oplog@1.5.0' {
    */
   export type UpdateFailureClass = "divergence" | "target-trap" | "not-replayable" | "target-rejected" | "interrupted" | "operational" | "other";
   /**
+   * A recovery replay from a loaded snapshot
+   */
+  export type ReplaySnapshotStart = {
+    /** The oplog index of the loaded snapshot */
+    snapshotIndex: OplogIndex;
+    /**
+     * The oplog indexes of the automatic snapshots that the recovery rejected before it, in
+     * ascending order
+     */
+    rejectedSnapshots: OplogIndex[];
+  };
+  /**
+   * Where a recovery replay started
+   */
+  export type ReplayStart =
+  /** From a loaded snapshot */
+  {
+    tag: 'snapshot'
+    val: ReplaySnapshotStart
+  } |
+  /**
+   * Without a snapshot, after the recovery rejected the automatic snapshots at these oplog
+   * indexes, in ascending order; empty when no snapshot was involved
+   */
+  {
+    tag: 'full-replay'
+    val: OplogIndex[]
+  };
+  /**
    * The identity of a recorded `Start`, or of the call that a replay made in its place
    */
   export type ReplayHostCall = {
@@ -714,6 +743,8 @@ declare module 'golem:api/oplog@1.5.0' {
     actual: ReplayStep;
     /** The identity fields on which the two steps differ; empty when the steps differ in kind */
     mismatched: StartIdentityField[];
+    /** Where the replay that diverged started; none for a divergence outside a recovery replay */
+    replayStart?: ReplayStart;
   };
   export type FailedSnapshotAssistedUpdateDetails = {
     pendingUpdateIndex: OplogIndex;
