@@ -99,12 +99,29 @@ pub fn default_test_agent_initial_permissions_for_account(
     })
 }
 
-/// The default initial card of agents, plus grants that name the loopback addresses: test peers
-/// listen there, and the default `network` wildcard reaches only public addresses over raw sockets.
+/// The default initial card of agents without its `card` grant.
+///
+/// Test agents manage no cards by default. A test whose agent derives, inspects, installs or
+/// revokes a card names those verbs in that agent's own initial card, so that no test depends on
+/// the default card's `card` grant.
+pub(crate) fn default_agent_initial_permissions_without_card_grants(
+    recipient: RecipientPattern,
+) -> AgentTypeInitialPermissions {
+    let mut permissions = AgentTypeInitialPermissions::default_for_recipient(recipient);
+    permissions
+        .lower_bound
+        .positive
+        .retain(|grant| !matches!(grant, PolymorphicPermissionPattern::Card(_)));
+    permissions
+}
+
+/// The default initial card of agents without its `card` grant, plus grants that name the
+/// loopback addresses: test peers listen there, and the default `network` wildcard reaches only
+/// public addresses over raw sockets.
 pub fn default_test_agent_initial_permissions(
     recipient: RecipientPattern,
 ) -> AgentTypeInitialPermissions {
-    let mut permissions = AgentTypeInitialPermissions::default_for_recipient(recipient.clone());
+    let mut permissions = default_agent_initial_permissions_without_card_grants(recipient.clone());
     for loopback in ["127.0.0.1", "[::1]"] {
         permissions
             .lower_bound
@@ -1548,4 +1565,46 @@ pub async fn build_ifs_archive(
 #[async_trait]
 pub trait WorkerLogEventStream: 'static + Send {
     async fn message(&mut self) -> anyhow::Result<Option<LogEvent>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use test_r::test;
+
+    use super::default_test_agent_initial_permissions;
+    use golem_common::model::card::PolymorphicPermissionPattern;
+    use golem_common::model::card::recipient::RecipientPattern;
+    use golem_common::model::component::AgentTypeInitialPermissions;
+
+    fn is_card_grant(grant: &PolymorphicPermissionPattern) -> bool {
+        matches!(grant, PolymorphicPermissionPattern::Card(_))
+    }
+
+    #[test]
+    fn test_agent_default_card_has_no_card_grant() {
+        let permissions = default_test_agent_initial_permissions(RecipientPattern::Any);
+
+        assert!(
+            !permissions.lower_bound.positive.iter().any(is_card_grant),
+            "a test agent must name the card verbs it uses in its own initial card"
+        );
+    }
+
+    #[test]
+    fn test_agent_default_card_keeps_every_other_default_grant() {
+        let permissions = default_test_agent_initial_permissions(RecipientPattern::Any);
+        let default = AgentTypeInitialPermissions::default_for_recipient(RecipientPattern::Any);
+
+        for grant in default
+            .lower_bound
+            .positive
+            .iter()
+            .filter(|grant| !is_card_grant(grant))
+        {
+            assert!(
+                permissions.lower_bound.positive.contains(grant),
+                "missing default grant {grant:?}"
+            );
+        }
+    }
 }
