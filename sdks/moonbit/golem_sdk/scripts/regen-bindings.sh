@@ -9,7 +9,7 @@
 #   bash scripts/regen-bindings.sh
 #
 # Steps:
-#   1. Generate the default agent/tool/middleware world.
+#   1. Generate the default agent/tool/middleware world for both backends.
 #   2. Preserve hand-maintained stubs and package descriptors.
 #   3. Fix the s8/s16 lifting bug: the generated code reads signed
 #      bytes/shorts with `mbt_ffi_load8`/`mbt_ffi_load16` (i32.load8_s/load16_s)
@@ -70,34 +70,25 @@ generate_world() {
   local gen_dir="$3"
   local output_dir="$tmp_root/$output_name"
 
-  echo "==> Generating $world_name"
+  shift 3
+  echo "==> Generating $world_name ($output_name)"
   wit-bindgen moonbit "$PWD/wit" \
     --world "$world_name" \
     --gen-dir "$gen_dir" \
     --derive-debug --derive-eq --derive-error \
+    "$@" \
     --project-name golemcloud/golem_sdk \
     --out-dir "$output_dir"
 }
 
-generate_world default agent-guest gen
+generate_world wasm agent-guest gen
+generate_world wasm-gc agent-guest gen --wasm-gc
 
 echo "==> Assembling generated roots"
 rm -rf "${GENERATED_ROOTS[@]}" gen-tool-middleware gen-agent-tool-middleware \
   world/tool-middleware-guest world/agent-tool-middleware-guest
-cp -R "$tmp_root/default/interface" interface
-cp -R "$tmp_root/default/async-core" async-core
-mkdir -p world
-cp -R "$tmp_root/default/world/agent-guest" world/
-cp -R "$tmp_root/default/gen" gen
-
-if [[ -d "$preserved_root" ]]; then
-  find "$preserved_root" -type f -print0 |
-    while IFS= read -r -d '' file; do
-      relative="${file#"$preserved_root/"}"
-      mkdir -p "$(dirname "$relative")"
-      cp "$file" "$relative"
-    done
-fi
+python3 scripts/merge-backend-bindings.py \
+  "$tmp_root/wasm" "$tmp_root/wasm-gc" "$preserved_root" "$PWD"
 
 rm -rf world/tool-middleware-guest world/agent-tool-middleware-guest
 
@@ -128,6 +119,7 @@ done < <(
   find "${GENERATED_ROOTS[@]}" -type f \
     \( -name 'moon.pkg' -o -name 'moon.pkg.json' \) -print0
 )
+moon info --target wasm-gc "${generated_packages[@]}"
 moon info --target wasm "${generated_packages[@]}"
 
 echo "==> Verifying s8/s16 fix"

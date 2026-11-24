@@ -247,6 +247,7 @@ The terms and fields are interpreted in the following way:
 | `CompletionDiscarded` / `CompletionDelivered`                | `completion-discarded` / `completion-delivered`                                                                                                               |
 | `AgentInvocationStarted`                                     | `agent-invocation-started`, `invoke`, and depending on the invocation kind: `agent-initialization`, `agent-method-invocation`, `external-tool`, `save-snapshot`, `load-snapshot`, `process-oplog-entries`; match on method or tool name, match on idempotency key, match on target revision (manual updates) |
 | `AgentInvocationFinished`                                    | `agent-invocation-finished`, `invoke`, match on consumed fuel                                                                                                 |
+| `AgentInvocationSettled`                                     | `agent-invocation-settled`, match on invocation ID, match on consumed fuel |
 | `PendingAgentInvocation`                                     | `pending-agent-invocation`, `invoke`, and the same invocation kind terms and matches as `AgentInvocationStarted` (pending external tool calls are not matched on idempotency key) |
 | `Suspend`                                                    | `suspend`                                                                                                                                                     |
 | `Error`                                                      | `error`, match on error message                                                                                                                               |
@@ -329,7 +330,7 @@ golem invocation get --agent 'CounterAgent("my-counter")' --idempotency-key my-k
 golem invocation list --agent 'CounterAgent("my-counter")' --status pending --status scheduled
 ```
 
-`invocation get` shows the state of the invocation (`scheduled`, `pending`, `running`, `waiting`, `retrying`, `interrupted`, `completed`, `failed` or `cancelled`) and, once it finished, its result. When the key was used for more than one method of the agent, it shows the invocation of each method, and `--method` selects one. It exits with code 130 when an invocation it shows was cancelled. `invocation list` lists the invocations of an agent, newest change first, and prints a cursor for the next page.
+`invocation get` shows the state of the invocation (`scheduled`, `pending`, `running`, `waiting`, `retrying`, `interrupted`, `completed`, `background-failed`, `failed` or `cancelled`) and, once it finished, its result. A `background-failed` invocation recorded its result, then the agent failed during the background work that the method started: `invocation get` shows the result and the error, and `agent invoke` with the same idempotency key returns the result (addressed by agent ID, it also prints the error as a warning). When the key was used for more than one method of the agent, it shows the invocation of each method, and `--method` selects one. It exits with code 130 when an invocation it shows was cancelled. `invocation list` lists the invocations of an agent, newest change first, and prints a cursor for the next page.
 
 A key is found only for the account that made the invocation, and invocations made through an HTTP route are not found by their key. An invocation ID is resolved in the current environment; select another one with `--environment`.
 
@@ -339,7 +340,7 @@ If an invocation is enqueued or scheduled for an agent, but it has not been star
 golem invocation cancel --agent 'CounterAgent("my-counter")' --idempotency-key my-key
 ```
 
-A running invocation cannot be cancelled. An invocation that already finished keeps its result.
+A running invocation cannot be cancelled. An invocation that already finished keeps its result, also while the background work it started still runs.
 
 ## Shell access
 

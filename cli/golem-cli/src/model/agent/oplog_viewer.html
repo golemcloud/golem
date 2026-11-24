@@ -257,6 +257,7 @@ const KINDS = {
   CompletionDelivered: ['COMPLETION DELIVERED', 'host', 1], CompletionDiscarded: ['COMPLETION DISCARDED', 'host', 1],
   HostStreamFrame: ['HOST STREAM FRAME', 'host', 1],
   AgentInvocationStarted: ['INVOKE', 'invocation'], AgentInvocationFinished: ['INVOKE COMPLETED', 'invocation'],
+  AgentInvocationSettled: ['INVOKE SETTLED', 'invocation', 1],
   PendingAgentInvocation: ['ENQUEUED', 'invocation', 1], CancelPendingInvocation: ['CANCEL INVOCATION', 'invocation', 1],
   Suspend: ['SUSPEND', 'lifecycle', 1], Error: ['ERROR', 'error', 1], RecoverySucceeded: ['RECOVERY SUCCEEDED', 'lifecycle', 1],
   Jump: ['JUMP', 'lifecycle', 1], Interrupted: ['INTERRUPTED', 'lifecycle', 1],
@@ -490,7 +491,7 @@ function renderReportNode(key, n, open) {
     case 'flag': return leaf(h('span', { class: 'b' }, String(n.value)));
     case 'number': {
       const el = leaf(h('span', { class: 'n' }, String(n.value)));
-      if (key && /(Index|^retryFrom$|^start$|^end$|^confirmedUpTo$|^sendingUpTo$|^lastBatchStart$|^observationalOwner$)/.test(key) && n.value > 0) el.append(' ', indexLink(n.value));
+      if (key && /(Index|^retryFrom$|^start$|^end$|^confirmedUpTo$|^sendingUpTo$|^lastBatchStart$|^observationalOwner$|^driver$)/.test(key) && n.value > 0) el.append(' ', indexLink(n.value));
       return el;
     }
     default: return leaf(ty(n.kind));
@@ -676,7 +677,7 @@ function renderJson(key, v, open) {
   }
   if (typeof v === 'number' || typeof v === 'bigint') {
     const el = h('div', { class: 'leaf' }, keyLabel(key), h('span', { class: 'n' }, String(v)));
-    if (key && /(Index|^retryFrom$|^start$|^end$|^confirmedUpTo$|^sendingUpTo$|^lastBatchStart$|^observationalOwner$)/.test(key) && v > 0) el.append(' ', indexLink(v));
+    if (key && /(Index|^retryFrom$|^start$|^end$|^confirmedUpTo$|^sendingUpTo$|^lastBatchStart$|^observationalOwner$|^driver$)/.test(key) && v > 0) el.append(' ', indexLink(v));
     return el;
   }
   if (typeof v === 'boolean') return h('div', { class: 'leaf' }, keyLabel(key), h('span', { class: 'b' }, String(v)));
@@ -754,7 +755,7 @@ function summary(e) {
   const p = e.entry; const t = e.type;
   switch (t) {
     case 'Create': return [span('fn', 'agent created'), ' ', span('val', `revision ${p.componentRevision} · ${p.agentMode || ''} · ${bytesText(p.componentSize)}` + (p.parent ? ` · parent ${EXPORT ? fieldText(p.parent) : (p.parent.agentId || '')}` : ''))];
-    case 'Start': return [span('fn', p.functionName), span('val', '(' + typedText(p.request, 110) + ')'), p.observationalOwner != null ? span('val', ' · observational') : null, p.denial != null ? span('err', ' · denied: ' + fieldText(p.denial)) : null];
+    case 'Start': return [span('fn', p.functionName), span('val', '(' + typedText(p.request, 110) + ')'), p.observationalOwner != null ? span('val', ' · observational') : null, p.driver != null ? span('val', ' · driven by ' + p.driver) : null, p.denial != null ? span('err', ' · denied: ' + fieldText(p.denial)) : null];
     case 'End': return [span('val', '← #' + idxOf(p.startIndex)), ' ', p.response != null ? [arrow(), span('val', typedText(p.response, 120))] : span('val', 'scope end'), p.forcedCommit ? span('val', ' · forced commit') : null];
     case 'Cancelled': return [span('err', 'cancelled'), span('val', ' ← #' + idxOf(p.startIndex)), p.partial != null ? [span('val', ' · partial: '), span('val', typedText(p.partial, 80))] : null];
     case 'CompletionDelivered': return [span('val', 'result of #' + idxOf(p.startIndex) + ' delivered to the guest')];
@@ -762,6 +763,7 @@ function summary(e) {
     case 'HostStreamFrame': return [span('val', `${p.kind} frame for #${idxOf(p.parentStartIndex)}: `), span('val', typedText(p.payload, 100))];
     case 'AgentInvocationStarted': { const inv = p.invocation; const inp = invocationInput(inv); return [span('fn', invocationName(inv)), inp ? span('val', '(' + typedText(inp, 110) + ')') : null]; }
     case 'AgentInvocationFinished': { const r = p.result; const err = resultError(r); const out = resultOutput(r); return [span('val', p.methodName || (r && r.type) || ''), ' ', err ? [span('err', 'error: ' + err)] : out ? [arrow(), span('val', typedText(out, 120))] : r && r.type === 'SaveSnapshot' ? [arrow(), span('val', snapshotText(r.snapshot))] : span('ok', 'ok')]; }
+    case 'AgentInvocationSettled': return [span('val', 'background work ended · invocation id ' + (EXPORT ? fieldText(p.invocationId) : (p.invocationId && p.invocationId.value || p.invocationId)))];
     case 'PendingAgentInvocation': { const inv = p.invocation; const inp = invocationInput(inv); return [span('fn', invocationName(inv)), inp ? span('val', '(' + typedText(inp, 100) + ')') : null, span('val', ' · queued')]; }
     case 'CancelPendingInvocation': return [span('val', 'invocation id ' + (EXPORT ? fieldText(p.invocationId) : (p.invocationId && p.invocationId.value || p.invocationId)))];
     case 'Error': return [span('err', (p.kind || '') + ': ' + (EXPORT ? fieldText(p.error, 200) : trunc(String(p.error || ''), 200))), span('val', ` · retry from #${idxOf(p.retryFrom)}` + (e.attempt ? ` · attempt ${e.attempt}` : ''))];
@@ -829,6 +831,12 @@ function buildTree(entries, extraDropped) {
   // members of the host node so the merged row can summarize them.
   const member = (e, host) => { const m = { kind: 'entry', e, children: [], members: [], parent: host, frames: [] }; host.members.push(m); return m; };
   let invocation = null; const hosts = new Map(); const hostNodes = new Map(); const entities = new Map();
+  // An invocation whose result is recorded at the export's return runs background work until its
+  // AgentInvocationSettled. The public oplog does not tell which results await settlement, so the
+  // entries after AgentInvocationFinished render at the top level until a Settled of the same
+  // invocation id arrives before the next AgentInvocationStarted; they then move under the
+  // invocation.
+  let draining = null; const idKey = v => v == null ? null : JSON.stringify(v);
   const errorsByRetry = new Map(); const nodeOf = new Map();
   const container = () => invocation || root;
   for (const e of entries) {
@@ -846,8 +854,9 @@ function buildTree(entries, extraDropped) {
       target = parent;
     }
     switch (t) {
-      case 'AgentInvocationStarted': if (invocation) invocation.unfinished = true; n = mk('invocation', e, root); invocation = n; break;
-      case 'AgentInvocationFinished': if (invocation) { invocation.end = e; n = leaf(e, invocation); invocation = null; } else n = leaf(e, root); break;
+      case 'AgentInvocationStarted': if (invocation) invocation.unfinished = true; draining = null; n = mk('invocation', e, root); invocation = n; break;
+      case 'AgentInvocationFinished': if (invocation) { invocation.end = e; n = leaf(e, invocation); draining = { node: invocation, from: root.children.length, id: idKey(p.invocationId) }; invocation = null; } else { draining = null; n = leaf(e, root); } break;
+      case 'AgentInvocationSettled': if (draining && draining.id != null && draining.id === idKey(p.invocationId)) { const moved = root.children.splice(draining.from); for (const c of moved) { c.parent = draining.node; draining.node.children.push(c); } draining.node.settled = e; n = leaf(e, draining.node); draining = null; } else n = leaf(e, target); break;
       case 'Start': { const parent = p.parentStartIndex != null ? hosts.get(idxOf(p.parentStartIndex)) : null; n = mk('host', e, parent || target); hosts.set(e.index, n); hostNodes.set(e.index, n); break; }
       case 'End': case 'Cancelled': { const s = hosts.get(idxOf(p.startIndex)); if (s) { s.end = e; hosts.delete(idxOf(p.startIndex)); n = member(e, s); } else n = leaf(e, target); break; }
       case 'CompletionDelivered': case 'CompletionDiscarded': { const s = hostNodes.get(idxOf(p.startIndex)); if (s) { s.completion = e; n = member(e, s); } else n = leaf(e, target); break; }
@@ -937,6 +946,7 @@ function groupHeader(n) {
     if (n.completion) right.push(h('span', { class: 'tag ' + (n.completion.type === 'CompletionDiscarded' ? 'warn' : ''), title: n.completion.type }, n.completion.type === 'CompletionDiscarded' ? 'discarded' : 'delivered'));
     if (n.frames.length) right.push(h('span', { class: 'tag' }, n.frames.length + ' frames'));
     if (p.observationalOwner != null) right.push(h('span', { class: 'tag' }, 'observational'));
+    if (p.driver != null) right.push(h('span', { class: 'tag' }, 'driven by ' + p.driver));
     if (p.denial != null) right.push(h('span', { class: 'tag warn', title: fieldText(p.denial) }, 'denied'));
     if (end) right.push(h('span', { class: 'tag', title: 'end entry index' }, '→ #' + end.index));
   } else if (n.kind === 'entity') {
@@ -963,7 +973,7 @@ function renderNodeEl(n, prev) {
   if (isGroup) { const { parts, right } = groupHeader(n); row.append(h('span', { class: 'kind' }, parts[0]), parts[1], h('span', { class: 'right' }, ...right, attrTag(e || { attribution: null }))); }
   else {
     const right = [];
-    if (e.type === 'AgentInvocationFinished' && e.entry.consumedFuel) right.push(h('span', { class: 'tag fuel' }, '⛽ ' + fieldText(e.entry.consumedFuel, 40)));
+    if ((e.type === 'AgentInvocationFinished' || e.type === 'AgentInvocationSettled') && e.entry.consumedFuel) right.push(h('span', { class: 'tag fuel' }, '⛽ ' + fieldText(e.entry.consumedFuel, 40)));
     if (e.type === 'Error') right.push(h('span', { class: 'tag warn' }, 'attempt ' + e.attempt));
     const a = attrTag(e); if (a) right.push(a);
     if (state.live && state.live.serverQuery) right.push(h('span', { class: 'tag ctx', title: 'load the oplog around this entry', onclick: ev => { ev.stopPropagation(); showContext(e.index); } }, 'context'));
@@ -1098,7 +1108,7 @@ function drawMinimap() {
   for (let i = 0; i < n; i++) {
     const e = state.entries[i]; const [, cat] = kindInfo(classOf(e));
     const x = (i / n) * W;
-    if (e.type === 'AgentInvocationStarted') { ctx.fillStyle = colors.invocation; ctx.globalAlpha = .18; let j = i + 1; while (j < n && state.entries[j].type !== 'AgentInvocationFinished') j++; ctx.fillRect(x, 0, Math.max(1, ((j - i + 1) / n) * W), H2); ctx.globalAlpha = 1; }
+    if (e.type === 'AgentInvocationStarted') { ctx.fillStyle = colors.invocation; ctx.globalAlpha = .18; let j = i + 1; while (j < n && state.entries[j].type !== 'AgentInvocationFinished') j++; if (j < n) { const id = JSON.stringify(state.entries[j].entry.invocationId); const settles = x => x.type === 'AgentInvocationSettled' && id !== undefined && JSON.stringify(x.entry.invocationId) === id; let k = j + 1; while (k < n && state.entries[k].type !== 'AgentInvocationStarted' && !settles(state.entries[k])) k++; if (k < n && settles(state.entries[k])) j = k; } ctx.fillRect(x, 0, Math.max(1, ((j - i + 1) / n) * W), H2); ctx.globalAlpha = 1; }
     const tall = cat === 'error' || cat === 'update' || cat === 'invocation';
     ctx.fillStyle = colors[cat] || '#888';
     ctx.fillRect(x, tall ? 4 : 12, Math.max(px, 1), tall ? H2 - 8 : H2 - 20);
@@ -1115,7 +1125,7 @@ function setupMinimap() {
 function renderSidebar() {
   // Stats
   const byType = {}; let fuel = 0; let tokenizedFuel = 0; let errors = 0; let invocations = 0; let logs = 0;
-  for (const e of state.entries) { byType[e.type] = (byType[e.type] || 0) + 1; if (e.type === 'AgentInvocationFinished') { const f = numOf(e.entry.consumedFuel); if (f != null) fuel += f; else if (e.entry.consumedFuel != null) tokenizedFuel++; } if (e.type === 'AgentInvocationStarted') invocations++; if (e.type === 'Error') errors++; if (e.type === 'Log') logs++; }
+  for (const e of state.entries) { byType[e.type] = (byType[e.type] || 0) + 1; if (e.type === 'AgentInvocationFinished' || e.type === 'AgentInvocationSettled') { const f = numOf(e.entry.consumedFuel); if (f != null) fuel += f; else if (e.entry.consumedFuel != null) tokenizedFuel++; } if (e.type === 'AgentInvocationStarted') invocations++; if (e.type === 'Error') errors++; if (e.type === 'Log') logs++; }
   const first = state.entries[0]; const last = state.entries[state.entries.length - 1];
   const stats = $('#pane-stats'); stats.replaceChildren();
   const tbl = (rows) => { const t = h('table'); for (const [k, v] of rows) t.append(h('tr', null, h('td', null, k), h('td', { class: 'num' }, v))); return t; };

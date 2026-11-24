@@ -428,7 +428,20 @@ const rootImports = new Proxy(
   },
 )
 
+let pendingHighSurrogate = ""
 const importObject = {
+  spectest: {
+    print_char(value) {
+      const character = String.fromCodePoint(value)
+      if (value >= 0xd800 && value <= 0xdbff) {
+        process.stdout.write(pendingHighSurrogate)
+        pendingHighSurrogate = character
+      } else {
+        process.stdout.write(pendingHighSurrogate + character)
+        pendingHighSurrogate = ""
+      }
+    },
+  },
   exception: {
     tag: exceptionTag,
     throw() {
@@ -473,7 +486,7 @@ const importObject = {
   "wasi:cli/environment@0.3.0": {
     "get-environment"(resultPtr) {
       const memory = new DataView(instance.exports.memory.buffer)
-      memory.setUint32(resultPtr, 0, true)
+      memory.setUint32(resultPtr, permissionHostAllocate(0), true)
       memory.setUint32(resultPtr + 4, 0, true)
     },
   },
@@ -697,6 +710,18 @@ const importObject = {
 }
 
 for (const imported of WebAssembly.Module.imports(module)) {
+  if (imported.kind === "function" &&
+      imported.module === "golem:agent/invocation-context@2.0.0" &&
+      imported.name === "caller") {
+    importObject[imported.module] ??= {}
+    importObject[imported.module][imported.name] = result => {
+      // caller { original: anonymous, immediate: anonymous }.
+      const memory = new DataView(instance.exports.memory.buffer)
+      memory.setUint8(result, 3)
+      memory.setUint8(result + 112, 3)
+    }
+    continue
+  }
   if (imported.kind === "function" && imported.module === "golem:agent/durable-streams@2.0.0") {
     importObject[imported.module] ??= {}
     importObject[imported.module][imported.name] = (...args) => {
@@ -1115,3 +1140,4 @@ if (requestedTests) {
 }
 
 instance.exports.moonbit_test_driver_finish()
+process.stdout.write(pendingHighSurrogate)

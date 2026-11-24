@@ -763,7 +763,7 @@ async fn get_oplog_with_api_changing_updates(
         .invoke_and_await_agent(&component, &agent_id, "f4", data_value!())
         .await?;
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let oplog = crate::http::settled_oplog(&executor, &worker_id).await?;
 
     // there might be a pending invocation entry before the update entry. Filter it out to make the test more robust
     let oplog = oplog
@@ -781,7 +781,16 @@ async fn get_oplog_with_api_changing_updates(
 
     let _ = executor.check_oplog_is_queryable(&worker_id).await;
 
-    assert_eq!(oplog.len(), 16, "unexpected oplog: {oplog:#?}");
+    // The constructor and each of the three method invocations end with a settlement entry.
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationSettled(_)))
+            .count(),
+        4,
+        "unexpected oplog: {oplog:#?}"
+    );
+    assert_eq!(oplog.len(), 20, "unexpected oplog: {oplog:#?}");
 
     Ok(())
 }
@@ -820,15 +829,23 @@ async fn get_oplog_starting_with_updated_component(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let oplog = executor
-        .get_oplog(&worker_id, OplogIndex::INITIAL)
+    let oplog = crate::http::settled_oplog(&executor, &worker_id)
         .await?
         .into_iter()
         .filter(|entry| !matches!(entry.entry, PublicOplogEntry::GrowMemory(_)))
         .collect::<Vec<_>>();
 
     assert_eq!(result.into_typed::<u64>()?, 11);
-    assert_eq!(oplog.len(), 11);
+    // The constructor and the method invocation each end with a settlement entry.
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationSettled(_)))
+            .count(),
+        2,
+        "unexpected oplog: {oplog:#?}"
+    );
+    assert_eq!(oplog.len(), 13, "unexpected oplog: {oplog:#?}");
 
     Ok(())
 }

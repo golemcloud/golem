@@ -73,6 +73,7 @@ fn cache_observations_expire_when_execution_selects_another_revision() {
                 idempotency_key: None,
                 oplog_index: None,
                 agent_fingerprint: None,
+                background_failure: None,
             },
         );
         assert_eq!(

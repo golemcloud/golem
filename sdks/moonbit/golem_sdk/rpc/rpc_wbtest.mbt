@@ -20,22 +20,17 @@ extern "wasm" fn rpc_host_calls_ffi(ret : Int32) = "golem:test" "rpc-host-calls"
 extern "wasm" fn push_host_buffer(ptr : Int32, size : Int32) = "golem:test" "push-permission-host-buffer"
 
 ///|
-extern "wasm" fn guest_malloc(size : Int32) -> Int32 =
-  #|(func (param i32) (result i32) (local i32)
-  #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
-  #| local.tee 1 i32.const 0 call $moonbit.init_array8
-  #| local.get 1)
+fn guest_malloc(size : Int32) -> Int32 {
+  @gen.mbt_ffi_cabi_realloc(0, 0, 1, size)
+}
 
 ///|
 extern "wasm" fn load32(ptr : Int32) -> Int32 =
   #|(func (param i32) (result i32) local.get 0 i32.load)
 
 ///|
-extern "wasm" fn ptr2str(ptr : Int32, len : Int32) -> String =
-  #|(func (param i32) (param i32) (result i32)
-  #| local.get 0
-  #| local.get 1 call $moonbit.init_array16
-  #| local.get 0)
+extern "wasm" fn load8(ptr : Int32) -> Int32 =
+  #|(func (param i32) (result i32) local.get 0 i32.load8_u)
 
 ///|
 /// The `rpc-error` cases of the fake host.
@@ -65,7 +60,15 @@ fn fresh_rpc_host() -> Unit {
 fn rpc_host_calls() -> String {
   let ret = guest_malloc(8)
   rpc_host_calls_ffi(ret)
-  ptr2str(load32(ret), load32(ret + 4))
+  let ptr = load32(ret)
+  let len = load32(ret + 4) * 2
+  let text = try! @utf16.decode(
+    Bytes::makei(len, i => load8(ptr + i).to_byte()),
+    ignore_bom=false,
+  )
+  ignore(@gen.mbt_ffi_cabi_realloc(ptr, len, 2, 0))
+  ignore(@gen.mbt_ffi_cabi_realloc(ret, 8, 4, 0))
+  text
 }
 
 ///|

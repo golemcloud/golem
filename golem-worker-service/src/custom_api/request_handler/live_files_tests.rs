@@ -66,6 +66,7 @@ fn live_files_harness() -> InvocationHarness {
             idempotency_key: None,
             oplog_index: None,
             agent_fingerprint: None,
+            background_failure: None,
         },
         golem_common::schema::AgentTypeSchema {
             kind: golem_common::schema::agent::AgentTypeKind::Regular,

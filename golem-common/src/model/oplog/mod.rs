@@ -190,6 +190,7 @@ impl OplogEntry {
             | OplogEntry::CompletionDelivered { .. }
             | OplogEntry::AgentInvocationStarted { .. }
             | OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::AgentInvocationSettled { .. }
             | OplogEntry::Suspend { .. }
             | OplogEntry::RecoverySucceeded { .. }
             | OplogEntry::Interrupted { .. }
@@ -267,6 +268,7 @@ impl OplogEntry {
             | OplogEntry::CompletionDelivered { .. }
             | OplogEntry::AgentInvocationStarted { .. }
             | OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::AgentInvocationSettled { .. }
             | OplogEntry::AgentInvocationFailed { .. }
             | OplogEntry::Suspend { .. }
             | OplogEntry::Error { .. }
@@ -405,6 +407,7 @@ impl OplogScopeProjection {
             OplogEntry::Create { .. }
             | OplogEntry::AgentInvocationStarted { .. }
             | OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::AgentInvocationSettled { .. }
             | OplogEntry::Suspend { .. }
             | OplogEntry::RecoverySucceeded { .. }
             | OplogEntry::Interrupted { .. }

@@ -37,6 +37,13 @@ Use the following _YAML comments_ at the start of your `golem.yaml` documents to
 
 Note that on top of the above schema there are other checks performed by `golem`, see the field reference below for details.
 
+### Package fields
+
+- `package.calls`: A list of agent type names the package calls. Deploy fails if an installed package needs an agent type that the deployment does not provide.
+- `agents.<agent-type-name>.package`: The installed package that supplies the agent. Use the published agent type name as the manifest key.
+
+See [Publishing packages](/next/develop/publishing-packages) for the other package fields and an installer example.
+
 ## Loading of Application Manifest documents
 
 The _Golem CLI_ commands that use _Application Manifest_ start by searching for `golem.yaml` documents in the _current_ and the _parent_ directories. The outermost `golem.yaml` found this way is used as the root manifest document, then more manifests are searched based on its <FieldLink path="includes"/> field.

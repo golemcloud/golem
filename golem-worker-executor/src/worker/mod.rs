@@ -655,6 +655,9 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     #[allow(dead_code)]
     metrics_status: Arc<WorkerStatusMetric>,
     last_known_status_detached: Arc<AtomicBool>,
+    /// Set while an `AgentInvocationSettled` that the invocation loop appended waits for the
+    /// commit of the next `AgentInvocationStarted` (see [`Worker::defer_settlement_commit`]).
+    settlement_commit_deferred: AtomicBool,
     status_flusher: Arc<status_flusher::AgentStatusFlusher>,
     status_checkpointer: status_checkpointer::StatusCheckpointer,
     // Note: std lock for wasmtime reasons
@@ -1298,6 +1301,8 @@ enum InvocationResult {
     Cancelled,
     Lazy {
         oplog_idx: OplogIndex,
+        /// The give-up entry of a background failure after the result at `oplog_idx`.
+        background_failure: Option<OplogIndex>,
     },
 }
 
@@ -1501,7 +1506,7 @@ use ingress::{inactive_ephemeral_agent_error, validate_resolved_invocation_ident
 use interrupt::register_interrupt_request;
 use lifecycle::retirement::owned_shard_epoch;
 pub(crate) use lifecycle::retirement::retired_by_assignment;
-use lifecycle::stop::invocation_keys_to_fail;
+use lifecycle::stop::{invocation_keys_failed_on_giving_up, invocation_keys_to_fail};
 use read_only_cache::{build_read_only_cache_entry, is_no_cache, populate_read_only_cache};
 use runtime::shared_linear_memory_error;
 use streaming::sessions::{

@@ -3518,6 +3518,8 @@ components:
         componentRevision:
           type: integer
           format: uint64
+        backgroundFailure:
+          $ref: '#/components/schemas/InvocationFailure'
     AgentKeyFilter:
       type: object
       title: AgentKeyFilter
@@ -6338,8 +6340,8 @@ components:
       type: object
       title: Invocation
       description: |-
-        An invocation with its result. `result` is present once the invocation is `completed` or
-        `failed`; a completed constructor run has no result.
+        An invocation with its result. `result` is present once the invocation is `completed`,
+        `background-failed` or `failed`; a completed constructor run has no result.
       required:
       - summary
       properties:
@@ -6347,6 +6349,19 @@ components:
           $ref: '#/components/schemas/InvocationSummary'
         result:
           $ref: '#/components/schemas/InvocationOutcome'
+    InvocationBackgroundFailure:
+      type: object
+      title: InvocationBackgroundFailure
+      description: |-
+        The recorded result of an invocation, and the failure of the agent during the invocation's
+        background work after it. `value` is absent for the constructor run.
+      required:
+      - error
+      properties:
+        value:
+          $ref: '#/components/schemas/ExternalTypedSchemaValue'
+        error:
+          type: string
     InvocationFailure:
       type: object
       title: InvocationFailure
@@ -6385,12 +6400,26 @@ components:
       - $ref: '#/components/schemas/InvocationOutcome_InvocationMethodResult'
       - $ref: '#/components/schemas/InvocationOutcome_InvocationToolResult'
       - $ref: '#/components/schemas/InvocationOutcome_InvocationFailure'
+      - $ref: '#/components/schemas/InvocationOutcome_InvocationBackgroundFailure'
       discriminator:
         propertyName: type
         mapping:
           Method: '#/components/schemas/InvocationOutcome_InvocationMethodResult'
           Tool: '#/components/schemas/InvocationOutcome_InvocationToolResult'
           Failure: '#/components/schemas/InvocationOutcome_InvocationFailure'
+          BackgroundFailure: '#/components/schemas/InvocationOutcome_InvocationBackgroundFailure'
+    InvocationOutcome_InvocationBackgroundFailure:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - BackgroundFailure
+            example: BackgroundFailure
+      - $ref: '#/components/schemas/InvocationBackgroundFailure'
     InvocationOutcome_InvocationFailure:
       allOf:
       - type: object
@@ -6451,6 +6480,7 @@ components:
       - retrying
       - interrupted
       - completed
+      - background-failed
       - failed
       - cancelled
     InvocationStatus:
@@ -7774,6 +7804,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFailedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationSettledParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
@@ -7835,6 +7866,7 @@ components:
           AgentInvocationStarted: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
           AgentInvocationFinished: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
           AgentInvocationFailed: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFailedParams'
+          AgentInvocationSettled: '#/components/schemas/PublicOplogEntry_r#AgentInvocationSettledParams'
           Suspend: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
           Error: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
           RecoverySucceeded: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
@@ -7971,6 +8003,18 @@ components:
             - AgentInvocationFinished
             example: AgentInvocationFinished
       - $ref: '#/components/schemas/r#AgentInvocationFinishedParams'
+    PublicOplogEntry_r#AgentInvocationSettledParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - AgentInvocationSettled
+            example: AgentInvocationSettled
+      - $ref: '#/components/schemas/r#AgentInvocationSettledParams'
     PublicOplogEntry_r#AgentInvocationStartedParams:
       allOf:
       - type: object
@@ -9516,6 +9560,10 @@ components:
         observationalOwner:
           type: integer
           format: uint64
+        driver:
+          type: integer
+          format: uint64
+          description: The invocation that drives the call when it is not the invocation the call belongs to.
         carriesRequest:
           type: boolean
           description: |-
@@ -11251,6 +11299,7 @@ components:
       - observational-owner
       - request-presence
       - parent
+      - driver
     StoredCard:
       type: object
       oneOf:
@@ -11807,6 +11856,23 @@ components:
         componentRevision:
           type: integer
           format: uint64
+    r#AgentInvocationSettledParams:
+      type: object
+      title: r#AgentInvocationSettledParams
+      required:
+      - timestamp
+      - invocationId
+      - consumedFuel
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        invocationId:
+          type: string
+          format: uuid
+        consumedFuel:
+          type: integer
+          format: int64
     r#AgentInvocationStartedParams:
       type: object
       title: r#AgentInvocationStartedParams
@@ -12637,6 +12703,9 @@ components:
         invocationId:
           $ref: '#/components/schemas/DurableInvocationId'
         observationalOwner:
+          type: integer
+          format: uint64
+        driver:
           type: integer
           format: uint64
         request:
