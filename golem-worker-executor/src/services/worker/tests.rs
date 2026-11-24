@@ -4616,9 +4616,28 @@ impl KeyValueStorage for ExpiryRecordingKeyValueStorage {
 /// The worker service writes and removes the status baseline with no expiry, and the live
 /// status cache with the expiry of a derived cache, on the full write, the delta write and the
 /// removal. The removal is `WorkerService::remove` of an incarnation that is not the current one,
-/// which deletes no oplog.
+/// which deletes no oplog. The delta write of the baseline on a matching delta base counts a
+/// `delta_match` publication of the baseline.
 #[test]
 async fn the_worker_service_writes_the_status_baseline_with_no_expiry() {
+    fn baseline_delta_matches() -> f64 {
+        prometheus::gather()
+            .into_iter()
+            .filter(|family| family.name() == "status_cache_publication_total")
+            .flat_map(|family| family.get_metric().to_vec())
+            .filter(|metric| {
+                [("cache", "checkpoint"), ("event", "delta_match")]
+                    .iter()
+                    .all(|(name, value)| {
+                        metric
+                            .get_label()
+                            .iter()
+                            .any(|label| label.name() == *name && label.value() == *value)
+                    })
+            })
+            .map(|metric| metric.get_counter().value())
+            .sum()
+    }
     let storage = Arc::new(ExpiryRecordingKeyValueStorage::default());
     let (service, owned_agent_id, _) = status_baseline_test_service(storage.clone());
     let fingerprint = AgentFingerprint(Uuid::new_v4());
@@ -4650,10 +4669,16 @@ async fn the_worker_service_writes_the_status_baseline_with_no_expiry() {
         .write_status_checkpoint(&owned_agent_id, fingerprint, None, first)
         .await
         .unwrap();
+    let delta_matches_before = baseline_delta_matches();
     service
         .write_status_checkpoint(&owned_agent_id, fingerprint, Some(&checkpoint), second)
         .await
         .unwrap();
+    // Other tests of the process can only raise the count.
+    assert!(
+        baseline_delta_matches() > delta_matches_before,
+        "the delta write of the baseline is not a delta match"
+    );
     service
         .remove(
             &mut crate::services::oplog::OpenOplogs::new("delete-test")
