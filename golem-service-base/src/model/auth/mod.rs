@@ -183,7 +183,7 @@ pub enum AuthorizationError {
     SystemOnlyActionNotAllowed(String),
     #[error("The permission target {0:?} is not allowed")]
     PermissionNotAllowed(Box<PermissionTarget>),
-    #[error("Failed to evaluate permission target {target:?}: {error:?}")]
+    #[error("Failed to evaluate permission target {target:?}: {error}")]
     PermissionEvaluationFailed {
         target: Box<PermissionTarget>,
         error: CardAlgebraError,
