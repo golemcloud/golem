@@ -177,13 +177,14 @@ are copied unchanged from it.
   `querySales(team, quarter)` and `drawChart`.
 - `tools-middleware`: the `refund` tool (same shape as `tools-secrets`, plus
   `customerEmail` in `Refund`), `ToolInvokeError`, `createPromise`/`awaitPromise`;
-  application helpers `askFinance`, `approved`, `checkRateLimit(principal)`, `audit`.
+  application helpers `askFinance`, `approved`, `checkRateLimit(who: Principal)`, `audit`. The
+  tool's options carry `{ required: true }`: without it, a 2.0 option is optional.
 - `artifacts-peruser`: zod, `defineAgent`, `http`, `method`, `node:fs`; `dashboardFor`.
 - `artifacts-routers`: `defineHttpRouter`, `AgentStream`, `s`; the `AnalystAgent`
   whose `exportCsv({ id })` streams an export as CSV; `header` and `empty` helpers.
-- `artifacts-signin`: zod, `defineAgent`, `http`, `method`, `s`; `invoicesOf`, `pageFor`.
-- `artifacts-login`: zod, `defineAgent`, `http`, `method`, `s`, `Principal`;
-  the `Chart` type, `answerWithChart`, and `userKey` (OIDC issuer + sub).
+- `artifacts-signin`: zod, `defineAgent`, `http`, `method`; `invoicesOf(org, issuer, subject)`, `pageFor`.
+- `artifacts-login`: zod, `defineAgent`, `http`, `method`, `s`, the `PrincipalRef` type;
+  the `Chart` type (`{ askedBy: PrincipalRef | undefined, png }`) and `answerWithChart`.
 - `agents-stream`: `AgentStream`, `s`; OpenAI client.
 - `agents-readonly`: zod and SDK imports only.
 
@@ -242,11 +243,11 @@ file, replaces it in memory, writes prelude + mutant to `gen/neg-<f>.ts`
 | artifacts-overview | exposeFiles `path:` → `file:` | TS2769 |
 | artifacts-routes | tool `html` positional `z.string()` → `z.number()` | TS2345 |
 | artifacts-files | inline return `tag: 'inline'` → `'raw'` | TS2322 |
-| artifacts-login | `made?.askedBy` → `made?.asked` | TS2551 |
-| tools-middleware | `checkRateLimit(principal)` → `(args.charge)` | TS2345 |
+| artifacts-login | `askedBy: ctx.caller.original.ref` → `ctx.caller()` | TS2349 |
+| tools-middleware | `checkRateLimit(caller.original)` → `(args.charge)` | TS2345 |
 | artifacts-peruser | `id.user` → `id.users` | TS2551 |
 | artifacts-routers | `exportCsv({ id })` → `({ n })` | TS2353 |
-| artifacts-signin | `{ issuer, sub }` → `{ issuer, subject }` | TS2339 |
+| artifacts-signin | `{ issuer, subject }` → `{ issuer, sub }` | TS2339 |
 
 `tools/requests` contains no Golem API call (Golem adds the idempotency key
 itself), so its control plants the tempting wrong usage of passing the key
@@ -273,3 +274,13 @@ its row so the text still occurs exactly once.
 ## artifacts/overview: UUID file names (Oct 22 2026)
 
 The chart tool names the PNG and the HTML page with one fresh UUID, as artifacts/peruser does, and `pageFor(q, name)` points the page's `<img>` at `<name>.png`. `const name = crypto.randomUUID()`. To stay within 31 lines, the `methods` block of the agent definition is folded onto two lines, as in the Effect snippet. No comment explains the UUID (owner ruling). Re-verified: `check.sh` ALL_OK, `neg.sh` passing.
+
+## Caller identity 2.0 (Nov 24 2026)
+
+`artifacts/login`, `artifacts/signin` and `tools/middleware` read the caller from the invocation
+context: the second argument of an agent handler (`ctx.caller`) and the `caller` of the middleware
+context. The 1.6 `s.principal()` input, `this.getPrincipal()` and the middleware `principal` are
+gone. `login` stores `ctx.caller.original.ref` (a `PrincipalRef`) and compares with `equals`;
+`signin` narrows `ctx.caller.original` to `kind === 'user'` and reads `issuer` and `subject`.
+Re-verified on the three changed snippets with the harness rebuilt from this file: the display
+rules, `tsc` for each, and the three negative controls above, which fail as they must.
