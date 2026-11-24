@@ -514,3 +514,47 @@ async fn runtime_card_creation_rejects_an_expired_parent() {
 
     join_set.abort_all();
 }
+
+#[test]
+#[timeout("120s")]
+async fn an_audit_record_sent_over_grpc_waits_once_in_the_staging_table() {
+    use golem_common::model::account::AccountId;
+    use golem_common::model::application::ApplicationId;
+    use golem_common::model::authority::{
+        AuthorizationRequest, CatalogOperation, Decision, Denial, EnvironmentTarget, Operation,
+        Resource, Target,
+    };
+    use golem_common::model::caller::Caller;
+    use golem_registry_service::repo::audit_staging::{AuditStagingRepo, DbAuditStagingRepo};
+    use golem_service_base::model::auth::audit::{AuditContext, AuditRecord, AuditSink};
+    use golem_service_base::model::auth::surface::Surface;
+
+    let (_temp_dir, db_config, _join_set, port) = start_registry().await;
+    let sink: std::sync::Arc<dyn AuditSink> = std::sync::Arc::new(registry_client(port));
+    let request = AuthorizationRequest::new(
+        Caller::anonymous(),
+        Operation::single(
+            CatalogOperation::ListAgents,
+            Resource::None,
+            Target::Environment(EnvironmentTarget {
+                account_id: AccountId::new(),
+                application_id: ApplicationId::new(),
+                environment_id: EnvironmentId::new(),
+            }),
+        )
+        .unwrap(),
+    );
+    let record = AuditRecord::new(
+        &request,
+        &Decision::Deny(Denial::SignInRequired { scheme: None }),
+        &AuditContext::new(Surface::Rest),
+    );
+
+    sink.record(record.clone()).await.unwrap();
+    // A sender that lost the answer sends the same record again.
+    sink.record(record.clone()).await.unwrap();
+
+    let staging = DbAuditStagingRepo::new(SqlitePool::configured(&db_config).await.unwrap());
+    let row = staging.get(record.event_id).await.unwrap().unwrap();
+    assert_eq!(row.to_audit_record().unwrap(), record);
+}

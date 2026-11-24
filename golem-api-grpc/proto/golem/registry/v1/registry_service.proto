@@ -26,6 +26,8 @@ service RegistryService {
   // auth api
   rpc AuthenticateToken (AuthenticateTokenRequest) returns (AuthenticateTokenResponse);
   rpc AuthorizeEnvironment (AuthorizeEnvironmentRequest) returns (AuthorizeEnvironmentResponse);
+  // Stores the audit record of one authorization decision in the registry's staging table.
+  rpc RecordAudit (RecordAuditRequest) returns (RecordAuditResponse);
 
   // installation api
   rpc GetGolemIssuer (GetGolemIssuerRequest) returns (GetGolemIssuerResponse);
@@ -105,6 +107,18 @@ message AuthenticateTokenResponse {
 
 message AuthenticateTokenSuccessResponse {
     golem.auth.AuthCtx auth_ctx = 1;
+}
+
+message RecordAuditRequest {
+  // The record in its JSON form; a record whose event is already stored is kept as it is.
+  string record = 1;
+}
+
+message RecordAuditResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    RegistryServiceError error = 2;
+  }
 }
 
 message GetGolemIssuerRequest {
