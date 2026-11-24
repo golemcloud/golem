@@ -112,7 +112,7 @@ describe("UsagePush", () => {
     )
   }
 
-  /** An account in paid overage with a monthly amount of 1 GCU and 1 GB-second. */
+  /** An account in paid overage with a monthly amount of 1 GCU and 1 GiB-second. */
   const overageAccount = async (options: { readonly subscribed?: boolean } = {}) => {
     const accountId = await registry.account()
     await registry.revision(accountId, 0, "allow_overage", {

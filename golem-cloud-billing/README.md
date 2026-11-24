@@ -506,7 +506,7 @@ of the registry), so it can also read a month that has closed:
 Each run reads the previous and the current UTC month, so usage that the registry receives for a
 month after its last run in that month still reaches Polar. The table `usage_events` keeps one
 event for every increase: it goes from the amount that earlier events submitted to the current
-billable overage, in millionths of GCU, GB-seconds or GB-month. Polar refuses a numeric metadata
+billable overage, in millionths of GCU, GiB-seconds or GiB-month. Polar refuses a numeric metadata
 value above 2^53 - 1, so an increase above that becomes several events, each with an ID that ends
 in the amount that it reaches. A run records its events first and then sends every event that is
 not sent yet. Polar skips an event whose `external_id` it has
@@ -519,12 +519,16 @@ not bill them. A held event is never sent: the run logs the warning `unbilled_us
 account, the meter and the amount, and `usage_events` keeps the event with `held_at`. The usage
 of an account on an internal plan with overage is held in the same way.
 
-| Event name | Unit |
-| --- | --- |
-| `golem.compute` | GCU |
-| `golem.memory` | GB-seconds |
-| `golem.durable_storage` | GB-month |
-| `golem.ephemeral_storage` | GB-month |
+| Event name | Resource | Unit |
+| --- | --- | --- |
+| `golem.compute` | Compute | GCU |
+| `golem.memory` | Active memory | GiB-seconds |
+| `golem.durable_storage` | Active durable filesystem | GiB-month |
+| `golem.ephemeral_storage` | Active ephemeral filesystem | GiB-month |
+
+A GiB is 1,073,741,824 bytes (`BillableUsage.ts`, as in golem-common). The page shows active memory
+in GiB-hours, the unit of its overage price. The resource names and the units match the customer
+copy of Golem Cloud.
 
 Each event carries `units` (the increase in the unit of the meter), `micro_units` (the same
 increase as an integer) and `period` (`YYYY-MM`). The Polar meters sum `units`.

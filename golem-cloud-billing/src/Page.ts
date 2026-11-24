@@ -406,7 +406,8 @@ interface Pricing {
   readonly prices: OveragePrices
 }
 
-// Memory shows GB-hours, the unit of its overage price, not the GB-seconds of the meter.
+// Active memory shows GiB-hours, the unit of its overage price, not the GiB-seconds of the meter.
+// The names and units match the customer copy of Golem Cloud. A GiB is 1024^3 bytes.
 const usageMeters = {
   computeGcu: {
     label: "Compute",
@@ -417,24 +418,24 @@ const usageMeters = {
     pricedAmount: 1_000_000
   },
   memoryGbSeconds: {
-    label: "Memory",
-    unit: "GB-hours",
+    label: "Active memory",
+    unit: "GiB-hours",
     scale: 1 / 3600,
     format: oneDecimal,
     price: (prices) => prices.perGbHour,
     pricedAmount: 3600
   },
   durableStorageGbMonth: {
-    label: "Durable storage",
-    unit: "GB-month",
+    label: "Active durable filesystem",
+    unit: "GiB-month",
     scale: 1,
     format: twoDecimals,
     price: (prices) => prices.perDurableGbMonth,
     pricedAmount: 1
   },
   ephemeralStorageGbMonth: {
-    label: "Ephemeral storage",
-    unit: "GB-month",
+    label: "Active ephemeral filesystem",
+    unit: "GiB-month",
     scale: 1,
     format: twoDecimals,
     price: (prices) => prices.perEphemeralGbMonth,
@@ -533,9 +534,9 @@ const priceList = ({ currency, prices }: Pricing) => {
   const price = (value: string) => priceFormat[currency].format(value as Intl.StringNumericLiteral)
   return html`<dl class="facts prices">
           <div><dt>Compute</dt><dd>${price(prices.perMillionGcu)} per million GCU</dd></div>
-          <div><dt>Memory</dt><dd>${price(prices.perGbHour)} per GB-hour</dd></div>
-          <div><dt>Durable storage</dt><dd>${price(prices.perDurableGbMonth)} per GB-month</dd></div>
-          <div><dt>Ephemeral storage</dt><dd>${price(prices.perEphemeralGbMonth)} per GB-month</dd></div>
+          <div><dt>Active memory</dt><dd>${price(prices.perGbHour)} per GiB-hour</dd></div>
+          <div><dt>Active durable filesystem</dt><dd>${price(prices.perDurableGbMonth)} per GiB-month</dd></div>
+          <div><dt>Active ephemeral filesystem</dt><dd>${price(prices.perEphemeralGbMonth)} per GiB-month</dd></div>
         </dl>
         <p class="muted">Prices in ${isoCode(currency)}, ${taxNote(currency)}. Polar bills the overage of a month on the next invoice.</p>`
 }

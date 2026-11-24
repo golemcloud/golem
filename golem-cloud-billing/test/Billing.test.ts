@@ -422,10 +422,10 @@ describe("Polar billing", () => {
 
       expect(html).toContain("Paid overage")
       expect(html).toContain("Off. When the account uses all of its monthly allowance, its agents stop")
-      expect(html).toContain("$0.0112 per million GCU")
-      expect(html).toContain("$0.045 per GB-hour")
-      expect(html).toContain("$0.27 per GB-month")
-      expect(html).toContain("$0.24 per GB-month")
+      expect(html).toContain("<dt>Compute</dt><dd>$0.0112 per million GCU")
+      expect(html).toContain("<dt>Active memory</dt><dd>$0.045 per GiB-hour")
+      expect(html).toContain("<dt>Active durable filesystem</dt><dd>$0.27 per GiB-month")
+      expect(html).toContain("<dt>Active ephemeral filesystem</dt><dd>$0.24 per GiB-month")
       expect(html).toContain("Prices in USD, plus tax.")
       expect(html).toContain(`action="/billing/overage"`)
       expect(html).toContain(`value="allowOverage"`)
@@ -557,10 +557,11 @@ describe("Polar billing", () => {
         "This month, against the monthly allowance of the plan. The monthly allowance starts again on the 1st of each month (UTC)."
       )
       expect(html).toContain("2.5M of 100M GCU included · 3%")
-      expect(html).toContain("250 of 912.5 GB-hours included · 27%")
+      expect(html).toContain("250 of 912.5 GiB-hours included · 27%")
       expect(html).toContain(`max="100000000" value="2500000"`)
-      expect(html).toContain("Not metered")
-      expect(html).toContain("No usage this month")
+      expect(html).toContain(`aria-label="Active memory used"`)
+      expect(html).toContain("<dt>Active durable filesystem</dt><dd class=\"muted\">Not metered</dd>")
+      expect(html).toContain("<dt>Active ephemeral filesystem</dt><dd class=\"muted\">No usage this month</dd>")
     })
 
     it("shows a used-up allowance and the paid overage above it", async () => {
@@ -597,7 +598,7 @@ describe("Polar billing", () => {
 
       const html = await page(jar)
 
-      expect(html).toContain("0.001 of 912.5 GB-hours included · &lt;1%")
+      expect(html).toContain("0.001 of 912.5 GiB-hours included · &lt;1%")
       expect(html).not.toContain("Paid overage so far this month")
     })
 
@@ -2348,9 +2349,9 @@ describe("Polar billing", () => {
         }
         const html = await page(jar)
         expect(html).toContain(`${symbol}${prices.perMillionGcu} per million GCU`)
-        expect(html).toContain(`${symbol}${prices.perGbHour} per GB-hour`)
-        expect(html).toContain(`${symbol}${prices.perDurableGbMonth} per GB-month`)
-        expect(html).toContain(`${symbol}${prices.perEphemeralGbMonth} per GB-month`)
+        expect(html).toContain(`${symbol}${prices.perGbHour} per GiB-hour`)
+        expect(html).toContain(`${symbol}${prices.perDurableGbMonth} per GiB-month`)
+        expect(html).toContain(`${symbol}${prices.perEphemeralGbMonth} per GiB-month`)
         expect(html).toContain(`Prices in ${currency.toUpperCase()}, including tax.`)
         expect(html).toContain(`+ 1.5M GCU of paid overage · ${symbol}0.02`)
         expect(html).toContain(`Paid overage so far this month: about ${symbol}0.02 including tax, at the prices below.`)
