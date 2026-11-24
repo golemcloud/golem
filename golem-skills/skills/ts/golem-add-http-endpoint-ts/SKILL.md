@@ -18,7 +18,7 @@ Golem agents can be exposed over HTTP using code-first route definitions. This i
 |---|---|
 | `golem-http-params-ts` | Path/query/header variable mapping, body mapping, supported types, response mapping |
 | `golem-make-http-request-ts` | Making outgoing HTTP requests from agent code, especially when calling other Golem agent endpoints (required for correct JSON body formatting) |
-| `golem-add-http-auth-ts` | Enabling authentication and receiving `Principal` |
+| `golem-add-http-auth-ts` | Enabling authentication and reading `ctx.caller` |
 | `golem-add-cors-ts` | Configuring CORS allowed origins |
 | `golem-configure-api-domain` | Setting up `httpApi` in `golem.yaml`, security schemes, domain deployments, and `subdomain` versus `domain` choices |
 

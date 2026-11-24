@@ -110,7 +110,7 @@ Each ordinary structured body input becomes a top-level field in the expected JS
 
 > **⚠️ Important:** Ordinary structured bodies use a JSON object with **body input keys only** as fields, even for one parameter. `input: { decision: z.string() }` expects `{"decision": "approved"}`, not a bare string. A single object input named `payload` also needs wrapping: `{"payload": {"name": "Widget", "count": 5}}`, not `{"name": "Widget", "count": 5}`. Do not include path/query/header inputs. Unstructured text and binary inputs instead consume the raw body; see below.
 
-CLI positional invocation is different: pass one argument per user-supplied `input` field in declaration order, including inputs bound to path/query/header values over HTTP. Skip host-injected `Principal` fields without a principal value or placeholder. Use TypeScript native literals for each value, not one object wrapping the full input. A single object input is one object literal without the HTTP `payload` wrapper. Load `golem-invoke-agent-ts` for CLI examples and caller-only input rules.
+CLI positional invocation is different: pass one argument per user-supplied `input` field in declaration order, including inputs bound to path/query/header values over HTTP. Use TypeScript native literals for each value, not one object wrapping the full input. A single object input is one object literal without the HTTP `payload` wrapper. Load `golem-invoke-agent-ts` for CLI examples and caller-only input rules.
 
 ## Binary Request and Response Bodies
 
@@ -244,23 +244,23 @@ download: method({
 | `T.nullable()` / `T.optional()` | value or `null` |
 | `z.enum(['a', 'b'])` | JSON string |
 
-## Accessing the Principal
+## Accessing the Caller
 
-Declare a bare `s.principal()` input to receive the current invocation principal.
-The host injects it; callers supply no wire field and it is not bound to the URL,
-headers, or body. `this.getPrincipal()` instead returns the initialization principal,
-which can differ from a later caller. See the `golem-add-http-auth-ts` skill:
+Every handler receives the invocation context as its second argument. `ctx.caller.original`
+is the principal that started the call chain, for example the signed-in user; `ctx.caller.immediate`
+made this call. The context is not an input: callers supply no wire field, and it is never bound
+to the URL, headers, or body. See the `golem-add-http-auth-ts` skill:
 
 ```typescript
-// Contract (import s from '@golemcloud/golem-ts-sdk'):
+// Contract:
 whoAmI: method({
-  input: { caller: s.principal() },
+  input: {},
   returns: z.object({ kind: z.string() }),
   http: http.get('/whoami'),
 }),
 // Handler:
-whoAmI({ caller }) {
-  return { kind: caller.tag };
+whoAmI(_input, ctx) {
+  return { kind: ctx.caller.original.kind };
 },
 ```
 

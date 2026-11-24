@@ -194,7 +194,7 @@ save(): Uint8Array | Promise<Uint8Array>
 load(bytes: Uint8Array, context: SnapshotRestoreContext): State | Promise<State>
 ```
 
-A custom `snapshot` block overrides the default serialization entirely. The restore context provides the constructor input (`id`), the agent ID (`agentId`), the restored principal, and a fresh config view. After a custom `load`, the SDK reads the schema of each open database in a `DatabaseSync` field. For a file-backed database, it also reads every page when all pages fit in the page cache.
+A custom `snapshot` block overrides the default serialization entirely. The restore context provides the constructor input (`id`), the agent ID (`agentId`) and a fresh config view. A snapshot holds no caller: if the agent must remember its creator, keep `ctx.caller.original.ref` (a `PrincipalRef`) in its state. After a custom `load`, the SDK reads the schema of each open database in a `DatabaseSync` field. For a file-backed database, it also reads every page when all pages fit in the page cache.
 
 ## Restoration Is Read-Only
 

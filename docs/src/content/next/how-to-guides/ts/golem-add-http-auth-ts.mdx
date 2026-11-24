@@ -56,38 +56,42 @@ export const MostlySecureAgent = defineAgent({
 });
 ```
 
-## Receiving the Principal
+## Reading the Caller
 
-When auth is enabled, read the authenticated user's `Principal` either from the handler's `this` via `this.getPrincipal()` (the init-time principal), or by declaring a bare `s.principal()` method parameter — which is **auto-injected** with the per-call caller principal. Either way the `Principal` is host-supplied: an auto-injected parameter consumes no wire field and is **never** mapped to path/query/header variables:
+When auth is enabled, a handler reads the signed-in user from its invocation context. The SDK passes the context as the second argument of every method handler, and as the `ctx` of `init`. `ctx.caller.original` is the principal that started the call chain: for a signed-in user it is a `user` principal, with the user's `claims`. `ctx.caller.immediate` is the principal that made this call. The context is not an input: it consumes no wire field and is **never** mapped to path/query/header variables.
 
 ```typescript
 import { z } from 'zod';
-import { defineAgent, method, http, s } from '@golemcloud/golem-ts-sdk';
+import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
 
 export const ApiAgent = defineAgent({
   name: 'ApiAgent',
   id: { name: z.string() },
   http: http.mount('/api/{name}', { auth: true }),
   methods: {
-    whoAmI: method({ input: { caller: s.principal() }, returns: z.object({ kind: z.string() }), http: http.get('/whoami') }),
-    getData: method({ input: { id: z.string(), caller: s.principal() }, returns: Data, http: http.get('/data/{id}') }),
+    whoAmI: method({ input: {}, returns: z.object({ kind: z.string() }), http: http.get('/whoami') }),
+    getData: method({ input: { id: z.string() }, returns: z.string(), http: http.get('/data/{id}') }),
   },
 });
 
 export const ApiAgentImpl = ApiAgent.implement({
-  init: () => ({}),
+  // Remember who created the agent. A PrincipalRef is data: it grants nothing by itself.
+  init: (ctx) => ({ owner: ctx.caller.original.ref }),
   methods: {
-    whoAmI({ caller }) {
-      return { kind: caller.tag };
+    whoAmI(_input, ctx) {
+      return { kind: ctx.caller.original.kind };
     },
-    getData({ id, caller }) {
-      // ... authorize caller and return Data for id ...
+    getData({ id }, ctx) {
+      if (this.owner === undefined || !ctx.caller.original.equals(this.owner)) {
+        throw new Error('Only the creator can read this data');
+      }
+      return `data for ${id}`;
     },
   },
 });
 ```
 
-`this.getPrincipal()` returns the initialization principal, also available in `init` via the `InitContext` argument: `init: (ctx) => ({ caller: ctx.principal })`. It is not necessarily the caller of a later invocation. To authorize each call, declare a bare `s.principal()` method input; the host injects the current invocation principal without a caller wire field. See [`golem-http-params-ts`](/next/how-to-guides/ts/golem-http-params-ts). `this.getId()`, which returns the agent's `AgentId`, is also available on every handler's `this`.
+The principal kinds are `user`, `account` (a Golem account, for example the CLI), `agent`, `tool` and `anonymous`; narrow with `kind`. A `Principal` or a `Caller` is a live value: it cannot be a method input, a result or part of a value type, and the build fails if a signature holds one. To store an identity, keep `ctx.caller.original.ref`, a `PrincipalRef`, and compare with `equals`; declare it in a schema with `s.principalRef()`. `this.getId()`, which returns the agent's `AgentId`, is also available on every handler's `this`.
 
 ## Deployment Configuration
 
