@@ -20,9 +20,10 @@ are case-insensitive. Reject duplicate names, duplicate structural headers,
 unsupported headers, and header injection.
 
 Exactly one physical `state` part has Content-Type `application/json` and UTF-8
-JSON `{ "version": 1, "principal": ..., "state": ... }`. It need not arrive
-first. SDKs own metadata and principal serialization; reject duplicate metadata
-keys. Binary-only state is JSON null. User parts are `part:<logical-name>`;
+JSON `{ "version": 2, "state": ... }`. It need not arrive first. SDKs own the
+metadata serialization; reject duplicate metadata keys. SDK readers still accept
+a 1.6 `{ "version": 1, "principal": ..., "state": ... }` part and drop its
+principal. Binary-only state is JSON null. User parts are `part:<logical-name>`;
 managed SQLite images are `db:<name>`. Logical user names match
 `[A-Za-z0-9_][A-Za-z0-9_.-]*` and are case-sensitive. `part:state` and
 `part:__proto__` are valid. Bare ASCII MIME type/subtype values normalize to
