@@ -1,0 +1,192 @@
+name: Bounded Selector Validation
+on:
+  workflow_call:
+    inputs:
+      deadline:
+        required: true
+        type: string
+      isolated:
+        required: true
+        type: boolean
+permissions:
+  contents: read
+  actions: write
+jobs:
+  prepare-harness:
+    runs-on: blacksmith-32vcpu-ubuntu-2204
+    timeout-minutes: 45
+    env:
+      DEADLINE: ${{ inputs.deadline }}
+      ISOLATED: ${{ inputs.isolated }}
+      PREPARATION: 'true'
+      EVIDENCE_LIMIT: '1073741824'
+      HOST: prepare
+    steps:
+      - &deadline_guard
+        name: Validate the immutable allocation and start the deadline guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$ISOLATED" == true && "$GITHUB_RUN_ATTEMPT" == 1 && "$DEADLINE" =~ ^[0-9]+$ ]]
+          timeout 20s gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$RUNNER_TEMP/selector-run.json"
+          created=$(date -d "$(jq -r .created_at "$RUNNER_TEMP/selector-run.json")" +%s)
+          now=$(date +%s)
+          (( DEADLINE > now + 120 && DEADLINE <= created + 5400 ))
+          cutoff=$DEADLINE
+          if [[ "$PREPARATION" == true && $((created + 3000)) -lt "$cutoff" ]]; then
+            cutoff=$((created + 3000))
+          fi
+          (( cutoff > now + 120 ))
+          export CUTOFF=$cutoff
+          cat > "$RUNNER_TEMP/selector-deadline.py" <<'PY'
+          import json, os, time, urllib.request
+          cutoff = int(os.environ['CUTOFF'])
+          api = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          headers = {'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'}
+          def request(suffix='', method='GET'):
+              with urllib.request.urlopen(urllib.request.Request(api + suffix, headers=headers, method=method), timeout=20) as response:
+                  return response.read()
+          time.sleep(max(0, cutoff - time.time() - 120))
+          print(f'Cancelling at {time.time()}, cutoff={cutoff}', flush=True)
+          try:
+              request('/cancel', 'POST')
+          except Exception as error:
+              print(f'Cancellation request failed: {type(error).__name__}', flush=True)
+          time.sleep(max(0, cutoff - time.time() - 60))
+          if json.loads(request())['status'] != 'completed':
+              request('/force-cancel', 'POST')
+          PY
+          python3 "$RUNNER_TEMP/selector-deadline.py" > "$RUNNER_TEMP/selector-deadline.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/selector-deadline.pid"
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Retain the exact original builder identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: timeout 20s gh api "repos/$GITHUB_REPOSITORY/actions/runs/44078542455" > "$RUNNER_TEMP/original-origin.json"
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: 44078542455
+          artifact-ids: 14329150891
+          merge-multiple: true
+          path: ${{ runner.temp }}/original
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Verify and freeze the original archive before building
+        run: |
+          python3 integration-tests/benchmark_suites/r3_selector.py freeze \
+            --archive "$RUNNER_TEMP/original/benchmark-bundle.tar.gz" \
+            --origin "$RUNNER_TEMP/original-origin.json" --output "$RUNNER_TEMP/selector-results"
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-prefix-key: 'v3-rust'
+          cache-shared-key: 'release'
+          cache-save-if: 'false'
+          install-cargo-make: 'false'
+      - name: Build only the harness
+        run: cargo build --locked --profile benchmarks -p integration-tests --bin benchmarks
+      - name: Package the harness and explicit mixed-source provenance
+        run: |
+          target="$(cargo metadata --no-deps --format-version 1 | jq -r .target_directory)"
+          python3 integration-tests/benchmark_suites/r3_selector.py package \
+            --binary "$target/benchmarks/benchmarks" --source "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" --output "$RUNNER_TEMP/selector-results"
+          rustc --version --verbose > "$RUNNER_TEMP/selector-results/toolchain.txt"
+      - &evidence_check
+        name: Check complete evidence size without truncation
+        id: evidence
+        if: always()
+        run: |
+          bytes=$(du -sb "$RUNNER_TEMP/selector-results" | cut -f1)
+          echo "$bytes" > "$RUNNER_TEMP/evidence-bytes.txt"
+          (( bytes <= EVIDENCE_LIMIT ))
+      - name: Retain the frozen runtime and the prepared harness
+        if: success()
+        uses: actions/upload-artifact@v6
+        with:
+          name: selector-preparation-attempt1
+          path: ${{ runner.temp }}/selector-results
+          if-no-files-found: error
+          retention-days: 7
+      - &receipts_upload
+        name: Preserve small lifecycle and rejection receipts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: selector-receipts-${{ github.job }}-${{ env.HOST }}-attempt${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/selector-results/status.json
+            ${{ runner.temp }}/selector-results/preparation-receipt.json
+            ${{ runner.temp }}/selector-run.json
+            ${{ runner.temp }}/selector-deadline.log
+            ${{ runner.temp }}/evidence-bytes.txt
+          if-no-files-found: warn
+          retention-days: 7
+      - &stop_guard
+        name: Stop only this deadline guard after uploads
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/selector-deadline.pid" ]]; then
+            pid=$(cat "$RUNNER_TEMP/selector-deadline.pid")
+            if [[ -r "/proc/$pid/cmdline" ]] && tr '\0' '\n' < "/proc/$pid/cmdline" | grep -Fxq "$RUNNER_TEMP/selector-deadline.py"; then
+              kill "$pid"
+            fi
+          fi
+
+  validate-selector:
+    needs: prepare-harness
+    runs-on: blacksmith-32vcpu-ubuntu-2204
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        host: ['1', '2', '3', '4']
+    env:
+      DEADLINE: ${{ inputs.deadline }}
+      ISOLATED: ${{ inputs.isolated }}
+      PREPARATION: 'false'
+      EVIDENCE_LIMIT: '262144000'
+      HOST: ${{ matrix.host }}
+    steps:
+      - *deadline_guard
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          ref: eb46c797c329e1787fb9260cc57b132e0830489d
+          path: runtime
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v8
+        with:
+          name: selector-preparation-attempt1
+          path: ${{ runner.temp }}/prepared
+      - uses: shogo82148/actions-setup-redis@v1.49.0
+        with:
+          redis-version: '8.0.2'
+          auto-start: false
+      - name: Run exactly one fresh N=5 selector-validation process
+        run: |
+          python3 integration-tests/benchmark_suites/r3_selector.py run \
+            --root "$GITHUB_WORKSPACE/runtime" --prepared "$RUNNER_TEMP/prepared" \
+            --output "$RUNNER_TEMP/selector-results" --deadline "$DEADLINE" \
+            --source "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --host "$HOST"
+      - *evidence_check
+      - name: Preserve raw evidence including ordinary failures
+        if: always() && steps.evidence.outcome == 'success'
+        uses: actions/upload-artifact@v6
+        with:
+          name: selector-validation-${{ matrix.host }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/selector-results
+          if-no-files-found: error
+          retention-days: 7
+      - *receipts_upload
+      - *stop_guard

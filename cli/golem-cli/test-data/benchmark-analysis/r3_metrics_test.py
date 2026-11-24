@@ -7,14 +7,19 @@ import math
 import os
 from pathlib import Path
 import subprocess
+import sys
+import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[4]
 SCRIPT = ROOT / 'integration-tests/benchmark_suites/validate_r3_metrics.py'
 spec = importlib.util.spec_from_file_location('r3_metrics', SCRIPT)
 r3 = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(r3)
+sys.path.insert(0, str(SCRIPT.parent))
+import r3_selector as selector
 
 
 def configuration(name='throughput-cpu-intensive', cluster=5, size=1, length=100):
@@ -51,16 +56,16 @@ def iteration(specification, index=0, route='local'):
 def suite_record(declaration, run_id='saved-1'):
     entries = {}
     hardware = 'a' * 64
-    series = hashlib.sha256(json.dumps([1, 1, r3.RUNNER, hardware, r3.STORAGE, False],
-                                      separators=(',', ':')).encode()).hexdigest()
     for item in declaration['configurations']:
-        entry = entries.setdefault(item['entry'], dict(name=item['entry'], entry_version=1, iterations=item['iterations'],
+        series = hashlib.sha256(json.dumps([1, item['version'], r3.RUNNER, hardware, r3.STORAGE, False],
+                                          separators=(',', ':')).encode()).hexdigest()
+        entry = entries.setdefault(item['entry'], dict(name=item['entry'], entry_version=item['version'], iterations=item['iterations'],
             series_key=series, measurement_environment=dict(runner_id=r3.RUNNER,
                 hardware_fingerprint=hardware, storage_profile=r3.STORAGE, sockets_enabled=False), results=[]))
         entry['results'].append(dict(run_config=item['config'],
                                      iteration_results=[iteration(item, i) for i in range(item['iterations'])]))
     return dict(schema_version=2, harness_version=1, suite=declaration['suite_name'], suite_fingerprint=declaration['suite_fingerprint'],
-                run_id=run_id, source=dict(repository='golemcloud/golem', commitSha=r3.SOURCE),
+                run_id=run_id, source=dict(repository='golemcloud/golem', commitSha=declaration['source']),
                 runner=dict(id=r3.RUNNER), results=list(entries.values()),
                 artifacts=dict(runner=dict(sha256='b' * 64),
                                services={name: dict(sha256='c' * 64) for name in r3.SERVICES},
@@ -70,7 +75,16 @@ def suite_record(declaration, run_id='saved-1'):
 class R3MetricsTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.declaration = r3.manifest()
+        directory = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(directory.cleanup)
+        cls.producer_root = Path(directory.name)
+        # Exact producer files from SOURCE, not the changing harness checkout.
+        with tarfile.open(Path(__file__).with_name('r3-producers.tar.gz')) as archive:
+            for name in r3.PRODUCERS:
+                path = cls.producer_root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(archive.extractfile(name).read())
+        cls.declaration = r3.manifest(cls.producer_root)
 
     def test_inventory_is_source_defined_including_unobserved_route(self):
         items = self.declaration['configurations']
@@ -252,7 +266,7 @@ class R3MetricsTest(unittest.TestCase):
         declaration['configurations'] = [declaration['configurations'][0]]
         clean = suite_record(declaration)
         for change in ('source', 'hardware', 'artifact', 'missing-iteration', 'missing-config',
-                       'extra-entry', 'boolean-version', 'failure'):
+                       'extra-entry', 'boolean-version', 'workload-version', 'failure'):
             run = copy.deepcopy(clean)
             if change == 'source':
                 run['source']['commitSha'] = 'e' * 40
@@ -270,6 +284,8 @@ class R3MetricsTest(unittest.TestCase):
                 run['results'].append(extra)
             elif change == 'boolean-version':
                 run['harness_version'] = True
+            elif change == 'workload-version':
+                run['results'][0]['entry_version'] = 2
             else:
                 run['results'][0]['results'][0]['failures'] = {'setup': ['failed']}
             with self.subTest(change=change):
@@ -293,7 +309,8 @@ class R3MetricsTest(unittest.TestCase):
             path.write_text(json.dumps(dict(runs=[run])))
             sha = hashlib.sha256(path.read_bytes()).hexdigest()
             output = Path(directory) / 'view'
-            command = ['python3', str(SCRIPT), '--record', str(path), sha, '--output', str(output)]
+            command = ['python3', str(SCRIPT), '--record', str(path), sha,
+                       '--producer-root', str(self.producer_root), '--output', str(output)]
             env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
             result = subprocess.run(command, capture_output=True, text=True, env=env, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -316,6 +333,16 @@ class R3MetricsTest(unittest.TestCase):
             invalid = json.loads((Path(command[-1]) / 'report.json').read_text())
             self.assertEqual(invalid['summary']['invalid_iterations'], 1)
             self.assertFalse(invalid['r3_acceptance'])
+            with tempfile.TemporaryDirectory() as changed:
+                producer = Path(changed) / 'integration-tests/benchmark_suites/ci.yaml'
+                producer.parent.mkdir(parents=True)
+                producer.write_text('changed producer')
+                command[6] = changed
+                command[-1] = str(Path(directory) / 'changed-producer')
+                result = subprocess.run(command, capture_output=True, text=True, env=env, timeout=30)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Producer contract changed', result.stderr)
+                self.assertFalse(Path(command[-1]).exists())
 
     def test_coverage_pilot_cli_distinguishes_absence_from_loss(self):
         declaration = copy.deepcopy(self.declaration)
@@ -334,7 +361,8 @@ class R3MetricsTest(unittest.TestCase):
         clean = suite_record(declaration)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'raw.json'
-            command = ['python3', str(SCRIPT.with_name('r3_coverage.py')), 'analyze', str(path)]
+            command = ['python3', str(SCRIPT.with_name('r3_coverage.py')), 'analyze', str(path),
+                       '--producer-root', str(self.producer_root)]
             for scenario in ('absent', 'exposed', 'lost-sample', 'wrong-suite', 'missing-iteration'):
                 run = copy.deepcopy(clean)
                 if scenario == 'exposed':
@@ -392,7 +420,7 @@ class R3MetricsTest(unittest.TestCase):
 
     def test_finite_duration_range_retains_report_without_capping_ratio(self):
         with tempfile.TemporaryDirectory() as directory:
-            command = ['python3', str(SCRIPT)]
+            command = ['python3', str(SCRIPT), '--producer-root', str(self.producer_root)]
             for index in range(5):
                 run = suite_record(self.declaration, f'finite-range-{index}')
                 for it in run['results'][0]['results'][0]['iteration_results']:
@@ -414,6 +442,154 @@ class R3MetricsTest(unittest.TestCase):
             self.assertEqual(band['max_min_status'], 'unrepresentable')
             self.assertFalse(band['comparable_control_within_threshold'])
             self.assertFalse(report['r3_acceptance'])
+
+
+class SelectorValidationTest(unittest.TestCase):
+    source = 'f' * 40
+
+    def record(self):
+        declared = selector.declaration(self.source)
+        run = suite_record(declared)
+        for spec in declared['configurations']:
+            raw = next(result for entry in run['results'] if entry['name'] == spec['entry']
+                       for result in entry['results'] if result['run_config'] == spec['config'])
+            for it in raw['iteration_results']:
+                # Independent oracle: even iterations start local; each adjacent target flips.
+                start = 'local' if it['index'] in (0, 2, 4) else 'remote'
+                for language in ('rust', 'ts'):
+                    for route in ('local', 'remote'):
+                        prefix = f'{language}-agent-rpc-{route}-'
+                        for key in list(it['duration_samples']):
+                            if key.startswith(prefix):
+                                del it['duration_samples'][key]
+                        for key in list(it['count_samples']):
+                            if key.startswith(prefix):
+                                del it['count_samples'][key]
+                    calls = {'throughput-cpu-intensive': 10, 'throughput-large-input': 100}[spec['entry']]
+                    for target in range(spec['config']['size']):
+                        route = start if target % 2 == 0 else ('remote' if start == 'local' else 'local')
+                        prefix = f'{language}-agent-rpc-{route}-'
+                        it['duration_samples'][prefix + f'worker-{target}__secondary'] = [10 + target] * calls
+                        it['duration_samples'].setdefault(prefix + 'invocation', []).extend([10 + target] * calls)
+                        for suffix in ('retries', 'timeouts'):
+                            it['count_samples'][prefix + f'worker-{target}-{suffix}__secondary'] = [0] * calls
+                            it['count_samples'].setdefault(prefix + 'invocation-' + suffix, []).extend([0] * calls)
+        return run
+
+    def test_public_cli_exact_schedule_and_wrong_parity(self):
+        run = self.record()
+        with tempfile.TemporaryDirectory() as directory:
+            raw = Path(directory) / 'raw.json'
+            command = ['python3', str(SCRIPT.with_name('r3_selector.py')), 'analyze', str(raw), '--source', self.source]
+            for change in ('none', 'parity', 'source', 'version', 'iteration', 'failure', 'retry'):
+                damaged = copy.deepcopy(run)
+                it = damaged['results'][0]['results'][0]['iteration_results'][0]
+                if change == 'parity':
+                    # Both routes remain exposed over the process, but iteration0 is wrong.
+                    for field in ('duration_samples', 'count_samples'):
+                        it[field] = {key.replace('-rpc-local-', '-rpc-remote-'): value for key, value in it[field].items()}
+                elif change == 'source':
+                    damaged['source']['commitSha'] = r3.SOURCE
+                elif change == 'version':
+                    damaged['results'][0]['entry_version'] = 1
+                elif change == 'iteration':
+                    damaged['results'][0]['results'][0]['iteration_results'].pop()
+                elif change == 'failure':
+                    it['failures'] = {'setup': ['failed']}
+                elif change == 'retry':
+                    it['count_samples']['rust-agent-rpc-local-invocation-retries'][0] = 1
+                raw.write_text(json.dumps(dict(runs=[damaged])))
+                result = subprocess.run(command, capture_output=True, text=True, timeout=30,
+                                        env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'))
+                with self.subTest(change=change):
+                    if change == 'none':
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        report = json.loads(result.stdout)
+                        self.assertEqual(len(report['rows']), 16)
+                        self.assertTrue(report['coverage_complete'])
+                        self.assertFalse(report['r3_acceptance'])
+                        self.assertFalse(report['n_accepted'])
+                        self.assertEqual(report['rows'][0]['applicable_indexes'], [0, 2, 4])
+                        self.assertEqual(report['rows'][1]['applicable_indexes'], [1, 3])
+                        self.assertEqual(report, selector.analyze(run, self.source))
+                    else:
+                        self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_selection_receipts_are_complete_and_match_pods(self):
+        receipts = []
+        for index in range(5):
+            for component in range(8):
+                for target in range(10 if component >= 6 else 1):
+                    local = (index + target) % 2 == 0
+                    receipts.append(dict(component_id=f'{index}-{component}', iteration=index, target=target,
+                        candidate=3, local=local, parent='Caller("key")', child='Callee("key")',
+                        parent_pod='127.0.0.1:9100', child_pod=f'127.0.0.1:{9100 if local else 9101}'))
+        text = '\n'.join('\x1b[1mrpc_selection\x1b[0m: ' + json.dumps(item) for item in receipts)
+        self.assertEqual(selector.selections(text), receipts)
+        selector.validate_selections(receipts)
+        for change in ('missing', 'duplicate', 'wrong-pod', 'bad-candidate'):
+            damaged = copy.deepcopy(receipts)
+            if change == 'missing':
+                damaged.pop()
+            elif change == 'duplicate':
+                damaged.append(damaged[0])
+            elif change == 'wrong-pod':
+                damaged[0]['child_pod'] = 'different'
+            else:
+                damaged[0]['candidate'] = 10000
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                selector.validate_selections(damaged)
+
+    def test_overlay_is_bound_and_never_changes_service_bytes(self):
+        import io
+        provenance = dict(source=self.source, run_id='123', attempt='1', base_source=r3.SOURCE,
+                          base_bundle_sha256=selector.original.BUNDLE_SHA, sha256=hashlib.sha256(b'executable').hexdigest())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'target/benchmarks').mkdir(parents=True)
+            (root / 'target/release').mkdir()
+            service = root / 'target/release/worker-executor'
+            service.write_bytes(b'original executor')
+            for change in ('none', 'source', 'run', 'attempt', 'digest', 'permission', 'extra', 'link', 'duplicate', 'traversal'):
+                metadata = copy.deepcopy(provenance)
+                if change in ('source', 'run', 'attempt'):
+                    metadata[{'source': 'source', 'run': 'run_id', 'attempt': 'attempt'}[change]] = 'wrong'
+                if change == 'digest':
+                    metadata['sha256'] = '0' * 64
+                archive = root / 'overlay.tar.gz'
+                with tarfile.open(archive, 'w:gz') as tar:
+                    for name, data in (('benchmarks', b'executable'), ('harness-provenance.json', json.dumps(metadata).encode())):
+                        member = tarfile.TarInfo(name)
+                        member.size = len(data)
+                        member.mode = 0o644 if change == 'permission' else 0o755
+                        tar.addfile(member, io.BytesIO(data))
+                    if change in ('extra', 'link', 'duplicate', 'traversal'):
+                        member = tarfile.TarInfo({'extra': 'worker-executor', 'link': 'link',
+                                                 'duplicate': 'benchmarks', 'traversal': '../benchmarks'}[change])
+                        if change == 'link':
+                            member.type = tarfile.SYMTYPE
+                            member.linkname = 'benchmarks'
+                        tar.addfile(member)
+                with self.subTest(change=change):
+                    if change == 'none':
+                        selector.install_overlay(archive, root, {}, self.source, '123')
+                        self.assertEqual((root / 'target/benchmarks/benchmarks').read_bytes(), b'executable')
+                    else:
+                        with self.assertRaises(ValueError):
+                            selector.install_overlay(archive, root, {}, self.source, '123')
+                    self.assertEqual(service.read_bytes(), b'original executor')
+
+    def test_original_origin_and_expired_preparation_fail_closed(self):
+        origin = dict(id=44078542455, head_sha=r3.SOURCE, path='.github/workflows/benchmark.yaml',
+                      event='workflow_dispatch', run_attempt=1, conclusion='success')
+        selector.validate_origin(origin)
+        for key, value in (('path', '.github/workflows/other.yaml'), ('run_attempt', 2), ('conclusion', 'failure')):
+            with self.assertRaises(ValueError):
+                selector.validate_origin(dict(origin, **{key: value}))
+        with patch.object(selector.subprocess, 'check_output') as process:
+            with self.assertRaisesRegex(ValueError, 'reserve'):
+                selector.checked(['must-not-run'], ROOT, 0)
+            process.assert_not_called()
 
 
 if __name__ == '__main__':

@@ -27,8 +27,8 @@ def suite():
         dict(name='throughput-large-input', version=1, iterations=5, clusterSize=[5], size=[1], length=[100, 10000])])
 
 
-def declaration():
-    result = metrics.manifest()
+def declaration(producer_root=ROOT):
+    result = metrics.manifest(producer_root)
     result.update(suite_name=suite()['name'],
                   suite_fingerprint=metrics.digest(json.dumps(suite(), separators=(',', ':')).encode()),
                   fixtures=['benchmark_agent_rust_release', 'benchmark_agent_ts'])
@@ -43,8 +43,8 @@ def declaration():
     return result
 
 
-def analyze(run):
-    declared = declaration()
+def analyze(run, producer_root=ROOT):
+    declared = declaration(producer_root)
     configurations, _ = metrics.validate_identity(run, declared)
     rows = []
     for specification in declared['configurations']:
@@ -127,7 +127,7 @@ def execute(args):
         checked(['docker', 'tag', POSTGRES, 'postgres:17.7'])
         suite_path = args.output / 'suite.yaml'
         save(suite_path, suite())
-        save(args.output / 'manifest.json', declaration())
+        save(args.output / 'manifest.json', declaration(args.root))
         harness = args.root / 'target/benchmarks/benchmarks'
         checked([str(harness), 'suite', '--check-artifacts', str(suite_path), 'spawned'])
         run_id = f'r3-coverage-{os.environ["GITHUB_RUN_ID"]}-{args.host}'
@@ -174,7 +174,7 @@ def execute(args):
         for item in list(artifacts['services'].values()) + list(artifacts['fixtures'].values()):
             member = str(Path(item['path']).resolve().relative_to(args.root))
             metrics.require(item['sha256'] == members[member] == sha(args.root / member), 'Wrong measured artifact')
-        report = analyze(run)
+        report = analyze(run, args.root)
         save(args.output / 'coverage.json', report)
         status['valid'] = True
     except BaseException as error:
@@ -221,13 +221,14 @@ def main():
     run.add_argument('--host', choices=('1', '2', '3', '4'), required=True)
     analysis = commands.add_parser('analyze')
     analysis.add_argument('record', type=Path)
+    analysis.add_argument('--producer-root', type=Path, default=ROOT)
     args = parser.parse_args()
     if args.mode == 'run':
         execute(args)
     else:
         collection = json.loads(args.record.read_text())
         metrics.require(len(collection['runs']) == 1, 'Expected one fresh process')
-        print(json.dumps(analyze(collection['runs'][0]), indent=2, allow_nan=False))
+        print(json.dumps(analyze(collection['runs'][0], args.producer_root), indent=2, allow_nan=False))
 
 
 if __name__ == '__main__':

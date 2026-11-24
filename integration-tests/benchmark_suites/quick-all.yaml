@@ -61,42 +61,42 @@ benchmarks:
     length: [ 5000 ]
 
   - name: throughput-echo
-    version: 1
+    version: 2
     iterations: 1
     clusterSize: [ 1, 5 ]
     size: [ 1, 10, 100 ]
     length: [ 1000 ]
 
   - name: throughput-echo-aggregate
-    version: 1
+    version: 2
     iterations: 1
     clusterSize: [ 1, 5 ]
     size: [ 1, 10, 100 ]
     length: [ 1000 ]
 
   - name: throughput-large-input
-    version: 1
+    version: 2
     iterations: 1
     clusterSize: [ 1, 5 ]
     size: [ 1, 10 ]
     length: [ 100, 10000, 100000 ]
 
   - name: throughput-large-input-aggregate
-    version: 1
+    version: 2
     iterations: 1
     clusterSize: [ 1, 5 ]
     size: [ 1, 10 ]
     length: [ 100, 10000, 100000 ]
 
   - name: throughput-cpu-intensive
-    version: 1
+    version: 2
     iterations: 1
     clusterSize: [ 1, 5 ]
     size: [ 1, 10 ]
     length: [ 100 ]
 
   - name: throughput-cpu-intensive-aggregate
-    version: 1
+    version: 2
     iterations: 1
     clusterSize: [ 1, 5 ]
     size: [ 1, 10 ]

@@ -7,13 +7,13 @@ benchmarks:
     size: [100]
     length: [2]
   - name: throughput-cpu-intensive
-    version: 1
+    version: 2
     iterations: 3
     clusterSize: [1]
     size: [1]
     length: [100]
   - name: throughput-large-input
-    version: 1
+    version: 2
     iterations: 3
     clusterSize: [5]
     size: [25]

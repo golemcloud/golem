@@ -33,7 +33,7 @@ benchmarks:
   # size   = number of workers per implementation (×6 implementations total)
   # length = unused for echo
   - name: throughput-echo
-    version: 1
+    version: 2
     iterations: 3
     clusterSize: [2]
     size: [1, 50, 100, 250]
@@ -45,7 +45,7 @@ benchmarks:
   # benchmark most relevant to the memory-admission investigation — sized to
   # match throughput-echo so it exercises real density.
   - name: throughput-large-input
-    version: 1
+    version: 2
     iterations: 3
     clusterSize: [2]
     size: [1, 50, 100, 250]
@@ -54,7 +54,7 @@ benchmarks:
   # size   = number of workers per implementation
   # length = CPU work length passed to cpu_intensive
   - name: throughput-cpu-intensive
-    version: 1
+    version: 2
     iterations: 3
     clusterSize: [2]
     size: [1, 50, 100, 250]

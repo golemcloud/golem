@@ -27,11 +27,11 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
 };
-use golem_common::model::{AgentId, RoutingTable};
+use golem_common::model::{AgentId, Pod, RoutingTable};
 use golem_common::schema::TypedSchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
-    Benchmark, BenchmarkRecorder, BenchmarkResultValue, ResultKey, RunConfig,
+    Benchmark, BenchmarkError, BenchmarkRecorder, BenchmarkResultValue, ResultKey, RunConfig,
 };
 use golem_test_framework::config::benchmark::TestMode;
 use golem_test_framework::config::dsl_impl::TestUserContext;
@@ -41,17 +41,21 @@ use indoc::indoc;
 use reqwest::{Body, Method, Request, Url};
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use tracing::{Instrument, Level, info};
 
 pub struct ThroughputEcho<const AGGREGATE: bool> {
     config: RunConfig,
+    iteration: AtomicUsize,
 }
 pub struct ThroughputLargeInput<const AGGREGATE: bool> {
     config: RunConfig,
+    iteration: AtomicUsize,
 }
 pub struct ThroughputCpuIntensive<const AGGREGATE: bool> {
     config: RunConfig,
+    iteration: AtomicUsize,
 }
 
 #[async_trait]
@@ -118,15 +122,24 @@ impl<const AGGREGATE: bool> Benchmark for ThroughputEcho<AGGREGATE> {
     }
 
     async fn create(_mode: &TestMode, config: RunConfig) -> BenchmarkResultValue<Self> {
-        Ok(Self { config })
+        Ok(Self {
+            config,
+            iteration: AtomicUsize::new(0),
+        })
     }
 
     async fn setup_iteration(
         &self,
         benchmark_context: &Self::BenchmarkContext,
-        _recorder: BenchmarkRecorder,
+        recorder: BenchmarkRecorder,
     ) -> BenchmarkResultValue<Self::IterationContext> {
-        Ok(benchmark_context.setup_iteration(&self.config).await)
+        benchmark_context
+            .setup_iteration(
+                &self.config,
+                self.iteration.fetch_add(1, Ordering::Relaxed),
+                recorder,
+            )
+            .await
     }
 
     async fn warmup(
@@ -134,8 +147,7 @@ impl<const AGGREGATE: bool> Benchmark for ThroughputEcho<AGGREGATE> {
         benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
     ) -> BenchmarkResultValue {
-        benchmark_context.warmup(context).await;
-        Ok(())
+        benchmark_context.warmup(context).await
     }
 
     async fn run(
@@ -144,8 +156,7 @@ impl<const AGGREGATE: bool> Benchmark for ThroughputEcho<AGGREGATE> {
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
     ) -> BenchmarkResultValue {
-        benchmark_context.run(context, recorder, AGGREGATE).await;
-        Ok(())
+        benchmark_context.run(context, recorder, AGGREGATE).await
     }
 
     async fn cleanup_iteration(
@@ -229,15 +240,24 @@ impl<const AGGREGATE: bool> Benchmark for ThroughputLargeInput<AGGREGATE> {
     }
 
     async fn create(_mode: &TestMode, config: RunConfig) -> BenchmarkResultValue<Self> {
-        Ok(Self { config })
+        Ok(Self {
+            config,
+            iteration: AtomicUsize::new(0),
+        })
     }
 
     async fn setup_iteration(
         &self,
         benchmark_context: &Self::BenchmarkContext,
-        _recorder: BenchmarkRecorder,
+        recorder: BenchmarkRecorder,
     ) -> BenchmarkResultValue<Self::IterationContext> {
-        Ok(benchmark_context.setup_iteration(&self.config).await)
+        benchmark_context
+            .setup_iteration(
+                &self.config,
+                self.iteration.fetch_add(1, Ordering::Relaxed),
+                recorder,
+            )
+            .await
     }
 
     async fn warmup(
@@ -245,8 +265,7 @@ impl<const AGGREGATE: bool> Benchmark for ThroughputLargeInput<AGGREGATE> {
         benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
     ) -> BenchmarkResultValue {
-        benchmark_context.warmup(context).await;
-        Ok(())
+        benchmark_context.warmup(context).await
     }
 
     async fn run(
@@ -255,8 +274,7 @@ impl<const AGGREGATE: bool> Benchmark for ThroughputLargeInput<AGGREGATE> {
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
     ) -> BenchmarkResultValue {
-        benchmark_context.run(context, recorder, AGGREGATE).await;
-        Ok(())
+        benchmark_context.run(context, recorder, AGGREGATE).await
     }
 
     async fn cleanup_iteration(
@@ -337,15 +355,24 @@ impl<const AGGREGATE: bool> Benchmark for ThroughputCpuIntensive<AGGREGATE> {
     }
 
     async fn create(_mode: &TestMode, config: RunConfig) -> BenchmarkResultValue<Self> {
-        Ok(Self { config })
+        Ok(Self {
+            config,
+            iteration: AtomicUsize::new(0),
+        })
     }
 
     async fn setup_iteration(
         &self,
         benchmark_context: &Self::BenchmarkContext,
-        _recorder: BenchmarkRecorder,
+        recorder: BenchmarkRecorder,
     ) -> BenchmarkResultValue<Self::IterationContext> {
-        Ok(benchmark_context.setup_iteration(&self.config).await)
+        benchmark_context
+            .setup_iteration(
+                &self.config,
+                self.iteration.fetch_add(1, Ordering::Relaxed),
+                recorder,
+            )
+            .await
     }
 
     async fn warmup(
@@ -353,8 +380,7 @@ impl<const AGGREGATE: bool> Benchmark for ThroughputCpuIntensive<AGGREGATE> {
         benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
     ) -> BenchmarkResultValue {
-        benchmark_context.warmup(context).await;
-        Ok(())
+        benchmark_context.warmup(context).await
     }
 
     async fn run(
@@ -363,8 +389,7 @@ impl<const AGGREGATE: bool> Benchmark for ThroughputCpuIntensive<AGGREGATE> {
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
     ) -> BenchmarkResultValue {
-        benchmark_context.run(context, recorder, AGGREGATE).await;
-        Ok(())
+        benchmark_context.run(context, recorder, AGGREGATE).await
     }
 
     async fn cleanup_iteration(
@@ -386,7 +411,13 @@ pub struct AgentIdPair {
 }
 
 impl AgentIdPair {
-    fn at_same_worker_executor(&self, routing_table: &RoutingTable) -> bool {
+    fn assigned_pods(&self, routing_table: &RoutingTable) -> BenchmarkResultValue<(Pod, Pod)> {
+        if routing_table.number_of_shards.value == 0 {
+            return Err(BenchmarkError::new(
+                "rpc-routing",
+                "Routing table has no shards",
+            ));
+        }
         let parent_agent_id = AgentId::from_agent_id(self.component_id, &self.parent)
             .expect("Failed to create worker id from parent agent id");
         let child_agent_id = AgentId::from_agent_id(self.component_id, &self.child)
@@ -395,10 +426,80 @@ impl AgentIdPair {
         let child_pod = routing_table.lookup(&child_agent_id);
 
         match (parent_pod, child_pod) {
-            (Some(parent_pod), Some(child_pod)) => parent_pod == child_pod,
-            _ => panic!("Failed to find the pod of parent and child agents in RPC benchmark"),
+            (Some(parent_pod), Some(child_pod)) => Ok((*parent_pod, *child_pod)),
+            _ => Err(BenchmarkError::new(
+                "rpc-routing",
+                format!(
+                    "Missing assignment for RPC pair {} / {}",
+                    self.parent, self.child
+                ),
+            )),
         }
     }
+
+    fn at_same_worker_executor(&self, routing_table: &RoutingTable) -> bool {
+        let (parent, child) = self
+            .assigned_pods(routing_table)
+            .expect("Invalid RPC routing");
+        parent == child
+    }
+
+    fn ensure_unchanged(
+        &self,
+        expected: &RoutingTable,
+        current: &RoutingTable,
+    ) -> BenchmarkResultValue {
+        let assigned = self.assigned_pods(expected)?;
+        if self.assigned_pods(current)? != assigned {
+            return Err(BenchmarkError::new(
+                "rpc-routing",
+                format!(
+                    "RPC assignment changed for {} / {}",
+                    self.parent, self.child
+                ),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn select_rpc_agent_pairs(
+    component_id: ComponentId,
+    parent_type: &str,
+    child_type: &str,
+    size: usize,
+    iteration: usize,
+    routing_table: Option<&RoutingTable>,
+) -> BenchmarkResultValue<Vec<AgentIdPair>> {
+    (0..size).map(|target| {
+        let pair = |name: String| AgentIdPair {
+            component_id,
+            parent: agent_id!(parent_type, name.clone()),
+            child: agent_id!(child_type, name),
+        };
+        let Some(table) = routing_table else {
+            return Ok(pair(format!("rpc-test-{target}")));
+        };
+        // Alternate both across targets and across iterations. A single executor
+        // has no remote route; an odd target count gives local one extra on even iterations.
+        let local = table.all().len() == 1 || iteration % 2 == target % 2;
+        const MAX_CANDIDATES: usize = 10_000;
+        for candidate in 0..MAX_CANDIDATES {
+            let selected = pair(format!("rpc-test-{target}-{candidate}"));
+            let (parent_pod, child_pod) = selected.assigned_pods(table)?;
+            if (parent_pod == child_pod) == local {
+                info!(rpc_selection = %serde_json::json!({
+                    "component_id": component_id.to_string(), "parent": selected.parent.to_string(),
+                    "child": selected.child.to_string(), "parent_pod": parent_pod.to_string(),
+                    "child_pod": child_pod.to_string(), "local": local, "iteration": iteration,
+                    "target": target, "candidate": candidate
+                }),
+                      "Selected RPC benchmark pair");
+                return Ok(selected);
+            }
+        }
+        Err(BenchmarkError::new("rpc-routing", format!("No {parent_type}/{child_type} pair for local={local}, target={target} after {MAX_CANDIDATES} candidates")))
+    }).collect()
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -481,6 +582,8 @@ pub struct ThroughputBenchmark {
     rust_http_request: HttpRequestFn,
     deps: BenchmarkTestDependencies,
     call_count: usize,
+    routing_required: bool,
+    spawned_cluster_size: Option<usize>,
     /// Pre-built HTTP client for cloud-mode apps-domain calls
     /// (`https://{env_id}.{apps_base_domain}`).  Cached here so the
     /// connection pool is warm across benchmark iterations.
@@ -567,6 +670,17 @@ impl ThroughputBenchmark {
             rust_http_request,
             deps,
             call_count,
+            routing_required: !matches!(
+                mode,
+                TestMode::Cloud {
+                    shard_manager_grpc_host: None,
+                    ..
+                } | TestMode::Cloud {
+                    shard_manager_grpc_port: None,
+                    ..
+                }
+            ),
+            spawned_cluster_size: matches!(mode, TestMode::Spawned { .. }).then_some(cluster_size),
             cloud_http_client,
         }
     }
@@ -575,13 +689,16 @@ impl ThroughputBenchmark {
         self.deps.kill_all().await
     }
 
-    pub async fn setup_iteration(&self, config: &RunConfig) -> IterationContext {
+    pub async fn setup_iteration(
+        &self,
+        config: &RunConfig,
+        iteration: usize,
+        recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue<IterationContext> {
         let mut rust_agent_ids = vec![];
         let mut ts_agent_ids = vec![];
         let mut rust_agent_ids_for_http = vec![];
         let mut ts_agent_ids_for_http = vec![];
-        let mut ts_rpc_agent_id_pairs = vec![];
-        let mut rust_rpc_agent_id_pairs = vec![];
 
         // Fetch routing table when shard-manager is configured; fall back to
         // None (unlabeled single-bucket RPC) when not configured (e.g. cloud
@@ -589,17 +706,31 @@ impl ThroughputBenchmark {
         let routing_table: Option<RoutingTable> =
             match self.deps.shard_manager().get_routing_table().await {
                 Ok(rt) => {
-                    info!("Fetched routing table: {rt}");
+                    info!(routing_table = %rt, "Fetched routing table");
                     Some(rt)
+                }
+                Err(err) if self.routing_required => {
+                    return Err(BenchmarkError::new("rpc-routing", err));
                 }
                 Err(err) => {
                     info!(
-                        "Shard-manager not available, skipping routing table (RPC pairs \
-                         will be unlabeled): {err:#}"
+                        error = %err, "Shard-manager not configured; RPC pairs will be unlabeled"
                     );
                     None
                 }
             };
+
+        if let (Some(expected), Some(table)) = (self.spawned_cluster_size, &routing_table) {
+            if table.all().len() != expected {
+                return Err(BenchmarkError::new(
+                    "rpc-routing",
+                    format!(
+                        "Expected {expected} assigned executors, found {}",
+                        table.all().len()
+                    ),
+                ));
+            }
+        }
 
         let user = self.deps.user().await.unwrap();
         let (_, env) = user.app_and_env().await.unwrap();
@@ -629,18 +760,34 @@ impl ThroughputBenchmark {
             ts_agent_ids.push(agent_id!("BenchmarkAgent", format!("test-{n}")));
             rust_agent_ids_for_http.push(agent_id!("RustBenchmarkAgent", format!("test-{n}-http")));
             ts_agent_ids_for_http.push(agent_id!("BenchmarkAgent", format!("test-{n}-http")));
-
-            ts_rpc_agent_id_pairs.push(AgentIdPair {
-                component_id: ts_agent_component.id,
-                parent: agent_id!("RpcBenchmarkAgent", format!("rpc-test-{n}")),
-                child: agent_id!("BenchmarkAgent", format!("rpc-test-{n}")),
-            });
-            rust_rpc_agent_id_pairs.push(AgentIdPair {
-                component_id: rust_agent_component.id,
-                parent: agent_id!("RustRpcBenchmarkAgent", format!("rpc-test-{n}")),
-                child: agent_id!("RustBenchmarkAgent", format!("rpc-test-{n}")),
-            });
         }
+
+        let pairs = (|| {
+            let ts = select_rpc_agent_pairs(
+                ts_agent_component.id,
+                "RpcBenchmarkAgent",
+                "BenchmarkAgent",
+                config.size,
+                iteration,
+                routing_table.as_ref(),
+            )?;
+            let rust = select_rpc_agent_pairs(
+                rust_agent_component.id,
+                "RustRpcBenchmarkAgent",
+                "RustBenchmarkAgent",
+                config.size,
+                iteration,
+                routing_table.as_ref(),
+            )?;
+            Ok((ts, rust))
+        })();
+        let (ts_rpc_agent_id_pairs, rust_rpc_agent_id_pairs) = match pairs {
+            Ok(pairs) => pairs,
+            Err(error) => {
+                cleanup_user_state(&user, &env.id, &recorder).await;
+                return Err(error);
+            }
+        };
 
         let client = user.registry_service_client().await;
 
@@ -695,7 +842,7 @@ impl ThroughputBenchmark {
         .instrument(tracing::info_span!("deploy_environment"))
         .await;
 
-        IterationContext {
+        Ok(IterationContext {
             user,
             domain,
             rust_agent_component,
@@ -709,10 +856,30 @@ impl ThroughputBenchmark {
             ts_rpc_agent_id_pairs,
             rust_rpc_agent_id_pairs,
             env_id: env.id,
-        }
+        })
     }
 
-    pub async fn warmup(&self, iteration: &IterationContext) {
+    async fn ensure_rpc_routing(&self, iteration: &IterationContext) -> BenchmarkResultValue {
+        if let Some(expected) = &iteration.routing_table {
+            let current = self
+                .deps
+                .shard_manager()
+                .get_routing_table()
+                .await
+                .map_err(|error| BenchmarkError::new("rpc-routing", error))?;
+            for pair in iteration
+                .ts_rpc_agent_id_pairs
+                .iter()
+                .chain(&iteration.rust_rpc_agent_id_pairs)
+            {
+                pair.ensure_unchanged(expected, &current)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn warmup(&self, iteration: &IterationContext) -> BenchmarkResultValue {
+        self.ensure_rpc_routing(iteration).await?;
         async fn warmup_agents(
             user: &TestUserContext<BenchmarkTestDependencies>,
             component: &ComponentDto,
@@ -812,6 +979,7 @@ impl ThroughputBenchmark {
         )
         .instrument(tracing::info_span!("warmup_rust_rpc_agents"))
         .await;
+        self.ensure_rpc_routing(iteration).await
     }
 
     pub async fn run(
@@ -819,7 +987,8 @@ impl ThroughputBenchmark {
         iteration: &IterationContext,
         recorder: BenchmarkRecorder,
         aggregate: bool,
-    ) {
+    ) -> BenchmarkResultValue {
+        self.ensure_rpc_routing(iteration).await?;
         async fn measure_agents(
             user: &TestUserContext<BenchmarkTestDependencies>,
             routing_table: &Option<RoutingTable>,
@@ -1108,6 +1277,7 @@ impl ThroughputBenchmark {
         )
         .instrument(tracing::info_span!("measure_rust_rpc"))
         .await;
+        self.ensure_rpc_routing(iteration).await
     }
 
     pub async fn cleanup_iteration(
@@ -1174,7 +1344,188 @@ impl ThroughputBenchmark {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_api_grpc::proto::golem::shardmanager::{
+        RoutingTable as GrpcRoutingTable, RoutingTableEntry,
+    };
+    use golem_common::model::ShardId;
+    use std::collections::HashSet;
     use test_r::test;
+
+    fn routing_table(pods: usize) -> RoutingTable {
+        GrpcRoutingTable {
+            number_of_shards: 64,
+            shard_assignments: (0..64)
+                .map(|shard| RoutingTableEntry {
+                    shard_id: Some(ShardId::new(shard).into()),
+                    pod: Some(
+                        Pod {
+                            ip: "127.0.0.1".parse().unwrap(),
+                            port: 9100 + (shard as usize % pods) as u16,
+                        }
+                        .into(),
+                    ),
+                })
+                .collect(),
+        }
+        .try_into()
+        .unwrap()
+    }
+
+    #[test]
+    fn rpc_selector_balances_routes_without_changing_target_count() {
+        let table = routing_table(5);
+        for component in [1, 0x123456789abcdef0123456789abcdef0] {
+            for (parent, child) in [
+                ("RustRpcBenchmarkAgent", "RustBenchmarkAgent"),
+                ("RpcBenchmarkAgent", "BenchmarkAgent"),
+            ] {
+                for size in [1, 3, 10] {
+                    let mut local_counts = vec![];
+                    for iteration in 0..5 {
+                        let pairs = select_rpc_agent_pairs(
+                            ComponentId(uuid::Uuid::from_u128(component)),
+                            parent,
+                            child,
+                            size,
+                            iteration,
+                            Some(&table),
+                        )
+                        .unwrap();
+                        assert_eq!(pairs.len(), size);
+                        let mut names = HashSet::new();
+                        for pair in &pairs {
+                            assert!(names.insert(pair.parent.to_string()));
+                            assert_eq!(pair.parent.parameters, pair.child.parameters);
+                            let caller =
+                                AgentId::from_agent_id(pair.component_id, &pair.parent).unwrap();
+                            let callee =
+                                AgentId::from_agent_id(pair.component_id, &pair.child).unwrap();
+                            assert_eq!(
+                                table.lookup(&caller) == table.lookup(&callee),
+                                iteration % 2 == (names.len() - 1) % 2
+                            );
+                        }
+                        local_counts.push(
+                            pairs
+                                .iter()
+                                .filter(|pair| pair.at_same_worker_executor(&table))
+                                .count(),
+                        );
+                    }
+                    assert_eq!(
+                        local_counts,
+                        vec![
+                            size.div_ceil(2),
+                            size / 2,
+                            size.div_ceil(2),
+                            size / 2,
+                            size.div_ceil(2)
+                        ]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rpc_selector_rejects_unreachable_or_incomplete_routing() {
+        let component = ComponentId(uuid::Uuid::from_u128(42));
+        let table = routing_table(5);
+        // Identical agent types cannot form a remote pair for any shared name.
+        assert!(
+            select_rpc_agent_pairs(
+                component,
+                "BenchmarkAgent",
+                "BenchmarkAgent",
+                1,
+                1,
+                Some(&table)
+            )
+            .is_err()
+        );
+        let mut incomplete: GrpcRoutingTable = table.into();
+        incomplete.shard_assignments.clear();
+        assert!(
+            select_rpc_agent_pairs(
+                component,
+                "RpcBenchmarkAgent",
+                "BenchmarkAgent",
+                1,
+                0,
+                Some(&incomplete.clone().try_into().unwrap())
+            )
+            .is_err()
+        );
+        incomplete.number_of_shards = 0;
+        assert!(
+            select_rpc_agent_pairs(
+                component,
+                "RpcBenchmarkAgent",
+                "BenchmarkAgent",
+                1,
+                0,
+                Some(&incomplete.try_into().unwrap())
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn rpc_selector_handles_single_executor_and_unavailable_cloud_routing() {
+        let component = ComponentId(uuid::Uuid::from_u128(42));
+        for iteration in 0..2 {
+            let table = routing_table(1);
+            let pairs = select_rpc_agent_pairs(
+                component,
+                "RpcBenchmarkAgent",
+                "BenchmarkAgent",
+                3,
+                iteration,
+                Some(&table),
+            )
+            .unwrap();
+            assert!(
+                pairs
+                    .iter()
+                    .all(|pair| pair.at_same_worker_executor(&table))
+            );
+        }
+        let pairs =
+            select_rpc_agent_pairs(component, "RpcBenchmarkAgent", "BenchmarkAgent", 1, 1, None)
+                .unwrap();
+        assert_eq!(
+            pairs[0].parent,
+            agent_id!("RpcBenchmarkAgent", "rpc-test-0")
+        );
+        assert_eq!(pairs[0].child, agent_id!("BenchmarkAgent", "rpc-test-0"));
+    }
+
+    #[test]
+    fn rpc_routing_rejects_movement_even_when_locality_is_unchanged() {
+        let table = routing_table(5);
+        let pairs = select_rpc_agent_pairs(
+            ComponentId(uuid::Uuid::from_u128(42)),
+            "RpcBenchmarkAgent",
+            "BenchmarkAgent",
+            2,
+            0,
+            Some(&table),
+        )
+        .unwrap();
+        let mut moved: GrpcRoutingTable = table.clone().into();
+        for assignment in &mut moved.shard_assignments {
+            assignment.pod.as_mut().unwrap().port += 10;
+        }
+        let moved: RoutingTable = moved.try_into().unwrap();
+        for pair in pairs {
+            pair.ensure_unchanged(&table, &table).unwrap();
+            assert_eq!(
+                pair.at_same_worker_executor(&table),
+                pair.at_same_worker_executor(&moved)
+            );
+            assert!(pair.ensure_unchanged(&table, &moved).is_err());
+        }
+    }
 
     #[test]
     fn aggregate_variants_have_distinct_benchmark_names() {

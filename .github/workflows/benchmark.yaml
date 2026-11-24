@@ -17,6 +17,10 @@ on:
         description: Run only the bounded unpublished N=5 routing-coverage pilot
         type: boolean
         default: false
+      selector_validation:
+        description: One harness-only build and four bounded unpublished selector validation hosts
+        type: boolean
+        default: false
       short_validation:
         description: Run the build-free unpublished diagnostic instead of normal benchmark jobs
         type: boolean
@@ -80,8 +84,18 @@ env:
   WASI_SDK_PATH: /opt/wasi-sdk
 
 jobs:
+  selector-validation:
+    if: github.event_name == 'workflow_dispatch' && inputs.selector_validation
+    permissions:
+      contents: read
+      actions: write
+    uses: ./.github/workflows/benchmark-selector.yaml
+    with:
+      deadline: ${{ inputs.deadline }}
+      isolated: ${{ !inputs.publish && !inputs.coverage_pilot && !inputs.paired && !inputs.paired_deadline_probe && !inputs.prepare_bundle && !inputs.prepare_executor && !inputs.short_validation && !inputs.trace_diagnostic && !inputs.r3_controls }}
+
   coverage-pilot:
-    if: github.event_name == 'workflow_dispatch' && inputs.coverage_pilot
+    if: github.event_name == 'workflow_dispatch' && !inputs.selector_validation && inputs.coverage_pilot
     permissions:
       contents: read
       actions: write
@@ -91,7 +105,7 @@ jobs:
       isolated: ${{ !inputs.publish && !inputs.paired && !inputs.paired_deadline_probe && !inputs.prepare_bundle && !inputs.prepare_executor && !inputs.short_validation && !inputs.trace_diagnostic && !inputs.r3_controls }}
 
   paired-comparison:
-    if: github.event_name == 'workflow_dispatch' && !inputs.coverage_pilot && (inputs.paired || inputs.paired_deadline_probe)
+    if: github.event_name == 'workflow_dispatch' && !inputs.selector_validation && !inputs.coverage_pilot && (inputs.paired || inputs.paired_deadline_probe)
     permissions:
       contents: read
       actions: write
@@ -108,7 +122,7 @@ jobs:
       isolated: ${{ !inputs.publish && !inputs.prepare_bundle && !inputs.prepare_executor && !inputs.short_validation && !inputs.trace_diagnostic && !inputs.r3_controls }}
 
   short-validation:
-    if: github.event_name == 'workflow_dispatch' && !inputs.coverage_pilot && !inputs.paired && !inputs.paired_deadline_probe && !inputs.prepare_bundle && !inputs.prepare_executor && (inputs.short_validation || inputs.trace_diagnostic)
+    if: github.event_name == 'workflow_dispatch' && !inputs.selector_validation && !inputs.coverage_pilot && !inputs.paired && !inputs.paired_deadline_probe && !inputs.prepare_bundle && !inputs.prepare_executor && (inputs.short_validation || inputs.trace_diagnostic)
     permissions:
       contents: read
       actions: read
@@ -122,7 +136,7 @@ jobs:
       executor_source: ${{ inputs.executor_source }}
 
   prepare-executor:
-    if: github.event_name == 'workflow_dispatch' && !inputs.coverage_pilot && inputs.prepare_executor && !inputs.paired && !inputs.paired_deadline_probe && !inputs.prepare_bundle
+    if: github.event_name == 'workflow_dispatch' && !inputs.selector_validation && !inputs.coverage_pilot && inputs.prepare_executor && !inputs.paired && !inputs.paired_deadline_probe && !inputs.prepare_bundle
     runs-on: blacksmith-32vcpu-ubuntu-2204
     timeout-minutes: 30
     permissions:
@@ -169,7 +183,7 @@ jobs:
           retention-days: 30
 
   build-benchmarks:
-    if: ${{ !inputs.coverage_pilot && !inputs.paired && !inputs.paired_deadline_probe && !inputs.short_validation && !inputs.trace_diagnostic && !inputs.prepare_executor }}
+    if: ${{ !inputs.selector_validation && !inputs.coverage_pilot && !inputs.paired && !inputs.paired_deadline_probe && !inputs.short_validation && !inputs.trace_diagnostic && !inputs.prepare_executor }}
     runs-on: blacksmith-32vcpu-ubuntu-2204
     timeout-minutes: ${{ inputs.prepare_bundle && 45 || 360 }}
     outputs:
@@ -249,7 +263,7 @@ jobs:
 
   run-benchmark:
     needs: build-benchmarks
-    if: ${{ !inputs.prepare_bundle }}
+    if: ${{ !inputs.selector_validation && !inputs.prepare_bundle }}
     runs-on: blacksmith-32vcpu-ubuntu-2204
     strategy:
       fail-fast: false
@@ -327,7 +341,7 @@ jobs:
               size: [100]
               length: [2]
             - name: throughput-cpu-intensive
-              version: 1
+              version: 2
               iterations: 3
               clusterSize: [1]
               size: [1]
@@ -374,7 +388,7 @@ jobs:
 
   merge-and-publish:
     needs: [build-benchmarks, run-benchmark]
-    if: ${{ always() && !cancelled() && !inputs.prepare_bundle && needs.build-benchmarks.result == 'success' }}
+    if: ${{ always() && !cancelled() && !inputs.selector_validation && !inputs.prepare_bundle && needs.build-benchmarks.result == 'success' }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5

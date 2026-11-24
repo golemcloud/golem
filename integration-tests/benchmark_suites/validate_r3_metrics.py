@@ -187,9 +187,9 @@ def metric_rules(name, config):
     return dict(metrics=metrics, sparse_phases=phases)
 
 
-def manifest():
+def manifest(producer_root=ROOT):
     for path, expected in PRODUCERS.items():
-        require(digest((ROOT / path).read_bytes()) == expected, f'Producer contract changed: {path}')
+        require(digest((producer_root / path).read_bytes()) == expected, f'Producer contract changed: {path}')
     suite = dict(name='CI', benchmarks=[])
     for name, partition, clusters, sizes, lengths, cache in SUITE_ENTRIES:
         # BenchmarkSuiteItem's Serialize field order, not YAML insertion order.
@@ -347,7 +347,7 @@ def validate_identity(run, declaration):
     require(type(run['schema_version']) is int and run['schema_version'] == 2
             and type(run['harness_version']) is int and run['harness_version'] == 1,
             'Unknown raw schema/harness')
-    require(run['source']['repository'] == 'golemcloud/golem' and run['source']['commitSha'] == SOURCE,
+    require(run['source']['repository'] == 'golemcloud/golem' and run['source']['commitSha'] == declaration['source'],
             'Unknown producer source')
     require(run['suite_fingerprint'] == declaration['suite_fingerprint']
             and run['suite'] == declaration['suite_name'], 'Unknown suite')
@@ -513,8 +513,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--record', nargs=2, action='append', required=True, metavar=('PATH', 'SHA256'))
     parser.add_argument('--output', type=Path, required=True, help='New output directory; never overwrite evidence')
+    parser.add_argument('--producer-root', type=Path, default=ROOT,
+                        help='Original-source directory whose producer file digests must match')
     args = parser.parse_args()
-    declaration = manifest()
+    declaration = manifest(args.producer_root)
     records = [read_record(Path(path), expected) for path, expected in args.record]
     report = analyze(records, declaration)
     args.output.mkdir(parents=True, exist_ok=False)

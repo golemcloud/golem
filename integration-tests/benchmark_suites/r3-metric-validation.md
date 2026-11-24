@@ -30,6 +30,7 @@ host independence for its partitions.
 
 ```shell copy Copy Offline Validator Command
 python3 integration-tests/benchmark_suites/validate_r3_metrics.py \
+  --producer-root <original-source-directory> \
   --record <saved-result.json> <retained-sha256> \
   --record <another-saved-result.json> <retained-sha256> \
   --output <new-analysis-directory>
@@ -40,6 +41,16 @@ interpretation; neither raw evidence nor old analysis is overwritten. Exit 0 mea
 records passed metric validity checks, not coverage, noise, parallel-control or R3
 acceptance. Invalid identities or iterations produce exit 2 and a report. Unreadable,
 malformed or hash-mismatched files and changed producer declarations fail before output.
+
+`--producer-root` defaults to the current checkout. When analyzing the original cohort
+from a newer checkout, explicitly supply the original producer directory. Every declared
+producer digest must still match; this option does not select a different metric contract.
+The coverage pilot's offline `analyze` command takes the same option, and its execution
+path verifies the original runtime checkout rather than the orchestration checkout.
+The CLI tests retain the 16 original producer source files in `r3-producers.tar.gz`, made
+with `git archive` at the exact source above and gzip with a zero timestamp. Each file is
+checked against the unchanged manifest digests before use. This test-only snapshot is
+not a runnable benchmark bundle and does not change any benchmark component fixture.
 
 ## Interpretation
 
@@ -78,6 +89,65 @@ contract and reports blockers; it does not certify campaign execution, independe
 control overlap, budget compliance or optimization acceptance. Historical failures remain
 failures. A new measurement campaign, changed N, workflow adaptation and rollout require
 separate approval.
+
+## Route-balanced throughput workload
+
+The Rust/TypeScript throughput entries and their aggregate variants use workload version 2.
+With a routing table, the harness selects shared caller/callee constructor names before
+warm-up. It uses the existing `AgentId::from_agent_id` and `RoutingTable::lookup` functions;
+it does not invoke candidate agents or time candidates during selection. The executor,
+shard manager, RPC fixtures, call counts and concurrency are unchanged.
+
+On a multi-executor table, target 0 is local on iteration 0, remote on iteration 1,
+and alternates thereafter. Adjacent target slots take opposite routes. Thus size 1 at
+N=5 has three local and two remote iterations; size 10 has five of each per iteration.
+The iteration counter resets for each benchmark configuration. A single-executor table
+uses only local pairs. Cloud mode without a configured shard-manager connection keeps
+its unlabeled RPC bucket and makes no balanced-routing claim.
+
+Each target searches at most 10,000 distinct names. Missing assignments, a zero-shard
+table, an unavailable configured shard manager or exhausted search fail the iteration.
+There is no random fallback or replacement measurement. Structured setup logs retain the
+component, caller/callee identities, assigned pods, target, iteration and candidate index.
+The harness checks each pair's pod assignments before and after warm-up and measurement.
+An observed move fails the iteration even if the pair remains local or remains remote.
+These snapshots do not prove that no transient move occurred between checks; the
+workload assumes a stable cluster without deliberate rebalancing or executor churn.
+
+This changes the RPC mixture and the overall RPC-throughput estimand. Do not pool
+version-2 observations with the uncontrolled version-1 series. Single-benchmark CLI
+invocations must specify `--version 2`. The saved-evidence validator and coverage pilot
+below remain pinned to the original version-1 producer and bundle; they neither run
+this selector nor accept its output as that original cohort. A new prepared harness,
+explicit provenance/manifest and bounded CI validation are required before a new study.
+Route exposure alone does not establish repeatability, N or R3 acceptance.
+
+### Bounded selector CI validation
+
+Dispatch `benchmark.yaml` with `selector_validation=true`, `publish=false`, every other
+experiment flag false, and an epoch deadline no later than run creation plus 90 minutes.
+`benchmark-selector.yaml` excludes ordinary measurement and publication. It permits one
+attempt, one harness preparation and four fresh measurement hosts, with no replacement.
+
+Preparation freezes the exact original archive from run 44078542455 before building only
+the new benchmark harness. An expired, missing or unverifiable original stops the run.
+Preparation has a 45-minute job timeout and a creation-relative 50-minute guard cutoff.
+Each measurement job has a 25-minute timeout and runs one N=5 process capped at 15 minutes,
+with a two-minute cleanup reserve under the original deadline. Cancellation depends on
+GitHub and runner availability; it is not a provider-enforced physical shutdown guarantee.
+
+The explicit member source map assigns only the harness to the new source. Services,
+guest fixtures and built-ins retain the original source and verified bytes. The process
+uses `r3-selector.yaml`, checks every selected target's route and call accounting, and
+retains structured selection receipts. Four hosts must each provide all 20 iteration
+positions and 16 language/route rows. This validates the selector, not full-suite R3 or N.
+
+The allocation is $15 before tax. At $0.064 per runner minute, 150 rounded job minutes
+cost $9.60, leaving $5.40 contingency. Preparation evidence is capped at 1 GiB and each
+host at 250 MiB, below 2 GiB total, with seven-day retention. An oversized archive fails
+upload eligibility instead of truncating measurements. Ordinary failures retain evidence;
+forced cancellation, runner loss or platform outages can prevent completed uploads.
+Reconcile actual runner usage separately; these limits do not impose a provider invoice cap.
 
 ## CI routing-coverage pilot
 

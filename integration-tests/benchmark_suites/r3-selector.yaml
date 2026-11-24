@@ -1,0 +1,7 @@
+{
+  "name": "R3 selector validation",
+  "benchmarks": [
+    {"name": "throughput-cpu-intensive", "version": 2, "iterations": 5, "clusterSize": [5], "size": [1, 10], "length": [100]},
+    {"name": "throughput-large-input", "version": 2, "iterations": 5, "clusterSize": [5], "size": [1], "length": [100, 10000]}
+  ]
+}
