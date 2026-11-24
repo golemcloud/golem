@@ -11357,6 +11357,50 @@ async fn a_full_status_rebuild_with_a_retained_start_above_1_fails_as_expired() 
     );
 }
 
+/// A fold from a stored status reads the entries after it. The status that the executor stores
+/// for a new agent is at the `Create` entry, so the fold from it reads from index 2: it folds with
+/// a retained start of 2, and it is expired with a start of 3.
+#[test]
+async fn a_fold_from_the_status_at_the_create_entry_is_expired_only_with_a_start_above_2() {
+    let case = retained_test_case();
+    let owned_agent_id = case.owned_agent_id.clone();
+    let at_create = case.entries[0].expected_status.clone();
+    assert_eq!(at_create.oplog_idx, OplogIndex::INITIAL);
+    let last = OplogIndex::from_u64(case.entries.len() as u64);
+
+    let folded = RetainedTestCase::new(case.clone(), 2).await;
+    let status = super::calculate_last_known_status(
+        &folded,
+        &owned_agent_id,
+        AgentMode::Durable,
+        Some(at_create.clone()),
+    )
+    .await
+    .unwrap()
+    .expect("the oplog exists");
+    assert_eq!(status.oplog_idx, last);
+
+    let expired = RetainedTestCase::new(case, 3).await;
+    let error = super::calculate_last_known_status(
+        &expired,
+        &owned_agent_id,
+        AgentMode::Durable,
+        Some(at_create),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            super::StatusError::Unreadable(UnreadableOplog {
+                error: crate::services::oplog::OplogReadError::Expired { retained_start },
+                ..
+            }) if *retained_start == OplogIndex::from_u64(3)
+        ),
+        "{error:?}"
+    );
+}
+
 /// The skipped regions of a fork source read from the start of the retention that the caller
 /// passes, and keep the regions after it.
 #[test]

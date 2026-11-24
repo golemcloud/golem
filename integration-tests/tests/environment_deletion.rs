@@ -535,6 +535,13 @@ async fn force_oplog_retained_start(
 /// start with their original indexes, and a `from` before the start returns the
 /// `OPLOG_EXPIRED` error body that names the start. The test stops and starts the worker
 /// executors, so it runs in this binary, whose dependencies own the executor processes.
+///
+/// The worker service reads the metadata of the agent before it reads the oplog, and the
+/// executor folds the status of the agent from its stored status. The executor stores the status
+/// of a new agent at the `Create` entry when it creates the agent, and stores later statuses in
+/// the background, so a stop can leave the stored status at index 1. The fold from it reads from
+/// index 2, so the start is 2: a higher start makes the fold, and with it the oplog read,
+/// expired.
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
@@ -561,9 +568,9 @@ async fn get_oplog_starts_at_the_retained_start(
     )
     .await?;
     let history = user.get_oplog(&agent_id, OplogIndex::INITIAL).await?;
-    let retained_start = OplogIndex::from_u64(3);
+    let retained_start = OplogIndex::from_u64(2);
     assert!(
-        history.len() > 3,
+        history.len() > 2,
         "the oplog has entries after the start: {history:?}"
     );
 
