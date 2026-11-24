@@ -211,3 +211,41 @@ pub mod tls {
         RELOAD_FAILURES_TOTAL.with_label_values(&[use_name]).inc();
     }
 }
+
+pub mod authorization {
+    use lazy_static::lazy_static;
+    use prometheus::*;
+
+    lazy_static! {
+        static ref DECISIONS_TOTAL: IntCounterVec = register_int_counter_vec!(
+            "golem_authorization_decisions_total",
+            "Authorization decisions, by the class of each decided part and the outcome",
+            &["class", "outcome"]
+        )
+        .unwrap();
+        static ref DENIALS_TOTAL: IntCounterVec = register_int_counter_vec!(
+            "golem_authorization_denials_total",
+            "Authorization denials, by the class of the failing part and the surface",
+            &["class", "surface"]
+        )
+        .unwrap();
+        static ref AUDIT_RECORDS_LOST_TOTAL: IntCounterVec = register_int_counter_vec!(
+            "golem_audit_records_lost_total",
+            "Denials whose audit record could not be written, by surface",
+            &["surface"]
+        )
+        .unwrap();
+    }
+
+    pub fn record_decision(class: &str, outcome: &str) {
+        DECISIONS_TOTAL.with_label_values(&[class, outcome]).inc();
+    }
+
+    pub fn record_denial(class: &str, surface: &str) {
+        DENIALS_TOTAL.with_label_values(&[class, surface]).inc();
+    }
+
+    pub fn record_lost_audit_record(surface: &str) {
+        AUDIT_RECORDS_LOST_TOTAL.with_label_values(&[surface]).inc();
+    }
+}
