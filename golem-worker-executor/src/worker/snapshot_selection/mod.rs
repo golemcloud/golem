@@ -881,10 +881,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.update_exclusions(SnapshotExclusions::without_unavailable, |_| ());
     }
     /// Gives what `read` gives for the exclusions of the agent now, under their lock.
-    pub(in crate::worker) fn read_exclusions<T>(
-        &self,
-        read: impl FnOnce(&SnapshotExclusions) -> T,
-    ) -> T {
+    pub(crate) fn read_exclusions<T>(&self, read: impl FnOnce(&SnapshotExclusions) -> T) -> T {
         read(
             &self
                 .snapshot_exclusions

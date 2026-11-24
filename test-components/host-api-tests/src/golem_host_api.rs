@@ -156,6 +156,14 @@ pub trait GolemHostApi {
         constructor: String,
         method: String,
     ) -> Result<(), String>;
+    /// Calls `method` on the agent with the phantom ID `phantom_id`.
+    fn outbound_phantom_agent_rpc_invoke_and_await_result(
+        &self,
+        agent_type: String,
+        constructor: String,
+        phantom_id: Uuid,
+        method: String,
+    ) -> Result<(), String>;
     fn outbound_agent_rpc_schedule_result(
         &self,
         agent_type: String,
@@ -664,6 +672,29 @@ impl GolemHostApi for GolemHostApiImpl {
             None,
             Vec::new(),
         );
+        rpc.invoke_and_await(&method, encode_parameters(Vec::new())?, None)
+            .map(|_| ())
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    fn outbound_phantom_agent_rpc_invoke_and_await_result(
+        &self,
+        agent_type: String,
+        constructor: String,
+        phantom_id: Uuid,
+        method: String,
+    ) -> Result<(), String> {
+        let (high_bits, low_bits) = phantom_id.as_u64_pair();
+        let rpc = WasmRpc::create(
+            &agent_type,
+            encode_parameters(vec![SchemaValue::String(constructor)])?,
+            Some(golem_rust::schema::wit::wire::Uuid {
+                high_bits,
+                low_bits,
+            }),
+            Vec::new(),
+        )
+        .map_err(|error| format!("{error:?}"))?;
         rpc.invoke_and_await(&method, encode_parameters(Vec::new())?, None)
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))

@@ -2179,6 +2179,114 @@ async fn scope_card_delivery_and_cleanup_survive_crash_replay(
     Ok(())
 }
 
+/// Calls a phantom and a durable `GolemHostApi` agent over RPC from a caller whose card grants
+/// agent invocation only through `type_grant`, and returns both results.
+async fn rpc_with_only_a_type_invoke_grant(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    host_api_tests: &PrecompiledComponent,
+    type_grant: Option<&str>,
+) -> anyhow::Result<(Result<(), String>, Result<(), String>)> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let type_grant = type_grant
+        .map(|grant| parse_polymorphic_permission(grant).expect("valid type invoke grant"));
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("GolemHostApi")
+        .update_agent_provision_config("GolemHostApi", |config| {
+            let positive = &mut config.initial_permissions.lower_bound.positive;
+            positive
+                .retain(|permission| !matches!(permission, PolymorphicPermissionPattern::Agent(_)));
+            positive.push(
+                parse_polymorphic_permission("agent(?agent) @ * : view : *")
+                    .expect("valid self-view permission"),
+            );
+            positive.extend(type_grant);
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("GolemHostApi", "type-grant-rpc-caller");
+    configure_scope_card_root(&authority, &component, &caller)?;
+    executor.start_agent(&component.id, caller.clone()).await?;
+
+    let phantom = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "outbound_phantom_agent_rpc_invoke_and_await_result",
+            data_value!(
+                "GolemHostApi",
+                "type-grant-rpc-target",
+                Uuid::new_v4(),
+                "get_self_uri"
+            ),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    let durable = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "outbound_agent_rpc_invoke_and_await_result",
+            data_value!("GolemHostApi", "type-grant-rpc-target", "get_self_uri"),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    Ok((phantom, durable))
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn type_wildcard_invoke_grant_covers_phantom_and_durable_rpc_targets(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let (phantom, durable) = rpc_with_only_a_type_invoke_grant(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        Some("agent(?component/GolemHostApi(*)) @ * : invoke : *"),
+    )
+    .await?;
+    assert_eq!(
+        phantom,
+        Ok(()),
+        "a GolemHostApi(*) grant must reach a phantom agent"
+    );
+    assert_eq!(
+        durable,
+        Ok(()),
+        "a GolemHostApi(*) grant must reach a durable agent"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn phantom_rpc_target_is_denied_without_an_invoke_grant(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let (phantom, durable) =
+        rpc_with_only_a_type_invoke_grant(last_unique_id, deps, host_api_tests, None).await?;
+    for (target, result) in [("phantom", phantom), ("durable", durable)] {
+        assert!(
+            result.as_ref().is_err_and(|error| error.contains("Denied")),
+            "RPC to a {target} agent without an invoke grant must be denied, got {result:?}"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
