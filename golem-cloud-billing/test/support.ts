@@ -70,6 +70,7 @@ export interface RecordedRequest {
   readonly method: string
   readonly url: URL
   readonly headers: Headers
+  readonly body: unknown
 }
 
 export interface RegistryAccount {
@@ -125,8 +126,9 @@ export class FakeUpstreams {
   readonly fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const request = new Request(input, init)
     const url = new URL(request.url)
-    this.requests.push({ method: request.method, url, headers: request.headers })
     const route = `${request.method} ${url.origin}${url.pathname}`
+    const body: unknown = route === `POST ${registryUrl}/v1/login/oauth2` ? await request.json() : undefined
+    this.requests.push({ method: request.method, url, headers: request.headers, body })
     const bearer = request.headers.get("authorization")?.replace(/^Bearer /, "")
     switch (route) {
       case "POST https://github.com/login/oauth/access_token":
@@ -152,9 +154,10 @@ export class FakeUpstreams {
         if (this.registryLoginStatus !== 200) {
           return Response.json({ error: "unavailable" }, { status: this.registryLoginStatus })
         }
-        const token = url.searchParams.get("access-token")
-        const account = token === null ? undefined : this.registryAccounts.get(token)
-        if (url.searchParams.get("provider") !== "github" || account === undefined) {
+        const login = body as { provider?: unknown; accessToken?: unknown } | undefined
+        const account =
+          typeof login?.accessToken === "string" ? this.registryAccounts.get(login.accessToken) : undefined
+        if (login?.provider !== "github" || account === undefined) {
           return Response.json({ error: "invalid token" }, { status: 401 })
         }
         return Response.json({

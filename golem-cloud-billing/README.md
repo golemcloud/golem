@@ -21,8 +21,8 @@ registry keeps its tables in `public`, and the app keeps its tables in its own s
 GitHub sign-in ends in the `session.create.before` hook of Better Auth (`src/Auth.ts`). Before
 Better Auth stores the session, the hook:
 
-1. posts the GitHub access token of the user to `POST /v1/login/oauth2` of the registry, which
-   returns the Golem account and a Golem API token,
+1. posts the GitHub access token of the user to `POST /v1/login/oauth2` of the registry, in the
+   request body, and the registry returns the Golem account and a Golem API token,
 2. writes the account ID to `user.golem_account_id`,
 3. stores the Golem API token on the session, encrypted with `BETTER_AUTH_SECRET`.
 

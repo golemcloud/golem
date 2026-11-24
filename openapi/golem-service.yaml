@@ -10193,25 +10193,12 @@ paths:
         - `accountId` is the account's identifier, can be used on the account API
         - `secret` is the secret key to be sent in the Authorization header as a bearer token for all the other endpoints
       operationId: login_oauth2
-      parameters:
-      - in: query
-        name: provider
-        description: Currently only `github` is supported.
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/OAuth2Login'
         required: true
-        deprecated: false
-        schema:
-          $ref: '#/components/schemas/OAuth2Provider'
-        explode: true
-        style: form
-      - in: query
-        name: access-token
-        description: OAuth2 access token
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: form
       responses:
         '200':
           description: ''
@@ -28993,6 +28980,22 @@ components:
       required:
       - name
       - schema
+    OAuth2Login:
+      title: OAuth2Login
+      description: Signs in with an access token that the OAuth2 provider issued to the user.
+      type: object
+      properties:
+        provider:
+          description: Currently only `github` is supported.
+          allOf:
+          - $ref: '#/components/schemas/OAuth2Provider'
+          - description: Currently only `github` is supported.
+        accessToken:
+          description: The access token that the provider issued to the user.
+          type: string
+      required:
+      - provider
+      - accessToken
     OAuth2Provider:
       type: string
       enum:

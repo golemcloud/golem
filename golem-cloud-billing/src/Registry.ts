@@ -1,5 +1,5 @@
 import { Context, Data, Effect, Layer, Redacted, Schema } from "effect"
-import { HttpClient, HttpClientError, HttpIncomingMessage } from "effect/http"
+import { HttpBody, HttpClient, HttpClientError, HttpIncomingMessage } from "effect/http"
 import { BillingConfig } from "./BillingConfig.ts"
 
 const Uuid = Schema.String.check(Schema.isUUID())
@@ -24,8 +24,9 @@ export const Account = Schema.Struct({
 export type Account = typeof Account.Type
 
 /**
- * A failed registry call. It carries no request URL or response body: the URL of
- * `POST /v1/login/oauth2` holds the GitHub access token.
+ * A failed registry call. It carries no request or response: the request body of
+ * `POST /v1/login/oauth2` holds the GitHub access token, and its response body holds the
+ * secret of the Golem token.
  */
 export class RegistryError extends Data.TaggedError("RegistryError")<{
   readonly operation: string
@@ -52,8 +53,8 @@ const toRegistryError =
 export interface RegistryShape {
   /**
    * Exchanges a GitHub OAuth access token for a Golem API token, through the registry's
-   * `POST /v1/login/oauth2`. The registry keeps one account per GitHub identity, so the CLI
-   * and the billing app receive the same account.
+   * `POST /v1/login/oauth2`, with the access token in the request body. The registry keeps one
+   * account per GitHub identity, so the CLI and the billing app receive the same account.
    */
   readonly exchangeGitHubAccessToken: (
     accessToken: Redacted.Redacted<string>
@@ -78,14 +79,12 @@ export const layer: Layer.Layer<Registry, never, BillingConfig | HttpClient.Http
     const exchangeGitHubAccessToken = (accessToken: Redacted.Redacted<string>) =>
       client
         .post(`${baseUrl}/v1/login/oauth2`, {
-          urlParams: { provider: "github", "access-token": Redacted.value(accessToken) },
-          acceptJson: true
+          acceptJson: true,
+          body: HttpBody.jsonUnsafe({ provider: "github", accessToken: Redacted.value(accessToken) })
         })
         .pipe(
           Effect.flatMap(HttpIncomingMessage.schemaBodyJson(TokenWithSecret)),
-          Effect.mapError(toRegistryError("login_oauth2")),
-          // A client span records the full request URL, which holds the access token.
-          Effect.provideService(HttpClient.TracerDisabledWhen, () => true)
+          Effect.mapError(toRegistryError("login_oauth2"))
         )
 
     const getAccount = (token: Redacted.Redacted<string>, accountId: string) =>
