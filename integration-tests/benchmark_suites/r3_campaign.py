@@ -133,8 +133,9 @@ def preflight(args):
             require(not path.is_absolute() and '..' not in path.parts
                     and (member.isfile() or member.isdir()), 'Unsafe original archive')
             if member.isfile():
-                require(member.name not in original_members, 'Duplicate original member')
-                original_members[member.name] = hashlib.file_digest(archive.extractfile(member), 'sha256').hexdigest()
+                name = path.as_posix()
+                require(name not in original_members, 'Duplicate original member')
+                original_members[name] = hashlib.file_digest(archive.extractfile(member), 'sha256').hexdigest()
     save(args.output / 'campaign.json', dict(campaign_run_id=str(campaign['id']), created_epoch=created,
          deadline=args.deadline, orchestration_source=campaign['head_sha'], inputs=hashes, code=sources,
          original_members=original_members,

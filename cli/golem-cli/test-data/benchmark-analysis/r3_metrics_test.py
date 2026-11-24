@@ -647,6 +647,43 @@ def selection_log(rows):
 
 
 class R3CampaignTest(unittest.TestCase):
+    def test_preflight_member_names_match_the_installer(self):
+        import io
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prepared = root / 'prepared'
+            prepared.mkdir()
+            for name in campaign.INPUTS:
+                (prepared / name).write_bytes(b'unused synthetic preparation receipt')
+            archive = prepared / 'benchmark-bundle.tar.gz'
+            with tarfile.open(archive, 'w:gz') as tar:
+                for name in ('./target/benchmarks/benchmarks', './target/release/worker-executor'):
+                    item = tarfile.TarInfo(name)
+                    item.size, item.mode = 7, 0o755
+                    tar.addfile(item, io.BytesIO(b'payload'))
+            now = int(time.time())
+            origin = dict(id=campaign.PRODUCER, head_sha=campaign.HARNESS, run_attempt=1,
+                path='.github/workflows/benchmark.yaml', event='workflow_dispatch', conclusion='success',
+                repository=dict(full_name='golemcloud/golem'), created_at=campaign.datetime.fromtimestamp(now, campaign.timezone.utc).isoformat())
+            artifact = dict(id=campaign.ARTIFACT, name='selector-preparation-attempt1', size_in_bytes=357345303,
+                expired=False, workflow_run=dict(id=campaign.PRODUCER, head_sha=campaign.HARNESS))
+            campaign.save(root / 'origin.json', origin)
+            campaign.save(root / 'artifact.json', artifact)
+            output = root / 'frozen'
+            args = SimpleNamespace(output=output, origin=root / 'origin.json', campaign_origin=root / 'origin.json',
+                artifact=root / 'artifact.json', prepared=prepared, deadline=now+36000)
+            # This test exercises archive member identity, not the independently pinned byte receipt.
+            with patch.object(campaign, 'prepared_identity', return_value={}), patch.dict(os.environ, GITHUB_ACTIONS='false'):
+                campaign.preflight(args)
+            frozen = json.loads((output / 'campaign.json').read_text())['original_members']
+            installed = root / 'installed'
+            installed.mkdir()
+            with patch.object(campaign.original, 'BUNDLE_SHA', campaign.sha(archive)):
+                actual = campaign.original.install(archive, installed)
+            self.assertEqual(set(frozen), {'target/benchmarks/benchmarks', 'target/release/worker-executor'})
+            self.assertEqual(frozen, actual)
+
     def test_fixed_inventory_versions_and_all_selector_modes(self):
         declared = campaign.declaration()
         self.assertEqual(len(declared['configurations']), 84)
