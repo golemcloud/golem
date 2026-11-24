@@ -318,7 +318,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let resolved_revert = request.resolved_revert.map(|resolved| ResolvedRevert {
             last_oplog_index: OplogIndex::from_u64(resolved.last_oplog_index),
-            observed_oplog_index: OplogIndex::from_u64(resolved.observed_oplog_index),
         });
 
         let target = request

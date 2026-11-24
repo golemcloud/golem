@@ -1468,6 +1468,7 @@ fn hydrated_invocation_result_cache_is_bounded() {
         first,
         InvocationResult::Lazy {
             oplog_idx: OplogIndex::from_u64(2),
+            background_failure: None,
         },
         0,
         OplogIndex::from_u64(2),
@@ -1477,6 +1478,7 @@ fn hydrated_invocation_result_cache_is_bounded() {
         second,
         InvocationResult::Lazy {
             oplog_idx: OplogIndex::from_u64(4),
+            background_failure: None,
         },
         0,
         OplogIndex::from_u64(4),
@@ -1508,6 +1510,7 @@ fn hydrated_invocation_results_share_payloads_but_reject_deleted_branches() {
             idempotency_key: Some(key),
             oplog_index: Some(index),
             agent_fingerprint: None,
+            background_failure: None,
         }),
     });
     let mut cache = HydratedInvocationResultCache::new(1);
@@ -1897,6 +1900,34 @@ fn invocation_rejection_fails_only_the_rejected_pending_key() {
     assert_eq!(
         invocation_keys_to_fail(&status, None, true),
         vec![still_pending]
+    );
+}
+
+#[test]
+fn giving_up_after_a_recorded_result_fails_only_the_other_invocations() {
+    let current = InvocationId(Uuid::new_v4());
+    let queued = InvocationId(Uuid::new_v4());
+    let status = AgentStatusRecord {
+        pending_invocations: vec![PendingInvocationRef {
+            timestamp: Timestamp::now_utc(),
+            not_before: None,
+            oplog_index: OplogIndex::from_u64(2),
+            idempotency_key: Some(queued),
+            manual_update_target_revision: None,
+            operation: None,
+        }],
+        ..status_with_current_key(AgentStatus::Running, &current)
+    };
+
+    assert_eq!(
+        invocation_keys_failed_on_giving_up(&status, Some(&current), true),
+        vec![queued],
+        "the invocation that recorded its result keeps it"
+    );
+    assert_eq!(
+        invocation_keys_failed_on_giving_up(&status, Some(&current), false),
+        vec![current, queued],
+        "without a recorded result the current invocation fails first"
     );
 }
 

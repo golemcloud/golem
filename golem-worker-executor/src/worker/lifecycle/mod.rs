@@ -530,39 +530,31 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let agent_mode = identity.agent_mode;
 
         let oplog_service = deps.oplog_service();
-        let observed_oplog_index = oplog_service
+        let last_index = oplog_service
             .get_last_index(owned_agent_id, agent_mode)
             .await?;
-        let mut current = observed_oplog_index;
-        let mut found = 0;
-
-        loop {
-            let entries = oplog_service
-                .read_exact(owned_agent_id, agent_mode, current, 1)
-                .await?;
-            let entry = entries.get(&current).ok_or_else(|| {
+        let read = |index: OplogIndex| {
+            let oplog_service = oplog_service.clone();
+            async move {
+                oplog_service
+                    .read_exact(owned_agent_id, agent_mode, index, 1)
+                    .await?
+                    .remove(&index)
+                    .ok_or_else(|| {
+                        WorkerExecutorError::invalid_request(format!(
+                            "Could not read oplog entry {index} while resolving revert"
+                        ))
+                    })
+            }
+        };
+        cut_point::cut_before_last_invocations(read, last_index, number_of_invocations)
+            .await?
+            .map(|last_oplog_index| ResolvedRevert { last_oplog_index })
+            .ok_or_else(|| {
                 WorkerExecutorError::invalid_request(format!(
-                    "Could not read oplog entry {current} while resolving revert"
-                ))
-            })?;
-
-            if matches!(entry, OplogEntry::AgentInvocationStarted { .. }) {
-                found += 1;
-                if found == number_of_invocations {
-                    return Ok(ResolvedRevert {
-                        last_oplog_index: current.previous(),
-                        observed_oplog_index,
-                    });
-                }
-            }
-
-            if current == OplogIndex::INITIAL {
-                return Err(WorkerExecutorError::invalid_request(format!(
                     "Could not find {number_of_invocations} invocations to revert"
-                )));
-            }
-            current = current.previous();
-        }
+                ))
+            })
     }
 
     pub async fn activate_plugin<T>(
@@ -1081,7 +1073,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 self.revert_to_last_oplog_index(target.last_oplog_index, None)
                     .await
             }
-            RevertWorkerTarget::RevertLastInvocations(_) => {
+            RevertWorkerTarget::RevertLastInvocations(target) => {
                 let resolved_revert = resolved_revert.ok_or_else(|| {
                     WorkerExecutorError::invalid_request(
                         "Count-based revert requires a resolved cutoff",
@@ -1089,7 +1081,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 })?;
                 self.revert_to_last_oplog_index(
                     resolved_revert.last_oplog_index,
-                    Some(resolved_revert.observed_oplog_index),
+                    Some(target.number_of_invocations),
                 )
                 .await
             }
@@ -1315,7 +1307,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(in crate::worker) async fn revert_to_last_oplog_index(
         self: &Arc<Self>,
         last_oplog_index: OplogIndex,
-        expected_oplog_index: Option<OplogIndex>,
+        number_of_invocations: Option<u64>,
     ) -> Result<(), WorkerExecutorError> {
         if last_oplog_index == OplogIndex::NONE {
             return Err(WorkerExecutorError::invalid_request(
@@ -1380,7 +1372,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             let instance_guard = worker.lock_non_stopping_worker().await;
             let result = worker
-                .append_revert(last_oplog_index, expected_oplog_index)
+                .append_revert(last_oplog_index, number_of_invocations)
                 .await;
             drop(instance_guard);
 
@@ -1397,21 +1389,73 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     /// Called only after owner writers have drained, with the stopped instance locked. Gives the
     /// filesystem snapshot names that the committed revert made unused.
+    ///
+    /// A count-based revert (`number_of_invocations`) applies only while the stopped oplog still
+    /// cuts the last `number_of_invocations` invocations at the authorized `last_oplog_index`.
+    /// A later invocation changes the cut, and so does a revert that dropped one of the counted
+    /// invocations, because the count skips dropped regions; the revert is then rejected as
+    /// stale. Entries appended after the resolution that neither start nor drop an invocation keep
+    /// the cut, such as the settlement of the last invocation; the revert then applies. When the
+    /// last `Revert` of the stopped oplog already drops everything after `last_oplog_index` and no
+    /// invocation started after it, a revert to the same cut already applied, such as an earlier
+    /// dispatch of the same resolution (a repaired guest call or a retried request): it succeeds
+    /// without writing, and returns the snapshot names that the applied revert made unused, in
+    /// case that dispatch stopped before it deleted them.
     pub(in crate::worker) async fn append_revert(
         &self,
         last_oplog_index: OplogIndex,
-        expected_oplog_index: Option<OplogIndex>,
+        number_of_invocations: Option<u64>,
     ) -> Result<Box<[FilesystemSnapshotName]>, WorkerExecutorError> {
         use crate::durable_host::durable_stream::StreamStoreError;
         use crate::services::oplog::DurableStreamOplogRecord;
 
         let region_end = self.oplog.current_oplog_index().await;
-        if let Some(expected_oplog_index) = expected_oplog_index
-            && region_end != expected_oplog_index
-        {
-            return Err(WorkerExecutorError::invalid_request(format!(
-                "Stale count-based revert resolution: expected oplog index {expected_oplog_index}, found {region_end}"
-            )));
+        let entries = self
+            .oplog
+            .read_exact(OplogIndex::INITIAL, region_end.as_u64())
+            .await?;
+        if let Some(number_of_invocations) = number_of_invocations {
+            let applied_region = entries
+                .values()
+                .rev()
+                .find_map(|entry| match entry {
+                    OplogEntry::Revert { dropped_region, .. } => Some(
+                        (dropped_region.start == last_oplog_index.next())
+                            .then(|| dropped_region.clone()),
+                    ),
+                    OplogEntry::AgentInvocationStarted { .. } => Some(None),
+                    _ => None,
+                })
+                .flatten();
+            if let Some(applied_region) = applied_region {
+                let last_known_status = self.get_last_known_status().await;
+                return Ok(filesystem_snapshots::reverted_snapshot_names(
+                    &entries,
+                    &applied_region,
+                    &last_known_status.deleted_regions,
+                ));
+            }
+            let stopped_cut = cut_point::cut_before_last_invocations(
+                |idx| {
+                    std::future::ready(entries.get(&idx).cloned().ok_or_else(|| {
+                        WorkerExecutorError::invalid_request(format!(
+                            "Could not read oplog entry {idx} while checking the revert"
+                        ))
+                    }))
+                },
+                region_end,
+                number_of_invocations,
+            )
+            .await?;
+            if stopped_cut != Some(last_oplog_index) {
+                let stopped_cut = stopped_cut.map_or_else(
+                    || format!("none ({number_of_invocations} invocations not found)"),
+                    |cut| cut.to_string(),
+                );
+                return Err(WorkerExecutorError::invalid_request(format!(
+                    "Stale count-based revert resolution: authorized cut {last_oplog_index}, cut of the stopped oplog {stopped_cut}"
+                )));
+            }
         }
         if last_oplog_index >= region_end {
             return Err(WorkerExecutorError::invalid_request(
@@ -1424,10 +1468,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             start: region_start,
             end: region_end,
         };
-        let entries = self
-            .oplog
-            .read_exact(OplogIndex::INITIAL, region_end.as_u64())
-            .await?;
 
         {
             cut_point::validate_snapshot_update_boundaries(

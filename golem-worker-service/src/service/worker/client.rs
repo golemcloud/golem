@@ -68,7 +68,9 @@ use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, AgentStatus, FilterComparator, IdempotencyKey,
     InvocationRequestKey, PromiseId, ScanCursor,
 };
-use golem_common::model::{AgentInvocationOutput, AgentInvocationResult, InvocationStatus};
+use golem_common::model::{
+    AgentInvocationOutput, AgentInvocationResult, BackgroundFailure, InvocationStatus,
+};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use golem_service_base::model::auth::AuthCtx;
@@ -362,6 +364,14 @@ fn decode_invocation_result(
             }
         }
     };
+    let background_failure = wire
+        .background_failure
+        .map(|failure| {
+            let error = WorkerExecutorError::try_from(failure)?;
+            BackgroundFailure::try_from(error)
+                .map_err(|error| format!("unexpected background failure: {error}"))
+        })
+        .transpose()?;
     let invocation_status = wire.status.and_then(|status| {
         golem_api_grpc::proto::golem::worker::InvocationStatus::try_from(status)
             .ok()
@@ -382,6 +392,7 @@ fn decode_invocation_result(
         agent_fingerprint: wire
             .agent_fingerprint
             .map(|uuid| AgentFingerprint(uuid.into())),
+        background_failure,
     })
 }
 
@@ -2104,7 +2115,6 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     resolved_revert: resolved_revert.map(|resolved| {
                         golem_api_grpc::proto::golem::common::ResolvedRevert {
                             last_oplog_index: resolved.last_oplog_index.as_u64(),
-                            observed_oplog_index: resolved.observed_oplog_index.as_u64(),
                         }
                     }),
                 }))
@@ -2156,7 +2166,6 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         ),
                 } => Ok(ResolvedRevert {
                     last_oplog_index: OplogIndex::from_u64(resolved.last_oplog_index),
-                    observed_oplog_index: OplogIndex::from_u64(resolved.observed_oplog_index),
                 }),
                 workerexecutor::v1::ResolveRevertLastInvocationsResponse {
                     result:
@@ -3500,6 +3509,13 @@ mod one_shot_session_tests {
                     oplog_index: Some(29),
                     agent_fingerprint: Some(uuid::Uuid::nil().into()),
                     new_stream_mappings: Vec::new(),
+                    background_failure: Some(
+                        WorkerExecutorError::PreviousInvocationFailed {
+                            error: AgentError::Unknown("background work trapped".to_string()),
+                            stderr: "guest stderr".to_string(),
+                        }
+                        .into(),
+                    ),
                 },
             )),
             frame(finished(invocation_session_completion::Outcome::Success(
@@ -3531,6 +3547,13 @@ mod one_shot_session_tests {
         assert_eq!(
             output.agent_fingerprint,
             Some(AgentFingerprint(uuid::Uuid::nil()))
+        );
+        assert_eq!(
+            output.background_failure,
+            Some(golem_common::model::BackgroundFailure::Trapped {
+                error: AgentError::Unknown("background work trapped".to_string()),
+                stderr: "guest stderr".to_string(),
+            })
         );
     }
 

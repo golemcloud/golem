@@ -23,7 +23,7 @@ use golem_common::model::caller::{ClaimVisibility, PublicCaller};
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
-use golem_common::model::{AgentId, AgentStatus, OwnedAgentId};
+use golem_common::model::{AgentId, AgentStatus, InvocationId, OwnedAgentId};
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
@@ -615,13 +615,50 @@ fn idempotency_key_starts(
         .collect()
 }
 
-/// The index of the first `AgentInvocationFinished` after `start`.
-fn finished_after(oplog: &[PublicOplogEntryWithIndex], start: OplogIndex) -> Option<OplogIndex> {
+/// The invocation ID of the method invocation whose `AgentInvocationStarted` is at `start`.
+fn invocation_id_at(
+    oplog: &[PublicOplogEntryWithIndex],
+    start: OplogIndex,
+) -> Option<InvocationId> {
+    oplog.iter().find_map(|entry| match &entry.entry {
+        PublicOplogEntry::AgentInvocationStarted(params) if entry.oplog_index == start => {
+            match &params.invocation {
+                PublicAgentInvocation::AgentMethodInvocation(call) => Some(call.invocation_id),
+                _ => None,
+            }
+        }
+        _ => None,
+    })
+}
+
+/// The index of the `AgentInvocationFinished` of the method invocation whose
+/// `AgentInvocationStarted` is at `start`.
+fn finished_of(oplog: &[PublicOplogEntryWithIndex], start: OplogIndex) -> Option<OplogIndex> {
+    let invocation_id = invocation_id_at(oplog, start)?;
     oplog
         .iter()
         .find(|entry| {
-            entry.oplog_index > start
-                && matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationFinished(params)
+                    if params.invocation_id == invocation_id
+            )
+        })
+        .map(|entry| entry.oplog_index)
+}
+
+/// The index of the `AgentInvocationSettled` of the method invocation whose
+/// `AgentInvocationStarted` is at `start`.
+fn settled_of(oplog: &[PublicOplogEntryWithIndex], start: OplogIndex) -> Option<OplogIndex> {
+    let invocation_id = invocation_id_at(oplog, start)?;
+    oplog
+        .iter()
+        .find(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationSettled(params)
+                    if params.invocation_id == invocation_id
+            )
         })
         .map(|entry| entry.oplog_index)
 }
@@ -630,8 +667,10 @@ fn finished_after(oplog: &[PublicOplogEntryWithIndex], start: OplogIndex) -> Opt
 /// a guest future that makes a durable call and observes the invocation context; `reports`
 /// returns the observations, and so does `method` itself when `returns_observation` is set.
 /// Checks that each future reads the ID and the caller of the method it ran in, that its
-/// durable call is numbered under that invocation and recorded before the invocation finishes,
-/// and that a real restart replays the same observations and calls.
+/// durable call is numbered under that invocation and recorded before the background work of the
+/// invocation settles, and after the invocation's result when the future observes after the
+/// method returned (`returns_observation` unset), and that a real restart replays the same
+/// observations and calls.
 async fn check_spawned_futures_read_their_method_invocation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -692,12 +731,20 @@ async fn check_spawned_futures_read_their_method_invocation(
         "the durable calls of a spawned future are numbered under the method's invocation"
     );
     for ((start, _), (invocation, _)) in starts.iter().zip(&invocations) {
-        let finished = finished_after(&oplog, *invocation)
-            .expect("each invocation of the method should finish");
+        let settled = settled_of(&oplog, *invocation)
+            .expect("the background work of each invocation of the method should settle");
         assert!(
-            start < &finished,
-            "the durable call at {start} should be recorded before its invocation finishes at {finished}"
+            start < &settled,
+            "the durable call at {start} should be recorded before its invocation settles at {settled}"
         );
+        if !returns_observation {
+            let finished = finished_of(&oplog, *invocation)
+                .expect("each invocation of the method should record its result");
+            assert!(
+                start > &finished,
+                "the durable call at {start} should be recorded after the result at {finished}"
+            );
+        }
     }
     assert!(
         !oplog

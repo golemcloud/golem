@@ -21,8 +21,16 @@
 //! future resolves, leaving these tasks suspended wherever their last poll
 //! left them. The invocation completion path must keep the store's event
 //! loop running until none of them is still *active* — otherwise a task's
-//! durable `Start`/`End` entries could land after `AgentInvocationFinished`
-//! (breaking positional replay), or never be appended at all.
+//! durable `Start`/`End` entries could land after the invocation that counts
+//! the task settled (`AgentInvocationSettled` for a result recorded at the
+//! export's return, `AgentInvocationFinished` otherwise), breaking positional
+//! replay, or never be appended at all.
+//!
+//! A task that resumes from a park counts on the invocation the loop runs then,
+//! which drives it from then on: its entries land before that invocation
+//! settles, and a `Start` it records names that invocation as its `driver`. A
+//! parked task whose live work needs a driving invocation waits for one
+//! ([`TailActivity::park_until_driven`]).
 //!
 //! A spawned task counts as **active** from the moment it is spawned until
 //! it finishes, *except* while it is parked at a designated **safe park
@@ -44,7 +52,8 @@
 //!   Its cursor transactions stay active, and it cannot perform a missing live
 //!   effect until the normal replay-to-live transition authorizes continuation;
 //! * passive replay-progress notification for a recorded delivery marker while an
-//!   `AgentInvocationFinished` lies between the cursor and the marker. A reader
+//!   invocation boundary (a terminal, an `AgentInvocationSettled` or an
+//!   `AgentInvocationStarted`) lies between the cursor and the marker. A reader
 //!   retained across invocations is consumed in a later invocation, which cannot
 //!   replay until this one settles.
 //!
@@ -52,26 +61,47 @@
 //! live network / file I/O, ordinary replay-resolver waits, queued or running cursor
 //! transactions, and waits for a delivery marker recorded in the current
 //! invocation — keep the task active:
-//! the completion path waits for them (bounded by the invocation tail-drain
-//! timeout).
+//! the completion path waits for them (bounded by `tail_work_settle_timeout` on
+//! the settled path; the drain after a result recorded at the export's return is
+//! unbounded).
 
+use golem_common::model::oplog::OplogIndex;
 use std::future::Future;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use tokio::sync::watch;
+
+/// The invocation the loop runs: its `AgentInvocationStarted` index and its activity counter.
+#[derive(Clone, Debug)]
+struct CurrentInvocation {
+    started_index: OplogIndex,
+    active: Arc<AtomicUsize>,
+}
 
 /// Per-worker counter of Golem-spawned store tasks that are currently
 /// active (not finished and not parked at a safe park point). See the
 /// module documentation.
 ///
 /// A tracker can also count on the activity of one invocation: the invocation
-/// attributed when the tracker was obtained. Every activity created from it,
-/// including a parked task when it resumes, counts on that same invocation; a
-/// retained task is not relabelled to an invocation that later drives it. The
-/// invocation loop settles on the per-worker count only.
-#[derive(Clone, Debug, Default)]
+/// attributed when the tracker was obtained. Every activity created from it counts
+/// on that invocation. When a parked task resumes while the loop runs a later
+/// invocation, its activity counts on that later invocation, the one that drives it
+/// from then on. The invocation loop settles on the per-worker count only.
+#[derive(Clone, Debug)]
 pub struct TailWorkTracker {
     active: Arc<AtomicUsize>,
     invocation: Option<Arc<AtomicUsize>>,
+    current: Arc<watch::Sender<Option<CurrentInvocation>>>,
+}
+
+impl Default for TailWorkTracker {
+    fn default() -> Self {
+        Self {
+            active: Arc::default(),
+            invocation: None,
+            current: Arc::new(watch::Sender::new(None)),
+        }
+    }
 }
 
 impl TailWorkTracker {
@@ -84,7 +114,38 @@ impl TailWorkTracker {
         Self {
             active: self.active.clone(),
             invocation: Some(invocation.active.clone()),
+            current: self.current.clone(),
         }
+    }
+
+    /// Records that the loop runs the invocation started at `started_index`, whose activity
+    /// `invocation` counts. Resumed tasks count on it from then on.
+    pub(crate) fn begin_invocation(&self, started_index: OplogIndex, invocation: &TailWorkTracker) {
+        self.current.send_replace(Some(CurrentInvocation {
+            started_index,
+            active: invocation.active.clone(),
+        }));
+    }
+
+    /// Records that the loop runs no open invocation: it begins the next one, or the current one
+    /// closed.
+    pub(crate) fn end_invocation(&self) {
+        self.current.send_replace(None);
+    }
+
+    /// The `AgentInvocationStarted` index of the invocation the loop runs.
+    pub(crate) fn current_invocation(&self) -> Option<OplogIndex> {
+        self.current
+            .borrow()
+            .as_ref()
+            .map(|current| current.started_index)
+    }
+
+    fn current_counter(&self) -> Option<Arc<AtomicUsize>> {
+        self.current
+            .borrow()
+            .as_ref()
+            .map(|current| current.active.clone())
     }
 
     /// Registers one spawned task as active, returning its RAII activity
@@ -106,20 +167,6 @@ impl TailWorkTracker {
     pub fn active_count(&self) -> usize {
         self.active.load(Ordering::Acquire)
     }
-
-    fn add(&self) {
-        self.active.fetch_add(1, Ordering::AcqRel);
-        if let Some(invocation) = &self.invocation {
-            invocation.fetch_add(1, Ordering::AcqRel);
-        }
-    }
-
-    fn sub(&self) {
-        self.active.fetch_sub(1, Ordering::AcqRel);
-        if let Some(invocation) = &self.invocation {
-            invocation.fetch_sub(1, Ordering::AcqRel);
-        }
-    }
 }
 
 /// RAII activity token owned by one spawned store task: the task counts as
@@ -129,31 +176,103 @@ impl TailWorkTracker {
 #[derive(Debug)]
 pub struct TailActivity {
     tracker: TailWorkTracker,
+    /// The invocation counter the activity counts on now.
+    counted: Mutex<Option<Arc<AtomicUsize>>>,
 }
 
 impl TailActivity {
     fn new(tracker: TailWorkTracker) -> Self {
-        tracker.add();
-        Self { tracker }
+        let counted = tracker.invocation.clone();
+        let activity = Self {
+            tracker,
+            counted: Mutex::new(counted),
+        };
+        activity.add();
+        activity
     }
 
+    /// A tracker for the activities this task creates: they count on the invocation this
+    /// activity counts on now.
     pub fn tracker(&self) -> TailWorkTracker {
-        self.tracker.clone()
+        TailWorkTracker {
+            active: self.tracker.active.clone(),
+            invocation: self.counted.lock().unwrap().clone(),
+            current: self.tracker.current.clone(),
+        }
     }
 
     /// Awaits `fut` with this task marked inactive: use it around — and only
     /// around — safe park points (see the module documentation). The task is
     /// re-marked active before this returns, and stays balanced if the task
-    /// future is dropped mid-park.
+    /// future is dropped mid-park. It counts on the invocation the loop runs
+    /// when it resumes.
     pub async fn park<F: Future>(&self, fut: F) -> F::Output {
-        let _parked = ParkGuard::new(&self.tracker);
+        let _parked = ParkGuard::new(self);
         fut.await
+    }
+
+    /// Parks until the loop runs an invocation that `drives` accepts, given its
+    /// `AgentInvocationStarted` index, and counts on that invocation from then on. A task that
+    /// performs live work after its spawning invocation closed waits here for the invocation that
+    /// drives that work.
+    pub async fn park_until_driven(&self, drives: impl Fn(OplogIndex) -> bool) {
+        loop {
+            let mut current = self.tracker.current.subscribe();
+            let driving = current
+                .borrow_and_update()
+                .as_ref()
+                .filter(|current| drives(current.started_index))
+                .map(|current| current.active.clone());
+            if let Some(driving) = driving {
+                self.count_on(driving);
+                return;
+            }
+            // The tracker holds the sender for as long as this activity exists.
+            let _ = self.park(current.changed()).await;
+        }
+    }
+
+    fn add(&self) {
+        self.tracker.active.fetch_add(1, Ordering::AcqRel);
+        if let Some(invocation) = &*self.counted.lock().unwrap() {
+            invocation.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
+    fn sub(&self) {
+        self.tracker.active.fetch_sub(1, Ordering::AcqRel);
+        if let Some(invocation) = &*self.counted.lock().unwrap() {
+            invocation.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+
+    /// Moves the count of this active activity to `invocation`.
+    fn count_on(&self, invocation: Arc<AtomicUsize>) {
+        let mut counted = self.counted.lock().unwrap();
+        if counted
+            .as_ref()
+            .is_some_and(|counted| Arc::ptr_eq(counted, &invocation))
+        {
+            return;
+        }
+        invocation.fetch_add(1, Ordering::AcqRel);
+        if let Some(previous) = counted.replace(invocation) {
+            previous.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+
+    /// Counts the resumed activity on the invocation the loop runs, if it runs one.
+    fn resume(&self) {
+        if let Some(current) = self.tracker.current_counter() {
+            *self.counted.lock().unwrap() = Some(current);
+        }
+        self.add();
     }
 }
 
 impl Drop for TailActivity {
     fn drop(&mut self) {
-        self.tracker.sub();
+        self.sub();
     }
 }
 
@@ -161,19 +280,19 @@ impl Drop for TailActivity {
 /// while it exists and restores it on drop, so a task dropped while parked
 /// nets out correctly against [`TailActivity`]'s own drop.
 struct ParkGuard<'a> {
-    tracker: &'a TailWorkTracker,
+    activity: &'a TailActivity,
 }
 
 impl<'a> ParkGuard<'a> {
-    fn new(tracker: &'a TailWorkTracker) -> Self {
-        tracker.sub();
-        Self { tracker }
+    fn new(activity: &'a TailActivity) -> Self {
+        activity.sub();
+        Self { activity }
     }
 }
 
 impl Drop for ParkGuard<'_> {
     fn drop(&mut self) {
-        self.tracker.add();
+        self.activity.resume();
     }
 }
 
@@ -235,6 +354,96 @@ mod tests {
     }
 
     #[test]
+    fn resumed_parked_task_counts_on_the_driving_invocation() {
+        let worker = TailWorkTracker::default();
+        let spawner = TailWorkTracker::default();
+        let driver = TailWorkTracker::default();
+        worker.begin_invocation(OplogIndex::from_u64(10), &spawner);
+
+        let activity = worker.counting_on(&spawner).activity();
+        assert_eq!(spawner.active_count(), 1);
+
+        let mut parked = Box::pin(activity.park(std::future::pending::<()>()));
+        futures::executor::block_on(async {
+            assert!(futures::poll!(parked.as_mut()).is_pending());
+        });
+        assert!(!spawner.has_active());
+
+        worker.end_invocation();
+        worker.begin_invocation(OplogIndex::from_u64(21), &driver);
+        assert_eq!(worker.current_invocation(), Some(OplogIndex::from_u64(21)));
+        drop(parked);
+
+        assert!(!spawner.has_active());
+        assert_eq!(driver.active_count(), 1);
+        let child = activity.tracker().activity();
+        assert_eq!(driver.active_count(), 2);
+        drop(child);
+        drop(activity);
+        assert!(!driver.has_active());
+        assert!(!worker.has_active());
+    }
+
+    #[test]
+    fn park_until_driven_waits_for_an_accepted_invocation() {
+        let worker = TailWorkTracker::default();
+        let closed = TailWorkTracker::default();
+        let driver = TailWorkTracker::default();
+        let closed_start = OplogIndex::from_u64(10);
+        worker.begin_invocation(closed_start, &closed);
+
+        let activity = worker.counting_on(&closed).activity();
+        let mut waiting = Box::pin(activity.park_until_driven(|started| started != closed_start));
+        futures::executor::block_on(async {
+            assert!(futures::poll!(waiting.as_mut()).is_pending());
+        });
+        assert!(!worker.has_active());
+
+        worker.end_invocation();
+        futures::executor::block_on(async {
+            assert!(futures::poll!(waiting.as_mut()).is_pending());
+        });
+        assert!(!worker.has_active());
+
+        worker.begin_invocation(OplogIndex::from_u64(21), &driver);
+        futures::executor::block_on(async {
+            assert!(futures::poll!(waiting.as_mut()).is_ready());
+        });
+        assert!(!closed.has_active());
+        assert_eq!(driver.active_count(), 1);
+        drop(waiting);
+        drop(activity);
+        assert!(!worker.has_active());
+    }
+
+    /// The activity counts on the accepted invocation from then on, also when that invocation
+    /// already runs when the task asks.
+    #[test]
+    fn park_until_driven_counts_on_an_already_running_driver() {
+        let worker = TailWorkTracker::default();
+        let spawner = TailWorkTracker::default();
+        let driver = TailWorkTracker::default();
+        worker.begin_invocation(OplogIndex::from_u64(10), &spawner);
+        let activity = worker.counting_on(&spawner).activity();
+        worker.end_invocation();
+        worker.begin_invocation(OplogIndex::from_u64(21), &driver);
+
+        futures::executor::block_on(
+            activity.park_until_driven(|started| started == OplogIndex::from_u64(21)),
+        );
+        assert_eq!(
+            driver.active_count(),
+            1,
+            "the activity counts on the driving invocation"
+        );
+        assert!(
+            !spawner.has_active(),
+            "the activity no longer counts on its spawner"
+        );
+        drop(activity);
+    }
+
+    #[test]
     fn dropping_task_while_parked_stays_balanced() {
         let tracker = TailWorkTracker::default();
         let activity = tracker.activity();
@@ -277,6 +486,12 @@ mod context {
         /// The configured maximum invocation duration, if any.
         pub fn duration(&self) -> Option<Duration> {
             self.duration
+        }
+
+        /// Disarms the deadline unless it fired first. `false` means that it fired: its
+        /// interrupt is sent, or is about to be sent.
+        pub fn disarm(self) -> bool {
+            !self.claim.swap(true, Ordering::AcqRel)
         }
     }
 
@@ -364,11 +579,16 @@ mod context {
             let latch = self.state.invocation_deadline_exceeded.clone();
             latch.store(false, Ordering::Release);
             let duration = self.state.config.limits.max_invocation_duration;
+            let claim = Arc::new(AtomicBool::new(false));
             let timer = duration.map(|duration| {
                 let latch = latch.clone();
+                let claim = claim.clone();
                 let execution_status = self.execution_status.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(duration).await;
+                    if claim.swap(true, Ordering::AcqRel) {
+                        return;
+                    }
                     latch.store(true, Ordering::Release);
                     let interrupt_signal = {
                         let status = execution_status.read().unwrap();
@@ -387,6 +607,7 @@ mod context {
             });
             InvocationDeadline {
                 latch,
+                claim,
                 duration,
                 timer,
             }

@@ -122,6 +122,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 function_name,
                 invocation_id,
                 observational_owner,
+                driver,
                 request,
                 durable_function_type,
                 span_started,
@@ -146,6 +147,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     function_name: function_name.to_string(),
                     invocation_id,
                     observational_owner,
+                    driver,
                     request: request_value,
                     durable_function_type: durable_function_type.into(),
                     span_started: span_started.map(|span| public_span_started(*span)),
@@ -271,6 +273,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 method_name,
                 consumed_fuel,
                 component_revision: entry_component_revision,
+                awaits_settlement: _,
             } => {
                 let invocation_result: AgentInvocationResult = oplog_service
                     .download_payload(owned_agent_id, agent_mode, result)
@@ -309,6 +312,17 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     invocation_id,
                     error: error.to_string(""),
                     start_index,
+                },
+            )),
+            OplogEntry::AgentInvocationSettled {
+                timestamp,
+                invocation_id,
+                consumed_fuel,
+            } => Ok(PublicOplogEntry::AgentInvocationSettled(
+                AgentInvocationSettledParams {
+                    timestamp,
+                    invocation_id,
+                    consumed_fuel,
                 },
             )),
             OplogEntry::Suspend { timestamp } => {

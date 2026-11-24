@@ -209,6 +209,11 @@ declare module 'golem:api/oplog@1.5.0' {
    * variants for the payload shapes.
    * `denial` is the reason the host denied the call before it ran. A denied
    * call never runs its operation, and its `end` holds the denied response.
+   * `driver` is the oplog index of the agent invocation whose settlement waits
+   * for this call. It is present in two cases: a store task that records after
+   * its spawning invocation closed records the invocation that resumed it, and
+   * agent-level work recorded while an invocation runs records that invocation,
+   * even when the call's invocation id is anchored at the same invocation.
    */
   export type StartParameters = {
     timestamp: Datetime;
@@ -216,6 +221,7 @@ declare module 'golem:api/oplog@1.5.0' {
     functionName: string;
     invocationId?: DurableInvocationId;
     observationalOwner?: OplogIndex;
+    driver?: OplogIndex;
     request?: TypedSchemaValue;
     durableFunctionType: WrappedFunctionType;
     spanStarted?: SpanStarted;
@@ -320,6 +326,11 @@ declare module 'golem:api/oplog@1.5.0' {
     invocationId: Uuid;
     error: string;
     startIndex: OplogIndex;
+  };
+  export type AgentInvocationSettledParameters = {
+    timestamp: Datetime;
+    invocationId: Uuid;
+    consumedFuel: bigint;
   };
   export type OplogErrorKind = "invocation" | "recovery";
   export type ErrorParameters = {
@@ -653,6 +664,8 @@ declare module 'golem:api/oplog@1.5.0' {
     parentStartIndex?: OplogIndex;
     invocationId?: DurableInvocationId;
     observationalOwner?: OplogIndex;
+    /** The invocation that drives the call when it is not the invocation the call belongs to */
+    driver?: OplogIndex;
     /** Whether the call carries a request: true for a durable call, false for a durable scope */
     carriesRequest: boolean;
     /** The request of the call, when it is known */
@@ -683,7 +696,7 @@ declare module 'golem:api/oplog@1.5.0' {
   /**
    * An identity field of a recorded `Start`, which a replayed host call must match
    */
-  export type StartIdentityField = "function-name" | "function-type" | "invocation-id" | "observational-owner" | "request-presence" | "parent";
+  export type StartIdentityField = "function-name" | "function-type" | "invocation-id" | "observational-owner" | "request-presence" | "parent" | "driver";
   /**
    * The first entry at which a replay did not reproduce the recorded execution
    */
@@ -1025,6 +1038,7 @@ declare module 'golem:api/oplog@1.5.0' {
     functionName: string;
     invocationId?: DurableInvocationId;
     observationalOwner?: OplogIndex;
+    driver?: OplogIndex;
     request?: OplogPayload;
     durableFunctionType: WrappedFunctionType;
     spanStarted?: SpanStarted;
@@ -1189,6 +1203,11 @@ declare module 'golem:api/oplog@1.5.0' {
     error: WorkerError;
     startIndex: OplogIndex;
   };
+  export type RawAgentInvocationSettledParameters = {
+    timestamp: Datetime;
+    invocationId: Uuid;
+    consumedFuel: bigint;
+  };
   export type RawErrorParameters = {
     timestamp: Datetime;
     kind: OplogErrorKind;
@@ -1352,6 +1371,11 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'agent-invocation-failed'
     val: RawAgentInvocationFailedParameters
+  } |
+  /** The background work of an agent invocation ended after its result was recorded */
+  {
+    tag: 'agent-invocation-settled'
+    val: RawAgentInvocationSettledParameters
   } |
   /** Agent suspended */
   {
@@ -1635,6 +1659,11 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'agent-invocation-failed'
     val: AgentInvocationFailedParameters
+  } |
+  /** The background work of an agent invocation ended after its result was recorded */
+  {
+    tag: 'agent-invocation-settled'
+    val: AgentInvocationSettledParameters
   } |
   /** Agent suspended */
   {

@@ -1004,7 +1004,6 @@ impl WorkerGrpcApi {
                 .resolved_revert
                 .map(|resolved| golem_common::model::agent::ResolvedRevert {
                     last_oplog_index: OplogIndex::from_u64(resolved.last_oplog_index),
-                    observed_oplog_index: OplogIndex::from_u64(resolved.observed_oplog_index),
                 });
 
         self.worker_service

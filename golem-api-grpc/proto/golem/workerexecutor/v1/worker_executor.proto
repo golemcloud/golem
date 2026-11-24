@@ -637,6 +637,8 @@ enum InvocationLifecycleState {
   INVOCATION_LIFECYCLE_STATE_COMPLETED = 7;
   INVOCATION_LIFECYCLE_STATE_FAILED = 8;
   INVOCATION_LIFECYCLE_STATE_CANCELLED = 9;
+  // The invocation recorded its result, then the agent gave up during its background work.
+  INVOCATION_LIFECYCLE_STATE_BACKGROUND_FAILED = 10;
 }
 
 enum InvocationKind {

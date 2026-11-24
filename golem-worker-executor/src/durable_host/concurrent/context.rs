@@ -213,8 +213,9 @@ impl<T> ContextWindow<'_, T> {
 }
 
 impl<T: 'static, D: HasData + ?Sized> DurableAccess<T, D> for Accessor<T, D> {
+    /// A guest import's host code reads its authority with the cut-off state it was made with.
     fn with<R>(&self, f: impl FnOnce(ContextWindow<'_, T>) -> R) -> R {
-        self.with(|mut access| {
+        crate::durable_host::attribution::with_import_access(self, |mut access| {
             f(ContextWindow {
                 data: access.data_mut(),
             })

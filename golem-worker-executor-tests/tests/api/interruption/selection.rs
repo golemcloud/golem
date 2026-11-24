@@ -834,9 +834,54 @@ async fn deadline_selection(
             if success_first { 2 } else { 1 }
         );
         if success_first {
+            // The success is recorded at the export's return, so the late stop lands in the
+            // drain of the invocation's background work. A durable agent suspends; an ephemeral
+            // agent cannot suspend, so the stop fails the agent. Neither failure names the
+            // invocation or replaces its recorded result, and the drain does not settle.
+            if durable {
+                assert!(
+                    errors.is_empty(),
+                    "late monthly stop overwrote success: {errors:?}"
+                );
+            } else {
+                assert!(
+                    matches!(errors.as_slice(), [AgentError::EphemeralCannotSuspend(_)]),
+                    "late monthly stop must fail only the ephemeral agent: {errors:?}"
+                );
+                assert_eq!(suspends, 0);
+            }
             assert!(
-                errors.is_empty(),
-                "late monthly stop overwrote success: {errors:?}"
+                !entries.values().any(|entry| matches!(
+                    entry,
+                    OplogEntry::Error {
+                        invocation_id: Some(_),
+                        ..
+                    }
+                )),
+                "a failure after the result names no invocation"
+            );
+            let method = entries
+                .values()
+                .filter_map(|entry| match entry {
+                    OplogEntry::AgentInvocationStarted { invocation_id, .. } => Some(invocation_id),
+                    _ => None,
+                })
+                .next_back()
+                .expect("the method started");
+            assert!(
+                entries.values().any(|entry| matches!(
+                    entry,
+                    OplogEntry::AgentInvocationFinished { invocation_id, awaits_settlement: true, .. }
+                        if invocation_id == method
+                )),
+                "the method's success is recorded at its export's return"
+            );
+            assert!(
+                !entries.values().any(|entry| matches!(
+                    entry,
+                    OplogEntry::AgentInvocationSettled { invocation_id, .. } if invocation_id == method
+                )),
+                "the stopped drain does not settle"
             );
             let result = invocation.await??.into_typed::<Result<String, String>>()?;
             assert_eq!(result, Ok(String::new()));

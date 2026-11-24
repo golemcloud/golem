@@ -503,7 +503,15 @@ impl TestWorkerExecutor {
                 return Err(anyhow!("agent invocation returned an external-tool result"));
             }
         };
-        Ok(AgentResult::new(value, worker_agent_id))
+        let background_failure = result
+            .background_failure
+            .map(|failure| {
+                WorkerExecutorError::try_from(failure)
+                    .map(|error| error.to_string())
+                    .map_err(|error| anyhow!("invalid background failure: {error}"))
+            })
+            .transpose()?;
+        Ok(AgentResult::new(value, worker_agent_id).with_background_failure(background_failure))
     }
 }
 

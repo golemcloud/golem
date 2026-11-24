@@ -71,6 +71,17 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         .store_invocation_failure(&key, &TrapType::Interrupt(kind))
                         .await;
                 }
+            } else if matches!(kind, InterruptKind::Interrupt(_))
+                && status.settling_invocation.is_some()
+            {
+                // An interrupt of the drain of an invocation that recorded its result fails the
+                // queued invocations and keeps the recorded result.
+                self.parent
+                    .store_queued_invocation_failures(
+                        status.settling_invocation.as_ref(),
+                        &TrapType::Interrupt(kind),
+                    )
+                    .await;
             }
         }
         match decision {

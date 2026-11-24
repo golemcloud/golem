@@ -354,6 +354,7 @@ async fn real_mcp_endpoint_with_body_limit(
             idempotency_key: None,
             oplog_index: None,
             agent_fingerprint: None,
+            background_failure: None,
         },
         AgentConstructorSchema {
             name: None,

@@ -1176,6 +1176,7 @@ impl InvocationHarness {
                 idempotency_key: None,
                 oplog_index: None,
                 agent_fingerprint: None,
+                background_failure: None,
             },
             agent_mode,
             AgentConstructorSchema {

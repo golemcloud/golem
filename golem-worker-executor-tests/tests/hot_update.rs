@@ -8957,6 +8957,7 @@ async fn a_divergent_bootstrap_block_fails_the_snapshot_based_update(
                 function_name: HostFunctionName::WallClockNow,
                 invocation_id: None,
                 observational_owner: None,
+                driver: None,
                 request: None,
                 durable_function_type: DurableFunctionType::ReadLocal,
                 span_started: None,

@@ -44,20 +44,20 @@ use crate::model::oplog::payload::host_functions::{
 };
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFailedParams, AgentInvocationFinishedParams,
-    AgentInvocationStartedParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, CardDerivedParams, CardEventQueuedParams, CardExpiredParams,
-    CardInstallFailedParams, CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams,
-    CardTransferConfirmedParams, CardTransferStartedParams, CardTransferredParams,
-    CommittedRemoteTransactionParams, CompletionDeliveredParams, CompletionDiscardedParams,
-    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndParams,
-    ErrorParams, ExitedParams, FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams,
-    InterruptedParams, JumpParams, LogParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, RecoverySucceededParams, RemoveRetryPolicyParams,
-    RestartParams, ResumedParams, RevertParams, RolledBackRemoteTransactionParams,
-    SetRetryPolicyParams, SnapshotConfirmedParams, SnapshotParams, SpanClosedParams, StartParams,
-    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, StreamTerminalParams,
-    SuccessfulUpdateParams, SuspendParams,
+    AgentInvocationSettledParams, AgentInvocationStartedParams, BeginRemoteTransactionParams,
+    CancelPendingInvocationParams, CancelledParams, CardDerivedParams, CardEventQueuedParams,
+    CardExpiredParams, CardInstallFailedParams, CardInstalledParams, CardRevokedCascadeParams,
+    CardRevokedParams, CardTransferConfirmedParams, CardTransferStartedParams,
+    CardTransferredParams, CommittedRemoteTransactionParams, CompletionDeliveredParams,
+    CompletionDiscardedParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
+    DropResourceParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams, GrowMemoryParams,
+    HostStreamFrameParams, InterruptedParams, JumpParams, LogParams,
+    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RecoverySucceededParams,
+    RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
+    SnapshotParams, SpanClosedParams, StartParams, StreamItemsParams, StreamRegisteredParams,
+    StreamSessionParams, StreamTerminalParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::raw_types::{
     CreateProjectionParameters, DurableStreamEventSummary, OplogEnrichmentEntry,
@@ -140,6 +140,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 observational_owner: start
                     .observational_owner
                     .map(crate::base_model::OplogIndex::from_u64),
+                driver: start.driver.map(crate::base_model::OplogIndex::from_u64),
                 request: start.request.map(TryInto::try_into).transpose()?,
                 durable_function_type: start
                     .durable_function_type
@@ -240,6 +241,13 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     invocation_id: p.invocation_id.ok_or("Missing invocation_id")?.into(),
                     error: p.error,
                     start_index: OplogIndex::from_u64(p.start_index),
+                }),
+            ),
+            oplog_entry::Entry::AgentInvocationSettled(p) => Ok(
+                PublicOplogEntry::AgentInvocationSettled(AgentInvocationSettledParams {
+                    timestamp: p.timestamp.ok_or("Missing timestamp")?.into(),
+                    invocation_id: p.invocation_id.ok_or("Missing invocation_id")?.into(),
+                    consumed_fuel: p.consumed_fuel,
                 }),
             ),
             oplog_entry::Entry::Suspend(suspend) => Ok(PublicOplogEntry::Suspend(SuspendParams {
@@ -853,6 +861,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         function_name: start.function_name.clone(),
                         invocation_id: start.invocation_id.map(Into::into),
                         observational_owner: start.observational_owner.map(|id| id.as_u64()),
+                        driver: start.driver.map(|id| id.as_u64()),
                         request: start.request.map(TryInto::try_into).transpose()?,
                         durable_function_type: Some(start.durable_function_type.into()),
                         span_started: start.span_started.map(public_span_started_to_proto),
@@ -940,6 +949,15 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         invocation_id: Some(p.invocation_id.into()),
                         error: p.error,
                         start_index: p.start_index.into(),
+                    },
+                )),
+            },
+            PublicOplogEntry::AgentInvocationSettled(p) => golem_api_grpc::proto::golem::worker::OplogEntry {
+                entry: Some(oplog_entry::Entry::AgentInvocationSettled(
+                    golem_api_grpc::proto::golem::worker::AgentInvocationSettledParameters {
+                        timestamp: Some(p.timestamp.into()),
+                        invocation_id: Some(p.invocation_id.into()),
+                        consumed_fuel: p.consumed_fuel,
                     },
                 )),
             },
@@ -1969,6 +1987,7 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                     function_name: HostFunctionName::from(start.function_name.as_str()),
                     invocation_id: start.invocation_id,
                     observational_owner: start.observational_owner,
+                    driver: start.driver,
                     request,
                     durable_function_type,
                     span_started: start
@@ -2033,6 +2052,7 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                     method_name: finished.method_name,
                     consumed_fuel: finished.consumed_fuel,
                     component_revision: finished.component_revision,
+                    awaits_settlement: false,
                 })
             }
             PublicOplogEntry::AgentInvocationFailed(p) => Ok(OplogEntry::AgentInvocationFailed {
@@ -2041,6 +2061,12 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                 invocation_id: p.invocation_id,
                 error: AgentError::Unknown(p.error),
                 start_index: p.start_index,
+                awaits_settlement: false,
+            }),
+            PublicOplogEntry::AgentInvocationSettled(p) => Ok(OplogEntry::AgentInvocationSettled {
+                timestamp: p.timestamp,
+                invocation_id: p.invocation_id,
+                consumed_fuel: p.consumed_fuel,
             }),
             PublicOplogEntry::Suspend(p) => Ok(OplogEntry::Suspend {
                 timestamp: p.timestamp,
