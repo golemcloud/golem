@@ -4497,6 +4497,7 @@ dependencies = [
  "strum 0.27.2",
  "strum_macros 0.27.2",
  "tap",
+ "tar",
  "tempfile",
  "test-r",
  "testcontainers",
