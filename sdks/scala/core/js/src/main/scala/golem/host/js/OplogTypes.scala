@@ -98,6 +98,7 @@ sealed trait JsStartParameters extends js.Object {
   def functionName: String                            = js.native
   def invocationId: js.UndefOr[JsDurableInvocationId] = js.native
   def observationalOwner: js.UndefOr[js.BigInt]       = js.native
+  def driver: js.UndefOr[js.BigInt]                   = js.native
   def request: js.UndefOr[JsTypedSchemaValue]         = js.native
   def durableFunctionType: JsWrappedFunctionType      = js.native
   def spanStarted: js.UndefOr[JsSpanStarted]          = js.native
@@ -491,6 +492,13 @@ sealed trait JsAgentInvocationFailedParameters extends js.Object {
   def invocationId: JsUuid  = js.native
   def error: String         = js.native
   def startIndex: js.BigInt = js.native
+}
+
+@js.native
+sealed trait JsAgentInvocationSettledParameters extends js.Object {
+  def timestamp: JsDatetime   = js.native
+  def invocationId: JsUuid    = js.native
+  def consumedFuel: js.BigInt = js.native
 }
 
 // --- PendingAgentInvocationParameters ---

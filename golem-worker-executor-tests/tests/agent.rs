@@ -1055,6 +1055,7 @@ async fn method_failure_replay_rejects_success_or_trap_in_place_of_a_local_termi
             invocation_id,
             AgentError::InternalError("recorded method failure".into()),
             anchor,
+            false,
         );
         let terminal_index = executor
             .commit_oplog_entry_bypassing_worker_status(&worker.agent_id, terminal.clone())

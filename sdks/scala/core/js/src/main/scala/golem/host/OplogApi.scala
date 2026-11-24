@@ -125,7 +125,8 @@ object OplogApi {
     request: Option[TypedSchemaValue],
     wrappedFunctionType: DurabilityApi.DurableFunctionType,
     spanStarted: Option[SpanStarted] = None,
-    denial: Option[String] = None
+    denial: Option[String] = None,
+    driver: Option[OplogIndex] = None
   )
 
   final case class EndParameters(
@@ -236,6 +237,12 @@ object OplogApi {
     invocationId: UUID,
     error: String,
     startIndex: OplogIndex
+  )
+
+  final case class AgentInvocationSettledParameters(
+    timestamp: ContextApi.DateTime,
+    invocationId: UUID,
+    consumedFuel: Long
   )
 
   sealed trait OplogErrorKind extends Product with Serializable
@@ -452,6 +459,9 @@ object OplogApi {
     final case class AgentInvocationFailed(params: AgentInvocationFailedParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
+    final case class AgentInvocationSettled(params: AgentInvocationSettledParameters) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = params.timestamp
+    }
     final case class Suspend(ts: ContextApi.DateTime) extends OplogEntry {
       def timestamp: ContextApi.DateTime = ts
     }
@@ -616,6 +626,15 @@ object OplogApi {
               invocationId = JsUuid.toUuid(p.invocationId),
               error = p.error,
               startIndex = BigInt(p.startIndex.toString)
+            )
+          )
+        case "agent-invocation-settled" =>
+          val p = v.asInstanceOf[JsAgentInvocationSettledParameters]
+          AgentInvocationSettled(
+            AgentInvocationSettledParameters(
+              timestamp = parseDateTime(p.timestamp),
+              invocationId = JsUuid.toUuid(p.invocationId),
+              consumedFuel = BigInt(p.consumedFuel.toString).toLong
             )
           )
         case "suspend"            => Suspend(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
@@ -814,7 +833,8 @@ object OplogApi {
       request = raw.request.toOption.map(typedFromJs),
       wrappedFunctionType = DurabilityApi.DurableFunctionType.fromJs(raw.durableFunctionType),
       spanStarted = raw.spanStarted.toOption.map(parseSpanStarted),
-      denial = raw.denial.toOption
+      denial = raw.denial.toOption,
+      driver = raw.driver.toOption.map(index => BigInt(index.toString))
     )
 
   private def parseEndParameters(raw: JsEndParameters): EndParameters =

@@ -58,6 +58,9 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             if let Some(parent) = params.parent_start_index {
                 let _ = writeln!(result, "{pad}parent start index: {parent}");
             }
+            if let Some(driver) = params.driver {
+                let _ = writeln!(result, "{pad}driver:            {driver}");
+            }
             if let Some(request) = &params.request {
                 let _ = writeln!(
                     result,
@@ -189,6 +192,12 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}invocation id:     {}", params.invocation_id);
             let _ = writeln!(result, "{pad}start index:       {}", params.start_index);
             let _ = writeln!(result, "{pad}error:             {}", params.error);
+        }
+        PublicOplogEntry::AgentInvocationSettled(params) => {
+            let _ = writeln!(result, "AGENT INVOCATION SETTLED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(result, "{pad}invocation id:     {}", params.invocation_id);
+            let _ = writeln!(result, "{pad}consumed fuel:     {}", params.consumed_fuel);
         }
         PublicOplogEntry::Suspend(params) => {
             let _ = writeln!(result, "SUSPEND");

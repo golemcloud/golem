@@ -79,6 +79,7 @@ export type FallibleResultParameters = OplogTypes.FallibleResultParameters;
 export type SaveSnapshotResultParameters = OplogTypes.SaveSnapshotResultParameters;
 export type AgentInvocationResult = OplogTypes.AgentInvocationResult;
 export type AgentInvocationFinishedParameters = OplogTypes.AgentInvocationFinishedParameters;
+export type AgentInvocationSettledParameters = OplogTypes.AgentInvocationSettledParameters;
 export type PendingAgentInvocationParameters = OplogTypes.PendingAgentInvocationParameters;
 export type UpdateDescription = OplogTypes.UpdateDescription;
 export type PendingUpdateParameters = OplogTypes.PendingUpdateParameters;
@@ -183,6 +184,7 @@ export type PublicOplogEntry =
   | { tag: 'cancelled'; val: CancelledParameters }
   | { tag: 'agent-invocation-started'; val: AgentInvocationStartedParameters }
   | { tag: 'agent-invocation-finished'; val: AgentInvocationFinishedParameters }
+  | { tag: 'agent-invocation-settled'; val: AgentInvocationSettledParameters }
   | { tag: 'suspend'; val: Timestamp }
   | { tag: 'error'; val: ErrorParameters }
   | { tag: 'recovery-succeeded'; val: Timestamp }

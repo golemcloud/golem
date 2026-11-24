@@ -358,6 +358,7 @@ fn invocation_pair(
             method_name: None,
             consumed_fuel: 0,
             component_revision: ComponentRevision::INITIAL,
+            awaits_settlement: false,
         },
     );
 }
@@ -970,6 +971,7 @@ fn sample_status() -> AgentStatusRecord {
                     parent_start_index: None,
                     invocation_id: None,
                     observational_owner: None,
+                    driver: None,
                     carries_request: true,
                     request: None,
                 },
@@ -984,6 +986,7 @@ fn sample_status() -> AgentStatusRecord {
                     parent_start_index: None,
                     invocation_id: None,
                     observational_owner: None,
+                    driver: None,
                     carries_request: false,
                     request: None,
                 },
@@ -1309,6 +1312,74 @@ async fn invocation_result_index_resumes_across_calls_and_chunks() {
             .map(positions_only)
             .unwrap(),
         InvocationResultIndexLookup::Found(result_at(5))
+    );
+}
+
+/// The catch-up carries the settling invocation in its metadata, so a give-up in a later chunk
+/// than the result still makes the indexed result a background failure.
+#[test]
+async fn invocation_result_index_finds_a_background_failure_in_a_later_chunk() {
+    let key = idempotency_key("settling");
+    let mut entries = invocation_entries(&[key]);
+    if let Some(OplogEntry::AgentInvocationFinished {
+        awaits_settlement, ..
+    }) = entries.get_mut(&OplogIndex::from_u64(3))
+    {
+        *awaits_settlement = true;
+    }
+    entries.insert(
+        OplogIndex::from_u64(4),
+        OplogEntry::error(
+            None,
+            golem_common::model::oplog::OplogErrorKind::Invocation,
+            None,
+            golem_common::model::oplog::AgentError::Unknown("background work trapped".to_string()),
+            OplogIndex::from_u64(2),
+            Some(golem_common::model::RetryPolicyState::Terminal),
+            None,
+            None,
+        ),
+    );
+    let oplog = Arc::new(IndexTestOplogService::new(entries));
+    let mut config = GolemConfig::default();
+    config.invocation_results.physical_index_catch_up_chunk_size = 1;
+    let service = DefaultWorkerService::new(
+        Arc::new(InMemoryKeyValueStorage::new()),
+        Arc::new(ShardServiceDefault::new()),
+        oplog,
+        Arc::new(IndexTestComponentService),
+        Arc::new(config),
+    );
+    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 1));
+    let status = invocation_status(4, 0, &[(&key, 3)], 0, DeletedRegions::new());
+
+    service
+        .catch_up_invocation_result_index(
+            &owned_agent_id,
+            AgentMode::Durable,
+            invocation_index_fingerprint(),
+            &status,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        service
+            .lookup_invocation_result_index(
+                &owned_agent_id,
+                invocation_index_fingerprint(),
+                &status,
+                &key,
+            )
+            .await
+            .map(positions_only)
+            .unwrap(),
+        InvocationResultIndexLookup::Found(InvocationResultPosition {
+            end: golem_common::model::InvocationEnd::BackgroundFailed {
+                failure: OplogIndex::from_u64(4),
+            },
+            ..result_at(3)
+        })
     );
 }
 
@@ -3660,4 +3731,131 @@ async fn a_result_index_field_that_does_not_decode_resets_the_index() {
         positions_only(lookup(first).await),
         InvocationResultIndexLookup::Found(result_at(3))
     );
+}
+
+/// A background failure changes a result at its give-up entry, after newer results. The recent
+/// results keep it as the newest change, so the persisted index from before the give-up is
+/// incomplete instead of answering with the plain result.
+#[test]
+async fn a_background_failure_after_newer_results_is_not_answered_from_an_older_index() {
+    let settling = idempotency_key("settling");
+    let first_cancelled = idempotency_key("cancelled-1");
+    let second_cancelled = idempotency_key("cancelled-2");
+
+    let pending = |key: &InvocationId| {
+        OplogEntry::pending_agent_invocation(
+            None,
+            *key,
+            Box::new(InvocationRequestOperation::ManualUpdate {
+                target_revision: ComponentRevision::INITIAL,
+            }),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate)),
+            TraceId::generate(),
+            Vec::new(),
+            Vec::new(),
+        )
+    };
+
+    // The settling invocation records its result at the return (3). Two invocations queued during
+    // its drain are cancelled (6, 7). Then the background work gives up (8).
+    let mut entries = invocation_entries(std::slice::from_ref(&settling));
+    if let Some(OplogEntry::AgentInvocationFinished {
+        awaits_settlement, ..
+    }) = entries.get_mut(&OplogIndex::from_u64(3))
+    {
+        *awaits_settlement = true;
+    }
+    entries.insert(OplogIndex::from_u64(4), pending(&first_cancelled));
+    entries.insert(OplogIndex::from_u64(5), pending(&second_cancelled));
+    entries.insert(
+        OplogIndex::from_u64(6),
+        OplogEntry::cancel_pending_invocation(first_cancelled),
+    );
+    entries.insert(
+        OplogIndex::from_u64(7),
+        OplogEntry::cancel_pending_invocation(second_cancelled),
+    );
+    entries.insert(
+        OplogIndex::from_u64(8),
+        OplogEntry::error(
+            None,
+            golem_common::model::oplog::OplogErrorKind::Invocation,
+            None,
+            golem_common::model::oplog::AgentError::Unknown("background work trapped".to_string()),
+            OplogIndex::from_u64(2),
+            Some(golem_common::model::RetryPolicyState::Terminal),
+            None,
+            None,
+        ),
+    );
+
+    // The status comes from the real status fold, with a small recent-result capacity.
+    let initial = AgentStatusRecord {
+        invocation_results: InvocationResultMembership::new(1, 128, 3),
+        ..AgentStatusRecord::default()
+    };
+    let retry = golem_common::model::RetryConfig::default();
+    let before_give_up = crate::worker::status::update_status_with_new_entries(
+        AgentMode::Durable,
+        initial,
+        entries
+            .range(..=OplogIndex::from_u64(7))
+            .map(|(index, entry)| (*index, entry.clone()))
+            .collect(),
+        &retry,
+    )
+    .unwrap()
+    .unwrap();
+    let after_give_up = crate::worker::status::update_status_with_new_entries(
+        AgentMode::Durable,
+        before_give_up.clone(),
+        entries
+            .range(OplogIndex::from_u64(8)..)
+            .map(|(index, entry)| (*index, entry.clone()))
+            .collect(),
+        &retry,
+    )
+    .unwrap()
+    .unwrap();
+    let background_failed = InvocationResultPosition {
+        end: golem_common::model::InvocationEnd::BackgroundFailed {
+            failure: OplogIndex::from_u64(8),
+        },
+        ..result_at(3)
+    };
+    assert!(!after_give_up.invocation_results.is_exact_complete());
+    assert_eq!(
+        after_give_up
+            .invocation_results
+            .position(&settling)
+            .cloned()
+            .map(|position| positions_only(InvocationResultIndexLookup::Found(position))),
+        Some(InvocationResultIndexLookup::Found(
+            background_failed.clone()
+        ))
+    );
+
+    let (service, _oplog, owned_agent_id) = index_test_service(entries);
+    // A lookup before the give-up caught the index up through 7.
+    service
+        .catch_up_invocation_result_index(
+            &owned_agent_id,
+            AgentMode::Durable,
+            invocation_index_fingerprint(),
+            &before_give_up,
+        )
+        .await
+        .unwrap();
+
+    let lookup = service
+        .lookup_invocation_result_index(
+            &owned_agent_id,
+            invocation_index_fingerprint(),
+            &after_give_up,
+            &settling,
+        )
+        .await
+        .map(positions_only)
+        .unwrap();
+    assert_eq!(lookup, InvocationResultIndexLookup::Incomplete);
 }

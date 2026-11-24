@@ -95,7 +95,14 @@ fn request_identity_binds_source_generation_exact_cut_and_result_kind() {
     );
     assert_ne!(
         hash,
-        request_hash(&source, generation, cut, None, Some((None, None))).unwrap()
+        request_hash(
+            &source,
+            generation,
+            cut,
+            None,
+            Some(ForkCallOwner::default())
+        )
+        .unwrap()
     );
     let selected = StreamId(Uuid::from_u128(9));
     let empty = request_hash(&source, generation, cut, Some((selected, None)), None).unwrap();
@@ -130,7 +137,14 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
     let cut = OplogIndex::from_u64(2);
     let source_fingerprint = AgentFingerprint(Uuid::from_u128(3));
     let fingerprint = AgentFingerprint(Uuid::from_u128(4));
-    let hash = request_hash(&source, source_fingerprint, cut, None, Some((None, None))).unwrap();
+    let hash = request_hash(
+        &source,
+        source_fingerprint,
+        cut,
+        None,
+        Some(ForkCallOwner::default()),
+    )
+    .unwrap();
     assert_eq!(
         existing_fork(&service, &target, cut, hash).await.unwrap(),
         ExistingFork::Absent
@@ -224,7 +238,7 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
         })
         .await
         .unwrap();
-    write_guest_result(stage.as_ref(), None, None, &target.agent_id)
+    write_guest_result(stage.as_ref(), ForkCallOwner::default(), &target.agent_id)
         .await
         .unwrap();
     // Extra entries after creation must not affect retry recognition.

@@ -4293,6 +4293,10 @@ impl WorkerService {
         let response_idempotency_key = output
             .idempotency_key
             .ok_or_else(|| WorkerServiceError::Internal("Missing idempotency key".to_string()))?;
+        let background_failure = output
+            .background_failure
+            .take()
+            .map(invocations::background_failure);
 
         match output.result {
             golem_common::model::AgentInvocationResult::AgentMethod {
@@ -4315,6 +4319,7 @@ impl WorkerService {
                     idempotency_key: response_idempotency_key,
                     result: Some(typed_output),
                     component_revision: Some(decode_revision),
+                    background_failure,
                 })
             }
             _ => Ok(AgentInvocationResult {
@@ -4322,6 +4327,7 @@ impl WorkerService {
                 idempotency_key: response_idempotency_key,
                 result: None,
                 component_revision: output.component_revision,
+                background_failure,
             }),
         }
     }
@@ -5516,7 +5522,6 @@ mod tests {
             }
             Ok(ResolvedRevert {
                 last_oplog_index: OplogIndex::from_u64(42),
-                observed_oplog_index: OplogIndex::from_u64(100),
             })
         }
 
@@ -5847,6 +5852,7 @@ mod tests {
                     idempotency_key: None,
                     oplog_index: None,
                     agent_fingerprint: None,
+                    background_failure: None,
                 },
                 component_id,
             ));
@@ -5953,6 +5959,7 @@ mod tests {
                     idempotency_key: None,
                     oplog_index: None,
                     agent_fingerprint: None,
+                    background_failure: None,
                 },
                 component_id,
                 pinned_revision,
@@ -10162,6 +10169,7 @@ mod tests {
                 idempotency_key: None,
                 oplog_index: Some(OplogIndex::from_u64(7)),
                 agent_fingerprint: Some(harness.worker_client.fingerprint),
+                background_failure: None,
             });
 
         let response = harness
@@ -10433,6 +10441,7 @@ mod tests {
                 idempotency_key: None,
                 oplog_index: None,
                 agent_fingerprint: None,
+                background_failure: None,
             });
 
         let got = harness

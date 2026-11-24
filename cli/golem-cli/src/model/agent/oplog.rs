@@ -362,6 +362,9 @@ impl TextOutput for PublicOplogEntry {
                 if let Some(owner) = params.observational_owner {
                     logln(format!("{pad}observational owner: {}", owner));
                 }
+                if let Some(driver) = params.driver {
+                    logln(format!("{pad}driver:            {}", driver));
+                }
                 if let Some(request) = &params.request {
                     logln(format!(
                         "{pad}input:             {}",
@@ -525,6 +528,18 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}error:             {}",
                     format_error(&params.error)
                 ));
+            }
+            PublicOplogEntry::AgentInvocationSettled(params) => {
+                logln(format_message_highlight("INVOKE SETTLED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}invocation id:     {}",
+                    format_id(&params.invocation_id)
+                ));
+                logln(format!("{pad}consumed fuel:     {}", params.consumed_fuel));
             }
             PublicOplogEntry::Suspend(params) => {
                 logln(format_message_highlight("SUSPEND"));
@@ -1708,6 +1723,7 @@ mod tests {
             parent_start_index: None,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             carries_request: true,
             request: request
                 .map(|request| Box::new(request.to_string().into_typed_schema_value().unwrap())),

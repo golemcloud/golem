@@ -383,6 +383,22 @@ impl PublicOplogEntry {
                     )
                     || Self::string_match(&params.error, &["error".into()], query_path, query)
             }
+            PublicOplogEntry::AgentInvocationSettled(params) => {
+                Self::string_match("agentinvocationsettled", &[], query_path, query)
+                    || Self::string_match("agent-invocation-settled", &[], query_path, query)
+                    || Self::string_match(
+                        &params.invocation_id.to_string(),
+                        &["invocation-id".into()],
+                        query_path,
+                        query,
+                    )
+                    || Self::string_match(
+                        &params.consumed_fuel.to_string(),
+                        &["consumed-fuel".into()],
+                        query_path,
+                        query,
+                    )
+            }
             PublicOplogEntry::Suspend(_params) => {
                 Self::string_match("suspend", &[], query_path, query)
             }
