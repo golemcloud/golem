@@ -35,8 +35,8 @@ use golem_common::model::oplog::{
     HostRequest, HostRequestGolemRpcCreate, HostResponse, HostResponseFileSystemStat,
     HostResponseGolemRpcCreate, HostResponseKVUnit, HostResponseP3FileSystemStat,
     HostResponseP3FileSystemWriteAdmission, HostResponseP3SocketsTcpConnect,
-    HostResponsePermissionCheck, OplogEntry, OplogIndex, PublicAgentInvocation, PublicOplogEntry,
-    PublicOplogEntryWithIndex, PublicQueuedCardEvent,
+    HostResponsePermissionCheck, OplogEntry, OplogIndex, PublicAgentInvocationResult,
+    PublicOplogEntry, PublicOplogEntryWithIndex, PublicQueuedCardEvent,
 };
 use golem_common::model::{
     AgentId, AgentStatus, IdempotencyKey, OwnedAgentId, PendingCardEventRef, PromiseId,
@@ -6497,9 +6497,9 @@ async fn a_later_guest_oplog_batch_decodes_with_the_revision_at_its_start(
 /// restores. The target starts on the revision without `set`. It is updated to the revision with
 /// `set`, runs `set(7)`, and is reverted to the entry before the update. It is updated to the
 /// revision with `set` again, then to a revision without `set`, and is reverted to the entry
-/// before the second update; then it runs `set(9)`. Only the revision with `set` decodes the input
+/// before the second update; then it runs `set(9)`. Only the revision with `set` decodes the output
 /// of either call. Every public oplog read, guest and remote, from index 1 and from the first
-/// dropped entry of each revert, decodes both inputs.
+/// dropped entry of each revert, decodes both outputs.
 #[test]
 #[timeout("4m")]
 #[tracing::instrument]
@@ -6601,23 +6601,25 @@ async fn oplog_reads_decode_the_entries_around_a_revert_with_the_revision_that_t
 
     let mut remote = Vec::new();
     for from in starts {
-        let inputs = executor
+        let outputs = executor
             .get_oplog(&target, from)
             .await?
             .into_iter()
             .filter_map(|entry| match entry.entry {
-                PublicOplogEntry::AgentInvocationStarted(started) => match started.invocation {
-                    PublicAgentInvocation::AgentMethodInvocation(method)
-                        if method.method_name == "set" =>
-                    {
-                        Some(method.function_input.into_parts().1)
+                PublicOplogEntry::AgentInvocationFinished(finished)
+                    if finished.method_name.as_deref() == Some("set") =>
+                {
+                    match finished.result {
+                        PublicAgentInvocationResult::AgentMethod(output) => {
+                            Some(output.output.into_parts().1)
+                        }
+                        _ => None,
                     }
-                    _ => None,
-                },
+                }
                 _ => None,
             })
             .collect::<Vec<_>>();
-        remote.push((from, inputs));
+        remote.push((from, outputs));
     }
 
     let reader = executor
@@ -6648,28 +6650,28 @@ async fn oplog_reads_decode_the_entries_around_a_revert_with_the_revision_that_t
         .await?;
     let mut guest = Vec::new();
     for from in starts {
-        let inputs = executor
+        let outputs = executor
             .invoke_and_await_agent(
                 &reader,
                 &reader_agent,
-                "read_oplog_method_inputs",
+                "read_oplog_method_outputs",
                 data_value!(target.agent_id(), from.as_u64()),
             )
             .await?
             .into_typed::<Result<Vec<(String, Vec<u64>)>, String>>()?;
-        guest.push((from, inputs));
+        guest.push((from, outputs));
     }
 
-    let input = |value: u64| data_value!(value).into_parts().1;
+    let output = SchemaValue::U64;
     let call = |value: u64| ("set".to_string(), vec![value]);
     assert_eq!(
         (restored_revisions, remote, guest),
         (
             vec![without_set, with_set],
             vec![
-                (starts[0], vec![input(7), input(9)]),
-                (starts[1], vec![input(7), input(9)]),
-                (starts[2], vec![input(9)]),
+                (starts[0], vec![output(7), output(9)]),
+                (starts[1], vec![output(7), output(9)]),
+                (starts[2], vec![output(9)]),
             ],
             vec![
                 (starts[0], Ok(vec![call(7), call(9)])),
