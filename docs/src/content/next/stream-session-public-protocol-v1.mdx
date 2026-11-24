@@ -495,10 +495,33 @@ item. An identical duplicate input range returns the same cumulative ACK.
 ```
 
 Server reasons are `cancelled`, `consumer-drop`, `transport-detached`,
-`source-unavailable`, `producer-deleted`, `invocation-failed`, and
-`protocol-error`. `transport-detached` is observable only when durable state
-reports that reason; normal WebSocket loss by itself does not synthesize
-cancellation.
+`source-unavailable`, `producer-deleted`, `invocation-failed`,
+`protocol-error`, and `invalid-item`. `transport-detached` is observable only
+when durable state reports that reason; normal WebSocket loss by itself does
+not synthesize cancellation.
+
+```json
+{"channel":1,"message":"stream item does not satisfy its element schema","reason":"invalid-item","sequence":"2","type":"streamCancel","version":1}
+```
+
+`invalid-item` cancels an input channel whose next expected item fails its
+element schema with `validation-error` or `unsupported-value`. Only this reason
+carries the optional `sequence`, the logical sequence of the first invalid
+item, and `message`, a short diagnostic that never contains the submitted
+value. The server sends it after the ACKs of every earlier item of the channel
+and sends no later ACK for the channel. A packed `u8` frame that contains an
+invalid byte is rejected whole; none of its bytes are delivered or
+acknowledged. The server silently ignores later item, end, and cancellation
+frames for the channel. The callee observes an ordinary end of input after the
+earlier items. After a consumer cancellation of the channel, an invalid item
+at the next discarded sequence only makes the server ignore that frame and the
+later frames for the channel; the client already has the consumer
+cancellation. An invalid item at any other sequence, and every framing,
+channel, sequence, or resource failure, remains fatal for the session. The
+reason is not durable: after a reconnect the channel reports only a terminal
+input high-water. A client that resumes after the connection was lost cannot
+tell an input that was cut at an invalid item from a complete one, so it can
+report a successful result that the callee computed from the earlier items only.
 
 ### 6.8 `attachmentRevoked`
 
@@ -597,7 +620,8 @@ terminal. Cross-stream order is unspecified. Stream-local failure terminates
 only that stream. Transport detach does not cancel execution or streams.
 Explicit cancellation and readable output drop propagate cancellation.
 Natural input exhaustion is a normal input end. Input source failure is
-`source-unavailable`.
+`source-unavailable`. An invalid next input item ends only that input with
+`invalid-item`.
 
 One WebSocket carries one invocation session and multiplexes all of its input
 and output streams.

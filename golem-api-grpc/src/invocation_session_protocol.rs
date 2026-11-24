@@ -416,6 +416,23 @@ impl InvocationSessionState {
         self.phase == SessionPhase::Complete
     }
 
+    /// The sequence of the next new item an open input stream accepts, or `None` when the
+    /// stream is unknown, terminal, or discarding items after a consumer cancellation.
+    pub fn next_input_sequence(&self, stream_id: u64) -> Option<u64> {
+        self.inputs
+            .get(&stream_id)
+            .filter(|state| !state.terminal && state.discard_next_offset.is_none())
+            .map(|state| state.next_offset)
+    }
+
+    /// The sequence of the next item an input stream discards after a consumer cancellation,
+    /// or `None` when the stream is unknown or does not discard items.
+    pub fn discarded_input_sequence(&self, stream_id: u64) -> Option<u64> {
+        self.inputs
+            .get(&stream_id)
+            .and_then(|state| state.discard_next_offset)
+    }
+
     pub fn all_inputs_terminal(&self) -> bool {
         self.inputs.values().all(|state| state.terminal)
     }

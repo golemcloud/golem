@@ -437,5 +437,5 @@ func decodeBinary(data []byte) (binaryFrame, error) {
 
 var cancelReasons = []string{
 	"cancelled", "consumer-drop", "transport-detached", "source-unavailable",
-	"producer-deleted", "invocation-failed", "protocol-error",
+	"producer-deleted", "invocation-failed", "protocol-error", "invalid-item",
 }

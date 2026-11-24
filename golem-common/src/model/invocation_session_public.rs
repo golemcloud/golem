@@ -329,6 +329,7 @@ pub enum PublicServerCancelReason {
     ProducerDeleted,
     InvocationFailed,
     ProtocolError,
+    InvalidItem,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -515,7 +516,11 @@ pub enum PublicServerMessage {
     #[serde(rename = "streamCancel")]
     StreamCancel {
         channel: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
         reason: PublicServerCancelReason,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sequence: Option<DecimalU64>,
         version: u8,
     },
     #[serde(rename = "attachmentRevoked")]
@@ -1005,7 +1010,23 @@ fn validate_server_message(message: &PublicServerMessage) -> Result<(), PublicPr
                 validate_token_text(cursor)?;
             }
         }
-        PublicServerMessage::StreamCancel { channel, .. } => validate_channel(*channel)?,
+        PublicServerMessage::StreamCancel {
+            channel,
+            message,
+            reason,
+            sequence,
+            ..
+        } => {
+            validate_channel(*channel)?;
+            if *reason != PublicServerCancelReason::InvalidItem
+                && (message.is_some() || sequence.is_some())
+            {
+                return Err(PublicProtocolError::new(
+                    PublicErrorCode::MalformedMessage,
+                    "only an invalid-item cancellation carries a sequence and message",
+                ));
+            }
+        }
         PublicServerMessage::AttachmentRevoked { .. }
         | PublicServerMessage::InvocationFinished { .. } => {}
     }
@@ -1406,6 +1427,14 @@ mod tests {
             br#"{"channel":1,"extra":true,"sequence":"0","type":"inputStreamEnd","version":1}"#;
         assert_eq!(
             decode_client_text(unknown).unwrap_err().code,
+            PublicErrorCode::MalformedMessage
+        );
+        let diagnostic_without_invalid_item =
+            br#"{"channel":1,"message":"m","reason":"consumer-drop","type":"streamCancel","version":1}"#;
+        assert_eq!(
+            decode_server_text(diagnostic_without_invalid_item)
+                .unwrap_err()
+                .code,
             PublicErrorCode::MalformedMessage
         );
         let invalid_revocation =
