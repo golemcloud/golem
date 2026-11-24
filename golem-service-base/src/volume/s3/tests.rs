@@ -514,11 +514,7 @@ async fn successful_object_debug_keeps_references_and_continuation_unchanged() {
     let (endpoint, mut requests, server) = server(vec![
         reflected(""),
         reflected("body"),
-        listing_response(
-            &[("corpus/volume-secret/volume-token", 4)],
-            Some("volume-secret+volume-token/token"),
-        ),
-        metadata_response(4, "\"volume-secret\"", "volume-token"),
+        response(200, "<ListBucketResult><IsTruncated>true</IsTruncated><NextContinuationToken>volume-secret+volume-token/token</NextContinuationToken><Contents><Key>corpus/volume-secret/volume-token</Key><Size>4</Size><ETag>&quot;volume-secret&quot;</ETag></Contents></ListBucketResult>"),
         listing_response(&[], None),
         reflected(""),
     ])
@@ -559,13 +555,13 @@ async fn successful_object_debug_keeps_references_and_continuation_unchanged() {
     let listed = page.as_ref().unwrap();
     assert_eq!(listed.objects.len(), 1);
     assert_eq!(listed.objects[0].key.as_ref(), "volume-secret/volume-token");
-    assert_eq!(&listed.objects[0].version, version);
+    assert_eq!(listed.objects[0].size, 4);
+    assert_eq!(listed.objects[0].etag, version.etag);
     assert_eq!(
         listed.continuation.as_deref(),
         Some("volume-secret+volume-token/token")
     );
     assert_eq!(requests.recv().await.unwrap().method(), "GET");
-    assert_eq!(requests.recv().await.unwrap().method(), "HEAD");
     let next = volume
         .list("", listed.continuation.as_deref())
         .await
@@ -604,7 +600,6 @@ async fn successful_object_debug_keeps_references_and_continuation_unchanged() {
         listed,
         &listed.objects,
         &listed.objects[0],
-        &listed.objects[0].version,
         Some(&listed.objects[0]),
     ));
     assert_eq!(read.unwrap().body.collect().await.unwrap(), "body");
@@ -1153,8 +1148,7 @@ async fn trace_logs_do_not_disclose_credentials_or_reflected_error_messages() {
             "<Error><Code>AccessDenied</Code><Message>volume-secret volume-token</Message></Error>",
         ),
             metadata_response(4, "\"volume-secret\"", "volume-token"),
-            listing_response(&[("corpus/volume-secret/volume-token", 4)], Some("volume-secret-volume-token")),
-            metadata_response(4, "\"volume-secret\"", "volume-token"),
+            response(200, "<ListBucketResult><IsTruncated>true</IsTruncated><NextContinuationToken>volume-secret-volume-token</NextContinuationToken><Contents><Key>corpus/volume-secret/volume-token</Key><Size>4</Size><ETag>&quot;volume-secret-volume-token&quot;</ETag></Contents></ListBucketResult>"),
             response(200, "body"),
             response(204, ""),
             response(200, "<InitiateMultipartUploadResult><UploadId>volume-secret-volume-token</UploadId></InitiateMultipartUploadResult>"),
@@ -1180,6 +1174,7 @@ async fn trace_logs_do_not_disclose_credentials_or_reflected_error_messages() {
         assert_eq!(volume.stat("key", None).await.unwrap().version.etag.as_ref(), "\"volume-secret\"");
         let page = volume.list("", None).await.unwrap();
         assert_eq!(page.objects[0].key.as_ref(), "volume-secret/volume-token");
+        assert_eq!(page.objects[0].etag.as_ref(), "\"volume-secret-volume-token\"");
         assert_eq!(page.continuation.as_deref(), Some("volume-secret-volume-token"));
         let read = volume.read("key", None, None, None).await.unwrap();
         assert_eq!(read.body.collect().await.unwrap(), "body");
@@ -1192,7 +1187,7 @@ async fn trace_logs_do_not_disclose_credentials_or_reflected_error_messages() {
         volume.abort_multipart(WriteTarget::File("large"), upload.payload()).await.unwrap();
         assert_eq!(volume.versioning().await.unwrap().unwrap().payload().as_str(), "volume-secret-volume-token");
         assert_eq!(volume.lifecycle().await.unwrap()[0].payload().id(), Some("volume-secret-volume-token"));
-        ["PUT", "HEAD", "GET", "HEAD", "GET", "DELETE", "POST", "PUT", "POST", "DELETE", "GET", "GET"]
+        ["PUT", "HEAD", "GET", "GET", "DELETE", "POST", "PUT", "POST", "DELETE", "GET", "GET"]
             .into_iter().for_each(|method| assert_eq!(requests.try_recv().unwrap().method(), method));
         assert!(requests.try_recv().is_err());
         tracing::info!("after the volume request");
@@ -1459,167 +1454,197 @@ async fn successful_object_results_require_a_usable_reference_etag() {
 
 #[test]
 #[timeout("30s")]
-async fn list_returns_the_complete_head_observation_after_discovery() {
-    let states = [
-        (4, "\"listed-A\"", "version-A"),
-        (19, "\"head-B\"", "version-B"),
-    ];
-    let orders = states
-        .into_iter()
-        .flat_map(|listed| states.into_iter().map(move |head| (listed, head)));
-    stream::iter(orders).then(|((listed_size, listed_etag, _), (size, etag, version_id))| async move {
-        let (endpoint, mut requests, server) = server(vec![
-            response(200, format!("<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>corpus/key</Key><Size>{listed_size}</Size><ETag>{listed_etag}</ETag></Contents></ListBucketResult>")),
-            metadata_response(size, etag, version_id),
-        ]).await;
-        let volume = client(&endpoint, None, allowed());
-        let page = volume.list("", None).await.unwrap();
-        assert_eq!(page.objects.as_ref(), [ObjectMetadata {
-            key: "key".into(), size,
-            version: ObjectVersion { etag: etag.into(), version_id: Some(version_id.into()) },
-        }]);
-        assert_eq!(requests.try_recv().unwrap().method(), "GET");
-        let head = requests.try_recv().unwrap();
-        assert_eq!(head.method(), "HEAD");
-        assert_eq!(head.uri().path(), "/test-bucket/corpus/key");
-        assert!(!head.uri().query().unwrap_or_default().contains("versionId"));
-        assert!(requests.try_recv().is_err());
-        server.abort();
-    }).collect::<()>().await;
+async fn list_returns_page_metadata_without_per_object_requests() {
+    let (endpoint, mut requests, server) = server(vec![response(200,
+        "<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>corpus/sub/first</Key><Size>4</Size><ETag>&quot;page-A&quot;</ETag></Contents><Contents><Key>corpus/sub/second</Key><Size>19</Size><ETag>&quot;page-B&quot;</ETag></Contents></ListBucketResult>"
+    )]).await;
+    let volume = client(&endpoint, None, allowed());
+    let page = volume.list("sub/", None).await.unwrap();
+    assert_eq!(page.objects.len(), 2);
+    assert_eq!(page.objects[0].key.as_ref(), "sub/first");
+    assert_eq!(page.objects[0].size, 4);
+    assert_eq!(page.objects[0].etag.as_ref(), "\"page-A\"");
+    assert_eq!(page.objects[1].key.as_ref(), "sub/second");
+    assert_eq!(page.objects[1].size, 19);
+    assert_eq!(page.objects[1].etag.as_ref(), "\"page-B\"");
+    assert!(page.continuation.is_none());
+    let request = requests.try_recv().unwrap();
+    assert_eq!(request.method(), "GET");
+    assert_eq!(request.uri().path(), "/test-bucket/");
+    assert_eq!(
+        request.uri().query().unwrap(),
+        "list-type=2&prefix=corpus%2Fsub%2F"
+    );
+    assert!(requests.try_recv().is_err());
+    server.abort();
 }
 
 #[test]
 #[timeout("30s")]
-async fn list_checks_all_marker_and_file_observation_orders_without_scanning() {
-    let cases = [0, 9].into_iter().flat_map(|listed_size| {
-        [0, 9].into_iter().flat_map(move |head_size| {
-            [("version-B", Some("version-B")), ("null", None)]
-                .into_iter()
-                .map(move |versions| (listed_size, head_size, versions))
-        })
-    });
-    stream::iter(cases)
-        .then(
-            |(listed_size, head_size, (version_id, expected_version))| async move {
-                let (endpoint, mut requests, server) = server(vec![
-                    listing_response(&[("corpus/slash/", listed_size)], Some("next+opaque/token")),
-                    metadata_response(head_size, "\"head-B\"", version_id),
-                ])
-                .await;
-                let volume = client(&endpoint, None, allowed());
-                let page = volume
-                    .list("", Some("previous+opaque/token"))
-                    .await
-                    .unwrap();
-                assert_eq!(page.continuation.as_deref(), Some("next+opaque/token"));
-                if head_size == 0 {
-                    assert!(page.objects.is_empty());
-                } else {
-                    assert_eq!(
-                        page.objects.as_ref(),
-                        [ObjectMetadata {
-                            key: "slash/".into(),
-                            size: 9,
-                            version: ObjectVersion {
-                                etag: "\"head-B\"".into(),
-                                version_id: expected_version.map(Into::into)
-                            },
-                        }]
-                    );
-                }
-                let list = requests.try_recv().unwrap();
-                assert_eq!(list.method(), "GET");
-                assert!(list.uri().query().unwrap().contains("list-type=2"));
-                assert!(
-                    list.uri()
-                        .query()
-                        .unwrap()
-                        .contains("continuation-token=previous%2Bopaque%2Ftoken")
-                );
-                let head = requests.try_recv().unwrap();
-                assert_eq!(head.method(), "HEAD");
-                assert_eq!(head.uri().path(), "/test-bucket/corpus/slash/");
-                assert!(requests.try_recv().is_err());
-                server.abort();
+async fn list_keeps_empty_and_marker_only_pages_without_scanning() {
+    let (endpoint, mut requests, server) = server(vec![
+        listing_response(&[], Some("empty+page/token")),
+        listing_response(&[("corpus/dir/", 0)], Some("marker+page/token")),
+        listing_response(&[("corpus/empty-file", 0), ("corpus/nonempty/", 9)], None),
+    ])
+    .await;
+    let volume = client(&endpoint, None, allowed());
+    let empty = volume.list("", None).await.unwrap();
+    assert!(empty.objects.is_empty());
+    assert_eq!(empty.continuation.as_deref(), Some("empty+page/token"));
+    let first = requests.try_recv().unwrap();
+    assert_eq!(first.method(), "GET");
+    assert_eq!(first.uri().path(), "/test-bucket/");
+    assert_eq!(first.uri().query().unwrap(), "list-type=2&prefix=corpus%2F");
+    assert!(requests.try_recv().is_err());
+    let marker = volume
+        .list("", empty.continuation.as_deref())
+        .await
+        .unwrap();
+    assert!(marker.objects.is_empty());
+    assert_eq!(marker.continuation.as_deref(), Some("marker+page/token"));
+    let second = requests.try_recv().unwrap();
+    assert_eq!(second.method(), "GET");
+    assert_eq!(
+        second.uri().query().unwrap(),
+        "list-type=2&prefix=corpus%2F&continuation-token=empty%2Bpage%2Ftoken"
+    );
+    assert!(requests.try_recv().is_err());
+    let files = volume
+        .list("", marker.continuation.as_deref())
+        .await
+        .unwrap();
+    assert_eq!(
+        files.objects.as_ref(),
+        [
+            ListedObject {
+                key: "empty-file".into(),
+                size: 0,
+                etag: "\"listed-A\"".into()
             },
-        )
-        .collect::<()>()
-        .await;
+            ListedObject {
+                key: "nonempty/".into(),
+                size: 9,
+                etag: "\"listed-A\"".into()
+            },
+        ]
+    );
+    assert!(files.continuation.is_none());
+    let third = requests.try_recv().unwrap();
+    assert_eq!(third.method(), "GET");
+    assert_eq!(
+        third.uri().query().unwrap(),
+        "list-type=2&prefix=corpus%2F&continuation-token=marker%2Bpage%2Ftoken"
+    );
+    assert!(requests.try_recv().is_err());
+    server.abort();
 }
 
 #[test]
 #[timeout("30s")]
-async fn list_fails_the_whole_page_on_any_head_failure_in_either_key_order() {
-    let cases = [0, 9].into_iter().flat_map(|listed_size| {
-        [404, 403, 503, 200].into_iter().flat_map(move |status| {
-            [false, true]
-                .into_iter()
-                .map(move |failure_first| (listed_size, status, failure_first))
-        })
-    });
-    stream::iter(cases)
-        .then(|(listed_size, status, failure_first)| async move {
-            let keys = if failure_first {
-                [("corpus/slash/", listed_size), ("corpus/other", 5)]
-            } else {
-                [("corpus/other", 5), ("corpus/slash/", listed_size)]
-            };
-            let mut failed_head = response(status, "");
-            failed_head.headers_mut().remove("etag");
-            let good_head = metadata_response(5, "\"other\"", "other-version");
-            let heads = if failure_first {
-                [failed_head, good_head]
-            } else {
-                [good_head, failed_head]
-            };
-            let script = std::iter::once(listing_response(&keys, Some("unused-page")))
-                .chain(heads)
-                .collect();
-            let (endpoint, mut requests, server) = server(script).await;
+async fn list_hides_only_zero_byte_prefix_root_markers() {
+    stream::iter([0, 9])
+        .then(|size| async move {
+            let (endpoint, mut requests, server) =
+                server(vec![listing_response(&[("corpus/", size)], None)]).await;
             let volume = client(&endpoint, None, allowed());
-            let expected = match status {
-                404 => VolumeError::NotFound,
-                403 => VolumeError::Denied,
-                503 => VolumeError::RequestFailed,
-                200 => VolumeError::InvalidResponse,
-                _ => unreachable!(),
-            };
-            assert_eq!(volume.list("", None).await.unwrap_err(), expected);
+            let page = volume.list("", None).await.unwrap();
+            if size == 0 {
+                assert!(page.objects.is_empty());
+            } else {
+                assert_eq!(
+                    page.objects.as_ref(),
+                    [ListedObject {
+                        key: "".into(),
+                        size: 9,
+                        etag: "\"listed-A\"".into(),
+                    }]
+                );
+            }
+            assert!(page.continuation.is_none());
             assert_eq!(requests.try_recv().unwrap().method(), "GET");
-            let head_count = if failure_first { 1 } else { 2 };
-            let mut requests = stream::iter(keys.into_iter().take(head_count))
-                .fold(requests, |mut requests, (key, _)| async move {
-                    let request = requests.try_recv().unwrap();
-                    assert_eq!(request.method(), "HEAD");
-                    assert_eq!(request.uri().path(), format!("/test-bucket/{key}"));
-                    requests
-                })
-                .await;
             assert!(requests.try_recv().is_err());
             server.abort();
         })
         .collect::<()>()
         .await;
+}
+
+#[test]
+#[timeout("30s")]
+async fn list_rejects_incomplete_or_invalid_page_metadata_in_either_order() {
+    let invalid = [
+        "<Size>4</Size><ETag>&quot;tag&quot;</ETag>",
+        "<Key>corpus/key</Key><ETag>&quot;tag&quot;</ETag>",
+        "<Key>corpus/key</Key><Size>-1</Size><ETag>&quot;tag&quot;</ETag>",
+        "<Key>corpus/key</Key><Size>4</Size>",
+        "<Key>corpus/key</Key><Size>4</Size><ETag></ETag>",
+        "<Key>corpus/key</Key><Size>4</Size><ETag>tag</ETag>",
+        "<Key>corpus/key</Key><Size>4</Size><ETag>W/&quot;tag&quot;</ETag>",
+        "<Key>corpus/key</Key><Size>4</Size><ETag>&quot;tag with space&quot;</ETag>",
+        "<Key>corpus/dir/</Key><Size>-1</Size><ETag>&quot;tag&quot;</ETag>",
+    ];
+    stream::iter(invalid.into_iter().flat_map(|invalid| [false, true].into_iter().map(move |first| (invalid, first))))
+        .then(|(invalid, first)| async move {
+            let valid = "<Contents><Key>corpus/other</Key><Size>7</Size><ETag>&quot;valid&quot;</ETag></Contents>";
+            let contents = if first {
+                format!("<Contents>{invalid}</Contents>{valid}").into_boxed_str()
+            } else {
+                format!("{valid}<Contents>{invalid}</Contents>").into_boxed_str()
+            };
+            let (endpoint, mut requests, server) = server(vec![response(200, format!("<ListBucketResult><IsTruncated>true</IsTruncated><NextContinuationToken>unused-page</NextContinuationToken>{contents}</ListBucketResult>"))]).await;
+            let volume = client(&endpoint, None, allowed());
+            assert_eq!(volume.list("", None).await.unwrap_err(), VolumeError::InvalidResponse, "{invalid}, first={first}");
+            assert_eq!(requests.try_recv().unwrap().method(), "GET");
+            assert!(requests.try_recv().is_err());
+            server.abort();
+        }).collect::<()>().await;
+}
+
+#[test]
+#[timeout("30s")]
+async fn list_preserves_page_request_errors_without_retrying() {
+    stream::iter([
+        (404, VolumeError::NotFound),
+        (403, VolumeError::Denied),
+        (503, VolumeError::RequestFailed),
+    ])
+    .then(|(status, expected)| async move {
+        let (endpoint, mut requests, server) = server(vec![response(status, "<Error/>")]).await;
+        let volume = client(&endpoint, None, allowed());
+        assert_eq!(volume.list("", None).await.unwrap_err(), expected);
+        assert_eq!(requests.try_recv().unwrap().method(), "GET");
+        assert!(requests.try_recv().is_err());
+        server.abort();
+    })
+    .collect::<()>()
+    .await;
 }
 
 #[test]
 #[timeout("30s")]
 async fn list_rejects_outside_keys_even_when_they_look_like_markers() {
-    stream::iter(["other/dir/", "corpus2/dir/", "corpus/../dir/"])
-        .then(|key| async move {
-            let (endpoint, mut requests, server) =
-                server(vec![listing_response(&[(key, 0)], None)]).await;
-            let volume = client(&endpoint, None, allowed());
-            assert_eq!(
-                volume.list("", None).await.unwrap_err(),
-                VolumeError::InvalidResponse
-            );
-            assert_eq!(requests.recv().await.unwrap().method(), "GET");
-            assert!(requests.try_recv().is_err());
-            server.abort();
-        })
-        .collect::<()>()
-        .await;
+    stream::iter([
+        "other/dir/",
+        "corpus2/dir/",
+        "corpus/../dir/",
+        "corpus/./dir/",
+        "corpus//dir/",
+    ])
+    .then(|key| async move {
+        let (endpoint, mut requests, server) =
+            server(vec![listing_response(&[(key, 0)], None)]).await;
+        let volume = client(&endpoint, None, allowed());
+        assert_eq!(
+            volume.list("", None).await.unwrap_err(),
+            VolumeError::InvalidResponse
+        );
+        assert_eq!(requests.recv().await.unwrap().method(), "GET");
+        assert!(requests.try_recv().is_err());
+        server.abort();
+    })
+    .collect::<()>()
+    .await;
 }
 
 #[test]
@@ -1689,12 +1714,7 @@ async fn reads_keep_versions_ranges_and_hide_only_zero_byte_markers() {
     ranged
         .headers_mut()
         .insert("etag", "\"old\"".parse().unwrap());
-    let (endpoint, mut requests, server) = server(vec![head, ranged, response(200,
-        "<ListBucketResult><IsTruncated>true</IsTruncated><NextContinuationToken>next+token</NextContinuationToken><Contents><Key>corpus/dir/</Key><Size>0</Size></Contents><Contents><Key>corpus/dir/file</Key><Size>0</Size><ETag>&quot;file&quot;</ETag></Contents><Contents><Key>corpus/nonempty/</Key><Size>9</Size><ETag>&quot;nonempty&quot;</ETag></Contents></ListBucketResult>"),
-        metadata_response(0, "\"marker\"", "marker-version"),
-        metadata_response(0, "\"file\"", "file-version"),
-        metadata_response(9, "\"nonempty\"", "nonempty-version"),
-    ]).await;
+    let (endpoint, mut requests, server) = server(vec![head, ranged]).await;
     let volume = client(&endpoint, None, allowed());
     let head = volume.stat("key", None).await.unwrap();
     assert_eq!(head.size, 12);
@@ -1718,30 +1738,6 @@ async fn reads_keep_versions_ranges_and_hide_only_zero_byte_markers() {
     );
     assert_eq!(request.headers()["range"], "bytes=2-4");
     assert_eq!(request.headers()["if-match"], "\"old\"");
-    let page = volume.list("", Some("previous+token")).await.unwrap();
-    assert_eq!(page.continuation.as_deref(), Some("next+token"));
-    assert!(
-        page.objects
-            .iter()
-            .map(|o| o.key.as_ref())
-            .eq(["dir/file", "nonempty/"])
-    );
-    let request = requests.recv().await.unwrap();
-    assert!(
-        request
-            .uri()
-            .query()
-            .unwrap()
-            .contains("continuation-token=previous%2Btoken")
-    );
-    let mut requests = stream::iter(["dir/", "dir/file", "nonempty/"])
-        .fold(requests, |mut requests, key| async move {
-            let head = requests.recv().await.unwrap();
-            assert_eq!(head.method(), "HEAD");
-            assert_eq!(head.uri().path(), format!("/test-bucket/corpus/{key}"));
-            requests
-        })
-        .await;
     assert!(requests.try_recv().is_err());
     server.abort();
 }

@@ -21,7 +21,7 @@ use futures::{StreamExt, stream};
 use golem_service_base::aws::AwsCredentials;
 use golem_service_base::volume::connection::ConnectionPolicy;
 use golem_service_base::volume::s3::{
-    Encryption, ObjectMetadata, S3Volume, S3VolumeConfig, VolumeError, WriteCondition, WriteTarget,
+    Encryption, ListedObject, S3Volume, S3VolumeConfig, VolumeError, WriteCondition, WriteTarget,
 };
 use golem_test_framework::components::s3::{DockerRustFs, S3Server};
 use test_r::{test, timeout};
@@ -185,17 +185,37 @@ async fn rustfs_enforces_volume_preconditions_versions_and_multipart_completion(
     assert_eq!(
         page.objects.as_ref(),
         [
-            ObjectMetadata {
+            ListedObject {
                 key: "dir/file".into(),
                 size: 0,
-                version: empty_file
+                etag: empty_file.etag.clone()
             },
-            ObjectMetadata {
+            ListedObject {
                 key: "document".into(),
                 size: 14,
-                version: second.clone()
+                etag: second.etag.clone()
             },
         ]
+    );
+    assert_eq!(
+        volume.stat("dir/file", None).await.unwrap().version,
+        empty_file
+    );
+    let document = volume.stat("document", None).await.unwrap();
+    assert_eq!(document.version, second);
+    let listed_version = volume
+        .read(
+            "document",
+            document.version.version_id.as_deref(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(listed_version.version, second);
+    assert_eq!(
+        listed_version.body.collect().await.unwrap(),
+        "second-content"
     );
 
     let upload = volume.start_multipart(key).await.unwrap();

@@ -27,7 +27,6 @@ use aws_smithy_runtime_api::client::http::{SharedHttpConnector, http_client_fn};
 use aws_smithy_runtime_api::client::identity::SharedIdentityResolver;
 use aws_smithy_types::{retry::RetryConfig, timeout::TimeoutConfig};
 use bytes::Bytes;
-use futures::{StreamExt, TryStreamExt, stream};
 use std::fmt::{Debug, Formatter};
 use std::ops::RangeInclusive;
 use std::sync::Arc;
@@ -136,8 +135,21 @@ impl ObjectBody {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub struct ListedObject {
+    pub key: Box<str>,
+    pub size: u64,
+    pub etag: Box<str>,
+}
+
+impl Debug for ListedObject {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ListedObject")
+    }
+}
+
 pub struct ObjectPage {
-    pub objects: Box<[ObjectMetadata]>,
+    pub objects: Box<[ListedObject]>,
     pub continuation: Option<Box<str>>,
 }
 
@@ -432,16 +444,6 @@ impl S3Volume {
         version_id: Option<&str>,
     ) -> Result<ObjectMetadata, VolumeError> {
         relative_key(key)?;
-        self.metadata(key, version_id)
-            .await?
-            .ok_or(VolumeError::NotFound)
-    }
-
-    async fn metadata(
-        &self,
-        key: &str,
-        version_id: Option<&str>,
-    ) -> Result<Option<ObjectMetadata>, VolumeError> {
         let object_key = format!("{}{key}", self.config.prefix);
         let slash_key = object_key.ends_with('/');
         let result = self
@@ -460,16 +462,19 @@ impl S3Volume {
             .ok_or(VolumeError::InvalidResponse)?;
         let version = version(result.e_tag(), result.version_id())?;
         check_reference(version_id, None, &version)?;
-        Ok((size != 0 || !slash_key).then(|| ObjectMetadata {
+        if size == 0 && slash_key {
+            return Err(VolumeError::NotFound);
+        }
+        Ok(ObjectMetadata {
             key: key.into(),
             size,
             version,
-        }))
+        })
     }
 
     /// Returns one recursive page. The continuation token is opaque.
-    /// Each discovered key needs current HEAD metadata and s3:GetObject permission.
-    /// A metadata failure fails the page. The page is not a directory snapshot.
+    /// Sends one ListObjectsV2 request and takes each key, size and ETag from that page.
+    /// Hides zero-byte keys ending in `/`. The page has no version IDs.
     pub async fn list(
         &self,
         prefix: &str,
@@ -489,23 +494,35 @@ impl S3Volume {
         if result.is_truncated() == Some(true) && result.next_continuation_token().is_none() {
             return Err(VolumeError::InvalidResponse);
         }
-        let objects = stream::iter(result.contents())
-            .map(Ok)
+        let objects = result
+            .contents()
+            .iter()
             .try_fold(
                 Vec::with_capacity(result.contents().len()),
-                |mut objects, object| async move {
-                    let key = object
-                        .key()
-                        .and_then(|key| key.strip_prefix(self.config.prefix.as_ref()))
+                |mut objects, object| {
+                    let object_key = object.key().ok_or(VolumeError::InvalidResponse)?;
+                    let key = object_key
+                        .strip_prefix(self.config.prefix.as_ref())
                         .ok_or(VolumeError::InvalidResponse)?;
                     relative_key(key).map_err(|_| VolumeError::InvalidResponse)?;
-                    if let Some(metadata) = self.metadata(key, None).await? {
-                        objects.push(metadata);
+                    let size = object
+                        .size()
+                        .and_then(|size| u64::try_from(size).ok())
+                        .ok_or(VolumeError::InvalidResponse)?;
+                    let etag = object
+                        .e_tag()
+                        .filter(|etag| strong_etag(etag))
+                        .ok_or(VolumeError::InvalidResponse)?;
+                    if size != 0 || !object_key.ends_with('/') {
+                        objects.push(ListedObject {
+                            key: key.into(),
+                            size,
+                            etag: etag.into(),
+                        });
                     }
                     Ok::<_, VolumeError>(objects)
                 },
-            )
-            .await?
+            )?
             .into_boxed_slice();
         Ok(ObjectPage {
             objects,
