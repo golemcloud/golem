@@ -5,20 +5,21 @@ export const Billing = defineAgent({
   http: http.mount('/billing/{org}', { auth: true }), //@
   methods: {
     ask: method({
-      // Golem passes in the user who signed in:
-      input: { question: z.string(), caller: s.principal() }, //@
+      input: { question: z.string() },
       returns: z.string(), http: http.post('/ask'),
     }),
   },
 }).implement({
   init: ({ id }) => ({ org: id.org }),
   methods: {
-    async ask({ question, caller }) {
-      if (caller.tag !== 'oidc') throw new Error('sign-in required')
+    async ask({ question }, ctx) {
+      // Golem passes in the user who signed in:
+      const user = ctx.caller.original //@
+      if (user.kind !== 'user') throw new Error('sign-in required')
       // the issuer can be Google, GitLab or any OIDC provider:
-      const { issuer, sub } = caller //@
+      const { issuer, subject } = user //@
       // the model makes a page from that user's own invoices:
-      const invoices = await invoicesOf(this.org, issuer, sub)
+      const invoices = await invoicesOf(this.org, issuer, subject)
       return pageFor(question, invoices)
     },
   },
