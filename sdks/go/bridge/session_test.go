@@ -2049,6 +2049,34 @@ func TestAnItemTheCallCannotSendFailsTheCall(t *testing.T) {
 	}
 }
 
+// An item the server rejects for its schema fails the call with a
+// StreamItemError that names the item.
+func TestAnItemTheServerRejectsFailsTheCall(t *testing.T) {
+	server := newFakeServer(t, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		refs := provisionalRefs(t, start)
+		accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
+		c.expect("inputStreamItem")
+		ack(c, 1, 1, false)
+		c.expect("inputStreamItem")
+		c.send("streamCancel", map[string]any{
+			"channel":  1,
+			"message":  "stream item does not satisfy its element schema",
+			"reason":   "invalid-item",
+			"sequence": "1",
+		})
+		for c.readUntilClose().kind != "" {
+		}
+	})
+	err := InvokeStreaming(ctxT(t), server.agent(t), "consume",
+		streamParams(EncodeStream(EncodeU32)(StreamOf[uint32](1, 2))))
+	var rejected *StreamItemError
+	if !errors.As(err, &rejected) ||
+		!strings.Contains(err.Error(), "item 1: stream item does not satisfy its element schema") {
+		t.Fatalf("got %v, want a *StreamItemError naming item 1", err)
+	}
+}
+
 // A source that fails only makes its input unavailable: the server decides
 // what that means for the call, and here it still completes it.
 func TestAFailingSourceDoesNotFailTheCall(t *testing.T) {

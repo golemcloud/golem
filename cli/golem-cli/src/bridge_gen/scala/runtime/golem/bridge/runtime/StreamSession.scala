@@ -577,7 +577,7 @@ object StreamSession {
           case "outputStreamItem" => StreamSessionProtocol.validate(json, kind, Set("channel", "cursorToken", "mappings", "sequence", "value"))
           case "outputStreamEnd" => StreamSessionProtocol.validate(json, kind, Set("channel", "outcome", "sequence"), Set("cursorToken"))
           case "inputStreamAck" => StreamSessionProtocol.validate(json, kind, Set("channel", "highestContiguousSequence", "mappings", "terminal"))
-          case "streamCancel" => StreamSessionProtocol.validate(json, kind, Set("channel", "reason"))
+          case "streamCancel" => StreamSessionProtocol.validate(json, kind, Set("channel", "reason"), Set("message", "sequence"))
           case "attachmentRevoked" => StreamSessionProtocol.validate(json, kind, Set("reason"))
           case "invocationFinished" => StreamSessionProtocol.validate(json, kind, Set("outcome"))
           case _ => throw BridgeException(s"unsupported stream session message: $kind")
@@ -704,11 +704,17 @@ object StreamSession {
             val ch = StreamSessionProtocol.channel(json)
             if (Option(directions.get(ch)) != Some("input")) throw BridgeException("invalid input channel")
             val reason = Json.requireField(json, "reason").flatMap(Json.asString).toOption.get
-            if (!Set("cancelled", "consumer-drop", "transport-detached", "source-unavailable", "producer-deleted", "invocation-failed", "protocol-error").contains(reason))
+            if (!Set("cancelled", "consumer-drop", "transport-detached", "source-unavailable", "producer-deleted", "invocation-failed", "protocol-error", "invalid-item").contains(reason))
               throw BridgeException("invalid stream cancellation reason")
             Option(channels.get(ch)).flatMap(token => Option(session.inputTokens.get(token))).foreach { in =>
               in.state.cancel()
               in.consumer.foreach(_.cancel())
+            }
+            // The server rejected an item the caller sent, so the call fails with it.
+            if (reason == "invalid-item") {
+              val detail = Json.requireField(json, "message").flatMap(Json.asString).getOrElse("invalid stream item")
+              val item = Json.requireField(json, "sequence").flatMap(Json.asString).map(" " + _).getOrElse("")
+              fatal(BridgeException(s"the server rejected stream item$item: $detail"))
             }
           case "invocationFinished" =>
             val outcome = Json.requireField(json, "outcome").fold(e => throw BridgeException(e), identity)
