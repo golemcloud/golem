@@ -9,7 +9,7 @@ description: "Marking Scala agent methods as read-only for a side-effect-free gu
 
 A **read-only** agent method is one you promise is a **pure read** of the agent's already-loaded state: it must not mutate anything and its result must depend only on its inputs and the current state. Golem enforces the most important part of this contract — **writes to persistent state, outgoing HTTP, and RPC calls trap** at runtime with a `ReadOnlyViolation` agent error before they run — but it does **not** detect every source of impurity (in-memory mutation, clocks, randomness, env reads), so keeping the method pure is partly your responsibility (see [What Works in a Read-Only Method](#what-works-in-a-read-only-method)). In exchange Golem:
 
-- **Caches the result** per `(method, normalized input, optional principal)` on the worker.
+- **Caches the result** per `(method, normalized input, caller)` on the worker.
 - **Bypasses the invocation queue** on a cache hit — a read-only call returns immediately even while a slow write is being processed.
 - **Bypasses agent loading** on a cache hit — a cached value is served even if the agent is currently evicted.
 - **Emits HTTP cache headers** (`Cache-Control` / `ETag` / `Vary`) for read-only methods mapped to `GET`/`HEAD`.
@@ -59,19 +59,18 @@ def recentSummary(): Future[Summary]
 def pureCompute(x: Int, y: Int): Future[Int]
 ```
 
-## Per-Principal Caching (automatic)
+## Caching per Caller (automatic)
 
-There is **no `usesPrincipal` argument** on the annotation. Whether the cache is per-principal is **derived automatically by the SDK** from the method signature: if the method receives a `Principal`, the result is cached per principal and HTTP responses switch to `Cache-Control: private` with `Vary: Authorization`.
+The cache is always keyed per caller: the full caller of the invocation is part of the key, so each signed-in user gets their own entry, and all anonymous calls share one. There is no option for this on the annotation. A read-only method that needs to know who is calling takes an `InvocationContext` parameter, like any other method:
 
 ```scala
-import golem.Principal
+import golem.InvocationContext
 
-// Principal-aware: cached per principal (usesPrincipal auto-derived = true)
 @readOnly
-def myVisibleItems(principal: Principal): Future[List[Item]]
+def myVisibleItems(context: InvocationContext): Future[List[Item]]
 ```
 
-When the method does not receive a `Principal`, the result is shared across all callers and HTTP responses are `Cache-Control: public` (CDN-friendly). The `Principal` is auto-injected by the runtime — it is not part of the method's input schema and is not passed by callers (see `golem-add-http-auth-scala`).
+The SDK supplies the `InvocationContext`; it is not part of the method's input schema and is not passed by callers (see `golem-add-http-auth-scala`). HTTP cache headers depend on the request: an authenticated request gets `Cache-Control: private`, an anonymous one can get `Cache-Control: public`.
 
 ## What Works in a Read-Only Method
 

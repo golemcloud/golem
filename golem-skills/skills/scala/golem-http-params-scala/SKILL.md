@@ -98,7 +98,7 @@ Each ordinary structured body parameter becomes a top-level field in the expecte
 
 > **⚠️ Important:** Ordinary structured bodies use a JSON object with **body parameter names only** as keys, even for one parameter. `def decide(decision: String)` expects `{"decision": "approved"}`, not a bare string. A single object parameter named `payload` also needs wrapping: `{"payload": {"name": "Widget", "count": 5}}`, not `{"name": "Widget", "count": 5}`. Do not include path/query/header parameters. Unstructured text and binary parameters instead consume the raw body; see below.
 
-CLI positional invocation is different: pass one argument per user-supplied method parameter in signature order, including parameters bound to path/query/header values over HTTP. Skip host-injected `Principal` fields without a principal value or placeholder. Use Scala native literals for each value, not one JSON object wrapping the full input. A single object parameter is one native case-class literal without the HTTP `payload` wrapper. Load `golem-invoke-agent-scala` for CLI examples and caller-only input rules.
+CLI positional invocation is different: pass one argument per user-supplied method parameter in signature order, including parameters bound to path/query/header values over HTTP. Skip an `InvocationContext` parameter; the SDK supplies it. Use Scala native literals for each value, not one JSON object wrapping the full input. A single object parameter is one native case-class literal without the HTTP `payload` wrapper. Load `golem-invoke-agent-scala` for CLI examples and caller-only input rules.
 
 ## Raw Text and Binary Bodies
 
