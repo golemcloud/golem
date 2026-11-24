@@ -62,12 +62,14 @@ describe("Polar billing", () => {
   let app: ReturnType<typeof makeApp>
   let services: ReturnType<typeof makeServices>
   let upstreams: FakeUpstreams
+  /** The JSON log lines of the app, of every test so far. */
+  const logs: Array<Record<string, unknown>> = []
 
   beforeAll(async () => {
     await registry.create()
     config = registry.configs.web
     pool = queryPool(registry.ownerConfig)
-    app = makeApp(config)
+    app = makeApp(config, logs)
     services = makeServices(config)
     vi.stubGlobal("fetch", (input: string | URL | Request, init?: RequestInit) => upstreams.fetch(input, init))
   }, 60_000)
@@ -2110,7 +2112,7 @@ describe("Polar billing", () => {
       ["eur", "€"],
       ["gbp", "£"]
     ] as const)(
-      "settles an unpaid last order in %s in its currency, with the price in USD that Polar requires and does not charge",
+      "settles an unpaid last order in %s in its currency, with the price of 0 in USD that Polar requires",
       async (currency, symbol) => {
         const { jar, accountId } = await signedIn()
         await deliver("subscription.active", subscription(accountId, { currency }))
@@ -2126,7 +2128,7 @@ describe("Polar billing", () => {
           products: [polarSettlementProductId],
           prices: {
             [polarSettlementProductId]: [
-              { amount_type: "fixed", price_amount: 345, price_currency: "usd", tax_behavior: "inclusive" },
+              { amount_type: "fixed", price_amount: 0, price_currency: "usd", tax_behavior: "inclusive" },
               { amount_type: "fixed", price_amount: 345, price_currency: currency, tax_behavior: "inclusive" }
             ]
           },
@@ -2193,6 +2195,43 @@ describe("Polar billing", () => {
         { order_id: "order_1", settlement_order_id: "order_settlement_1", currency: "gbp", amount: 345 },
         { order_id: "order_2", settlement_order_id: "order_settlement_2", currency: "usd", amount: 500 }
       ])
+    })
+
+    it("settles nothing with the free USD order of a customer who selected the price of 0 for EUR orders, and logs an error", async () => {
+      const { jar, accountId } = await signedIn()
+      await deliver("subscription.revoked", subscription(accountId, { currency: "eur", ...ended }))
+      await deliver("order.created", order(accountId, { currency: "eur", ...lastOrder }))
+      await postSettle(jar)
+
+      await deliver(
+        "order.paid",
+        settlementOrder(accountId, {
+          currency: "usd",
+          subtotal_amount: 0,
+          net_amount: 0,
+          items: [{ product_price_id: "price_ad_hoc_usd", amount: 0, tax_amount: 0 }]
+        })
+      )
+
+      expect(await settledOrders()).toEqual([])
+      expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
+      expect(await page(jar)).toContain("Settle €3.45")
+      expect(
+        logs.filter((line) => (line["annotations"] as Record<string, unknown>)["golemAccountId"] === accountId)
+      ).toContainEqual(
+        expect.objectContaining({
+          level: "ERROR",
+          annotations: expect.objectContaining({
+            settlementOrderId: "order_settlement_1",
+            currency: "usd",
+            orderIds: "order_1",
+            orderCurrencies: "eur"
+          })
+        })
+      )
+
+      await deliver("order.paid", settlementOrder(accountId, { id: "order_settlement_2", currency: "eur" }))
+      expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
     })
 
     it("settles nothing with a settlement order in another currency than its orders", async () => {

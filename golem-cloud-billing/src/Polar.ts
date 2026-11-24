@@ -76,9 +76,9 @@ export interface CheckoutRequest {
 export const SETTLED_ORDERS_METADATA_KEY = "golem_settled_order_ids"
 
 /**
- * A checkout of the settlement product for a Golem account: an ad-hoc fixed price that the
- * customer cannot change, with no discount codes. The price is what the invoices charged for the
- * paid overage, tax included, and it includes tax whatever the default tax behavior of the
+ * A checkout of the settlement product for a Golem account: an ad-hoc fixed price in `currency`,
+ * with no discount codes (`settlementPrices`). The price is what the invoices charged for the paid
+ * overage, tax included, and it includes tax whatever the default tax behavior of the
  * organization: Polar takes the tax out of it, and adds none.
  */
 export interface SettlementCheckoutRequest extends CheckoutRequest {
@@ -93,15 +93,18 @@ export interface SettlementCheckoutRequest extends CheckoutRequest {
 /**
  * The ad-hoc prices of a settlement checkout: `amount` in `currency`, tax included. Polar refuses a
  * list of prices without a price in the default currency of the organization, also for ad-hoc
- * prices. So a settlement in another currency also gets a price of the same number of minor units
- * in the default currency. Polar never charges it: the checkout names `currency`, and the customer
- * cannot change the currency of a checkout. The amount of a settlement is a valid price in every
- * currency (`Settlement.SETTLEMENT_MINIMUM` and `Settlement.SETTLEMENT_MAXIMUM`).
+ * prices, and each currency must have the same types of price. So a settlement in another currency
+ * also gets a fixed price of 0 in the default currency. The checkout names `currency`, but the
+ * customer can select another price of the checkout through the public checkout update of Polar,
+ * and the checkout currency then follows that price. At 0, that price charges nothing: Polar makes
+ * a free order, and a settlement order in another currency than its orders settles nothing. The
+ * amount of a settlement is a valid price in every currency (`Settlement.SETTLEMENT_MINIMUM` and
+ * `Settlement.SETTLEMENT_MAXIMUM`).
  */
 const settlementPrices = (currency: Currency, amount: number) =>
   [...new Set([organizationCurrency, currency])].map((priceCurrency) => ({
     amount_type: "fixed" as const,
-    price_amount: amount,
+    price_amount: priceCurrency === currency ? amount : 0,
     price_currency: priceCurrency,
     tax_behavior: "inclusive" as const
   }))

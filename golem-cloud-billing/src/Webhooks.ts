@@ -186,11 +186,14 @@ export const makeHandler = Effect.gen(function* () {
 
   /**
    * A paid order of the settlement product settles each order in its metadata that the account
-   * owes in the currency of the settlement, and reconciles the account. It settles nothing when its
-   * price, the subtotal after the discount, is smaller than what the invoices of those orders charge
-   * for paid overage. The price includes the tax, so the net amount is smaller than the price.
-   * Polar delivers a paid order in several events (five in the sandbox), so an order that this
-   * settlement already settled is skipped. An order that the account does not owe in that currency
+   * owes, and reconciles the account. It settles nothing and logs an error when the account owes
+   * one of those orders in another currency, for example after the customer selected the price of 0
+   * in the default currency through the public checkout update of Polar (`Polar.settlementPrices`).
+   * The currencies of the orders come from the database, not from the checkout. It also settles
+   * nothing when its price, the subtotal after the discount, is smaller than what the invoices of
+   * those orders charge for paid overage. The price includes the tax, so the net amount is smaller
+   * than the price. Polar delivers a paid order in several events (five in the sandbox), so an
+   * order that this settlement already settled is skipped. An order that the account does not owe
    * logs a warning, for example an order that Polar charged after the checkout began: an operator
    * refunds that part of the settlement.
    */
@@ -219,9 +222,22 @@ export const makeHandler = Effect.gen(function* () {
       Effect.gen(function* () {
         const accountSubscriptions = yield* subscriptions.ofAccount(accountId, config.polar.productId)
         const unpaid = yield* subscriptions.unpaidOrders(accountId, config.polar.productId)
-        const owed = Settlement.owedOrders(accountSubscriptions, unpaid).filter(
-          (order) => listed.includes(order.orderId) && order.currency === currency
+        const owed = Settlement.owedOrders(accountSubscriptions, unpaid).filter((order) =>
+          listed.includes(order.orderId)
         )
+        const otherCurrency = owed.filter((order) => order.currency !== currency)
+        if (otherCurrency.length > 0) {
+          yield* Effect.logError("A settlement order is in another currency than the orders that it settles").pipe(
+            Effect.annotateLogs({
+              golemAccountId: accountId,
+              settlementOrderId: data.id,
+              currency,
+              orderIds: listed.join(","),
+              orderCurrencies: [...new Set(otherCurrency.map((order) => order.currency))].join(",")
+            })
+          )
+          return
+        }
         const notOwed: Array<string> = []
         for (const orderId of listed.filter((orderId) => !owed.some((order) => order.orderId === orderId))) {
           if ((yield* subscriptions.settlementOrderOf(orderId)) !== data.id) {

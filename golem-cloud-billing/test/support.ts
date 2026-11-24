@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { Layer, ManagedRuntime, Redacted } from "effect"
+import { Layer, Logger, ManagedRuntime, Redacted } from "effect"
 import { FetchHttpClient, HttpRouter } from "effect/http"
 import type pg from "pg"
 import * as App from "../src/App.ts"
@@ -102,13 +102,22 @@ export const dropSchema = async (pool: pg.Pool, schema: string) => {
   await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
 }
 
-/** The billing app as a Fetch handler, built from the same layers as the server. */
-export const makeApp = (config: BillingConfigShape) =>
+/**
+ * The billing app as a Fetch handler, built from the same layers as the server. `logs`, if given,
+ * receives each log line of the app as parsed JSON, next to the default logger.
+ */
+export const makeApp = (config: BillingConfigShape, logs?: Array<Record<string, unknown>>) =>
   HttpRouter.toWebHandler(
     Http.routes.pipe(
       Layer.provide(App.services),
       Layer.provide(FetchHttpClient.layer),
-      Layer.provide(Layer.succeed(BillingConfig, config))
+      Layer.provide(Layer.succeed(BillingConfig, config)),
+      Layer.provideMerge(
+        Logger.layer(
+          logs === undefined ? [] : [Logger.map(Logger.formatJson, (line) => void logs.push(JSON.parse(line)))],
+          { mergeWithExisting: true }
+        )
+      )
     ),
     { disableLogger: true }
   )

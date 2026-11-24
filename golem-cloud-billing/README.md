@@ -341,13 +341,18 @@ A checkout has one currency, so one settlement pays orders in one currency: the 
 oldest order that fits. It pays the oldest orders in that currency that fit: at most 13, the most
 IDs that fit in a metadata value, and at most 999,999.99 in the currency, the largest price of
 Polar. The orders in another currency wait for a later settlement. The checkout names the currency
-(`currency`), so Polar charges in it whatever the address of the browser, and the customer cannot
-change it. Polar refuses a list of prices without a price in the default currency of the
-organization, also for ad-hoc prices. So a settlement in EUR or GBP also gets a USD price of the
-same number of cents, which Polar never charges.
+(`currency`), so Polar charges in it whatever the address of the browser. Polar refuses a list of
+prices without a price in the default currency of the organization, also for ad-hoc prices, and
+each currency must have the same types of price. So a settlement in EUR or GBP also gets a fixed
+USD price of 0. The customer can select that price through the public checkout update of Polar,
+and the checkout currency then follows the price. Only Polar can refuse that change. At 0, the
+change charges nothing: Polar makes a free order, and the webhook settles nothing.
 
 A paid order of the settlement product records a settlement for each order in its metadata that
-the account still owes in the currency of the settlement order. When the account owes no more paid
+the account still owes. When the account owes one of those orders in another currency than the
+settlement order, the app records nothing and logs `A settlement order is in another currency than
+the orders that it settles`; the account stays suspended. The app reads the currency of each order
+from its database, not from the checkout. When the account owes no more paid
 overage, it moves to the plan of its subscriptions: the free plan, or the paid plan when the person subscribed again. A new
 subscription does not end the suspension before that, and the page names the plan that follows.
 A settlement order settles nothing when its price, the subtotal after the discount, is less than
