@@ -202,6 +202,7 @@ impl StartClaim {
                 expected: ReplayStep::HostCall(recorded.replay_host_call()),
                 actual: ReplayStep::HostCall(self.replay_host_call()),
                 mismatched: vec![StartIdentityField::Driver],
+                replay_start: None,
             }))
         }
     }
@@ -299,6 +300,7 @@ impl StartClaim {
             expected: ReplayStep::HostCall(expected),
             actual: ReplayStep::HostCall(actual),
             mismatched,
+            replay_start: None,
         }
     }
 
@@ -310,6 +312,7 @@ impl StartClaim {
             expected: ReplayStep::described("a matching Start in a deleted replay region"),
             actual: ReplayStep::HostCall(self.replay_host_call()),
             mismatched: Vec::new(),
+            replay_start: None,
         }
     }
 
@@ -327,6 +330,7 @@ impl StartClaim {
                 expected: entry.map_or_else(ReplayStep::end_of_history, recorded_step),
                 actual: ReplayStep::HostCall(self.replay_host_call()),
                 mismatched: Vec::new(),
+                replay_start: None,
             },
         }
     }

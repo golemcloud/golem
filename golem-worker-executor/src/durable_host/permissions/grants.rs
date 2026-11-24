@@ -218,6 +218,23 @@ pub(super) fn card_verb_name(verb: CardVerb) -> &'static str {
 pub(super) fn permission_error_from_algebra(
     error: CardAlgebraError,
 ) -> permissions_types::PermissionError {
+    let message = error.to_string();
+    permission_error_with_message(error, message)
+}
+
+/// Maps a failed wallet derivation. Its message also says what the request must restate,
+/// because a wallet derivation inherits nothing from the wallet card.
+pub(super) fn wallet_permission_error_from_algebra(
+    error: CardAlgebraError,
+) -> permissions_types::PermissionError {
+    let message = error.wallet_derivation_message();
+    permission_error_with_message(error, message)
+}
+
+fn permission_error_with_message(
+    error: CardAlgebraError,
+    message: String,
+) -> permissions_types::PermissionError {
     match error {
         CardAlgebraError::InvalidOwnerPath(owner) => {
             permissions_types::PermissionError::InvalidOwner(owner)
@@ -228,19 +245,17 @@ pub(super) fn permission_error_from_algebra(
         CardAlgebraError::ToolPattern(message) => {
             permissions_types::PermissionError::InvalidPattern(message)
         }
-        CardAlgebraError::LowerBoundTooBroad { grant } => {
-            permissions_types::PermissionError::LowerBoundTooBroad(
-                grant
-                    .render()
-                    .unwrap_or_else(|_| "lower-bound grant is too broad".to_string()),
-            )
+        CardAlgebraError::LowerBoundTooBroad { .. }
+        | CardAlgebraError::LowerDenialNotKept { .. } => {
+            permissions_types::PermissionError::LowerBoundTooBroad(message)
         }
-        CardAlgebraError::UpperBoundTooBroad { grant } => {
-            permissions_types::PermissionError::UpperBoundTooBroad(
-                grant
-                    .and_then(|grant| grant.render().ok())
-                    .unwrap_or_else(|| "upper-bound grant is too broad".to_string()),
-            )
+        CardAlgebraError::UpperDenialNotKept { .. }
+        | CardAlgebraError::UpperCeilingNotKept { .. }
+        | CardAlgebraError::UpperBoundTooBroad { .. } => {
+            permissions_types::PermissionError::UpperBoundTooBroad(message)
+        }
+        CardAlgebraError::NoWalletCardFits { combined, .. } => {
+            permission_error_with_message(*combined, message)
         }
     }
 }

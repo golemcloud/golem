@@ -29,7 +29,8 @@ use super::{
     permission_error_from_algebra, permission_error_from_parse, permission_error_from_serializable,
     permission_error_to_serializable, permissions_derive, permissions_types, persist_runtime_card,
     record_card_decision, refuse_cut_off_scope_card, resolve_permission_card,
-    resolve_permission_card_handle, worker_error_to_permission_error,
+    resolve_permission_card_handle, wallet_permission_error_from_algebra,
+    worker_error_to_permission_error,
 };
 
 impl DerivedGrantSets {
@@ -373,7 +374,7 @@ pub(super) fn select_wallet_derivation_parent(
             &envelope.upper_positive,
             &envelope.upper_negative,
         )
-        .map_err(permission_error_from_algebra)?
+        .map_err(wallet_permission_error_from_algebra)?
     {
         WalletDerivationParent::Single(parent_id) => parent_id,
         WalletDerivationParent::MultipleRequired => {
