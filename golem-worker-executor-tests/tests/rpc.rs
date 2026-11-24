@@ -13520,3 +13520,72 @@ async fn ts_cancel_survives_executor_restart(
 
     Ok(())
 }
+
+/// A guest `getById` reaches only an existing agent of its own environment. The ID of an agent of
+/// the same type in another environment, and the ID of a deleted agent, are not found, and
+/// neither lookup creates an agent.
+#[test]
+#[timeout("2m")]
+async fn guest_get_by_id_of_another_environments_or_a_deleted_agent_is_not_found(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let other_environment_id = golem_common::model::environment::EnvironmentId::new();
+    let other_component = executor
+        .component_dep(&other_environment_id, agent_rpc_rust)
+        .unique()
+        .store()
+        .await?;
+    let parent = agent_key!("RustParent", "get-by-id");
+    executor.start_agent(&component.id, parent.clone()).await?;
+    let get_child_by_id = async |agent_id: &OwnedAgentId| -> anyhow::Result<String> {
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &parent,
+                "get_child_by_id",
+                data_value!(agent_id.agent_id.as_uuid()),
+            )
+            .await?
+            .into_typed::<String>()
+    };
+
+    let live = executor
+        .start_agent(&component.id, agent_key!("RustChild", uuid::Uuid::new_v4()))
+        .await?;
+    assert_eq!(get_child_by_id(&live).await?, "found");
+
+    let foreign = executor
+        .start_agent(
+            &other_component.id,
+            agent_key!("RustChild", uuid::Uuid::new_v4()),
+        )
+        .await?;
+    let foreign_here = OwnedAgentId::new(context.default_environment_id, &foreign.agent_id);
+    let result = get_child_by_id(&foreign_here).await?;
+    assert!(result.starts_with("RemoteNotFound"), "{result}");
+    assert!(
+        executor
+            .get_worker_metadata_opt(&foreign_here)
+            .await?
+            .is_none()
+    );
+    assert!(executor.get_worker_metadata_opt(&foreign).await?.is_some());
+
+    let deleted = executor
+        .start_agent(&component.id, agent_key!("RustChild", uuid::Uuid::new_v4()))
+        .await?;
+    executor.delete_worker(&deleted).await?;
+    let result = get_child_by_id(&deleted).await?;
+    assert!(result.starts_with("RemoteNotFound"), "{result}");
+    assert!(executor.get_worker_metadata_opt(&deleted).await?.is_none());
+    Ok(())
+}

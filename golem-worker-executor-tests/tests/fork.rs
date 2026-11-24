@@ -1038,6 +1038,10 @@ inherit_test_dep!(
     #[tagged_as("agent_sdk_rust")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("agent_counters")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 #[test]
@@ -2876,4 +2880,74 @@ async fn a_rejected_export_fork_copies_no_snapshot_and_two_attempts_of_one_expor
     Ok(())
     })
     .await
+}
+
+/// A fork of a keyed agent gets its own ID and no key: its metadata names no key, an upsert of the
+/// source's key reaches the source and never the fork, and the two count apart from the fork.
+#[test]
+#[timeout("120s")]
+async fn a_fork_of_a_keyed_agent_has_no_key_and_an_upsert_of_the_key_never_selects_it(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_local_resume(deps, &context, false).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let key = agent_key!("Counter", "fork-source");
+    let source = executor.start_agent(&component.id, key.clone()).await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &key, "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        1
+    );
+
+    let cutoff = executor.oplog_max_index(&source).await?;
+    let fork = executor.fork_worker(&source, cutoff).await?;
+    assert_ne!(fork, source);
+    assert_eq!(fork.agent_id.type_tag(), source.agent_id.type_tag());
+    let source_metadata = executor.get_worker_metadata(&source).await?;
+    let fork_metadata = executor.get_worker_metadata(&fork).await?;
+    assert!(source_metadata.canonical_key.is_some());
+    assert_eq!(fork_metadata.canonical_key, None);
+    assert_ne!(
+        executor.agent_fingerprint(&fork.agent_id).await?,
+        executor.agent_fingerprint(&source.agent_id).await?
+    );
+
+    // The source counts 2 and 3 by key; the fork, which copied the count 1, counts 2 by ID.
+    assert_eq!(
+        executor.start_agent(&component.id, key.clone()).await?,
+        source
+    );
+    for expected in [2, 3] {
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &key, "increment", data_value!())
+                .await?
+                .into_typed::<u32>()?,
+            expected
+        );
+    }
+    assert_eq!(
+        crate::agent::invoke_and_await_agent_by_id(
+            &executor,
+            &component,
+            &fork,
+            None,
+            "increment",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u32>()?,
+        2
+    );
+    assert_eq!(executor.start_agent(&component.id, key).await?, source);
+    Ok(())
 }
