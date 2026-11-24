@@ -239,6 +239,17 @@ where
     )
 }
 
+/// The caller that a request must carry. A request without one, or with one that does not
+/// decode, is refused: the worker service never makes up a caller for a trusted request.
+fn required_caller(
+    caller: Option<golem_api_grpc::proto::golem::component::Caller>,
+) -> Result<golem_common::model::caller::Caller, GrpcAgentError> {
+    golem_common::model::caller::Caller::try_from(
+        caller.ok_or_else(|| bad_request_error("caller is missing"))?,
+    )
+    .map_err(|e| bad_request_error(format!("failed converting caller: {e}")))
+}
+
 /// The only way to turn a wire-level freshness disposition into the internal
 /// [`InvocationFreshnessDisposition`]. Decoding and trust-sanitization are
 /// deliberately fused into a single function so that no gRPC entry point can
@@ -928,6 +939,7 @@ impl WorkerGrpcApi {
             .target_revision
             .try_into()
             .map_err(|e| bad_request_error(format!("failed converting target_revision: {e}")))?;
+        let requester = required_caller(request.caller)?;
 
         self.worker_service
             .update(
@@ -936,6 +948,7 @@ impl WorkerGrpcApi {
                 target_revision,
                 disable_wakeup,
                 None,
+                Some(requester),
                 auth,
             )
             .await
@@ -955,12 +968,7 @@ impl WorkerGrpcApi {
             .map(|id| validate_protobuf_agent_id(Some(id)))
             .transpose()?;
         let oplog_idx = OplogIndex::from_u64(request.oplog_index_cutoff);
-        let caller = golem_common::model::caller::Caller::try_from(
-            request
-                .caller
-                .ok_or_else(|| bad_request_error("caller is missing"))?,
-        )
-        .map_err(|e| bad_request_error(format!("failed converting caller: {e}")))?;
+        let caller = required_caller(request.caller)?;
 
         self.worker_service
             .fork_worker(
@@ -1531,6 +1539,38 @@ mod freshness_tests {
         assert_eq!(
             sanitize_invocation_freshness_disposition(KNOWN_FRESH_WIRE, false),
             InvocationFreshnessDisposition::MayExist
+        );
+    }
+}
+
+#[cfg(test)]
+mod caller_tests {
+    use super::required_caller;
+    use golem_api_grpc::proto::golem::worker::v1::agent_error;
+    use golem_common::model::caller::{AccountAuthentication, AccountPrincipal, Caller, Principal};
+    use test_r::test;
+
+    #[test]
+    fn a_request_without_a_caller_is_refused() {
+        let error = required_caller(None).unwrap_err();
+        match error.error {
+            Some(agent_error::Error::BadRequest(body)) => {
+                assert_eq!(body.errors, vec!["caller is missing".to_string()])
+            }
+            other => panic!("expected a bad request, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_request_keeps_the_caller_it_carries() {
+        let caller = Caller::entry(Principal::Account(AccountPrincipal {
+            issuer: "https://golem.example".to_string(),
+            account_id: golem_common::model::account::AccountId::new(),
+            authentication: AccountAuthentication::ApiToken,
+        }));
+        assert_eq!(
+            required_caller(Some(caller.clone().into())).unwrap(),
+            caller
         );
     }
 }

@@ -608,7 +608,14 @@ fn the_never_live_mark_survives_folds_and_reports_sandboxed_over_the_folded_stat
     let updated = fold(
         running.clone(),
         vec![
-            (3, OplogEntry::pending_update(update, None)),
+            (
+                3,
+                OplogEntry::pending_update(
+                    update,
+                    None,
+                    Box::new(golem_common::model::caller::Caller::anonymous()),
+                ),
+            ),
             (
                 4,
                 OplogEntry::successful_update(
@@ -2989,6 +2996,7 @@ async fn single_manual_update() {
         )
         .pending_invocation(AgentInvocation::ManualUpdate {
             target_revision: ComponentRevision::new(2).unwrap(),
+            requester: golem_common::model::caller::Caller::anonymous(),
         })
         .host_call(
             "b",
@@ -3049,6 +3057,7 @@ async fn single_manual_failed_update() {
         )
         .pending_invocation(AgentInvocation::ManualUpdate {
             target_revision: ComponentRevision::new(2).unwrap(),
+            requester: golem_common::model::caller::Caller::anonymous(),
         })
         .host_call(
             "b",
@@ -3096,6 +3105,7 @@ async fn single_manual_failed_update_during_snapshot() {
         )
         .pending_invocation(AgentInvocation::ManualUpdate {
             target_revision: ComponentRevision::new(2).unwrap(),
+            requester: golem_common::model::caller::Caller::anonymous(),
         })
         .failed_update(update2)
         .agent_invocation_started("c", vec![], k2)
@@ -3135,7 +3145,10 @@ async fn manual_failure_before_pending_update_does_not_remove_automatic_update()
 
     let test_case = TestCase::builder(1)
         .pending_update(&automatic, |_| {})
-        .pending_invocation(AgentInvocation::ManualUpdate { target_revision })
+        .pending_invocation(AgentInvocation::ManualUpdate {
+            target_revision,
+            requester: golem_common::model::caller::Caller::anonymous(),
+        })
         .failed_update(manual)
         .build();
     let status = &test_case.entries.last().unwrap().expected_status;
@@ -3165,10 +3178,16 @@ async fn reverted_manual_failure_does_not_reassign_a_later_failure() {
     };
 
     let test_case = TestCase::builder(1)
-        .pending_invocation(AgentInvocation::ManualUpdate { target_revision })
+        .pending_invocation(AgentInvocation::ManualUpdate {
+            target_revision,
+            requester: golem_common::model::caller::Caller::anonymous(),
+        })
         .failed_update(manual())
         .revert(OplogIndex::from_u64(2))
-        .pending_invocation(AgentInvocation::ManualUpdate { target_revision })
+        .pending_invocation(AgentInvocation::ManualUpdate {
+            target_revision,
+            requester: golem_common::model::caller::Caller::anonymous(),
+        })
         .failed_update(manual())
         .build();
     let status = &test_case.entries.last().unwrap().expected_status;
@@ -3197,7 +3216,10 @@ fn manual_failure_identity_is_chunk_independent_across_reverted_admission() {
         filesystem_snapshot: None,
     };
     let test_case = TestCase::builder(1)
-        .pending_invocation(AgentInvocation::ManualUpdate { target_revision })
+        .pending_invocation(AgentInvocation::ManualUpdate {
+            target_revision,
+            requester: golem_common::model::caller::Caller::anonymous(),
+        })
         .revert(OplogIndex::INITIAL)
         .failed_update(manual())
         .build();
@@ -3265,8 +3287,14 @@ async fn manual_failure_removes_only_one_same_target_admission() {
     };
 
     let test_case = TestCase::builder(1)
-        .pending_invocation(AgentInvocation::ManualUpdate { target_revision })
-        .pending_invocation(AgentInvocation::ManualUpdate { target_revision })
+        .pending_invocation(AgentInvocation::ManualUpdate {
+            target_revision,
+            requester: golem_common::model::caller::Caller::anonymous(),
+        })
+        .pending_invocation(AgentInvocation::ManualUpdate {
+            target_revision,
+            requester: golem_common::model::caller::Caller::anonymous(),
+        })
         .failed_update(manual)
         .build();
     let status = &test_case.entries.last().unwrap().expected_status;
@@ -3309,7 +3337,11 @@ fn revert_validation_preserves_jump_while_removing_crossed_snapshot_baseline() {
         ),
         (
             OplogIndex::from_u64(20),
-            OplogEntry::pending_update(update.clone(), None),
+            OplogEntry::pending_update(
+                update.clone(),
+                None,
+                Box::new(golem_common::model::caller::Caller::anonymous()),
+            ),
         ),
         (
             OplogIndex::from_u64(21),
@@ -3348,7 +3380,11 @@ fn revert_validation_ignores_unapplied_snapshot_update_in_dropped_region() {
     };
     let entries = BTreeMap::from([(
         OplogIndex::from_u64(3),
-        OplogEntry::pending_update(update, None),
+        OplogEntry::pending_update(
+            update,
+            None,
+            Box::new(golem_common::model::caller::Caller::anonymous()),
+        ),
     )]);
 
     let regions = super::revert_validation_regions(
@@ -3411,7 +3447,11 @@ fn snapshot_based_update_with_outcome(outcome: OplogEntry) -> BTreeMap<OplogInde
     BTreeMap::from([
         (
             OplogIndex::from_u64(5),
-            OplogEntry::pending_update(update, None),
+            OplogEntry::pending_update(
+                update,
+                None,
+                Box::new(golem_common::model::caller::Caller::anonymous()),
+            ),
         ),
         (OplogIndex::from_u64(9), outcome),
     ])
@@ -3487,6 +3527,7 @@ fn a_failed_snapshot_based_update_keeps_the_outcome_of_the_update_before_it() {
                 target_revision: ComponentRevision::new(3).unwrap(),
             },
             None,
+            Box::new(golem_common::model::caller::Caller::anonymous()),
         ),
     );
     entries.insert(
@@ -3552,7 +3593,11 @@ fn a_snapshot_based_update_that_fails_right_after_its_entry_commits_nothing() {
     let regions = super::skipped_regions(&BTreeMap::from([
         (
             OplogIndex::from_u64(5),
-            OplogEntry::pending_update(update, None),
+            OplogEntry::pending_update(
+                update,
+                None,
+                Box::new(golem_common::model::caller::Caller::anonymous()),
+            ),
         ),
         (OplogIndex::from_u64(6), failed_update_to_revision_two()),
     ]));
@@ -3568,7 +3613,11 @@ fn a_failed_automatic_update_commits_nothing() {
     let regions = super::skipped_regions(&BTreeMap::from([
         (
             OplogIndex::from_u64(5),
-            OplogEntry::pending_update(update, None),
+            OplogEntry::pending_update(
+                update,
+                None,
+                Box::new(golem_common::model::caller::Caller::anonymous()),
+            ),
         ),
         (OplogIndex::from_u64(9), failed_update_to_revision_two()),
     ]));
@@ -3604,11 +3653,19 @@ fn snapshot_assisted_update_with_outcome(outcome: OplogEntry) -> BTreeMap<OplogI
     BTreeMap::from([
         (
             OplogIndex::from_u64(4),
-            OplogEntry::pending_update(automatic_update(2), None),
+            OplogEntry::pending_update(
+                automatic_update(2),
+                None,
+                Box::new(golem_common::model::caller::Caller::anonymous()),
+            ),
         ),
         (
             OplogIndex::from_u64(5),
-            OplogEntry::pending_update(assisted_update(2, 1, 1, 3), Some(OplogIndex::from_u64(4))),
+            OplogEntry::pending_update(
+                assisted_update(2, 1, 1, 3),
+                Some(OplogIndex::from_u64(4)),
+                Box::new(golem_common::model::caller::Caller::anonymous()),
+            ),
         ),
         (OplogIndex::from_u64(9), outcome),
     ])
@@ -3791,6 +3848,7 @@ async fn single_manual_update_with_revert() {
         )
         .pending_invocation(AgentInvocation::ManualUpdate {
             target_revision: ComponentRevision::new(2).unwrap(),
+            requester: golem_common::model::caller::Caller::anonymous(),
         })
         .host_call(
             "b",
@@ -3845,6 +3903,7 @@ async fn multiple_manual_updates_with_jump_and_revert() {
         )
         .pending_invocation(AgentInvocation::ManualUpdate {
             target_revision: ComponentRevision::new(2).unwrap(),
+            requester: golem_common::model::caller::Caller::anonymous(),
         })
         .host_call(
             "b",
@@ -3862,6 +3921,7 @@ async fn multiple_manual_updates_with_jump_and_revert() {
         .agent_invocation_started("c", vec![], k2)
         .pending_invocation(AgentInvocation::ManualUpdate {
             target_revision: ComponentRevision::new(2).unwrap(),
+            requester: golem_common::model::caller::Caller::anonymous(),
         })
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
@@ -6146,7 +6206,9 @@ impl TestCaseBuilder {
         let oplog_idx = OplogIndex::from_u64(self.entries.len() as u64 + 1);
         let ref_idempotency_key = invocation.idempotency_key().cloned();
         let manual_update_target_revision = match &invocation {
-            AgentInvocation::ManualUpdate { target_revision } => Some(*target_revision),
+            AgentInvocation::ManualUpdate {
+                target_revision, ..
+            } => Some(*target_revision),
             _ => None,
         };
         let operation = invocation.clone().into_parts().1.operation();
@@ -6257,8 +6319,12 @@ impl TestCaseBuilder {
                     })
                 })
         });
-        let entry =
-            OplogEntry::pending_update(update_description.clone(), update_attempt_index).rounded();
+        let entry = OplogEntry::pending_update(
+            update_description.clone(),
+            update_attempt_index,
+            Box::new(golem_common::model::caller::Caller::anonymous()),
+        )
+        .rounded();
         let oplog_idx = OplogIndex::from_u64(self.entries.len() as u64 + 1);
         self.add(entry.clone(), move |mut status| {
             let kind = PendingUpdateKind::of(update_description);
@@ -9013,6 +9079,7 @@ fn update_fields_after_a_successful_snapshot_based_update_clear_the_automatic_sn
                     filesystem_snapshot: None,
                 },
                 update_attempt_index: None,
+                requester: Box::new(golem_common::model::caller::Caller::anonymous()),
             },
         ),
         (
@@ -9122,6 +9189,7 @@ fn update_fields_carry_the_bootstrap_ranges_of_snapshots_and_snapshot_based_upda
                     filesystem_snapshot: None,
                 },
                 update_attempt_index: None,
+                requester: Box::new(golem_common::model::caller::Caller::anonymous()),
             },
         ),
         (
@@ -9241,6 +9309,7 @@ mod region_fold {
                 target_revision: revision(target),
             },
             None,
+            Box::new(golem_common::model::caller::Caller::anonymous()),
         )
     }
 
@@ -9250,6 +9319,7 @@ mod region_fold {
                 target_revision: revision(target),
             },
             Some(idx(admission)),
+            Box::new(golem_common::model::caller::Caller::anonymous()),
         )
     }
 
@@ -9271,6 +9341,7 @@ mod region_fold {
                 snapshot_bootstrap: None,
             },
             Some(idx(admission)),
+            Box::new(golem_common::model::caller::Caller::anonymous()),
         )
     }
 
@@ -9282,7 +9353,9 @@ mod region_fold {
             operation: Box::new(InvocationRequestOperation::ManualUpdate {
                 target_revision: revision(target),
             }),
-            payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate)),
+            payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate {
+                requester: golem_common::model::caller::Caller::anonymous(),
+            })),
             trace_id: TraceId::generate(),
             trace_states: Vec::new(),
             invocation_context: Vec::new(),
@@ -9298,6 +9371,7 @@ mod region_fold {
                 filesystem_snapshot: None,
             },
             admission.map(idx),
+            Box::new(golem_common::model::caller::Caller::anonymous()),
         )
     }
 
@@ -9510,6 +9584,7 @@ mod region_fold {
                 snapshot_bootstrap: Some(selected_range.clone()),
             },
             Some(idx(3)),
+            Box::new(golem_common::model::caller::Caller::anonymous()),
         );
         let pending = [(2, snapshot), (3, automatic_admission(2)), (4, strategy)];
 
@@ -9581,6 +9656,7 @@ mod region_fold {
                             filesystem_snapshot: Some(later.clone()),
                         },
                         Some(idx(11)),
+                        Box::new(golem_common::model::caller::Caller::anonymous()),
                     ),
                 ),
                 (13, succeeded(3)),
@@ -10162,6 +10238,7 @@ mod update_entry_sequences {
                                 filesystem_snapshot: named.then(FilesystemSnapshotName::update),
                             },
                             admission.map(idx),
+                            Box::new(golem_common::model::caller::Caller::anonymous()),
                         )
                     }
                     Generated::Success => succeeded(index + 1),

@@ -6622,10 +6622,16 @@ components:
       title: ManualUpdateParameters
       required:
       - targetRevision
+      - requester
       properties:
         targetRevision:
           type: integer
           format: uint64
+        requester:
+          description: Who asked for the update. It is not the caller of the update's snapshot save.
+          allOf:
+          - $ref: '#/components/schemas/PublicCaller'
+          - description: Who asked for the update. It is not the caller of the update's snapshot save.
     MetadataEnvelope:
       type: object
       properties:
@@ -12706,6 +12712,7 @@ components:
       - targetRevision
       - description
       - updateAttemptIndex
+      - requester
       properties:
         timestamp:
           type: string
@@ -12718,6 +12725,8 @@ components:
         updateAttemptIndex:
           type: integer
           format: uint64
+        requester:
+          $ref: '#/components/schemas/PublicCaller'
     r#PreCommitRemoteTransactionParams:
       type: object
       title: r#PreCommitRemoteTransactionParams

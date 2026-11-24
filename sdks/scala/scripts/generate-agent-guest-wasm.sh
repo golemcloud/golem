@@ -150,7 +150,7 @@ for role_spec in "${roles[@]}"; do
       --target-dir "$target_dir" \
       --release \
       --no-default-features \
-      --features full-p3,golem,typescript-transform-runtime
+      --features full-p3,golem,typescript-transform-runtime,post-return-drain
   )
   if [[ ! -f "$out_wasm" ]]; then
     echo "[agent-guest] ERROR: build did not produce $out_wasm" >&2

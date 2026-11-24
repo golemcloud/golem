@@ -1316,6 +1316,9 @@ impl WorkerService {
         Ok(())
     }
 
+    /// `requester` is who asked for the update, which the agent records; `None` records the
+    /// account of `auth_ctx`.
+    #[allow(clippy::too_many_arguments)]
     pub async fn update(
         &self,
         agent_id: &OwnedAgentId,
@@ -1323,6 +1326,7 @@ impl WorkerService {
         target_revision: ComponentRevision,
         disable_wakeup: bool,
         expected_fingerprint: Option<AgentFingerprint>,
+        requester: Option<Caller>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<OplogIndex> {
         let agent = self
@@ -1337,12 +1341,14 @@ impl WorkerService {
             )
             .await?;
 
+        let requester = requester.unwrap_or_else(|| self.rest_caller(&auth_ctx));
         self.worker_client
             .update(
                 &agent_id.agent_id,
                 update_mode,
                 target_revision,
                 disable_wakeup,
+                requester,
                 agent_id.environment_id,
                 agent.metadata.fingerprint,
                 auth_ctx,
@@ -4986,6 +4992,7 @@ mod tests {
         created_agent_ids: Mutex<Vec<AgentId>>,
         created_callers: Mutex<Vec<Caller>>,
         forked_callers: Mutex<Vec<Caller>>,
+        updated_callers: Mutex<Vec<Caller>>,
         creating_idempotency_keys: Mutex<Vec<Option<IdempotencyKey>>>,
         creating_ignore_already_existing: Mutex<Vec<bool>>,
         metadata_environment_id: Mutex<Option<EnvironmentId>>,
@@ -5024,6 +5031,7 @@ mod tests {
                 created_agent_ids: Mutex::new(Vec::new()),
                 created_callers: Mutex::new(Vec::new()),
                 forked_callers: Mutex::new(Vec::new()),
+                updated_callers: Mutex::new(Vec::new()),
                 creating_idempotency_keys: Mutex::new(Vec::new()),
                 creating_ignore_already_existing: Mutex::new(Vec::new()),
                 metadata_environment_id: Mutex::new(None),
@@ -5317,12 +5325,14 @@ mod tests {
             _: golem_common::model::agent::AgentUpdateMode,
             _: ComponentRevision,
             _: bool,
+            requester: Caller,
             _: EnvironmentId,
             expected_fingerprint: AgentFingerprint,
             _: AuthCtx,
         ) -> WorkerResult<OplogIndex> {
             assert_eq!(expected_fingerprint, self.fingerprint);
             self.effects.lock().unwrap().push("update");
+            self.updated_callers.lock().unwrap().push(requester);
             Ok(OplogIndex::INITIAL)
         }
 
@@ -6820,6 +6830,7 @@ mod tests {
                 ComponentRevision::new(1).unwrap(),
                 false,
                 None,
+                None,
                 auth_ctx.clone(),
             )
             .await
@@ -7652,6 +7663,83 @@ mod tests {
             vec![harness.worker_service.rest_caller(&auth), explicit]
         );
         assert!(matches!(callers[0].original, Principal::Account(_)));
+    }
+
+    #[test]
+    async fn rest_update_sends_the_account_caller() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let auth = AuthCtx::system();
+        // The executor knows the agent, so the update reaches it.
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        let agent_id = harness.owned(&harness.keyed_agent_id());
+
+        for mode in [AgentUpdateMode::Automatic, AgentUpdateMode::Manual] {
+            harness
+                .worker_service
+                .update(
+                    &agent_id,
+                    mode,
+                    ComponentRevision::new(1).unwrap(),
+                    false,
+                    None,
+                    None,
+                    auth.clone(),
+                )
+                .await
+                .unwrap();
+        }
+
+        let requesters = harness
+            .worker_client
+            .updated_callers
+            .lock()
+            .unwrap()
+            .clone();
+        let account = harness.worker_service.rest_caller(&auth);
+        assert_eq!(requesters, vec![account.clone(), account]);
+        assert!(matches!(requesters[0].original, Principal::Account(_)));
+    }
+
+    #[test]
+    async fn update_keeps_the_given_requester() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        // The executor knows the agent, so the update reaches it.
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        let agent_id = harness.owned(&harness.keyed_agent_id());
+        let requester = harness.worker_service.rest_caller(&AuthCtx::system());
+        let requester = Caller {
+            original: requester.original,
+            immediate: Principal::Anonymous,
+            tokens: Vec::new(),
+        };
+
+        harness
+            .worker_service
+            .update(
+                &agent_id,
+                AgentUpdateMode::Automatic,
+                ComponentRevision::new(1).unwrap(),
+                false,
+                None,
+                Some(requester.clone()),
+                AuthCtx::system(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            harness
+                .worker_client
+                .updated_callers
+                .lock()
+                .unwrap()
+                .clone(),
+            vec![requester]
+        );
     }
 
     #[test]

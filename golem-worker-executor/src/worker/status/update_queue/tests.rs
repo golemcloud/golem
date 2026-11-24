@@ -38,6 +38,7 @@ fn automatic(target: u64) -> OplogEntry {
             target_revision: revision(target),
         },
         None,
+        Box::new(golem_common::model::caller::Caller::anonymous()),
     )
 }
 
@@ -53,6 +54,7 @@ fn strategy(target: u64, admission: u64, snapshot: u64) -> OplogEntry {
             snapshot_bootstrap: None,
         },
         Some(idx(admission)),
+        Box::new(golem_common::model::caller::Caller::anonymous()),
     )
 }
 
@@ -64,7 +66,9 @@ fn manual_invocation(target: u64) -> OplogEntry {
         operation: Box::new(InvocationRequestOperation::ManualUpdate {
             target_revision: revision(target),
         }),
-        payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate)),
+        payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate {
+            requester: golem_common::model::caller::Caller::anonymous(),
+        })),
         trace_id: golem_common::model::invocation_context::TraceId::generate(),
         trace_states: Vec::new(),
         invocation_context: Vec::new(),
@@ -80,6 +84,7 @@ fn manual_pending_update(target: u64, admission: Option<u64>) -> OplogEntry {
             filesystem_snapshot: None,
         },
         admission.map(idx),
+        Box::new(golem_common::model::caller::Caller::anonymous()),
     )
 }
 

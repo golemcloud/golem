@@ -603,12 +603,14 @@ pub trait WorkerClient: Send + Sync {
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
+    /// Updates an agent. `requester` is who asked for the update; the agent records it.
     async fn update(
         &self,
         agent_id: &AgentId,
         update_mode: AgentUpdateMode,
         target_revision: ComponentRevision,
         disable_wakeup: bool,
+        requester: Caller,
         environment_id: EnvironmentId,
         expected_fingerprint: AgentFingerprint,
         auth_ctx: AuthCtx,
@@ -1533,6 +1535,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         update_mode: AgentUpdateMode,
         target_revision: ComponentRevision,
         disable_wakeup: bool,
+        requester: Caller,
         environment_id: EnvironmentId,
         expected_fingerprint: AgentFingerprint,
         auth_ctx: AuthCtx,
@@ -1552,7 +1555,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     expected_fingerprint: Some(expected_fingerprint.0.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     disable_wakeup,
-                    caller: Some(Caller::anonymous().into()),
+                    caller: Some(requester.clone().into()),
                 }))
             },
             |response| match response.into_inner() {
