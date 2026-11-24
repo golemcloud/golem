@@ -951,6 +951,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentMetadata> for AgentMetad
                 .agent_type_name
                 .map(crate::model::agent::AgentTypeName),
             canonical_key: value.canonical_key,
+            origin: crate::base_model::agent::AgentOrigin::try_from(value.origin)?,
             constructor_parameters: value.constructor_parameters,
             environment_id: value
                 .environment_id
@@ -1039,6 +1040,7 @@ impl TryFrom<AgentMetadataDto> for golem_api_grpc::proto::golem::worker::AgentMe
             owner_kind: value.owner_kind.into(),
             agent_type_name: value.agent_type_name.map(|name| name.0),
             canonical_key: value.canonical_key,
+            origin: value.origin.into(),
             constructor_parameters: value.constructor_parameters,
             component_id: None,
             environment_id: Some(value.environment_id.into()),

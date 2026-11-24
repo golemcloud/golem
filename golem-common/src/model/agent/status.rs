@@ -66,6 +66,19 @@ impl AgentMetadata {
         OwnedAgentId::new(self.environment_id, &self.agent_id)
     }
 
+    /// A fork is forked; otherwise an agent that owns its key is keyed, and every other
+    /// owner, ephemeral agents included, was created without a key.
+    pub fn origin(&self) -> crate::base_model::agent::AgentOrigin {
+        use crate::base_model::agent::AgentOrigin;
+        if self.create_request.kind == oplog::CreateRequestKind::Fork {
+            AgentOrigin::Forked
+        } else if self.canonical_key.is_some() {
+            AgentOrigin::Keyed
+        } else {
+            AgentOrigin::Created
+        }
+    }
+
     /// Resolves the persisted type and decodes the persisted constructor parameters.
     pub fn parse_agent_id(
         &self,

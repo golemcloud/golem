@@ -5258,6 +5258,11 @@ mod tests {
                             .type_id()
                             .and(self.metadata_agent_type_name.lock().unwrap().clone()),
                         canonical_key: self.metadata_canonical_key.lock().unwrap().clone(),
+                        origin: if self.metadata_canonical_key.lock().unwrap().is_some() {
+                            golem_common::model::agent::AgentOrigin::Keyed
+                        } else {
+                            golem_common::model::agent::AgentOrigin::Created
+                        },
                         constructor_parameters: None,
                     },
                 }),

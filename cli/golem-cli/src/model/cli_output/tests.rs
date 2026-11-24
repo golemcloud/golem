@@ -1256,6 +1256,7 @@ fn sample_agent_metadata_view() -> crate::model::agent::AgentMetadataView {
             "Agent".to_string(),
         )),
         agent_key: Some("Agent()".to_string()),
+        origin: golem_common::model::agent::AgentOrigin::Keyed,
         fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::nil()),
         created_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
         environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
@@ -4754,6 +4755,13 @@ fn arb_agent_metadata_view() -> BoxedStrategy<crate::model::agent::AgentMetadata
                 )),
                 agent_key: (component_revision % 2 == 0)
                     .then(|| format!("GeneratedAgent(\"{agent_id}\")")),
+                origin: if component_revision % 2 == 0 {
+                    golem_common::model::agent::AgentOrigin::Keyed
+                } else if retry_count % 2 == 0 {
+                    golem_common::model::agent::AgentOrigin::Created
+                } else {
+                    golem_common::model::agent::AgentOrigin::Forked
+                },
                 fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::from_u128(
                     u128::from(retry_count),
                 )),

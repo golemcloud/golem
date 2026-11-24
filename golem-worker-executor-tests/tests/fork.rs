@@ -20,7 +20,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::agent::{
-    AgentInvocationMode, AgentTypeName, InvocationFreshnessDisposition,
+    AgentInvocationMode, AgentOrigin, AgentTypeName, InvocationFreshnessDisposition,
 };
 use golem_common::model::caller::Caller;
 use golem_common::model::card::{CardId, ScopeCard, StoredCard};
@@ -2916,6 +2916,15 @@ async fn a_fork_of_a_keyed_agent_has_no_key_and_an_upsert_of_the_key_never_selec
     let fork_metadata = executor.get_worker_metadata(&fork).await?;
     assert!(source_metadata.canonical_key.is_some());
     assert_eq!(fork_metadata.canonical_key, None);
+    assert_eq!(source_metadata.origin, AgentOrigin::Keyed);
+    assert_eq!(fork_metadata.origin, AgentOrigin::Forked);
+    let unkeyed = executor
+        .create_unkeyed_agent(&component.id, None, key.clone(), HashMap::new())
+        .await?;
+    assert_eq!(
+        executor.get_worker_metadata(&unkeyed).await?.origin,
+        AgentOrigin::Created
+    );
     assert_ne!(
         executor.agent_fingerprint(&fork.agent_id).await?,
         executor.agent_fingerprint(&source.agent_id).await?

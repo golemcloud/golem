@@ -1438,6 +1438,7 @@ async fn agent_selector_runs_after_auth_and_before_etag_revalidation() {
                 owner_kind: OwnerKind::ComponentAgent,
                 agent_type_name: Some(AgentTypeName("mcp-agent".into())),
                 canonical_key: None,
+                origin: golem_common::model::agent::AgentOrigin::Created,
                 constructor_parameters: None,
                 environment_id: harness.environment_id,
                 created_by: harness.account_id,
