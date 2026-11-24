@@ -18,7 +18,9 @@
 //! fields that the flag names. Golem metadata becomes a `text`, `number`, `timestamp` or `flag`
 //! node.
 
-use golem_common::model::Timestamp;
+use crate::model::agent::agent_id_display;
+use golem_common::model::agent::AgentTypeName;
+use golem_common::model::{AgentId, Timestamp};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
@@ -205,20 +207,26 @@ pub struct StrNode {
     pub value: Option<String>,
 }
 
-/// A reference to an agent: one token over the text of the agent ID. It holds no agent ID, no
-/// component ID and no agent type.
+/// A reference to an agent, in clear: the agent ID, and the agent type name only on the own
+/// reference of the exported agent.
+///
+/// The agent ID is an opaque UUID that holds the type tag and no constructor parameter. The ID
+/// of a keyed agent is an unkeyed hash of the environment ID, the type ID and the canonical key,
+/// so a reader who knows the environment ID and the type ID can test a guessed key. The report
+/// never holds the environment ID in token mode. The identity fields of the report, such as the
+/// header `root`, never hold a component ID or an environment ID.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReportAgentRef {
-    pub token: ReportToken,
+    pub agent_id: AgentId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<AgentTypeName>,
 }
 
 impl ReportAgentRef {
-    /// The display form: `agent:` and the first 12 hex chars of the token, then `…`.
-    pub fn pseudonym(&self) -> String {
-        let hex = self.token.hex();
-        let prefix: String = hex.chars().take(12).collect();
-        format!("agent:{prefix}…")
+    /// The display form: `Type[<uuid>]`, or the bare UUID without an agent type.
+    pub fn label(&self) -> String {
+        agent_id_display(self.agent_type.as_ref(), &self.agent_id)
     }
 }
 

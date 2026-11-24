@@ -105,7 +105,8 @@ pub async fn invoke_tool(
         let (target, component, freshness_disposition) = worker_service
             .bound_invocation_target(
                 mcp_tool.component_id,
-                &constructor,
+                &mcp_tool.agent_type_name,
+                Some(&constructor),
                 AgentBinding::Constructor,
                 &request_key,
                 &mcp_tool.method.name,
@@ -117,7 +118,14 @@ pub async fn invoke_tool(
                 &component,
                 &target,
                 Some(mcp_tool.method.name.clone()),
-                Some(proto_method_parameters),
+                Some(golem_common::model::agent::AgentMethodInput::Native(
+                    golem_common::model::agent::NativeMethodInput::capture(
+                        proto_method_parameters,
+                        Vec::new(),
+                    )
+                    .map_err(crate::service::worker::WorkerServiceError::TypeChecker)?
+                    .0,
+                )),
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 None,
                 request_key,

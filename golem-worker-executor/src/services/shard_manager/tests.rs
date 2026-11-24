@@ -201,6 +201,7 @@ impl MockShardManager {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ShardManager for MockShardManager {
     async fn get_routing_table(&self) -> Result<RoutingTable, ShardManagerError> {
         unimplemented!()

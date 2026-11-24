@@ -23,6 +23,7 @@ mod runtime;
 mod startup;
 mod streaming;
 
+use acquisition::ConstructionError;
 #[cfg(test)]
 use acquisition::snapshot_policy_of_mode;
 #[cfg(test)]
@@ -337,6 +338,7 @@ pub enum CreateIntent {
     Invocation {
         owner: NewOwner,
         idempotency_key: Option<IdempotencyKey>,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
     },
     /// An explicit create request.
     Create {
@@ -364,6 +366,7 @@ impl CreateIntent {
             Self::Invocation {
                 owner,
                 idempotency_key,
+                ..
             } if !owner.keyed => (CreateRequestKind::Unkeyed, idempotency_key.clone()),
             Self::Invocation { .. } => (CreateRequestKind::GetOrCreate, None),
             Self::Create {
@@ -1017,7 +1020,7 @@ impl Drop for WorkerStatusMetric {
 #[derive(Debug)]
 enum WorkerInstance {
     Unresolved,
-    Initializing(Shared<BoxFuture<'static, Result<bool, WorkerExecutorError>>>),
+    Initializing(Shared<BoxFuture<'static, Result<bool, ConstructionError>>>),
     /// No invocation loop runs. `startup_failure` is the failed last start of a durable agent:
     /// admission returns it until the next start, which runs the agent again.
     Unloaded {
@@ -1342,6 +1345,8 @@ pub(crate) enum MethodFailureSettlementError {
 pub enum InvocationFailureDecision {
     /// Retry the invocation, or stop, as the retry decision says.
     Retry(RetryDecision),
+    /// The cancellation and typed rejection were committed. The rejected key must not run again.
+    Rejected,
     /// The oplog refused the record of the failure. A `RecoveryRequired` error, a storage that did
     /// not answer, sends the agent to infrastructure recovery, and the invocation stays pending, so
     /// it continues when the storage answers again. An `OplogFailed` error stops the agent, and the
@@ -1497,9 +1502,7 @@ pub(crate) use ingress::{
     await_scalar_invocation, require_canonical_command_path,
     require_expected_tool_deployment_revision,
 };
-use ingress::{
-    inactive_ephemeral_agent_error, replace_invocation_input, validate_resolved_invocation_identity,
-};
+use ingress::{inactive_ephemeral_agent_error, validate_resolved_invocation_identity};
 use interrupt::register_interrupt_request;
 use lifecycle::retirement::owned_shard_epoch;
 pub(crate) use lifecycle::retirement::retired_by_assignment;
@@ -1512,6 +1515,6 @@ use streaming::sessions::{
     validate_stream_session_record,
 };
 pub(crate) use streaming::sessions::{
-    same_origin_stream_invocation, stream_session_record_key, stream_session_record_keys,
-    stream_session_record_reference,
+    same_origin_queued_request, same_origin_stream_invocation, stream_session_record_key,
+    stream_session_record_keys, stream_session_record_reference,
 };

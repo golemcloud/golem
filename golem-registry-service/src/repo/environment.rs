@@ -232,6 +232,7 @@ impl<Repo: EnvironmentRepo> LoggedEnvironmentRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     async fn get_by_name(
         &self,
@@ -447,6 +448,7 @@ impl DbEnvironmentRepo<SqlitePool> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     async fn get_by_name(
         &self,
@@ -1369,6 +1371,7 @@ trait EnvironmentRepoInternal: EnvironmentRepo {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl EnvironmentRepoInternal for DbEnvironmentRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;

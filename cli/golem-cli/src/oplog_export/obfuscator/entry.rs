@@ -17,7 +17,7 @@
 
 use super::host::Direction;
 use super::value::{Region, Walker, flag, kept_case, number, record, text};
-use super::{ObfuscationContext, agent_reference};
+use super::{ObfuscationContext, own_agent_reference};
 use crate::oplog_export::model::{
     CaseKind, HostTypeMismatchRef, OmittedReason, ReportEntry, ReportField, ReportNode,
     ReportOmission, SchemaLessRpcValueRef, TimestampNode, TupleNode,
@@ -429,7 +429,7 @@ impl Walker<'_, '_> {
     }
 
     fn agent(&self, agent_id: &AgentId) -> ReportNode {
-        ReportNode::Agent(agent_reference(self.ctx, agent_id))
+        self.agent_node(agent_id)
     }
 
     fn host(
@@ -845,10 +845,17 @@ impl Walker<'_, '_> {
                 instance_id,
                 never_live,
             }) => Fields::new()
-                .add("agentId", self.agent(agent_id))
+                .add(
+                    "agentId",
+                    if *agent_id == self.ctx.own_agent().agent_id {
+                        ReportNode::Agent(own_agent_reference(self.ctx))
+                    } else {
+                        self.agent(agent_id)
+                    },
+                )
                 .opt(
                     "agentTypeName",
-                    agent_type_name.as_ref().map(|name| self.tok(name)),
+                    agent_type_name.as_ref().map(|name| text(name.0.clone())),
                 )
                 .add("ownerKind", name(owner_kind))
                 .add("agentMode", name(agent_mode))

@@ -655,8 +655,11 @@ type AgentInitializationParameters struct {
 }
 
 type AgentMethodInvocationParameters struct {
-	InvocationId      golem_core_types.Uuid
-	MethodName        string
+	InvocationId golem_core_types.Uuid
+	MethodName   string
+	// Component-independent original-method-input diagnostic envelope, not the
+	// executed method's input schema. Includes rejected captured JSON fields;
+	// native values are typed and host capabilities are redacted before encoding.
 	FunctionInput     golem_core_types.TypedSchemaValue
 	TraceId           string
 	TraceStates       []string

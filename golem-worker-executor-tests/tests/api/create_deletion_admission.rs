@@ -72,7 +72,9 @@ async fn exclusive_create_retries_after_deletion_instead_of_returning_a_missing_
         WorkerExecutorError::ShardingNotReady
     ));
 
-    executor.delete_worker(&agent).await?;
+    executor
+        .delete_worker_with_fingerprint(&agent, original)
+        .await?;
     let response = executor
         .client
         .clone()

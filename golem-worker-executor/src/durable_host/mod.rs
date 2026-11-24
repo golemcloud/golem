@@ -92,6 +92,7 @@ mod input_observation;
 pub mod io;
 pub mod keyvalue;
 mod logging;
+pub(crate) mod outgoing_caller;
 pub mod p3;
 pub(crate) mod permissions;
 pub mod quota;
@@ -117,7 +118,6 @@ pub mod rpc;
 pub(crate) mod sockets;
 pub mod stream_bus;
 pub(crate) mod stream_outcome;
-pub mod stream_session;
 pub mod stream_transport;
 mod suspendable_wait;
 pub mod tail_work;
@@ -1949,7 +1949,6 @@ impl<Ctx: WorkerCtx> Clone for PublicDurableWorkerState<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> PublicWorkerIo for PublicDurableWorkerState<Ctx> {
     fn event_service(&self) -> Arc<dyn WorkerEventService + Send + Sync> {
         self.event_service.clone()

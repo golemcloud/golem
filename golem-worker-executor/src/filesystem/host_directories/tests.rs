@@ -14,8 +14,6 @@
 
 use super::*;
 use std::io::ErrorKind;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt as _;
 use test_r::test;
 
 struct Directories {
@@ -48,10 +46,6 @@ async fn scratch_at(root: &Path) -> HostDirectory {
 }
 fn is_empty_directory(path: &Path) -> bool {
     std::fs::read_dir(path).unwrap().next().is_none()
-}
-#[cfg(unix)]
-fn running_as_root() -> bool {
-    unsafe { libc::geteuid() == 0 }
 }
 #[test]
 async fn a_temporary_root_lives_while_a_host_directory_lives() {
@@ -201,31 +195,41 @@ async fn a_child_removed_with_its_parent_discards_without_error() {
 }
 
 #[cfg(unix)]
-#[test]
-async fn discard_reports_a_removal_failure() {
-    if running_as_root() {
-        return;
+mod unix {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
+    use test_r::test;
+
+    fn running_as_root() -> bool {
+        unsafe { libc::geteuid() == 0 }
     }
-    let root = tempfile::tempdir().unwrap();
-    let directory = scratch_at(root.path()).await;
-    let locked = directory.path().as_path().join("locked");
-    std::fs::create_dir(&locked).unwrap();
-    std::fs::write(locked.join("file"), b"contents").unwrap();
-    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o500)).unwrap();
 
-    let error = directory.discard().await.unwrap_err();
+    #[test]
+    async fn discard_reports_a_removal_failure() {
+        if running_as_root() {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let directory = scratch_at(root.path()).await;
+        let locked = directory.path().as_path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::write(locked.join("file"), b"contents").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o500)).unwrap();
 
-    assert_eq!(
-        error.context().io_kind(),
-        Some(std::io::ErrorKind::PermissionDenied)
-    );
-    assert!(!error.to_string().contains("directory filesystem"));
-    assert!(
-        error
-            .to_string()
-            .starts_with("failed to discard host directory"),
-        "{error}"
-    );
-    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
-    assert!(locked.join("file").is_file());
+        let error = directory.discard().await.unwrap_err();
+
+        assert_eq!(
+            error.context().io_kind(),
+            Some(std::io::ErrorKind::PermissionDenied)
+        );
+        assert!(!error.to_string().contains("directory filesystem"));
+        assert!(
+            error
+                .to_string()
+                .starts_with("failed to discard host directory"),
+            "{error}"
+        );
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(locked.join("file").is_file());
+    }
 }

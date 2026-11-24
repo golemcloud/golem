@@ -15923,7 +15923,16 @@ components:
         methodName:
           type: string
         functionInput:
-          $ref: '#/components/schemas/TypedSchemaValue'
+          description: |-
+            Component-independent original-method-input diagnostic envelope, not the executed
+            method's input schema. Captured JSON fields include rejected values; native
+            host capabilities are redacted before encoding.
+          allOf:
+          - $ref: '#/components/schemas/TypedSchemaValue'
+          - description: |-
+              Component-independent original-method-input diagnostic envelope, not the executed
+              method's input schema. Captured JSON fields include rejected values; native
+              host capabilities are redacted before encoding.
         traceId:
           type: string
         traceStates:
@@ -17809,7 +17818,9 @@ components:
             enum:
             - char
           value:
-            type: char
+            type: string
+            minLength: 1
+            maxLength: 1
         required:
         - kind
         - value
@@ -21696,7 +21707,9 @@ components:
             enum:
             - delimited
           value:
-            type: char
+            type: string
+            minLength: 1
+            maxLength: 1
         required:
         - kind
         - value
@@ -21707,7 +21720,9 @@ components:
             enum:
             - either
           value:
-            type: char
+            type: string
+            minLength: 1
+            maxLength: 1
         required:
         - kind
         - value
@@ -22857,7 +22872,9 @@ components:
             enum:
             - char
           value:
-            type: char
+            type: string
+            minLength: 1
+            maxLength: 1
         required:
         - kind
         - value
@@ -25518,6 +25535,20 @@ components:
         required:
         - type
         - value
+    AgentIdBinding:
+      title: AgentIdBinding
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+          - Path
+          - Query
+        name:
+          type: string
+      required:
+      - type
+      - name
     AgentMethodSchema:
       type: object
       properties:
@@ -27846,8 +27877,12 @@ components:
           $ref: '#/components/schemas/AgentHttpAuthDetails'
         phantomAgent:
           type: boolean
-        phantomIdBinding:
-          $ref: '#/components/schemas/PhantomIdBinding'
+        agentIdBinding:
+          $ref: '#/components/schemas/AgentIdBinding'
+        createRoute:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentPathSegment'
         corsOptions:
           $ref: '#/components/schemas/CorsOptions'
         webhookSuffix:
@@ -29093,23 +29128,6 @@ components:
       - currentRevision
       - name
       - data
-    PhantomIdBinding:
-      title: PhantomIdBinding
-      type: object
-      properties:
-        type:
-          type: string
-          enum:
-          - Path
-          - Query
-        name:
-          type: string
-        optional:
-          type: boolean
-      required:
-      - type
-      - name
-      - optional
     Plan:
       example:
         appLimit: 10

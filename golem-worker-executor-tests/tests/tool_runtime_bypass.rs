@@ -852,6 +852,7 @@ fn deployment_state(
                     secret_keys_revealable: SecretKeyScope::All,
                     filesystem_access: ToolFilesystemAccess::Unset,
                     source: tool.registration.source.clone(),
+                    shell: false,
                 },
             )
         })

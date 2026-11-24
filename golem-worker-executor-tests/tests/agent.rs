@@ -831,7 +831,8 @@ async fn constructor_failure_refuses_admission_on_an_already_acquired_worker(
             let invocation = AgentInvocation::AgentMethod {
                 idempotency_key: InvocationId(uuid::Uuid::new_v4()),
                 method_name: "value".to_string(),
-                input: data_value!().into_parts().1,
+                allow_streams: false,
+                input: data_value!().into_parts().1.try_into().unwrap(),
                 invocation_context: InvocationContextStack::fresh(),
                 caller: callers::anonymous(),
                 scope_card: None,
@@ -1028,16 +1029,25 @@ async fn method_failure_replay_rejects_success_or_trap_in_place_of_a_local_termi
             })
             .await;
         let key = IdempotencyKey::fresh();
+        let invocation_id = external_invocation_id(&executor, &worker, &key, method).await?;
         executor
             .invoke_agent_with_key(&component, &agent, &key, method, data_value!())
             .await?;
         gate.entered().await;
-        let invocation_id = external_invocation_id(&executor, &worker, &key, method).await?;
-        let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
-        let anchor = entries.iter().find(|entry| matches!(
-            &entry.entry, PublicOplogEntry::AgentInvocationStarted(start)
-                if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.invocation_id == invocation_id)
-        )).expect("the gated invocation start must be committed").oplog_index;
+        // The gate holds the status actor's append receipt, so inspect storage directly.
+        let entries = executor.stored_oplog(&worker.agent_id).await;
+        let anchor = OplogIndex::from_u64(
+            entries
+                .iter()
+                .position(|entry| {
+                    matches!(
+                        entry, OplogEntry::AgentInvocationStarted { invocation_id: started, .. }
+                            if *started == invocation_id
+                    )
+                })
+                .expect("the gated invocation start must be committed") as u64
+                + 1,
+        );
         // Deliberately forge an incompatible completed outcome. Reconstruction must not
         // accept a successful body or an actual Wasm trap as the recorded method error.
         let terminal = OplogEntry::agent_invocation_failed(
@@ -1298,6 +1308,8 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
                 constructor: None,
                 component_id: Some(component.id.into()),
                 method_name: Some("produce".to_string()),
+                allow_streams: true,
+                captured_method_input: None,
                 input: Some(input.clone()),
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
                 schedule_at,
@@ -1383,6 +1395,8 @@ async fn invocation_classification_uses_the_existing_workers_component_revision(
             constructor: None,
             component_id: Some(streaming_component.id.into()),
             method_name: Some("produce".to_string()),
+            allow_streams: true,
+            captured_method_input: None,
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
             schedule_at: None,
@@ -1863,6 +1877,8 @@ async fn immediate_scheduled_ephemeral_invocation_reuses_completed_result(
             constructor: Some(proto_agent_key(&logical_agent_id)?),
             component_id: Some(component.id.into()),
             method_name: Some("changeAndGet".to_string()),
+            allow_streams: false,
+            captured_method_input: None,
             input: Some(
                 SchemaValue::Record { fields: vec![] }
                     .try_into()
@@ -1927,6 +1943,8 @@ async fn ephemeral_invocation_lookup_does_not_create_unknown_agent(
             constructor: None,
             component_id: Some(component.id.into()),
             method_name: None,
+            allow_streams: false,
+            captured_method_input: None,
             input: None,
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
             schedule_at: None,
@@ -1993,6 +2011,8 @@ async fn scheduled_ephemeral_invocation_uses_schedule_time_component_revision(
             constructor: Some(proto_agent_key(&logical_agent_id)?),
             component_id: Some(component.id.into()),
             method_name: Some("changeAndGet".to_string()),
+            allow_streams: false,
+            captured_method_input: None,
             input: Some(
                 SchemaValue::Record { fields: vec![] }
                     .try_into()
@@ -3120,6 +3140,8 @@ fn counter_invocation(
         constructor: None,
         component_id: Some(component.id.into()),
         method_name: (!lookup).then(|| "increment".to_string()),
+        allow_streams: false,
+        captured_method_input: None,
         input: if lookup {
             None
         } else {
@@ -3371,6 +3393,7 @@ pub(crate) async fn create_unkeyed_agent_at(
             environment_id: Some(component.environment_id.into()),
             ignore_already_existing: true,
             auth_ctx: Some(executor.auth_ctx().into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })
         .await?
@@ -3399,6 +3422,8 @@ pub(crate) async fn invoke_and_await_agent_by_id(
             constructor: None,
             component_id: Some(component.id.into()),
             method_name: Some(method.to_string()),
+            allow_streams: false,
+            captured_method_input: None,
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
             schedule_at: None,

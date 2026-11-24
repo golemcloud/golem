@@ -24,6 +24,7 @@ use golem_common::agent_key;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::extraction::extract_component_metadata;
 use golem_common::model::agent::{AgentMode, AgentTypeName, OwnerKind};
+use golem_common::model::caller::Caller;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::durable_stream::{StreamError, StreamTerminal};
@@ -99,6 +100,7 @@ async fn start_with_agent_sockets(
 }
 
 mod attachment_cost_contract;
+mod caller_chains;
 mod chunk_f_policy_acceptance;
 mod chunk_m_stream_deltas;
 mod dropped_waits;
@@ -952,6 +954,9 @@ pub(crate) fn deployment_state(
                     secret_keys_revealable: SecretKeyScope::All,
                     filesystem_access,
                     source: tool.registration.source.clone(),
+                    // The registry marks the built-in `bash` release as the shell; the tests
+                    // deploy the built-in `bash` component in its place.
+                    shell: provider_component_name == "golem:bash" && name.as_str() == "bash",
                 },
             )
         })
@@ -1962,6 +1967,7 @@ fn native_deployment_state(
         secret_keys_revealable: SecretKeyScope::All,
         filesystem_access: ToolFilesystemAccess::Unset,
         source,
+        shell: false,
     };
     let mut state = ToolDeploymentState {
         deployment_revision,
@@ -2013,6 +2019,7 @@ fn native_deployment_state(
             secret_keys_revealable: SecretKeyScope::All,
             filesystem_access: ToolFilesystemAccess::Unset,
             source: helper_source,
+            shell: false,
         },
     );
     state
@@ -7087,17 +7094,41 @@ async fn rust_generated_client_streams_live_and_handles_edges(
         .await?;
 
     let owned_agent_id = worker_id.clone();
+    let account = callers::account(AccountId::new());
     let principal_context: Vec<String> = executor
         .invoke_and_await_agent_as_caller(
             &caller_component,
             &agent_id,
-            callers::account(AccountId::new()),
+            account.clone(),
             "principal_context",
             data_value!(),
         )
         .await?
         .into_typed()?;
-    assert_eq!(principal_context, ["account", "account", "account"]);
+    // The agent sees the account in both roles. The tool that it calls keeps the account as the
+    // original caller and sees the agent, and the tool that this tool calls sees the tool.
+    let agent = callers::agent_in(
+        worker_id.agent_id,
+        agent_id.agent_type.clone(),
+        executor.get_worker_metadata(&worker_id).await?.fingerprint,
+        context.default_environment_id,
+    )
+    .immediate;
+    let tool = callers::tool_principal(context.default_environment_id, "streaming");
+    assert_eq!(
+        principal_context,
+        [
+            callers::caller_text(&account),
+            callers::caller_text(&Caller {
+                immediate: agent,
+                ..account.clone()
+            }),
+            callers::caller_text(&Caller {
+                immediate: tool,
+                ..account
+            }),
+        ]
+    );
 
     let marker_result = tokio::time::timeout(
         std::time::Duration::from_secs(30),
@@ -11940,6 +11971,8 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
         constructor: None,
         component_id: Some(caller_component.id.into()),
         method_name: Some("hold_fire_and_forget_capable_staging".to_string()),
+        allow_streams: false,
+        captured_method_input: None,
         input: Some(value.try_into().map_err(anyhow::Error::msg)?),
         mode: AgentInvocationMode::Await as i32,
         schedule_at: None,

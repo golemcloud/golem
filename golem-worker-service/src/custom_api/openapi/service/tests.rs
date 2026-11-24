@@ -75,6 +75,7 @@ type Call = (
 );
 struct ControlledInvoker(mpsc::UnboundedSender<Call>);
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ProviderInvoker for ControlledInvoker {
     async fn invoke(&self, call: &ProviderCall) -> Result<String, OpenApiError> {
         let (tx, rx) = oneshot::channel();

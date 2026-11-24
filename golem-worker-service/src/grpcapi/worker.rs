@@ -269,6 +269,7 @@ pub struct WorkerGrpcApi {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl GrpcWorkerService for WorkerGrpcApi {
     async fn launch_new_worker(
         &self,
@@ -803,6 +804,12 @@ impl WorkerGrpcApi {
             .try_into()
             .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
 
+        if request.invocation.is_some() && !matches!(&auth, AuthCtx::System | AuthCtx::Agent(_)) {
+            return Err(bad_request_error(
+                "invocation is an internal creation context",
+            ));
+        }
+
         let component_id: golem_common::model::component::ComponentId = request
             .component_id
             .and_then(|id| id.try_into().ok())
@@ -847,6 +854,7 @@ impl WorkerGrpcApi {
                     .ok_or_else(|| bad_request_error("caller is missing"))?,
                 request.idempotency_key.map(Into::into),
                 freshness_disposition,
+                request.invocation,
             )
             .await?;
 
@@ -1269,7 +1277,11 @@ impl WorkerGrpcApi {
             .into();
 
         if let Some(scheduled) = request.scheduled {
-            let owner = validate_protobuf_agent_id(scheduled.owner_agent_id)?;
+            let canceller: golem_common::model::caller::Principal = scheduled
+                .canceller
+                .ok_or_else(|| bad_request_error("Missing canceller"))?
+                .try_into()
+                .map_err(|error| bad_request_error(format!("invalid canceller: {error}")))?;
             let receipt = ScheduleId {
                 id: scheduled
                     .schedule_id
@@ -1289,7 +1301,7 @@ impl WorkerGrpcApi {
                     &OwnedAgentId::new(environment, &agent_id),
                     &idempotency_key,
                     receipt,
-                    &owner,
+                    &canceller,
                     auth,
                 )
                 .await

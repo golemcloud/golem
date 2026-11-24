@@ -2227,7 +2227,8 @@ fn request_entries_keep_their_operation_outside_the_payload() {
         },
         AgentInvocationPayload::AgentMethod {
             method_name: "a-removed-method".to_string(),
-            input: SchemaValue::Record { fields: vec![] },
+            input: SchemaValue::Record { fields: vec![] }.try_into().unwrap(),
+            allow_streams: false,
             caller: caller.clone(),
             scope_card: None,
         },
@@ -3057,7 +3058,10 @@ fn invocation_wallet_pin_protobuf_roundtrip_and_required_validation() {
             method_name: "test".to_string(),
         }),
         payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
-            input: SchemaValue::Record { fields: Vec::new() },
+            input: SchemaValue::Record { fields: Vec::new() }
+                .try_into()
+                .unwrap(),
+            allow_streams: false,
             caller: caller.clone(),
             scope_card: None,
         })),

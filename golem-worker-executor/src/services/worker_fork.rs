@@ -1328,6 +1328,7 @@ fn rewrite_forked_oplog_entry(
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
     async fn fork_stream_slot(&self, request: ForkStreamSlotRequest) -> ForkStreamSlotResponse {
         export::fork(self, request).await
@@ -1569,7 +1570,10 @@ mod tests {
                 method_name: "test".to_string(),
             }),
             payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
-                input: SchemaValue::Record { fields: Vec::new() },
+                input: SchemaValue::Record { fields: Vec::new() }
+                    .try_into()
+                    .unwrap(),
+                allow_streams: false,
                 caller: Caller::anonymous(),
                 scope_card: None,
             })),

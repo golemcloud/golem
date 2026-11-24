@@ -52,6 +52,11 @@ impl<Ctx: WorkerCtx> ReturnRecorder<Ctx> for LoopRecorder<Ctx> {
     }
 }
 
+pub(super) enum InvocationFailure {
+    RejectedBeforeGuest(WorkerExecutorError),
+    Execution(WorkerExecutorError),
+}
+
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     pub(super) async fn record_retry_interrupt_failure(
         &self,
@@ -214,6 +219,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             &self.store.data().component_metadata().metadata,
             self.parent.parsed_agent_id.as_ref(),
         );
+        if matches!(invocation.invocation, AgentInvocation::AgentMethod { .. }) {
+            match self
+                .parent
+                .durable_stream_session_status(&idempotency_key)
+                .await
+            {
+                Ok(Some(_)) => self.uses_streams = true,
+                Ok(None) => {}
+                Err(error) => return self.invocation_failure_recovery(&error),
+            }
+        }
         let admission =
             monthly_resource_admission(&self.parent.resource_entry, self.parent.agent_mode());
         if admission != MonthlyResourceAdmission::Admit {
@@ -274,7 +290,23 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let result = match result {
             Ok(None) => return CommandOutcome::Continue,
             Ok(Some(result)) => Ok(result),
-            Err(error) => Err(error),
+            Err(InvocationFailure::RejectedBeforeGuest(error))
+                if self.parent.agent_mode() == AgentMode::Durable
+                    && self.store.data().check_interrupt().is_none()
+                    && self
+                        .store
+                        .data()
+                        .durable_ctx()
+                        .selected_tool_owner_failure()
+                        .is_none() =>
+            {
+                return self
+                    .reject_pre_guest_invocation(&display_name, &invocation_idempotency_key, error)
+                    .await;
+            }
+            Err(
+                InvocationFailure::Execution(error) | InvocationFailure::RejectedBeforeGuest(error),
+            ) => Err(error),
         };
 
         match (recorder.outcome, result) {
@@ -466,7 +498,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         idempotency_key: InvocationId,
         invocation: HydratedInvocation,
         recorder: &mut dyn ReturnRecorder<Ctx>,
-    ) -> Result<Option<InvokeResult>, WorkerExecutorError> {
+    ) -> Result<Option<InvokeResult>, InvocationFailure> {
         let (lowered, local_span_ids, inherited_span_ids) = async {
             self.store
                 .data_mut()
@@ -496,44 +528,92 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await;
             }
 
-            let invocation_for_lowering = if self.uses_streams {
-                self.parent
-                    .rehydrate_durable_streaming_invocation(invocation.invocation.clone())
-                    .await?
-            } else {
-                invocation.invocation.clone()
-            };
+            let execution_input = self
+                .parent
+                .rehydrate_durable_streaming_input(&invocation.invocation)
+                .await?;
             let lowered = lower_invocation(
-                invocation_for_lowering,
+                invocation.invocation.clone(),
                 &self.store.data().component_metadata().metadata,
                 &self.parent.owner_context,
-            )?;
+                execution_input,
+            );
 
             Ok::<_, WorkerExecutorError>((lowered, local_span_ids, inherited_span_ids))
         }
         .instrument(span!(Level::INFO, "prepare_invocation_context"))
-        .await?;
+        .await
+        .map_err(InvocationFailure::Execution)?;
 
-        let result = invoke_live_observed_and_traced(
-            lowered,
-            self.store,
-            self.instance,
-            invocation,
-            self.uses_streams.then_some(&idempotency_key),
-            Some(recorder),
-        )
-        .await;
+        let result = match lowered {
+            Ok(lowered) => invoke_live_observed_and_traced(
+                lowered,
+                self.store,
+                self.instance,
+                invocation,
+                self.uses_streams.then_some(&idempotency_key),
+                Some(recorder),
+            )
+            .await
+            .map_err(InvocationFailure::Execution),
+            Err(error @ WorkerExecutorError::InvalidRequest { .. }) => {
+                Err(InvocationFailure::RejectedBeforeGuest(error))
+            }
+            Err(error) => Err(InvocationFailure::Execution(error)),
+        };
 
         // Invocation-owned spans are closed by AgentInvocationFinished in the
         // oplog processor; removing their resident context records no transition.
         for span_id in local_span_ids {
-            self.store.data_mut().remove_span(&span_id)?;
+            self.store
+                .data_mut()
+                .remove_span(&span_id)
+                .map_err(InvocationFailure::Execution)?;
         }
         for span_id in inherited_span_ids {
-            self.store.data_mut().remove_span(&span_id)?;
+            self.store
+                .data_mut()
+                .remove_span(&span_id)
+                .map_err(InvocationFailure::Execution)?;
         }
 
         result
+    }
+
+    async fn reject_pre_guest_invocation(
+        &mut self,
+        function: &str,
+        id: &InvocationId,
+        error: WorkerExecutorError,
+    ) -> CommandOutcome {
+        let details = error.to_string();
+        let trap = TrapType::from_worker_executor_error::<Ctx>(
+            error,
+            OplogIndex::INITIAL,
+            self.parent.agent_mode(),
+        );
+        match self
+            .store
+            .data_mut()
+            .on_invocation_failure(function, &trap)
+            .await
+        {
+            InvocationFailureDecision::Rejected => {
+                if self.uses_streams
+                    && let Err(error) = self
+                        .parent
+                        .fail_durable_streaming_session(id, details)
+                        .await
+                {
+                    return self.invocation_failure_recovery(&error);
+                }
+                CommandOutcome::Continue
+            }
+            InvocationFailureDecision::Infrastructure(error) => {
+                self.invocation_failure_recovery(&error)
+            }
+            InvocationFailureDecision::Retry(decision) => CommandOutcome::BreakInnerLoop(decision),
+        }
     }
 
     /// The logic handling a successfully finished agent invocation
@@ -647,6 +727,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await
                 {
                     InvocationFailureDecision::Retry(decision) => decision,
+                    InvocationFailureDecision::Rejected => RetryDecision::None,
                     InvocationFailureDecision::Infrastructure(error) => {
                         return self.invocation_failure_recovery(&error);
                     }
@@ -861,19 +942,20 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             trap_type,
             Some(TrapType::Interrupt(InterruptKind::ShardLost))
         );
-        let decision = match trap_type {
+        let (decision, rejection_persisted) = match trap_type {
             Some(trap_type) => match self
                 .store
                 .data_mut()
                 .on_invocation_failure(full_function_name, &trap_type)
                 .await
             {
-                InvocationFailureDecision::Retry(decision) => decision,
+                InvocationFailureDecision::Retry(decision) => (decision, false),
+                InvocationFailureDecision::Rejected => (RetryDecision::None, true),
                 InvocationFailureDecision::Infrastructure(error) => {
                     return self.invocation_failure_recovery(&error);
                 }
             },
-            None => RetryDecision::None,
+            None => (RetryDecision::None, false),
         };
         // A lost shard writes nothing more: a terminal streaming-session failure would end an
         // invocation the shard's new owner resumes.
@@ -895,6 +977,15 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .durable_stream_producer
                 .changed()
                 .notify_waiters();
+        }
+
+        // Failure teardown closes this Store's stream runtime. Reconstruct only after the
+        // rejection committed, so remaining queued work runs without retrying the rejected key.
+        if rejection_persisted
+            && self.parent.agent_mode() == AgentMode::Durable
+            && !self.parent.retired_for_lost_shard()
+        {
+            return CommandOutcome::BreakInnerLoop(RetryDecision::Immediate);
         }
 
         failed_agent_invocation_outcome(self.parent.agent_mode(), decision, oplog_failure.as_ref())

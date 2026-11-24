@@ -74,11 +74,11 @@ impl Rpc for CreateThenHangRpc {
         target: &OwnedAgentId,
         key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
-        owner: &AgentId,
+        canceller: &golem_common::model::caller::Principal,
         auth: &AuthCtx,
     ) -> Result<bool, RpcError> {
         self.inner
-            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
             .await
     }
 
@@ -89,6 +89,7 @@ impl Rpc for CreateThenHangRpc {
         request_key: InvocationRequestKey,
         invocation: golem_common::model::AgentInvocation,
         scheduled_at: chrono::DateTime<chrono::Utc>,
+        self_agent_id: &AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, RpcError> {
         self.inner
@@ -98,6 +99,7 @@ impl Rpc for CreateThenHangRpc {
                 request_key,
                 invocation,
                 scheduled_at,
+                self_agent_id,
                 auth_ctx,
             )
             .await
@@ -107,6 +109,7 @@ impl Rpc for CreateThenHangRpc {
         &self,
         agent: ResolvedTarget,
         method: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         created_by: AccountId,
         caller: &AgentId,
         env: &[(String, String)],
@@ -121,6 +124,7 @@ impl Rpc for CreateThenHangRpc {
             .create_demand(
                 agent,
                 method,
+                invocation,
                 created_by,
                 caller,
                 env,
@@ -323,14 +327,20 @@ async fn guest_create_without_a_key_reaches_the_same_agent_after_a_crash_before_
         .collect::<Vec<_>>();
     assert_eq!(creates.len(), 1);
     assert_eq!(creates[0].kind, CreateRequestKind::Unkeyed);
+    // The create keeps the root caller of the invocation, here anonymous, as the original caller,
+    // and has the creating agent as the immediate caller.
     assert_eq!(
         creates[0].caller,
-        callers::agent_in(
-            caller.agent_id,
-            caller_key.agent_type.clone(),
-            executor.get_worker_metadata(&caller).await?.fingerprint,
-            caller.environment_id
-        )
+        Caller {
+            immediate: callers::agent_in(
+                caller.agent_id,
+                caller_key.agent_type.clone(),
+                executor.get_worker_metadata(&caller).await?.fingerprint,
+                caller.environment_id
+            )
+            .immediate,
+            ..callers::anonymous()
+        }
     );
 
     let fresh = executor

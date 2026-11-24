@@ -335,7 +335,10 @@ impl TestWorkerExecutor {
                 .validate_response(&response)
                 .map_err(anyhow::Error::msg)?;
             match response.response {
-                Some(invocation_response::Response::Accepted(_)) => {}
+                Some(
+                    invocation_response::Response::Accepted(_)
+                    | invocation_response::Response::Ready(_),
+                ) => {}
                 Some(invocation_response::Response::Rejected(rejected)) => {
                     // Kept alongside the message: a rejection is refused before acceptance, and
                     // the reason says as what.
@@ -441,6 +444,8 @@ impl TestWorkerExecutor {
                 component_id: Some(component.id.into()),
                 method_name: Some(method_name.to_string()),
                 input: Some(proto_method_parameters),
+                captured_method_input: None,
+                allow_streams: false,
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 schedule_at: None,
                 idempotency_key: idempotency_key.cloned().map(Into::into),
@@ -829,6 +834,7 @@ impl TestDsl for TestWorkerExecutor {
                 invocation_context: None,
                 idempotency_key: None,
                 freshness_disposition: 0,
+                invocation: None,
             })
             .await?;
 
@@ -872,6 +878,8 @@ impl TestDsl for TestWorkerExecutor {
             component_id: Some(component.id.into()),
             method_name: Some(method_name.to_string()),
             input: Some(proto_method_parameters),
+            captured_method_input: None,
+            allow_streams: false,
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
             schedule_at: None,
             idempotency_key: Some(idempotency_key.clone().into()),
@@ -1313,26 +1321,8 @@ impl TestDsl for TestWorkerExecutor {
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
     async fn delete_worker(&self, agent_id: &OwnedAgentId) -> anyhow::Result<()> {
         let fingerprint = self.get_worker_metadata(agent_id).await?.fingerprint;
-        let response = self
-            .client
-            .clone()
-            .delete_worker(DeleteWorkerRequest {
-                agent_id: Some(agent_id.agent_id.into()),
-                environment_id: Some(agent_id.environment_id.into()),
-                auth_ctx: Some(self.auth_ctx().into()),
-                caller: Some(Caller::anonymous().into()),
-                expected_fingerprint: Some(fingerprint.0.into()),
-            })
-            .await?
-            .into_inner();
-
-        match response.result {
-            Some(delete_worker_response::Result::Success(_)) => Ok(()),
-            Some(delete_worker_response::Result::Failure(error)) => {
-                Err(anyhow!("Failed to delete worker: {error:?}"))
-            }
-            _ => Err(anyhow!("Failed to delete worker: unknown error")),
-        }
+        self.delete_worker_with_fingerprint(agent_id, fingerprint)
+            .await
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
@@ -1592,6 +1582,35 @@ impl TestDsl for TestWorkerExecutor {
 }
 
 impl TestWorkerExecutor {
+    /// Deletes the recorded incarnation without looking up its metadata again. This also
+    /// permits joining or retrying deletion after its durable state has been removed.
+    pub async fn delete_worker_with_fingerprint(
+        &self,
+        agent_id: &OwnedAgentId,
+        fingerprint: golem_common::model::AgentFingerprint,
+    ) -> anyhow::Result<()> {
+        let response = self
+            .client
+            .clone()
+            .delete_worker(DeleteWorkerRequest {
+                agent_id: Some(agent_id.agent_id.into()),
+                environment_id: Some(agent_id.environment_id.into()),
+                auth_ctx: Some(self.auth_ctx().into()),
+                caller: Some(Caller::anonymous().into()),
+                expected_fingerprint: Some(fingerprint.0.into()),
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(delete_worker_response::Result::Success(_)) => Ok(()),
+            Some(delete_worker_response::Result::Failure(error)) => {
+                Err(anyhow!("Failed to delete worker: {error:?}"))
+            }
+            _ => Err(anyhow!("Failed to delete worker: unknown error")),
+        }
+    }
+
     /// The request that creates the keyed agent of `key`, which the component implements, in the
     /// test's default environment, and returns an existing one as it is. Tests that drive the
     /// creation RPCs directly change its fields.
@@ -1614,6 +1633,7 @@ impl TestWorkerExecutor {
             invocation_context: None,
             idempotency_key: None,
             freshness_disposition: 0,
+            invocation: None,
         })
     }
 
@@ -1652,6 +1672,7 @@ impl TestWorkerExecutor {
                 invocation_context: None,
                 idempotency_key: None,
                 freshness_disposition: 0,
+                invocation: None,
             })
             .await?
             .into_inner();

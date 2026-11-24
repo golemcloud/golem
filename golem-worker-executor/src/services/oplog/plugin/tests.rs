@@ -190,6 +190,7 @@ impl RecordingOplogProcessorPlugin {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogProcessorPlugin for RecordingOplogProcessorPlugin {
     async fn resolve_target(
         &self,
@@ -514,6 +515,7 @@ impl FakeComponentService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentService for FakeComponentService {
     async fn get(
         &self,
@@ -663,6 +665,7 @@ impl Debug for InMemoryOplog {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Oplog for InMemoryOplog {
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
         let gate = if matches!(entry, OplogEntry::OplogProcessorCheckpoint { .. }) {

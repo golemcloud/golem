@@ -45,7 +45,6 @@ mod test_ids {
 
 pub use middleware::McpSessionLayer;
 pub use replica::McpReplica;
-pub(crate) use replica::SSE_RETRY_MILLIS;
 
 use crate::config::{SessionStoreConfig, with_session_store_schema};
 use golem_common::SafeDisplay;

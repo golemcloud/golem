@@ -3684,7 +3684,16 @@ components:
         methodName:
           type: string
         functionInput:
-          $ref: '#/components/schemas/TypedSchemaValue'
+          description: |-
+            Component-independent original-method-input diagnostic envelope, not the executed
+            method's input schema. Captured JSON fields include rejected values; native
+            host capabilities are redacted before encoding.
+          allOf:
+          - $ref: '#/components/schemas/TypedSchemaValue'
+          - description: |-
+              Component-independent original-method-input diagnostic envelope, not the executed
+              method's input schema. Captured JSON fields include rejected values; native
+              host capabilities are redacted before encoding.
         traceId:
           type: string
         traceStates:
@@ -5566,7 +5575,9 @@ components:
             enum:
             - char
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
       - type: object
         required:
         - kind
@@ -9453,7 +9464,9 @@ components:
             enum:
             - delimited
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
       - type: object
         required:
         - kind
@@ -9464,7 +9477,9 @@ components:
             enum:
             - either
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
     ReplayDivergence:
       type: object
       title: ReplayDivergence
@@ -10614,7 +10629,9 @@ components:
             enum:
             - char
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
       - type: object
         required:
         - kind

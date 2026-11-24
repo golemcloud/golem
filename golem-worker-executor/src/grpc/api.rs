@@ -37,6 +37,7 @@ use super::{
 };
 
 #[tonic::async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutor for WorkerExecutorImpl<Ctx, Svcs>
 {

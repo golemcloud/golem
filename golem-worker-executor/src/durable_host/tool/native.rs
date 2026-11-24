@@ -675,7 +675,7 @@ impl NativeToolTask {
                 has_stderr,
                 EntityCallMode::Synchronous,
                 Some(activation),
-                Some(caller),
+                caller,
                 ToolAttachmentCounterparty::SessionJournal,
             )
             .await

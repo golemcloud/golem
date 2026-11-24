@@ -450,6 +450,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
         };
         let stderr_rep = stderr.as_ref().map(Resource::rep);
         let admission_activity = tool_admission_activity(accessor);
+        // The next layer gets the middleware's own caller: no middleware changes the roles.
+        let caller = accessor.with(|mut access| access.get().invocation_caller());
         let dispatch = dispatch_tool_attempt(
             accessor,
             attempt,
@@ -459,7 +461,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
             stderr_requested,
             EntityCallMode::Asynchronous,
             None,
-            None,
+            caller,
             ToolAttachmentCounterparty::Guest,
         )
         .await;

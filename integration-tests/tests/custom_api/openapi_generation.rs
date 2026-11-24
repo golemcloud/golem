@@ -232,6 +232,7 @@ async fn openapi_provider_context_cache_and_failure_corpus(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     use crate::custom_api::http_test_context::make_test_context_with_files;
+    use golem_client::api::RegistryServiceClient;
     use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
     use golem_test_framework::dsl::{TestDsl, TestDslExtended};
     use golem_test_framework::model::IFSEntry;
@@ -333,12 +334,22 @@ async fn openapi_provider_context_cache_and_failure_corpus(
         json["x-provider-revision"],
         fixed["expect"]["component_revision"]
     );
-    assert!(
-        json["x-provider-agent"]
-            .as_str()
-            .unwrap()
-            .starts_with("StaticHttpRouter()[")
-    );
+    let provider_agent_id =
+        golem_common::model::AgentId(json["x-provider-agent"].as_str().unwrap().parse()?);
+    let registry = context.user.registry_service_client().await;
+    let deployment = registry
+        .get_environment(&context.env_id.0)
+        .await?
+        .current_deployment
+        .expect("the provider's environment is deployed");
+    let provider_type = registry
+        .get_deployment_agent_type(
+            &context.env_id.0,
+            deployment.deployment_revision.into(),
+            "StaticHttpRouter",
+        )
+        .await?;
+    assert_eq!(provider_agent_id.type_tag(), provider_type.type_id.get());
     assert_eq!(
         json["paths"]["/raw/echo/"]["post"]["operationId"],
         "rawEcho"

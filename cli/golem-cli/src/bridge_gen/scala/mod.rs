@@ -1955,7 +1955,7 @@ impl ScalaBridgeGenerator {
         ));
         writer.indent();
         writer.line(format!(
-            "bindRemote({RESOLVED_AGENT}(configuration, agentTypeName, if (keyed) _root_.scala.Some(parameters) else _root_.scala.None, _root_.scala.Some(__response)))"
+            "bindRemote({RESOLVED_AGENT}(configuration, agentTypeName, _root_.scala.None, _root_.scala.Some(__response)))"
         ));
         writer.dedent();
         writer.line("}");

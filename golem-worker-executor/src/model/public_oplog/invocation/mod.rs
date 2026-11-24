@@ -135,30 +135,7 @@ pub(super) async fn agent_invocation_to_public(
             invocation_context,
             ..
         } => {
-            let metadata = components
-                .get_metadata(owner_component_id, Some(component_revision))
-                .await
-                .map_err(|err| err.to_string())?;
-
-            let agent_type = agent_type_name
-                .and_then(|name| metadata.metadata.find_agent_type_by_name_ref(name));
-
-            let method = agent_type.and_then(|at| {
-                at.methods
-                    .iter()
-                    .find(|m| m.name == method_name)
-                    .map(|m| (at, m))
-            });
-
-            let function_input = match method {
-                Some((agent_type, method)) => input_value_to_typed_schema_value(
-                    &agent_type.schema,
-                    &method.input_schema,
-                    input,
-                )
-                .unwrap_or_else(|_| empty_typed_schema_value()),
-                None => empty_typed_schema_value(),
-            };
+            let function_input = input.to_public_value()?;
 
             let span_data = invocation_context.to_oplog_data();
 

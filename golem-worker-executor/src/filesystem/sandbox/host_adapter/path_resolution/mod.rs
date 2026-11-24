@@ -15,53 +15,16 @@
 use super::super::name_comparison::{
     NativeNameComparisonMode, NativeNameCoordinationKey, SandboxNameComparisonKey,
 };
-use super::super::object_identity::{
-    NativeFileIdentity, SandboxDirectoryId, directory_identity, native_file_identity,
-};
+use super::super::object_identity::{SandboxDirectoryId, directory_identity, native_file_identity};
 use super::super::open_handles::{NativeDirectoryHandle, SandboxDirectory, SandboxFilePermissions};
 use super::super::sandbox_paths::{
     ResolvedPathEntry, SandboxPath, SandboxResolvedPathTarget, split_path_target,
 };
-use super::{NativeNameModeProbe, NativeNameModeSource, is_read_only_file};
+use super::is_read_only_file;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-#[cfg(target_os = "linux")]
-pub(in crate::filesystem::sandbox) const XFS_NAME_MODE_SHORTCUT_DEFAULT_ENABLED: bool = true;
-
-#[cfg(windows)]
-pub(in crate::filesystem::sandbox) fn windows_directory_is_case_sensitive(
-    directory: &cap_std::fs::Dir,
-) -> std::io::Result<bool> {
-    use std::mem::{MaybeUninit, size_of};
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Foundation::{ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED};
-    use windows_sys::Win32::Storage::FileSystem::{
-        FILE_CASE_SENSITIVE_INFO, FileCaseSensitiveInfo, GetFileInformationByHandleEx,
-    };
-
-    let mut information = MaybeUninit::<FILE_CASE_SENSITIVE_INFO>::zeroed();
-    let succeeded = unsafe {
-        GetFileInformationByHandleEx(
-            directory.as_raw_handle() as _,
-            FileCaseSensitiveInfo,
-            information.as_mut_ptr().cast(),
-            size_of::<FILE_CASE_SENSITIVE_INFO>() as u32,
-        )
-    };
-    if succeeded == 0 {
-        let error = std::io::Error::last_os_error();
-        if matches!(
-            error.raw_os_error(),
-            Some(code) if code == ERROR_INVALID_PARAMETER as i32 || code == ERROR_NOT_SUPPORTED as i32
-        ) {
-            return Ok(false);
-        }
-        return Err(error);
-    }
-    const FILE_CS_FLAG_CASE_SENSITIVE_DIR: u32 = 1;
-    Ok(unsafe { information.assume_init() }.Flags & FILE_CS_FLAG_CASE_SENSITIVE_DIR != 0)
-}
+pub(in crate::filesystem::sandbox) use platform::*;
 
 pub(in crate::filesystem::sandbox) fn resolve_host_path_target(
     base: Arc<cap_std::fs::Dir>,
@@ -119,14 +82,45 @@ pub(in crate::filesystem::sandbox) fn resolve_host_path_target(
     })
 }
 
-pub(in crate::filesystem::sandbox) fn native_name_comparison_mode(
-    directory: &cap_std::fs::Dir,
-    parent: &SandboxDirectoryId,
-    source: NativeNameModeSource,
-    probe: &NativeNameModeProbe,
-) -> std::io::Result<NativeNameComparisonMode> {
-    #[cfg(target_os = "linux")]
-    {
+#[cfg(target_os = "linux")]
+mod platform {
+    use super::*;
+    use crate::filesystem::sandbox::object_identity::NativeFileIdentity;
+    use crate::filesystem::volume::platform::ValidatedXfsNameMode;
+
+    #[derive(Clone, Copy)]
+    pub(in crate::filesystem::sandbox) enum NativeNameModeSource {
+        NativeDetection,
+        ValidatedXfs(ValidatedXfsNameMode),
+    }
+
+    #[derive(Clone, Default)]
+    pub(in crate::filesystem::sandbox) struct NativeNameModeProbe {
+        #[cfg(test)]
+        pub(in crate::filesystem::sandbox) count: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl NativeNameModeProbe {
+        fn record(&self) {
+            #[cfg(test)]
+            self.count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        #[cfg(test)]
+        pub(in crate::filesystem::sandbox::host_adapter) fn count(&self) -> usize {
+            self.count.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    pub(in crate::filesystem::sandbox) const XFS_NAME_MODE_SHORTCUT_DEFAULT_ENABLED: bool = true;
+
+    pub(in crate::filesystem::sandbox) fn native_name_comparison_mode(
+        directory: &cap_std::fs::Dir,
+        parent: &SandboxDirectoryId,
+        source: NativeNameModeSource,
+        probe: &NativeNameModeProbe,
+    ) -> std::io::Result<NativeNameComparisonMode> {
         Ok(linux_name_comparison_mode(
             source,
             parent,
@@ -139,60 +133,121 @@ pub(in crate::filesystem::sandbox) fn native_name_comparison_mode(
             },
         ))
     }
-    #[cfg(windows)]
-    {
-        let _ = (parent, source, probe);
-        return Ok(if windows_directory_is_case_sensitive(directory)? {
-            NativeNameComparisonMode::Exact
-        } else {
-            NativeNameComparisonMode::WindowsInsensitive
-        });
-    }
-    #[cfg(not(any(target_os = "linux", windows)))]
-    {
-        // Case sensitivity does not prove byte-exact lookup. APFS also aliases Unicode spellings.
-        let _ = (directory, parent, source, probe);
-        Ok(NativeNameComparisonMode::Conservative)
-    }
-}
 
-#[cfg(target_os = "linux")]
-pub(in crate::filesystem::sandbox) fn xfs_name_mode_shortcut_enabled() -> bool {
-    let enabled = XFS_NAME_MODE_SHORTCUT_DEFAULT_ENABLED;
+    pub(in crate::filesystem::sandbox) fn xfs_name_mode_shortcut_enabled() -> bool {
+        let enabled = XFS_NAME_MODE_SHORTCUT_DEFAULT_ENABLED;
+        #[cfg(test)]
+        let enabled = enabled && !xfs_name_mode_shortcut_disabled_for_test();
+        enabled
+    }
+
     #[cfg(test)]
-    let enabled = enabled && !xfs_name_mode_shortcut_disabled_for_test();
-    enabled
-}
-
-#[cfg(all(test, target_os = "linux"))]
-pub(in crate::filesystem::sandbox) fn xfs_name_mode_shortcut_disabled_for_test() -> bool {
-    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *DISABLED.get_or_init(|| {
-        std::env::var("GOLEM_FILESYSTEM_DISABLE_XFS_NAME_MODE_SHORTCUT").as_deref() == Ok("1")
-    })
-}
-
-#[cfg(target_os = "linux")]
-pub(in crate::filesystem::sandbox) fn linux_name_comparison_mode(
-    source: NativeNameModeSource,
-    parent: &SandboxDirectoryId,
-    shortcut_enabled: bool,
-    detect_flags: impl FnOnce() -> Option<u32>,
-) -> NativeNameComparisonMode {
-    const FS_CASEFOLD_FL: u32 = 0x4000_0000;
-    let parent_device = match &parent.0 {
-        NativeFileIdentity::Unix { device, .. } => *device,
-        #[allow(unreachable_patterns)]
-        _ => return NativeNameComparisonMode::Conservative,
-    };
-    if shortcut_enabled
-        && matches!(source, NativeNameModeSource::ValidatedXfs(proof) if proof.matches_device(parent_device))
-    {
-        return NativeNameComparisonMode::Exact;
+    pub(in crate::filesystem::sandbox) fn xfs_name_mode_shortcut_disabled_for_test() -> bool {
+        static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *DISABLED.get_or_init(|| {
+            std::env::var("GOLEM_FILESYSTEM_DISABLE_XFS_NAME_MODE_SHORTCUT").as_deref() == Ok("1")
+        })
     }
-    match detect_flags() {
-        Some(flags) if flags & FS_CASEFOLD_FL == 0 => NativeNameComparisonMode::Exact,
-        Some(_) | None => NativeNameComparisonMode::Conservative,
+
+    pub(in crate::filesystem::sandbox) fn linux_name_comparison_mode(
+        source: NativeNameModeSource,
+        parent: &SandboxDirectoryId,
+        shortcut_enabled: bool,
+        detect_flags: impl FnOnce() -> Option<u32>,
+    ) -> NativeNameComparisonMode {
+        const FS_CASEFOLD_FL: u32 = 0x4000_0000;
+        let parent_device = match &parent.0 {
+            NativeFileIdentity::Unix { device, .. } => *device,
+            #[allow(unreachable_patterns)]
+            _ => return NativeNameComparisonMode::Conservative,
+        };
+        if shortcut_enabled
+            && matches!(source, NativeNameModeSource::ValidatedXfs(proof) if proof.matches_device(parent_device))
+        {
+            return NativeNameComparisonMode::Exact;
+        }
+        match detect_flags() {
+            Some(flags) if flags & FS_CASEFOLD_FL == 0 => NativeNameComparisonMode::Exact,
+            Some(_) | None => NativeNameComparisonMode::Conservative,
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+mod platform {
+    #[derive(Clone, Copy)]
+    pub(in crate::filesystem::sandbox) enum NativeNameModeSource {
+        NativeDetection,
+    }
+
+    #[derive(Clone, Default)]
+    pub(in crate::filesystem::sandbox) struct NativeNameModeProbe {}
+
+    pub(in crate::filesystem::sandbox) use native::*;
+
+    #[cfg(not(windows))]
+    mod native {
+        use super::super::*;
+
+        pub(in crate::filesystem::sandbox) fn native_name_comparison_mode(
+            _directory: &cap_std::fs::Dir,
+            _parent: &SandboxDirectoryId,
+            _source: NativeNameModeSource,
+            _probe: &NativeNameModeProbe,
+        ) -> std::io::Result<NativeNameComparisonMode> {
+            // Case sensitivity does not prove byte-exact lookup. APFS also aliases Unicode spellings.
+            Ok(NativeNameComparisonMode::Conservative)
+        }
+    }
+
+    #[cfg(windows)]
+    mod native {
+        use super::super::*;
+        use std::mem::{MaybeUninit, size_of};
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::{ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_CASE_SENSITIVE_INFO, FileCaseSensitiveInfo, GetFileInformationByHandleEx,
+        };
+
+        pub(in crate::filesystem::sandbox) fn native_name_comparison_mode(
+            directory: &cap_std::fs::Dir,
+            _parent: &SandboxDirectoryId,
+            _source: NativeNameModeSource,
+            _probe: &NativeNameModeProbe,
+        ) -> std::io::Result<NativeNameComparisonMode> {
+            Ok(if windows_directory_is_case_sensitive(directory)? {
+                NativeNameComparisonMode::Exact
+            } else {
+                NativeNameComparisonMode::WindowsInsensitive
+            })
+        }
+
+        pub(in crate::filesystem::sandbox) fn windows_directory_is_case_sensitive(
+            directory: &cap_std::fs::Dir,
+        ) -> std::io::Result<bool> {
+            let mut information = MaybeUninit::<FILE_CASE_SENSITIVE_INFO>::zeroed();
+            let succeeded = unsafe {
+                GetFileInformationByHandleEx(
+                    directory.as_raw_handle() as _,
+                    FileCaseSensitiveInfo,
+                    information.as_mut_ptr().cast(),
+                    size_of::<FILE_CASE_SENSITIVE_INFO>() as u32,
+                )
+            };
+            if succeeded == 0 {
+                let error = std::io::Error::last_os_error();
+                if matches!(
+                    error.raw_os_error(),
+                    Some(code) if code == ERROR_INVALID_PARAMETER as i32 || code == ERROR_NOT_SUPPORTED as i32
+                ) {
+                    return Ok(false);
+                }
+                return Err(error);
+            }
+            const FILE_CS_FLAG_CASE_SENSITIVE_DIR: u32 = 1;
+            Ok(unsafe { information.assume_init() }.Flags & FILE_CS_FLAG_CASE_SENSITIVE_DIR != 0)
+        }
     }
 }
 

@@ -2564,13 +2564,17 @@
     },
     "ReportAgentRef": {
       "type": "object",
-      "description": "A reference to an agent: one token over the agent ID text.",
+      "description": "A reference to an agent, in clear: the agent ID, and the agent type name only on the own reference of the exported agent.",
       "required": [
-        "token"
+        "agentId"
       ],
       "properties": {
-        "token": {
-          "$ref": "#/definitions/ReportToken"
+        "agentId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "agentType": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -2832,14 +2836,18 @@
           "type": "object",
           "required": [
             "kind",
-            "token"
+            "agentId"
           ],
           "properties": {
             "kind": {
               "const": "agent"
             },
-            "token": {
-              "$ref": "#/definitions/ReportToken"
+            "agentId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "agentType": {
+              "type": "string"
             }
           },
           "additionalProperties": false
@@ -4690,14 +4698,26 @@
     },
     "package.digest": {
       "type": "object",
-      "description": "The SHA-256 digest of a Golem package's OCI manifest.",
+      "description": "The SHA-256 digest of a Golem package's OCI manifest and the publisher exports omitted from the package.",
       "x-golem-output-mode": "single",
       "x-golem-command": "package pack",
       "x-golem-commands": ["package pack", "publish"],
-      "required": ["$type", "digest"],
+      "required": ["$type", "digest", "omittedExports"],
       "properties": {
         "$type": { "const": "package.digest" },
-        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "omittedExports": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["kind", "name"],
+            "properties": {
+              "kind": { "enum": ["http-api", "mcp"] },
+              "name": { "type": "string", "description": "The resolved domain of the omitted export." }
+            },
+            "additionalProperties": false
+          }
+        }
       },
       "additionalProperties": false
     },
@@ -8419,12 +8439,13 @@
     },
     "HttpMountDetails": {
       "type": "object",
-      "required": ["pathPrefix", "authDetails", "phantomAgent", "phantomIdBinding", "corsOptions", "webhookSuffix", "staticBindings", "filesystemBindings", "fileResponseHeaders", "openapiProviderMethod"],
+      "required": ["pathPrefix", "authDetails", "phantomAgent", "agentIdBinding", "createRoute", "corsOptions", "webhookSuffix", "staticBindings", "filesystemBindings", "fileResponseHeaders", "openapiProviderMethod"],
       "properties": {
         "pathPrefix": { "type": "array", "items": { "$ref": "#/definitions/AgentPathSegment" } },
         "authDetails": { "oneOf": [{ "$ref": "#/definitions/AgentHttpAuthDetails" }, { "type": "null" }] },
         "phantomAgent": { "type": "boolean" },
-        "phantomIdBinding": { "oneOf": [{ "$ref": "#/definitions/PhantomIdBinding" }, { "type": "null" }] },
+        "agentIdBinding": { "oneOf": [{ "$ref": "#/definitions/AgentIdBinding" }, { "type": "null" }] },
+        "createRoute": { "type": ["array", "null"], "items": { "$ref": "#/definitions/AgentPathSegment" } },
         "corsOptions": { "$ref": "#/definitions/CorsOptions" },
         "webhookSuffix": { "type": "array", "items": { "$ref": "#/definitions/AgentPathSegment" } },
         "staticBindings": { "type": "array", "items": { "$ref": "#/definitions/FileMapping" } },
@@ -8434,13 +8455,12 @@
       },
       "additionalProperties": false
     },
-    "PhantomIdBinding": {
+    "AgentIdBinding": {
       "type": "object",
-      "required": ["type", "name", "optional"],
+      "required": ["type", "name"],
       "properties": {
         "type": { "type": "string", "enum": ["Path", "Query"] },
-        "name": { "type": "string" },
-        "optional": { "type": "boolean" }
+        "name": { "type": "string" }
       },
       "additionalProperties": false
     },

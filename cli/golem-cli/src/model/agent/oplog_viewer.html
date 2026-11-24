@@ -332,8 +332,8 @@ let EXPORT = false;
 const REPORT_KINDS = new Set(['record', 'tuple', 'case', 'list', 'map', 'bytes', 'scalar', 'quantity', 'str', 'agent', 'redacted', 'typeDescription', 'text', 'number', 'timestamp', 'flag']);
 const isReportNode = v => EXPORT && !!v && typeof v === 'object' && !Array.isArray(v) && typeof v.kind === 'string' && REPORT_KINDS.has(v.kind);
 const isMetaLeaf = v => isReportNode(v) && (v.kind === 'text' || v.kind === 'number' || v.kind === 'timestamp' || v.kind === 'flag');
-// The same text as `ReportAgentRef::pseudonym()`: `agent:`, the first 12 hex chars of the token, `…`.
-function pseudonymOf(ref) { const t = (ref && ref.token) || ''; return 'agent:' + t.slice(t.lastIndexOf(':') + 1).slice(0, 12) + '…'; }
+// The same text as `ReportAgentRef::label()`: `Type[<uuid>]`, or the bare UUID without an agent type.
+function agentLabel(ref) { const id = (ref && ref.agentId) || ''; return ref && ref.agentType ? ref.agentType + '[' + id + ']' : id; }
 function tokText(t, full) { if (!t) return ''; if (full) return t; const i = t.lastIndexOf(':'); return t.slice(0, i + 1) + t.slice(i + 1, i + 9) + '…'; }
 function typeDescText(d, depth) {
   if (!d) return '';
@@ -364,7 +364,7 @@ function reportNodeText(node, budget, full) {
       case 'scalar': return n.value !== undefined ? String(n.value) : tokText(n.token, full);
       case 'quantity': return n.mantissa != null ? `quantity ${n.mantissa} scale ${n.scale != null ? n.scale : '?'}` + (n.unit ? ' ' + n.unit : n.unitToken ? ' ' + tokText(n.unitToken, full) : '') : tokText(n.token, full);
       case 'str': return n.value != null ? JSON.stringify(n.value) : tokText(n.token, full);
-      case 'agent': return full ? n.token + ' ' + pseudonymOf(n) : pseudonymOf(n);
+      case 'agent': return agentLabel(n);
       case 'redacted': return '‹redacted ' + n.reason + '›';
       case 'typeDescription': return 'type ' + typeDescText(n.description);
       case 'text': case 'timestamp': return String(n.value);
@@ -484,7 +484,7 @@ function renderReportNode(key, n, open) {
     case 'scalar': return leaf(ty(n.scalarKind), ' ', n.value !== undefined ? h('span', { class: n.scalarKind === 'bool' ? 'b' : 'n' }, String(n.value)) : tok(n.token));
     case 'quantity': return leaf(ty('quantity'), ' ', n.mantissa != null ? h('span', { class: 'n' }, `${n.mantissa} scale ${n.scale != null ? n.scale : '?'}`) : tok(n.token), n.unit ? ' ' + n.unit : null, n.unitToken ? [' ', tok(n.unitToken)] : null);
     case 'str': return leaf(ty('str'), ' ', n.value != null ? h('span', { class: 's' }, JSON.stringify(n.value)) : tok(n.token));
-    case 'agent': return leaf(ty('agent'), ' ', h('span', { class: 'cap', title: n.token }, pseudonymOf(n)));
+    case 'agent': return leaf(ty('agent'), ' ', h('span', { class: 'cap' }, agentLabel(n)));
     case 'redacted': return leaf(h('span', { class: 'secret' }, 'redacted · ' + n.reason));
     case 'typeDescription': return leaf(ty('type'), ' ', h('span', null, typeDescText(n.description)));
     case 'text': case 'timestamp': return leaf(h('span', { class: 's' }, String(n.value)));
@@ -1190,8 +1190,8 @@ function normalize(doc, opts) {
   entries.sort((a, b) => a.index - b.index);
   return entries;
 }
-// Export pages take their identity only from the header: the root reference, never an agent ID.
-function exportMeta(header) { return { agentId: pseudonymOf(header && header.root), generatedAt: header && header.generatedAt, cliVersion: header && header.cliVersion }; }
+// Export pages take their identity only from the header root reference.
+function exportMeta(header) { return { agentId: agentLabel(header && header.root), generatedAt: header && header.generatedAt, cliVersion: header && header.cliVersion }; }
 const pageEntries = page => EXPORT ? normalize({ entries: exportEntries(page.entries) }, { exportMode: true }) : normalize(page);
 function mergeCoverage(a, b) {
   if (!a) return b || null; if (!b) return a;

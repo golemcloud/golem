@@ -298,14 +298,14 @@ func Resolve(name string, recordType RecordType) witTypes.Result[[]DnsRecord, Dn
 		result0 := make([]DnsRecord, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))
 		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))); index++ {
 			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))), index*(11*4))
-			result := wasm_lift_1_t1298(unsafe.Add(unsafe.Pointer(base), 0))
+			result := wasm_lift_1_t1299(unsafe.Add(unsafe.Pointer(base), 0))
 
 			result0 = append(result0, result)
 		}
 
 		result2 = witTypes.Ok[[]DnsRecord, DnsError](result0)
 	case 1:
-		result1 := wasm_lift_1_t1299(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result1 := wasm_lift_1_t1300(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result2 = witTypes.Err[[]DnsRecord, DnsError](result1)
 	default:
@@ -317,14 +317,14 @@ func Resolve(name string, recordType RecordType) witTypes.Result[[]DnsRecord, Dn
 }
 
 //go:noinline
-func wasm_lift_1_t1298(src unsafe.Pointer) DnsRecord {
-	result := wasm_lift_1_t1297(unsafe.Add(unsafe.Pointer(src), 4))
+func wasm_lift_1_t1299(src unsafe.Pointer) DnsRecord {
+	result := wasm_lift_1_t1298(unsafe.Add(unsafe.Pointer(src), 4))
 
 	return DnsRecord{Ttl: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 0))), Data: result}
 }
 
 //go:noinline
-func wasm_lift_1_t1299(src unsafe.Pointer) DnsError {
+func wasm_lift_1_t1300(src unsafe.Pointer) DnsError {
 	var variant DnsError
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -359,7 +359,7 @@ func wasm_lift_1_t1299(src unsafe.Pointer) DnsError {
 }
 
 //go:noinline
-func wasm_lift_1_t1297(src unsafe.Pointer) RecordData {
+func wasm_lift_1_t1298(src unsafe.Pointer) RecordData {
 	var variant RecordData
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -376,7 +376,7 @@ func wasm_lift_1_t1297(src unsafe.Pointer) RecordData {
 		variant = MakeRecordDataCname(value0)
 
 	case 3:
-		result := wasm_lift_1_t1290(unsafe.Add(unsafe.Pointer(src), 4))
+		result := wasm_lift_1_t1291(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = MakeRecordDataMx(result)
 
@@ -391,7 +391,7 @@ func wasm_lift_1_t1297(src unsafe.Pointer) RecordData {
 		variant = MakeRecordDataPtr(value2)
 
 	case 6:
-		result3 := wasm_lift_1_t1291(unsafe.Add(unsafe.Pointer(src), 4))
+		result3 := wasm_lift_1_t1292(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = MakeRecordDataSrv(result3)
 
@@ -407,17 +407,17 @@ func wasm_lift_1_t1297(src unsafe.Pointer) RecordData {
 		variant = MakeRecordDataTxt(result5)
 
 	case 8:
-		result6 := wasm_lift_1_t1293(unsafe.Add(unsafe.Pointer(src), 4))
+		result6 := wasm_lift_1_t1294(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = MakeRecordDataCaa(result6)
 
 	case 9:
-		result7 := wasm_lift_1_t1294(unsafe.Add(unsafe.Pointer(src), 4))
+		result7 := wasm_lift_1_t1295(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = MakeRecordDataSoa(result7)
 
 	case 10:
-		result8 := wasm_lift_1_t1295(unsafe.Add(unsafe.Pointer(src), 4))
+		result8 := wasm_lift_1_t1296(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = MakeRecordDataNaptr(result8)
 
@@ -429,21 +429,21 @@ func wasm_lift_1_t1297(src unsafe.Pointer) RecordData {
 }
 
 //go:noinline
-func wasm_lift_1_t1290(src unsafe.Pointer) MxRecord {
+func wasm_lift_1_t1291(src unsafe.Pointer) MxRecord {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
 
 	return MxRecord{Preference: uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), Exchange: value0}
 }
 
 //go:noinline
-func wasm_lift_1_t1291(src unsafe.Pointer) SrvRecord {
+func wasm_lift_1_t1292(src unsafe.Pointer) SrvRecord {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
 
 	return SrvRecord{Priority: uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), Weight: uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 2)))), Port: uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))), Target: value0}
 }
 
 //go:noinline
-func wasm_lift_1_t1293(src unsafe.Pointer) CaaRecord {
+func wasm_lift_1_t1294(src unsafe.Pointer) CaaRecord {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
 	value1 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4))))
 
@@ -451,7 +451,7 @@ func wasm_lift_1_t1293(src unsafe.Pointer) CaaRecord {
 }
 
 //go:noinline
-func wasm_lift_1_t1294(src unsafe.Pointer) SoaRecord {
+func wasm_lift_1_t1295(src unsafe.Pointer) SoaRecord {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
 
@@ -459,7 +459,7 @@ func wasm_lift_1_t1294(src unsafe.Pointer) SoaRecord {
 }
 
 //go:noinline
-func wasm_lift_1_t1295(src unsafe.Pointer) NaptrRecord {
+func wasm_lift_1_t1296(src unsafe.Pointer) NaptrRecord {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
 	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4))))
 	value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (5 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (6 * 4))))

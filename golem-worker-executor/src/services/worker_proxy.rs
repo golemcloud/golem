@@ -45,7 +45,7 @@ use golem_common::model::agent::{
     AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget, ScheduleId,
 };
 use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition};
-use golem_common::model::caller::Caller;
+use golem_common::model::caller::{Caller, Principal};
 use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
@@ -133,6 +133,7 @@ pub trait WorkerProxy: Send + Sync {
         &self,
         target: &ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -270,12 +271,14 @@ pub trait WorkerProxy: Send + Sync {
         auth_ctx: &AuthCtx,
     ) -> Result<bool, WorkerProxyError>;
 
+    /// Cancels a scheduled call. `canceller` is the agent or tool that cancels; the target
+    /// cancels only when it is the immediate caller recorded for the call.
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
         key: InvocationId,
         receipt: ScheduleId,
-        owner: &AgentId,
+        canceller: &Principal,
         auth: &AuthCtx,
     ) -> Result<bool, WorkerProxyError>;
 
@@ -416,11 +419,13 @@ impl RemoteWorkerProxy {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl WorkerProxy for RemoteWorkerProxy {
     async fn prepare(
         &self,
         target: &ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -458,6 +463,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     }),
                     caller: Some(caller.clone().into()),
                     method_name: Some(method_name.to_string()),
+                    invocation: invocation.clone(),
                     idempotency_key: idempotency_key.clone().map(Into::into),
                     freshness_disposition: match freshness_disposition {
                         InvocationFreshnessDisposition::KnownFresh => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh as i32,
@@ -518,6 +524,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     }),
                     caller: Some(caller.clone().into()),
                     method_name: None,
+                    invocation: None,
                     idempotency_key: idempotency_key.clone().map(Into::into),
                     freshness_disposition: 0,
                 }))
@@ -1099,7 +1106,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         target: &OwnedAgentId,
         key: InvocationId,
         receipt: ScheduleId,
-        owner: &AgentId,
+        canceller: &Principal,
         auth: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         let response = self
@@ -1111,9 +1118,9 @@ impl WorkerProxy for RemoteWorkerProxy {
                     auth_ctx: Some(auth.clone().into()),
                     scheduled: Some(
                         golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation {
-                            owner_agent_id: Some((*owner).into()),
                             schedule_id: Some(receipt.id.into()),
                             target_environment_id: Some(target.environment_id.into()),
+                            canceller: Some(canceller.clone().into()),
                         },
                     ),
                     environment_id: Some(target.environment_id.into()),
@@ -1428,6 +1435,7 @@ mod tests {
     }
 
     #[tonic::async_trait]
+    #[golem_async_trait::region_simple]
     impl WorkerService for FlakyWorkerService {
         type InvokeAgentSessionStream =
             Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send + 'static>>;
@@ -1839,6 +1847,7 @@ mod tests {
                 .prepare(
                     &target,
                     "transform",
+                    None,
                     &caller,
                     HashMap::new(),
                     InvocationContextStack::fresh(),

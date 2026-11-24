@@ -111,6 +111,7 @@ impl Debug for MultiSqliteKeyValueStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl KeyValueStorage for MultiSqliteKeyValueStorage {
     async fn set(
         &self,

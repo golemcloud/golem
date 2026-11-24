@@ -176,7 +176,7 @@ impl<'r, 'a> Walker<'r, 'a> {
         if has_id(&ids.agent_id)
             && let Ok(agent_id) = AgentId::from_value(value)
         {
-            return ReportNode::Agent(agent_reference(self.ctx, &agent_id));
+            return self.agent_node(&agent_id);
         }
         if has_id(&ids.schema_value) {
             return match SchemaValue::from_value(value) {
@@ -750,6 +750,19 @@ impl<'r, 'a> Walker<'r, 'a> {
             | SchemaValue::Option { .. }
             | SchemaValue::Result(_)
             | SchemaValue::Union(_) => self.schemaless(value, region),
+        }
+    }
+
+    /// An agent ID in clear when it has the layout of a Golem agent ID (`AgentId::is_issued`:
+    /// UUIDv8, RFC 4122 variant). Another UUID in an agent ID position, which a guest can write,
+    /// for example as the target of a failed RPC lookup, stays a token. The check is a layout
+    /// check, not a proof that Golem issued the ID: a guest can also write a UUID with this
+    /// layout.
+    pub fn agent_node(&self, agent_id: &AgentId) -> ReportNode {
+        if agent_id.is_issued() {
+            ReportNode::Agent(agent_reference(agent_id))
+        } else {
+            self.str_leaf(&agent_id.to_string(), Region::Customer)
         }
     }
 

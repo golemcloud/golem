@@ -16,7 +16,7 @@ use peer::Peer;
 
 macro_rules! timed_case {
     ($name:ident, Storage, $mode:ident) => {
-        timed_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
+        timed_case!(#[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
     };
     ($(#[$attr:meta])* $name:ident, $resource:ident, $mode:ident) => {
         $(#[$attr])*
@@ -60,16 +60,22 @@ timed_case!(
     Compute,
     Ephemeral
 );
-timed_case!(
-    durable_websocket_timed_receive_managed_xfs_storage_quota,
-    Storage,
-    Durable
-);
-timed_case!(
-    ephemeral_websocket_timed_receive_managed_xfs_storage_quota,
-    Storage,
-    Ephemeral
-);
+#[cfg(target_os = "linux")]
+mod storage {
+    use super::*;
+    use test_r::test;
+
+    timed_case!(
+        durable_websocket_timed_receive_managed_xfs_storage_quota,
+        Storage,
+        Durable
+    );
+    timed_case!(
+        ephemeral_websocket_timed_receive_managed_xfs_storage_quota,
+        Storage,
+        Ephemeral
+    );
+}
 
 const TIMED_RECEIVE: &str = "golem:websocket/client::receive-with-timeout";
 const CONNECT: &str = "golem:websocket/client::connect";
@@ -676,9 +682,10 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
         &InvocationContextStack::fresh(),
         callers::anonymous(),
         golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
-        golem_worker_executor::worker::CreateIntent::Invocation {
+        golem_worker_executor::worker::CreateIntent::Create {
             owner: golem_worker_executor::worker::NewOwner::keyed(component.id, name.clone()),
             idempotency_key: None,
+            exclusive: false,
         },
     )
     .await?;

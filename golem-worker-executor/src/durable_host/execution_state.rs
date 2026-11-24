@@ -428,6 +428,9 @@ pub struct InvocationExecutionState {
     /// The caller of the running export call. The executor reads it through
     /// `invocation_caller`, which falls back to the agent itself in both roles.
     pub caller: Option<Caller>,
+    /// The tool that the running middleware layer wraps: the last layer of its call's plan.
+    /// The layer's own calls carry its identity. It goes with the caller.
+    pub middleware_wrapped_tool: Option<Box<golem_common::model::tool::CompiledToolBinding>>,
     /// The ID of the running export call, when it is an invocation with an invocation ID.
     pub invocation_id: Option<OwnedInvocationId>,
     /// The spans of the invocation's invocation context.
@@ -473,6 +476,7 @@ impl Default for InvocationExecutionState {
         Self {
             start_index: None,
             caller: None,
+            middleware_wrapped_tool: None,
             invocation_id: None,
             invocation_context,
             current_span_id,

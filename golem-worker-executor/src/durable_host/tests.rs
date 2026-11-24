@@ -629,7 +629,10 @@ fn a_give_up_after_the_result_records_an_exhausted_retry_state() {
                     ),
                     payload: golem_common::model::oplog::OplogPayload::Inline(Box::new(
                         golem_common::model::StoredAgentInvocationPayload::AgentMethod {
-                            input: golem_common::schema::SchemaValue::Record { fields: Vec::new() },
+                            input: golem_common::schema::SchemaValue::Record { fields: Vec::new() }
+                                .try_into()
+                                .unwrap(),
+                            allow_streams: false,
                             caller: golem_common::model::caller::Caller::anonymous(),
                             scope_card: None,
                         },

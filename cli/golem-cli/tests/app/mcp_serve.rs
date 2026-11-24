@@ -222,7 +222,7 @@ async fn follow_pages(
     let mut pages = Vec::new();
     loop {
         let page = structured(&call(client, tool, arguments.clone()).await).clone();
-        let cursor = page.get("cursor").cloned();
+        let cursor = page.get("cursor").filter(|value| !value.is_null()).cloned();
         pages.push(page);
         let Some(cursor) = cursor else {
             return pages;
@@ -351,6 +351,7 @@ async fn mcp_serve_offers_one_tool_per_management_command() {
             &[
                 "agent_id",
                 "arguments",
+                "expected_fingerprint",
                 "function_name",
                 "idempotency_key",
                 "schedule_at",
@@ -703,68 +704,81 @@ async fn mcp_serve_stdout_carries_only_json_rpc() {
         "the call's progress is not on stderr:\n{stderr}"
     );
 
-    #[cfg(target_os = "linux")]
-    a_client_that_does_not_read_stdout_does_not_keep_the_server(&ctx).await;
+    platform::a_client_that_does_not_read_stdout_does_not_keep_the_server(&ctx).await;
 }
 
 /// A client that closes stdin and does not read stdout. The response of the call that runs at the
 /// end of stdin becomes ready only after it, when the pipe of stdout is full: rmcp gives up the
 /// write of that response, but the write stays blocked. The server still exits.
 #[cfg(target_os = "linux")]
-async fn a_client_that_does_not_read_stdout_does_not_keep_the_server(ctx: &TestContext) {
-    use std::io::{BufRead, Write};
+mod platform {
+    use super::*;
 
-    let (stdout_reader, stdout_writer) = std::io::pipe().unwrap();
-    let pipe_size = rustix::pipe::fcntl_setpipe_size(&stdout_writer, 4096).unwrap();
-    let mut filler = stdout_writer.try_clone().unwrap();
-    let mut child = server_command(ctx, &["-E", "local"])
-        .stdin(Stdio::piped())
-        .stdout(stdout_writer)
-        .stderr(Stdio::inherit())
-        .spawn()
-        .unwrap();
-    let mut stdin = child.stdin.take().unwrap();
-    let mut stdout = std::io::BufReader::new(stdout_reader);
+    pub(super) async fn a_client_that_does_not_read_stdout_does_not_keep_the_server(
+        ctx: &TestContext,
+    ) {
+        use std::io::{BufRead, Write};
 
-    let initialize = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        let (stdout_reader, stdout_writer) = std::io::pipe().unwrap();
+        let pipe_size = rustix::pipe::fcntl_setpipe_size(&stdout_writer, 4096).unwrap();
+        let mut filler = stdout_writer.try_clone().unwrap();
+        let mut child = server_command(ctx, &["-E", "local"])
+            .stdin(Stdio::piped())
+            .stdout(stdout_writer)
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let mut stdout = std::io::BufReader::new(stdout_reader);
+
+        let initialize = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
         "protocolVersion": "2025-03-26", "capabilities": {},
         "clientInfo": {"name": "test", "version": "0"}}});
-    stdin
-        .write_all(format!("{initialize}\n").as_bytes())
-        .await
-        .unwrap();
-    let mut line = String::new();
-    stdout.read_line(&mut line).unwrap();
-    assert!(line.contains(r#""id":1"#), "{line}");
-    // The server answers no request now, so nothing else writes to the pipe while it is filled.
-    // The response of the call that follows finds no room.
-    assert_eq!(rustix::io::ioctl_fionread(stdout.get_ref()).unwrap(), 0);
-    filler.write_all(&vec![b' '; pipe_size]).unwrap();
+        stdin
+            .write_all(format!("{initialize}\n").as_bytes())
+            .await
+            .unwrap();
+        let mut line = String::new();
+        stdout.read_line(&mut line).unwrap();
+        assert!(line.contains(r#""id":1"#), "{line}");
+        // The server answers no request now, so nothing else writes to the pipe while it is filled.
+        // The response of the call that follows finds no room.
+        assert_eq!(rustix::io::ioctl_fionread(stdout.get_ref()).unwrap(), 0);
+        filler.write_all(&vec![b' '; pipe_size]).unwrap();
 
-    let requests = [
-        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
-        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+        let requests = [
+            json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
             "name": "agent_invoke",
             "arguments": {
                 "agent_id": r#"Counter("mcp-unread")"#,
                 "function_name": "sleep_and_increment",
                 "arguments": ["4000"]}}}),
-    ];
-    for request in requests {
-        stdin
-            .write_all(format!("{request}\n").as_bytes())
-            .await
-            .unwrap();
-    }
-    // The call runs; its response is ready only after the end of stdin.
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    drop(stdin);
+        ];
+        for request in requests {
+            stdin
+                .write_all(format!("{request}\n").as_bytes())
+                .await
+                .unwrap();
+        }
+        // The call runs; its response is ready only after the end of stdin.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        drop(stdin);
 
-    let status = tokio::time::timeout(Duration::from_secs(60), child.wait())
-        .await
-        .expect("the server exits when its client does not read stdout")
-        .unwrap();
-    assert!(status.success(), "{status}");
+        let status = tokio::time::timeout(Duration::from_secs(60), child.wait())
+            .await
+            .expect("the server exits when its client does not read stdout")
+            .unwrap();
+        assert!(status.success(), "{status}");
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+mod platform {
+    pub(super) async fn a_client_that_does_not_read_stdout_does_not_keep_the_server(
+        _ctx: &super::TestContext,
+    ) {
+    }
 }
 
 #[test]

@@ -36,5 +36,11 @@ test_r::enable!();
 #[cfg(target_os = "linux")]
 mod quotad;
 
-#[cfg(target_os = "linux")]
+#[cfg(not(target_os = "linux"))]
+mod quotad {
+    pub fn run(_args: impl Iterator<Item = std::ffi::OsString>) -> anyhow::Result<()> {
+        anyhow::bail!("xfs-quotad manages XFS project quotas, which only Linux has")
+    }
+}
+
 pub use quotad::*;

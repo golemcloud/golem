@@ -1993,6 +1993,7 @@ pub(crate) mod tests {
             secret_keys_revealable: SecretKeyScope::All,
             filesystem_access: ToolFilesystemAccess::Unset,
             source,
+            shell: false,
         };
         EntityActivation::new(
             ExecutableTarget::new(component_id, component_revision),
