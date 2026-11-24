@@ -86,15 +86,9 @@ async fn mounted_create_returns_constructor_state_and_anonymous_distinct_ids(
             ("env", json!({})),
             ("config", json!([{"path": ["admin"], "value": true}])),
             ("config", json!([])),
+            ("keyed", json!(false)),
         ] {
-            let parameters = golem_common::schema::ExternalSchemaValue::try_from(
-                agent_key!("SelectedQueryAgent", "constructor from body")
-                    .parameters
-                    .value()
-                    .clone(),
-            )
-            .map_err(anyhow::Error::msg)?;
-            let mut body = json!({"parameters": parameters});
+            let mut body = json!({"id": "constructor from body"});
             body[field] = value;
             let response = agent
                 .client
@@ -107,18 +101,11 @@ async fn mounted_create_returns_constructor_state_and_anonymous_distinct_ids(
         }
         let mut ids = Vec::new();
         for _ in 0..2 {
-            let parameters = golem_common::schema::ExternalSchemaValue::try_from(
-                agent_key!("SelectedQueryAgent", "constructor from body")
-                    .parameters
-                    .value()
-                    .clone(),
-            )
-            .map_err(anyhow::Error::msg)?;
             let response = agent
                 .client
                 .post(agent.base_url.join(&format!("/{prefix}/create"))?)
                 .header("idempotency-key", &key)
-                .json(&json!({"parameters": parameters, "keyed": false}))
+                .json(&json!({"id": "constructor from body"}))
                 .send()
                 .await?;
             assert_eq!(response.status(), StatusCode::CREATED);
@@ -154,17 +141,14 @@ async fn mounted_create_returns_constructor_state_and_anonymous_distinct_ids(
             ("invalid keyed", true, StatusCode::BAD_REQUEST),
             ("fail", false, StatusCode::INTERNAL_SERVER_ERROR),
         ] {
-            let parameters = golem_common::schema::ExternalSchemaValue::try_from(
-                agent_key!("SelectedQueryAgent", constructor)
-                    .parameters
-                    .value()
-                    .clone(),
-            )
-            .map_err(anyhow::Error::msg)?;
+            let mut body = json!({"id": constructor});
+            if keyed {
+                body["keyed"] = json!(true);
+            }
             let response = agent
                 .client
                 .post(agent.base_url.join(&format!("/{prefix}/create"))?)
-                .json(&json!({"parameters": parameters, "keyed": keyed}))
+                .json(&body)
                 .send()
                 .await?;
             assert_eq!(response.status(), expected);

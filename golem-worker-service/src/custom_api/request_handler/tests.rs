@@ -880,7 +880,7 @@ fn create_request(authenticated: bool) -> Request {
     if authenticated {
         request = request.header("x-golem-session", r#"{"subject":"create-user"}"#);
     }
-    request.body(r#"{"parameters":{"kind":"record","value":{"fields":[]}}}"#)
+    request.body("{}")
 }
 
 #[test]
@@ -936,11 +936,15 @@ async fn create_dispatch_rejects_overrides_before_creating_an_agent() {
                 ),
                 ("config", serde_json::json!([])),
                 ("config", serde_json::Value::Null),
+                ("keyed", serde_json::json!(true)),
+                ("keyed", serde_json::json!(false)),
+                (
+                    "parameters",
+                    serde_json::json!({"kind": "record", "value": {"fields": []}}),
+                ),
                 ("unexpected", serde_json::json!(true)),
             ] {
-                let mut body = serde_json::json!({
-                    "parameters": {"kind": "record", "value": {"fields": []}}
-                });
+                let mut body = serde_json::json!({});
                 body[field] = value;
                 harness
                     .creates
@@ -986,13 +990,7 @@ async fn create_dispatch_returns_reference_and_selector_location_without_caller_
                     .lock()
                     .unwrap()
                     .push_back(Box::pin(async move { Ok(fingerprint) }));
-                let mut request = create_request(authenticated);
-                if index == 1 {
-                    request.set_body(
-                        r#"{"parameters":{"kind":"record","value":{"fields":[]}},"keyed":false}"#,
-                    );
-                }
-                let response = endpoint.execute(request).await;
+                let response = endpoint.execute(create_request(authenticated)).await;
                 assert_eq!(
                     response.status(),
                     StatusCode::CREATED,
@@ -1291,19 +1289,13 @@ async fn create_dispatch_inherits_auth_and_cors_and_does_not_require_an_incoming
                 StatusCode::BAD_REQUEST,
                 Some("REQUEST_BODY_INVALID_JSON"),
             ),
+            // The route's constructor declares no parameters, so a field it does not declare is
+            // rejected before the create service is called.
             (
                 true,
-                r#"{"parameters":{"kind":"record","value":{"fields":[]}},"keyed":true}"#,
+                r#"{"name":"bad"}"#,
                 StatusCode::BAD_REQUEST,
-                Some("REQUEST_VALUE_PARSING_FAILED"),
-            ),
-            // This reaches the real create service without an incoming agent ID. The
-            // constructor rejects the extra field before any worker can be created.
-            (
-                true,
-                r#"{"parameters":{"kind":"record","value":{"fields":[{"kind":"string","value":"bad"}]}}}"#,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Some("INTERNAL_AGENT_EXECUTION_FAILED"),
+                Some("REQUEST_JSON_BODY_PARSING_FAILED"),
             ),
         ] {
             let mut request = Request::builder()
@@ -1325,13 +1317,6 @@ async fn create_dispatch_inherits_auth_and_cors_and_does_not_require_an_incoming
             if let Some(code) = code {
                 let body: serde_json::Value = response.into_body().into_json().await.unwrap();
                 assert_eq!(body["code"], code, "{kind}: {body}");
-                if status == StatusCode::INTERNAL_SERVER_ERROR {
-                    assert!(
-                        body.to_string()
-                            .contains("Agent constructor parameters type error"),
-                        "{body}"
-                    );
-                }
             }
         }
         for (headers, expected) in [

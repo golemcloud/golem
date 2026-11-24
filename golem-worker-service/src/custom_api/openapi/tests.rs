@@ -533,7 +533,7 @@ fn id_selector_openapi_documents_concrete_paths_and_required_query() {
 }
 
 #[test]
-fn create_agent_openapi_projects_canonical_envelope_reference_and_location() {
+fn create_agent_openapi_projects_constructor_body_reference_and_location() {
     use golem_common::schema::NamedField;
     use golem_service_base::custom_api::{AgentSelection, CreateAgentBehaviour, MountAgent};
     for query in [false, true] {
@@ -612,65 +612,25 @@ fn create_agent_openapi_projects_canonical_envelope_reference_and_location() {
             spec["paths"]["/ordinary-create"]["post"]["operationId"],
             "TestAgent-create"
         );
-        assert!(
-            operation["description"]
-                .as_str()
-                .unwrap()
-                .contains("keyed: true is rejected")
-        );
         assert_eq!(operation["requestBody"]["required"], true);
-        let body = &operation["requestBody"]["content"]["application/json"]["schema"];
-        assert_eq!(body["properties"]["keyed"]["const"], false);
-        let constructor = &body["properties"]["parameters"]["x-golem-constructor-schema"];
-        assert_eq!(constructor["properties"]["decision"]["type"], "string");
-        let envelope = body;
-        assert!(envelope["properties"].get("parameters").is_some());
-        assert!(envelope["properties"].get("config").is_none());
-        assert!(envelope["properties"].get("env").is_none());
-        assert_eq!(envelope["additionalProperties"], false);
-        let mut schema = body.clone();
+        let mut schema = operation["requestBody"]["content"]["application/json"]["schema"].clone();
+        assert_eq!(schema["properties"]["decision"]["type"], "string");
         schema["components"] = spec["components"].clone();
         let validator = jsonschema::validator_for(&schema).unwrap();
-        let request = json!({
-            "parameters": { "kind": "record", "value": { "fields": [{ "kind": "string", "value": "ready" }] } }
-        });
-        assert!(
-            serde_json::from_value::<crate::api::agents::CreateAgentRequest>(request.clone())
-                .is_ok()
-        );
-        assert!(validator.is_valid(&request));
-        let mut explicit_unkeyed = request.clone();
-        explicit_unkeyed["keyed"] = json!(false);
-        assert!(validator.is_valid(&explicit_unkeyed));
-        for (field, value) in [
-            ("env", json!({"SETTING": "override"})),
-            ("env", json!({})),
-            ("env", Value::Null),
-            (
-                "config",
-                json!([{"path": ["setting"], "value": "override"}]),
-            ),
-            ("config", json!([])),
-            ("config", Value::Null),
+        assert!(validator.is_valid(&json!({ "decision": "ready" })));
+        for rejected in [
+            json!({}),
+            json!({ "decision": 1 }),
+            json!({ "decision": "ready", "keyed": false }),
+            json!({ "decision": "ready", "env": {} }),
+            json!({ "decision": "ready", "config": [] }),
+            json!({
+                "parameters": { "kind": "record", "value": { "fields": [{ "kind": "string", "value": "ready" }] } }
+            }),
+            json!(["ready"]),
         ] {
-            let mut overrides = request.clone();
-            overrides[field] = value;
-            assert!(!validator.is_valid(&overrides), "{overrides}");
-            if !overrides[field].is_null() {
-                assert!(
-                    serde_json::from_value::<crate::api::agents::CreateAgentRequest>(overrides)
-                        .is_ok()
-                );
-            }
+            assert!(!validator.is_valid(&rejected), "{rejected}");
         }
-        let mut malformed = request.clone();
-        malformed["parameters"] = json!({ "kind": "string", "value": "not a constructor record" });
-        assert!(!validator.is_valid(&malformed));
-        malformed["parameters"] = json!({ "kind": "record", "value": { "fields": [] } });
-        assert!(!validator.is_valid(&malformed));
-        let mut keyed = request;
-        keyed["keyed"] = json!(true);
-        assert!(!validator.is_valid(&keyed));
         let responses = &operation["responses"];
         assert!(responses.get("200").is_none());
         assert_eq!(responses["201"]["headers"]["Location"]["required"], true);

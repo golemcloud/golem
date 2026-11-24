@@ -273,6 +273,28 @@ pub struct CompiledInputSchema {
 }
 
 impl CompiledInputSchema {
+    /// The record of the user-supplied input fields, in declaration order. Auto-injected fields
+    /// are left out, so a value of this record is what a caller supplies.
+    pub fn user_supplied_record(&self) -> SchemaType {
+        SchemaType::record(
+            self.input_schema
+                .fields()
+                .iter()
+                .filter(|field| {
+                    matches!(
+                        field.source,
+                        golem_common::schema::FieldSource::UserSupplied
+                    )
+                })
+                .map(|field| golem_common::schema::NamedFieldType {
+                    name: field.name.clone(),
+                    body: field.schema.clone(),
+                    metadata: field.metadata.clone(),
+                })
+                .collect(),
+        )
+    }
+
     fn validate(&self) -> Result<(), String> {
         let expected = SchemaType::record(
             self.input_schema
