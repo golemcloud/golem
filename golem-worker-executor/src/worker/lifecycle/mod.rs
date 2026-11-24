@@ -691,10 +691,7 @@ mod tests {
         use crate::services::oplog::UnreadableOplog;
         use crate::services::oplog::retention::test_oplog::expired;
 
-        let agent_id = AgentId {
-            component_id: golem_common::model::component::ComponentId::new(),
-            agent_id: "reverted".to_string(),
-        };
+        let agent_id = AgentId::from_parts(7, 1);
         let unreadable = UnreadableOplog::new(&agent_id, expired(4));
         assert_eq!(
             revert_cut_error(StreamStoreError::Unreadable(unreadable.clone())),

@@ -487,7 +487,7 @@ mod tests {
                 &agent_id,
                 OplogReadError::Expired { retained_start }
             )),
-            WorkerExecutorError::oplog_expired(agent_id.clone(), retained_start)
+            WorkerExecutorError::oplog_expired(agent_id, retained_start)
         );
         assert!(
             !UnreadableOplog::new(

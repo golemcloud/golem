@@ -3194,7 +3194,7 @@ pub async fn force_oplog_retained_start(
         .map_err(|err| anyhow!(err))?;
     golem_worker_executor::services::oplog::retention::advance_oplog_retention(
         &storage,
-        &owned_agent_id.agent_id,
+        owned_agent_id,
         AgentMode::Durable,
         index,
     )
@@ -3223,11 +3223,11 @@ pub async fn remove_cached_status_and_result_index(
     let storage = &storage;
     let namespaces = [
         KeyValueStorageNamespace::AgentStatus {
-            agent_id: Arc::new(owned_agent_id.agent_id.clone()),
+            owned_agent_id: owned_agent_id.clone(),
             fingerprint,
         },
         KeyValueStorageNamespace::AgentInvocationResultIndex {
-            agent_id: owned_agent_id.agent_id.clone(),
+            owned_agent_id: owned_agent_id.clone(),
             fingerprint,
         },
     ];

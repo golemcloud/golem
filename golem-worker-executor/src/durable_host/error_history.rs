@@ -282,10 +282,13 @@ mod tests {
         FaultInjectingKeyValueStorage, KeyValueStorageFaults,
     };
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+    use golem_common::model::caller::Caller;
     use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
     use golem_common::model::invocation_context::TraceId;
     use golem_common::model::oplog::payload::OplogPayload;
-    use golem_common::model::{AgentInvocationPayload, Timestamp};
+    use golem_common::model::{
+        InvocationRequestOperation, StoredAgentInvocationPayload, Timestamp,
+    };
 
     /// The services of the error history walks over an oplog behind the retention layer.
     struct Retained {
@@ -365,7 +368,10 @@ mod tests {
         OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
             invocation_id: uuid::Uuid::from_u128(1).into(),
-            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            operation: Box::new(InvocationRequestOperation::SaveSnapshot),
+            payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
+                caller: Caller::anonymous(),
+            })),
             trace_id: TraceId::generate(),
             trace_states: Vec::new(),
             invocation_context: Vec::new(),

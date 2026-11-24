@@ -25,7 +25,8 @@ use crate::storage::keyvalue::KeyValueStorage;
 use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use futures::{StreamExt, TryStreamExt};
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, OwnerKind, Principal};
+use golem_common::model::agent::{AgentMode, OwnerKind};
+use golem_common::model::caller::Caller;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -43,6 +44,7 @@ use std::sync::{Arc, RwLock};
 pub(crate) struct RetainedOplog {
     pub service: Arc<RetentionOplogService>,
     pub owned_agent_id: OwnedAgentId,
+    pub component_id: ComponentId,
     key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
 }
 
@@ -106,16 +108,14 @@ impl RetainedOplog {
             golem_common::model::RetryConfig::default(),
         )
         .await;
-        let agent_id = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "retention".to_string(),
-        };
+        let agent_id = AgentId::from_parts(7, 1);
         Self {
             service: Arc::new(RetentionOplogService::new(
                 Arc::new(primary),
                 key_value_storage.clone(),
             )),
             owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent_id),
+            component_id: ComponentId::new(),
             key_value_storage,
         }
     }
@@ -125,12 +125,12 @@ impl RetainedOplog {
     }
 
     fn metadata(&self) -> AgentMetadata {
-        let agent_id = self.agent_id().clone();
         AgentMetadata {
-            component_id: agent_id.component_id,
+            component_id: self.component_id,
             agent_type_name: None,
             canonical_key: None,
-            agent_id,
+            constructor_parameters: None,
+            agent_id: *self.agent_id(),
             owner_kind: OwnerKind::ComponentAgent,
             env: vec![],
             environment_id: self.owned_agent_id.environment_id,
@@ -140,13 +140,12 @@ impl RetainedOplog {
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: AgentStatusRecord::default(),
-            original_phantom_id: None,
             fingerprint: AgentFingerprint::new(),
             agent_mode: AgentMode::Durable,
             create_request: CreateRequest::new(
                 CreateRequestKind::GetOrCreate,
                 None,
-                Principal::anonymous(),
+                Caller::anonymous(),
                 &InvocationContextStack::fresh_rounded(),
             ),
         }
@@ -204,7 +203,7 @@ impl RetainedOplog {
     pub async fn advance(&self, to: u64) -> OplogRetention {
         advance_oplog_retention(
             self.key_value_storage.as_ref(),
-            self.agent_id(),
+            &self.owned_agent_id,
             AgentMode::Durable,
             idx(to),
         )

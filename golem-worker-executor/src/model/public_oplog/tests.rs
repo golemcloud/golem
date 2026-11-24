@@ -4270,10 +4270,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         key_value_storage.clone(),
     ));
     let environment_id = EnvironmentId::new();
-    let agent_id = AgentId {
-        component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
-        agent_id: "retained-start".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 1);
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
@@ -4281,7 +4278,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
             &owned_agent_id,
             AgentMode::Durable,
             None,
-            make_agent_metadata(agent_id.clone(), AccountId::new(), environment_id),
+            make_agent_metadata(agent_id, AccountId::new(), environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
             None,
@@ -4312,7 +4309,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
     let retained_start = OplogIndex::from_u64(4);
     advance_oplog_retention(
         key_value_storage.as_ref(),
-        &agent_id,
+        &owned_agent_id,
         AgentMode::Durable,
         retained_start,
     )
@@ -4322,7 +4319,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         .retention(&owned_agent_id, AgentMode::Durable)
         .await
         .unwrap();
-    let expired = WorkerExecutorError::oplog_expired(agent_id.clone(), retained_start);
+    let expired = WorkerExecutorError::oplog_expired(agent_id, retained_start);
 
     let page_start = |cursor: Option<OplogCursor>, from: Option<u64>| {
         oplog_page_start(
@@ -4373,7 +4370,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         &owned_agent_id,
         AgentMode::Durable,
         retention,
-        owned_agent_id.component_id(),
+        test_component_id(),
         OwnerKind::ComponentAgent,
         None,
         ComponentRevision::INITIAL,
@@ -4401,7 +4398,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
-            owned_agent_id.component_id(),
+            test_component_id(),
             OwnerKind::ComponentAgent,
             None,
             OplogIndex::from_u64(index),
@@ -4427,7 +4424,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
             &owned_agent_id,
             AgentMode::Durable,
             retention,
-            owned_agent_id.component_id(),
+            test_component_id(),
             OwnerKind::ComponentAgent,
             None,
             ComponentRevision::INITIAL,
@@ -4454,7 +4451,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         &owned_agent_id,
         AgentMode::Durable,
         retention,
-        owned_agent_id.component_id(),
+        test_component_id(),
         OwnerKind::ComponentAgent,
         None,
         ComponentRevision::INITIAL,
@@ -4484,7 +4481,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
             &owned_agent_id,
             AgentMode::Durable,
             retention,
-            owned_agent_id.component_id(),
+            test_component_id(),
             OwnerKind::ComponentAgent,
             None,
             ComponentRevision::INITIAL,
@@ -4549,7 +4546,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         &owned_agent_id,
         AgentMode::Durable,
         retention,
-        owned_agent_id.component_id(),
+        test_component_id(),
         OwnerKind::ComponentAgent,
         None,
         search_revision,
@@ -4581,7 +4578,7 @@ struct RetainedAttribution {
 }
 
 impl RetainedAttribution {
-    async fn new(name: &str) -> Self {
+    async fn new() -> Self {
         let key_value_storage =
             Arc::new(crate::storage::keyvalue::memory::InMemoryKeyValueStorage::new());
         let primary = PrimaryOplogService::new(
@@ -4601,10 +4598,7 @@ impl RetainedAttribution {
             ),
         );
         let environment_id = EnvironmentId::new();
-        let agent_id = AgentId {
-            component_id: golem_common::model::component::ComponentId::new(),
-            agent_id: format!("Agent(\"{name}\")"),
-        };
+        let agent_id = AgentId::from_parts(7, 1);
         let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
         let oplog = oplog_service
             .open(
@@ -4655,7 +4649,7 @@ impl RetainedAttribution {
     async fn advance(&self, to: OplogIndex) {
         crate::services::oplog::retention::advance_oplog_retention(
             self.key_value_storage.as_ref(),
-            &self.owned_agent_id.agent_id,
+            &self.owned_agent_id,
             AgentMode::Durable,
             to,
         )
@@ -4680,7 +4674,7 @@ impl RetainedAttribution {
             &self.owned_agent_id,
             AgentMode::Durable,
             retention,
-            self.owned_agent_id.component_id(),
+            test_component_id(),
             OwnerKind::ComponentAgent,
             None,
             ComponentRevision::INITIAL,
@@ -4698,7 +4692,7 @@ impl RetainedAttribution {
 
 #[test]
 async fn an_entry_whose_start_is_below_the_retained_start_has_the_agent_attribution() {
-    let retained = RetainedAttribution::new("retained-attribution").await;
+    let retained = RetainedAttribution::new().await;
     // Index 1 stays readable alone below the start, so the entity `Start` is at index 2.
     retained.oplog.add(log_entry(1)).await.unwrap();
     let entity_start = retained.add_entity_start(None).await;
@@ -4748,7 +4742,7 @@ async fn an_entry_whose_start_is_below_the_retained_start_has_the_agent_attribut
 /// entity attribution, without the ancestors below the start.
 #[test]
 async fn an_entity_whose_ancestor_is_below_the_retained_start_keeps_its_attribution_without_it() {
-    let retained = RetainedAttribution::new("retained-ancestor").await;
+    let retained = RetainedAttribution::new().await;
     retained.oplog.add(log_entry(1)).await.unwrap();
     let ancestor = retained.add_entity_start(None).await;
     let child = retained.add_entity_start(Some(ancestor)).await;
@@ -4811,8 +4805,8 @@ fn create_entry_with_revision(
     component_revision: ComponentRevision,
 ) -> OplogEntry {
     OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
-        agent_id: owned_agent_id.agent_id.clone(),
-        component_id: owned_agent_id.component_id(),
+        agent_id: owned_agent_id.agent_id,
+        component_id: test_component_id(),
         agent_type_name: None,
         canonical_key: None,
         owner_kind: OwnerKind::ComponentAgent,
@@ -4826,12 +4820,13 @@ fn create_entry_with_revision(
         initial_total_linear_memory_size: 100,
         initial_active_plugins: HashSet::new(),
         local_agent_config: Vec::new(),
-        original_phantom_id: None,
+        constructor_parameters: None,
+        never_live: false,
         instance_id: Uuid::new_v4(),
         create_request: golem_common::model::oplog::CreateRequest::new(
             golem_common::model::oplog::CreateRequestKind::GetOrCreate,
             None,
-            Principal::anonymous(),
+            golem_common::model::caller::Caller::anonymous(),
             &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
     }))
@@ -4843,7 +4838,7 @@ fn create_entry_with_revision(
 async fn the_revision_lookup_reads_the_create_entry_below_the_retained_start() {
     use futures::{StreamExt, TryStreamExt};
 
-    let retained = RetainedAttribution::new("retained-create-revision").await;
+    let retained = RetainedAttribution::new().await;
     let created_revision = ComponentRevision::new(3).unwrap();
     retained
         .oplog
@@ -4898,7 +4893,7 @@ async fn the_revision_lookup_reads_the_create_entry_below_the_retained_start() {
 async fn a_read_from_index_0_of_a_full_oplog_starts_at_index_1() {
     use futures::{StreamExt, TryStreamExt};
 
-    let retained = RetainedAttribution::new("full-from-0").await;
+    let retained = RetainedAttribution::new().await;
     futures::stream::iter(1..=3)
         .then(|index| retained.oplog.add(log_entry(index)))
         .try_collect::<Vec<_>>()
@@ -4923,7 +4918,7 @@ async fn a_read_from_index_0_of_a_full_oplog_starts_at_index_1() {
         retained.oplog_service.clone(),
         &retained.owned_agent_id,
         AgentMode::Durable,
-        retained.owned_agent_id.component_id(),
+        test_component_id(),
         OwnerKind::ComponentAgent,
         None,
         OplogIndex::NONE,
@@ -4942,7 +4937,7 @@ async fn a_read_from_index_0_of_a_full_oplog_starts_at_index_1() {
 async fn a_guest_search_that_ends_before_its_start_reads_nothing() {
     use futures::{StreamExt, TryStreamExt};
 
-    let retained = RetainedAttribution::new("search-past-its-end").await;
+    let retained = RetainedAttribution::new().await;
     futures::stream::iter(1..=6)
         .then(|index| retained.oplog.add(log_entry(index)))
         .try_collect::<Vec<_>>()
@@ -4957,7 +4952,7 @@ async fn a_guest_search_that_ends_before_its_start_reads_nothing() {
         &retained.owned_agent_id,
         AgentMode::Durable,
         OplogRetention::FULL,
-        retained.owned_agent_id.component_id(),
+        test_component_id(),
         OwnerKind::ComponentAgent,
         None,
         ComponentRevision::INITIAL,

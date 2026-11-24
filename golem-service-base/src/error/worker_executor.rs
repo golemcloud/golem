@@ -1778,13 +1778,8 @@ mod read_only_violation_trap_tests {
 
     #[test]
     fn an_expired_oplog_keeps_its_retained_start_through_grpc() {
-        let expected = WorkerExecutorError::oplog_expired(
-            AgentId {
-                component_id: ComponentId(uuid::Uuid::nil()),
-                agent_id: "Counter(\"a\")".to_string(),
-            },
-            OplogIndex::from_u64(42),
-        );
+        let expected =
+            WorkerExecutorError::oplog_expired(AgentId::from_parts(7, 1), OplogIndex::from_u64(42));
 
         let status: Status = expected.clone().into();
 
@@ -1798,13 +1793,7 @@ mod read_only_violation_trap_tests {
 
     #[test]
     fn an_unreadable_oplog_still_crosses_grpc_as_its_text() {
-        let failed = WorkerExecutorError::oplog_failed(
-            AgentId {
-                component_id: ComponentId(uuid::Uuid::nil()),
-                agent_id: "Counter(\"a\")".to_string(),
-            },
-            "gap",
-        );
+        let failed = WorkerExecutorError::oplog_failed(AgentId::from_parts(7, 1), "gap");
 
         assert_eq!(
             WorkerExecutorError::try_from(golem::worker::v1::WorkerExecutionError::from(

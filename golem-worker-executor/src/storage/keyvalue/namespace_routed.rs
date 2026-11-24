@@ -417,10 +417,10 @@ mod tests {
         );
         assert!(Arc::ptr_eq(
             storage.backend_for_namespace(&KeyValueStorageNamespace::AgentOplogRetention {
-                agent_id: AgentId {
-                    component_id: ComponentId::new(),
-                    agent_id: "oplog-retention".to_string(),
-                },
+                owned_agent_id: golem_common::model::OwnedAgentId::new(
+                    golem_common::model::environment::EnvironmentId(uuid::Uuid::from_u128(1)),
+                    &AgentId::from_parts(7, 2),
+                ),
             }),
             &storage.persistent,
         ));

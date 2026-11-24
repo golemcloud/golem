@@ -908,7 +908,7 @@ impl ScriptedReadService {
 impl OplogService for ScriptedReadService {
     async fn lock_lifecycle(
         &self,
-        _agent_id: &AgentId,
+        _agent_id: &golem_common::model::AgentId,
     ) -> crate::services::oplog::OplogLifecycleGuard {
         unreachable!()
     }
@@ -1041,10 +1041,10 @@ impl OplogService for ScriptedReadService {
         unreachable!()
     }
 
-    async fn scan_for_component(
+    async fn scan_for_type(
         &self,
         _environment_id: &EnvironmentId,
-        _component_id: &golem_common::model::component::ComponentId,
+        _type_id: golem_common::model::type_id::TypeId,
         _modes: Option<AgentMode>,
         _cursor: golem_common::model::ScanCursor,
         _count: u64,

@@ -18,7 +18,7 @@ use axum::routing::post;
 use golem_client::api::{RegistryServiceClient, WorkerClient, WorkerError};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{AgentId, AgentStatus, PromiseId};
+use golem_common::model::{AgentStatus, OwnedAgentId, PromiseId};
 use golem_common::schema::FromSchema;
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use golem_common::{agent_key, data_value};
@@ -477,11 +477,11 @@ async fn complete_promise_in_deleted_environment_results_in_404(
     Ok(())
 }
 
-/// Moves the retained start of the oplog of `agent_id` forward to `retained_start`, in the
+/// Moves the retained start of the oplog of `owned_agent_id` forward to `retained_start`, in the
 /// key-value storage that the worker executors read it from. Call it while no executor runs.
 async fn force_oplog_retained_start(
     deps: &EnvBasedTestDependencies,
-    agent_id: &AgentId,
+    owned_agent_id: &OwnedAgentId,
     retained_start: OplogIndex,
 ) -> anyhow::Result<()> {
     use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
@@ -505,7 +505,8 @@ async fn force_oplog_retained_start(
             })
             .await
             .map_err(|error| anyhow!(error))?;
-            advance_oplog_retention(&storage, agent_id, AgentMode::Durable, retained_start).await?;
+            advance_oplog_retention(&storage, owned_agent_id, AgentMode::Durable, retained_start)
+                .await?;
         }
         DbInfo::Postgres(postgres) => {
             let storage = PostgresKeyValueStorage::configured(&KeyValueStoragePostgresConfig {
@@ -522,7 +523,8 @@ async fn force_oplog_retained_start(
             })
             .await
             .map_err(|error| anyhow!(error))?;
-            advance_oplog_retention(&storage, agent_id, AgentMode::Durable, retained_start).await?;
+            advance_oplog_retention(&storage, owned_agent_id, AgentMode::Durable, retained_start)
+                .await?;
         }
         DbInfo::Mysql(_) => anyhow::bail!("worker executors do not store key-values in MySQL"),
     }
@@ -547,7 +549,7 @@ async fn get_oplog_starts_at_the_retained_start(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let parsed_agent_id = agent_id!("GolemHostApi", "oplog-retained-start");
+    let parsed_agent_id = agent_key!("GolemHostApi", "oplog-retained-start");
     let agent_id = user
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;
@@ -578,10 +580,14 @@ async fn get_oplog_starts_at_the_retained_start(
         .await;
     let page = client
         .get_oplog(
-            &agent_id.component_id.0,
-            &agent_id.agent_id,
+            &agent_id.environment_id.0,
+            &agent_id.agent_id.0,
             None,
             100,
+            None,
+            None,
+            None,
+            None,
             None,
             None,
         )
@@ -601,10 +607,14 @@ async fn get_oplog_starts_at_the_retained_start(
 
     match client
         .get_oplog(
-            &agent_id.component_id.0,
-            &agent_id.agent_id,
+            &agent_id.environment_id.0,
+            &agent_id.agent_id.0,
             Some(OplogIndex::INITIAL.as_u64()),
             100,
+            None,
+            None,
+            None,
+            None,
             None,
             None,
         )

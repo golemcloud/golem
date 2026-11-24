@@ -7263,10 +7263,11 @@ mod tests {
     #[test]
     async fn an_oplog_page_without_a_start_requires_permission_for_the_entries_it_gives() {
         let harness = RestHarness::new(AgentMode::Durable);
-        let agent_id = AgentId {
-            component_id: harness.component_id,
-            agent_id: "weather-agent()".to_string(),
-        };
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        let agent_id = harness.keyed_agent_id();
+        let owned = harness.owned(&agent_id);
         let auth_ctx = auth_ctx_with_permissions(vec![oplog_target(
             &agent_id,
             OplogResourcePattern::range(Some(1), Some(3)),
@@ -7274,7 +7275,7 @@ mod tests {
 
         harness
             .worker_service
-            .get_oplog(&agent_id, None, None, 3, auth_ctx.clone())
+            .get_oplog(&owned, None, None, 3, None, None, auth_ctx.clone())
             .await
             .unwrap();
 
@@ -7282,7 +7283,7 @@ mod tests {
         assert!(
             harness
                 .worker_service
-                .get_oplog(&agent_id, None, None, 3, auth_ctx)
+                .get_oplog(&owned, None, None, 3, None, None, auth_ctx)
                 .await
                 .is_err(),
             "the oplog starts at index 10, after the range of the permission"
@@ -7295,10 +7296,11 @@ mod tests {
     #[test]
     async fn an_oplog_page_without_a_start_needs_permission_only_for_the_entries_it_gives() {
         let harness = RestHarness::new(AgentMode::Durable);
-        let agent_id = AgentId {
-            component_id: harness.component_id,
-            agent_id: "weather-agent()".to_string(),
-        };
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        let agent_id = harness.keyed_agent_id();
+        let owned = harness.owned(&agent_id);
         let auth_ctx = auth_ctx_with_permissions(vec![
             oplog_target(&agent_id, OplogResourcePattern::range(Some(1), Some(3))),
             oplog_target(&agent_id, OplogResourcePattern::range(Some(10), Some(12))),
@@ -7307,7 +7309,7 @@ mod tests {
         *harness.worker_client.oplog_page_first_index.lock().unwrap() = 10;
         let page = harness
             .worker_service
-            .get_oplog(&agent_id, None, None, 3, auth_ctx)
+            .get_oplog(&owned, None, None, 3, None, None, auth_ctx)
             .await
             .unwrap();
         assert_eq!(page.first_index_in_chunk, 10);

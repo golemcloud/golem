@@ -30,10 +30,10 @@ use crate::services::oplog::{
 use crate::storage::keyvalue::KeyValueStorage;
 use async_trait::async_trait;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::durable_stream::StreamSessionKey;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
+use golem_common::model::type_id::TypeId;
 use golem_common::model::{
     AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor, ShardEpoch,
 };
@@ -419,7 +419,7 @@ impl OplogService for RetentionOplogService {
             .await?;
         Ok(Arc::new(RetentionOplog::new(
             inner,
-            owned_agent_id.agent_id.clone(),
+            owned_agent_id.agent_id,
             OplogRetention::FULL,
         )))
     }
@@ -450,7 +450,7 @@ impl OplogService for RetentionOplogService {
             .await?;
         Ok(Arc::new(RetentionOplog::new(
             inner,
-            owned_agent_id.agent_id.clone(),
+            owned_agent_id.agent_id,
             OplogRetention::FULL,
         )))
     }
@@ -482,7 +482,7 @@ impl OplogService for RetentionOplogService {
             .await?;
         Ok(Arc::new(RetentionOplog::new(
             inner,
-            owned_agent_id.agent_id.clone(),
+            owned_agent_id.agent_id,
             retention,
         )))
     }
@@ -510,12 +510,7 @@ impl OplogService for RetentionOplogService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
     ) -> Result<OplogRetention, UnreadableOplog> {
-        read_oplog_retention(
-            self.key_value_storage.as_ref(),
-            &owned_agent_id.agent_id,
-            agent_mode,
-        )
-        .await
+        read_oplog_retention(self.key_value_storage.as_ref(), owned_agent_id, agent_mode).await
     }
 
     async fn assert_owning_epoch(
@@ -539,13 +534,9 @@ impl OplogService for RetentionOplogService {
         self.inner
             .delete(lifecycle, owned_agent_id, agent_mode, expected_epoch)
             .await?;
-        remove_oplog_retention(
-            self.key_value_storage.as_ref(),
-            &owned_agent_id.agent_id,
-            agent_mode,
-        )
-        .await
-        .map_err(OplogError::Maintenance)
+        remove_oplog_retention(self.key_value_storage.as_ref(), owned_agent_id, agent_mode)
+            .await
+            .map_err(OplogError::Maintenance)
     }
 
     async fn read_exact(
@@ -598,16 +589,16 @@ impl OplogService for RetentionOplogService {
         self.inner.try_exists(owned_agent_id, agent_mode).await
     }
 
-    async fn scan_for_component(
+    async fn scan_for_type(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        type_id: TypeId,
         modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<ScanPage, WorkerExecutorError> {
         self.inner
-            .scan_for_component(environment_id, component_id, modes, cursor, count)
+            .scan_for_type(environment_id, type_id, modes, cursor, count)
             .await
     }
 

@@ -26,8 +26,8 @@ use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
-use golem_common::model::{AgentStatus, IdempotencyKey, InvocationId, OwnedAgentId};
-use golem_common::{agent_id, data_value};
+use golem_common::model::{AgentStatus, IdempotencyKey, InvocationId};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor_test_utils::{
@@ -148,9 +148,8 @@ async fn an_agent_whose_oplog_starts_at_its_snapshot_recovers_and_answers_reads(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent = agent_id!("JsonSnapshotCounter", "retained-start");
+    let agent = agent_key!("JsonSnapshotCounter", "retained-start");
     let agent_id = executor.start_agent(&component.id, agent.clone()).await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &agent_id);
 
     increment(&executor, &component, &agent, 3).await?;
     let snapshot = wait_for_snapshot_after(&executor, &agent_id, OplogIndex::NONE).await?;
@@ -169,8 +168,8 @@ async fn an_agent_whose_oplog_starts_at_its_snapshot_recovers_and_answers_reads(
     let fingerprint = executor.get_worker_metadata(&agent_id).await?.fingerprint;
     drop(executor);
 
-    force_oplog_retained_start(deps, &context, &owned_agent_id, retained_start).await?;
-    remove_cached_status_and_result_index(deps, &context, &owned_agent_id, fingerprint).await?;
+    force_oplog_retained_start(deps, &context, &agent_id, retained_start).await?;
+    remove_cached_status_and_result_index(deps, &context, &agent_id, fingerprint).await?;
     let executor = start_with_snapshot_policy(deps, &context, policy).await?;
 
     assert_eq!(
@@ -212,7 +211,7 @@ async fn an_agent_whose_oplog_starts_at_its_snapshot_recovers_and_answers_reads(
 
     let create = executor
         .get_oplog_entry(
-            &agent_id,
+            &agent_id.agent_id,
             context.default_environment_id,
             OplogIndex::INITIAL,
             None,
@@ -231,7 +230,7 @@ async fn an_agent_whose_oplog_starts_at_its_snapshot_recovers_and_answers_reads(
     );
     let expired = executor
         .get_oplog_entry(
-            &agent_id,
+            &agent_id.agent_id,
             context.default_environment_id,
             retained_start.previous(),
             None,
@@ -258,7 +257,7 @@ async fn an_agent_whose_oplog_starts_at_its_snapshot_recovers_and_answers_reads(
         .map(|entry| entry.oplog_index)
         .unwrap_or(retained_start);
     let refused = executor
-        .fork_worker(&agent_id, "retained-start-fork", last)
+        .fork_worker(&agent_id, last)
         .await
         .expect_err("a fork copies the history from index 1");
     let refused = format!("{refused:#}");
@@ -296,7 +295,7 @@ async fn an_agent_whose_oplog_starts_at_its_snapshot_recovers_and_answers_reads(
     assert_eq!(value, 4, "the refused revert changed nothing");
 
     // An agent whose oplog starts at index 1 reverts its last call in the same executor.
-    let control = agent_id!("FailingCounter", "retained-start-control");
+    let control = agent_key!("FailingCounter", "retained-start-control");
     let control_id = executor.start_agent(&component.id, control.clone()).await?;
     executor
         .invoke_and_await_agent(&component, &control, "add", data_value!(5u64))
@@ -349,9 +348,8 @@ async fn a_recovery_without_a_usable_restore_source_keeps_the_oplog(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent = agent_id!("JsonSnapshotCounter", name);
+    let agent = agent_key!("JsonSnapshotCounter", name);
     let agent_id = executor.start_agent(&component.id, agent.clone()).await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &agent_id);
     increment(&executor, &component, &agent, 3).await?;
     if !matches!(policy, SnapshotPolicy::Disabled) {
         wait_for_snapshot_after(&executor, &agent_id, OplogIndex::NONE).await?;
@@ -364,7 +362,7 @@ async fn a_recovery_without_a_usable_restore_source_keeps_the_oplog(
         stored_primary_oplog_entries(
             deps,
             &context,
-            &owned_agent_id,
+            &agent_id,
             OplogIndex::INITIAL,
             retained_start.previous(),
         )
@@ -381,7 +379,7 @@ async fn a_recovery_without_a_usable_restore_source_keeps_the_oplog(
             .take_while(|index| *index < retained_start)
             .collect::<Vec<_>>()
     );
-    force_oplog_retained_start(deps, &context, &owned_agent_id, retained_start).await?;
+    force_oplog_retained_start(deps, &context, &agent_id, retained_start).await?;
     let executor = start_with_snapshot_policy(deps, &context, policy).await?;
 
     let failure = executor
@@ -393,7 +391,7 @@ async fn a_recovery_without_a_usable_restore_source_keeps_the_oplog(
 
     let create = executor
         .get_oplog_entry(
-            &agent_id,
+            &agent_id.agent_id,
             context.default_environment_id,
             OplogIndex::INITIAL,
             None,

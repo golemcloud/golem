@@ -5310,7 +5310,7 @@ async fn a_catch_up_over_a_retained_oplog_keeps_the_original_offsets() {
         Arc::new(UnusedComponentService),
         Arc::new(GolemConfig::default()),
     );
-    let id = owned_agent("retained-start", ComponentId::new());
+    let id = owned_agent("retained-start");
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let before_the_start = test_invocation_id("before-the-start".into());
     append_session(oplog.as_ref(), prepared_record(&id, &before_the_start)).await;
@@ -5332,14 +5332,9 @@ async fn a_catch_up_over_a_retained_oplog_keeps_the_original_offsets() {
         .expect("oplog write");
     let horizon = oplog.current_oplog_index().await;
     drop(oplog);
-    advance_oplog_retention(
-        kv.as_ref(),
-        &id.agent_id,
-        AgentMode::Durable,
-        retained_start,
-    )
-    .await
-    .unwrap();
+    advance_oplog_retention(kv.as_ref(), &id, AgentMode::Durable, retained_start)
+        .await
+        .unwrap();
     // The bounded index holds another session, so the lookups read the physical index.
     let mut bounded = DurableStreamSessionIndex::default();
     bounded.insert(test_invocation_id("recent".into()), completed(1, 1));

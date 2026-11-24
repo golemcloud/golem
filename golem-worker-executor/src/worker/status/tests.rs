@@ -11263,7 +11263,7 @@ impl RetainedTestCase {
             Arc::new(crate::storage::keyvalue::memory::InMemoryKeyValueStorage::new());
         crate::services::oplog::retention::advance_oplog_retention(
             key_value_storage.as_ref(),
-            &case.owned_agent_id.agent_id,
+            &case.owned_agent_id,
             AgentMode::Durable,
             OplogIndex::from_u64(start),
         )

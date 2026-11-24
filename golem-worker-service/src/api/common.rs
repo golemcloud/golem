@@ -791,10 +791,7 @@ mod tests {
     fn an_expired_oplog_read_maps_to_its_own_code() {
         let api_error: ApiEndpointError =
             WorkerServiceError::GolemError(WorkerExecutorError::oplog_expired(
-                golem_common::model::AgentId {
-                    component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
-                    agent_id: "Counter(\"a\")".to_string(),
-                },
+                golem_common::model::AgentId::from_parts(7, 1),
                 golem_common::model::OplogIndex::from_u64(42),
             ))
             .into();

@@ -10727,7 +10727,7 @@ async fn the_stream_index_and_the_control_refresh_read_from_the_retained_start()
     let handle = registered_stream(
         OplogIndex::from_u64(5),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         root_registration(&identity),
     )
@@ -10741,13 +10741,13 @@ async fn the_stream_index_and_the_control_refresh_read_from_the_retained_start()
             physical.take_read_ranges();
             let oplog: Arc<dyn Oplog> = Arc::new(RetentionOplog::new(
                 physical.clone(),
-                identity.agent_id.clone(),
+                identity.agent_id,
                 retention,
             ));
             let store = DurableStreamStore::load(
                 oplog,
                 identity.environment_id,
-                identity.agent_id.clone(),
+                identity.agent_id,
                 identity.fingerprint,
                 None,
             )
@@ -10800,7 +10800,7 @@ async fn an_attach_of_a_reader_introduced_below_the_retained_start_is_expired() 
     let key = attachment_key(&source_identity, handle.stream_id);
     let consumer_identity = TestIdentity {
         environment_id: key.consumer_environment_id,
-        agent_id: key.consumer.clone(),
+        agent_id: key.consumer,
         fingerprint: key.expected_consumer_fingerprint,
         invocation: key.consumer_invocation.clone(),
     };
@@ -10840,13 +10840,13 @@ async fn an_attach_of_a_reader_introduced_below_the_retained_start_is_expired() 
         async move {
             let oplog: Arc<dyn Oplog> = Arc::new(RetentionOplog::new(
                 physical,
-                consumer_identity.agent_id.clone(),
+                consumer_identity.agent_id,
                 retention,
             ));
             DurableStreamStore::load(
                 oplog,
                 consumer_identity.environment_id,
-                consumer_identity.agent_id.clone(),
+                consumer_identity.agent_id,
                 consumer_identity.fingerprint,
                 None,
             )

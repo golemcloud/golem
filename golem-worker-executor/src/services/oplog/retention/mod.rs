@@ -47,9 +47,9 @@ use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageError, KeyValueSt
 use bytes::Bytes;
 use desert_rust::BinaryCodec;
 use futures::{StreamExt, TryStreamExt};
-use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::OplogIndex;
+use golem_common::model::{AgentId, OwnedAgentId};
 use golem_common::serialization::{deserialize, serialize};
 
 /// Where the retained oplog of an agent starts.
@@ -243,9 +243,9 @@ const SVC_NAME: &str = "oplog";
 const ENTITY_NAME: &str = "oplog_retention";
 const SOURCE: OplogReadSource = OplogReadSource::Other("oplog retention");
 
-fn namespace(agent_id: &AgentId) -> KeyValueStorageNamespace {
+fn namespace(owned_agent_id: &OwnedAgentId) -> KeyValueStorageNamespace {
     KeyValueStorageNamespace::AgentOplogRetention {
-        agent_id: agent_id.clone(),
+        owned_agent_id: owned_agent_id.clone(),
     }
 }
 
@@ -273,7 +273,7 @@ fn unreadable(agent_id: &AgentId, error: KeyValueStorageError) -> UnreadableOplo
 /// the index before the start and after a range.
 async fn load(
     storage: &(dyn KeyValueStorage + Send + Sync),
-    agent_id: &AgentId,
+    owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
 ) -> Result<(OplogRetention, Option<Bytes>), UnreadableOplog> {
     let stored = storage
@@ -281,21 +281,21 @@ async fn load(
             SVC_NAME,
             "read_retention",
             ENTITY_NAME,
-            namespace(agent_id),
+            namespace(owned_agent_id),
             field(agent_mode),
         )
         .await
-        .map_err(|error| unreadable(agent_id, error))?;
+        .map_err(|error| unreadable(&owned_agent_id.agent_id, error))?;
     stored.map_or(Ok((OplogRetention::FULL, None)), |bytes| {
         let retention: OplogRetention = deserialize(&bytes).map_err(|error| {
             UnreadableOplog::new(
-                agent_id,
+                &owned_agent_id.agent_id,
                 OplogReadError::corruption(SOURCE, format!("undecodable record: {error}")),
             )
         })?;
         if retention.retained_start < OplogIndex::INITIAL {
             return Err(UnreadableOplog::new(
-                agent_id,
+                &owned_agent_id.agent_id,
                 OplogReadError::corruption(SOURCE, "the record has a retained start of 0"),
             ));
         }
@@ -306,10 +306,10 @@ async fn load(
 /// The retention of the oplog of the agent in `agent_mode`.
 pub async fn read_oplog_retention(
     storage: &(dyn KeyValueStorage + Send + Sync),
-    agent_id: &AgentId,
+    owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
 ) -> Result<OplogRetention, UnreadableOplog> {
-    Ok(load(storage, agent_id, agent_mode).await?.0)
+    Ok(load(storage, owned_agent_id, agent_mode).await?.0)
 }
 
 /// Moves the retained start of the oplog of the agent in `agent_mode` forward to `to`, and returns
@@ -318,18 +318,18 @@ pub async fn read_oplog_retention(
 /// changes the record between the read and the write, the attempt starts again from a new read.
 pub async fn advance_oplog_retention(
     storage: &(dyn KeyValueStorage + Send + Sync),
-    agent_id: &AgentId,
+    owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     to: OplogIndex,
 ) -> Result<OplogRetention, UnreadableOplog> {
     // The stream of attempts never ends: it gives a value only when an attempt wrote the record or
     // found the start already at or after `to`, and an error ends the advance.
     let attempts = futures::stream::repeat(())
-        .then(|()| try_advance_oplog_retention(storage, agent_id, agent_mode, to))
+        .then(|()| try_advance_oplog_retention(storage, owned_agent_id, agent_mode, to))
         .try_filter_map(|written| futures::future::ready(Ok(written)));
     std::pin::pin!(attempts).try_next().await?.ok_or_else(|| {
         UnreadableOplog::new(
-            agent_id,
+            &owned_agent_id.agent_id,
             OplogReadError::source_failure(SOURCE, "the advance attempts ended"),
         )
     })
@@ -339,17 +339,20 @@ pub async fn advance_oplog_retention(
 /// after the read.
 async fn try_advance_oplog_retention(
     storage: &(dyn KeyValueStorage + Send + Sync),
-    agent_id: &AgentId,
+    owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     to: OplogIndex,
 ) -> Result<Option<OplogRetention>, UnreadableOplog> {
-    let (current, stored) = load(storage, agent_id, agent_mode).await?;
+    let (current, stored) = load(storage, owned_agent_id, agent_mode).await?;
     let advanced = current.advanced_to(to);
     if advanced == current {
         return Ok(Some(current));
     }
     let encoded = serialize(&advanced).map_err(|error| {
-        UnreadableOplog::new(agent_id, OplogReadError::corruption(SOURCE, error))
+        UnreadableOplog::new(
+            &owned_agent_id.agent_id,
+            OplogReadError::corruption(SOURCE, error),
+        )
     })?;
     let field = field(agent_mode);
     let written = storage
@@ -357,28 +360,28 @@ async fn try_advance_oplog_retention(
             SVC_NAME,
             "advance_retention",
             ENTITY_NAME,
-            namespace(agent_id),
+            namespace(owned_agent_id),
             field,
             stored.as_deref(),
             &[],
             &[(field, &encoded)],
         )
         .await
-        .map_err(|error| unreadable(agent_id, error))?;
+        .map_err(|error| unreadable(&owned_agent_id.agent_id, error))?;
     Ok(written.then_some(advanced))
 }
 
 /// Removes the retention record of the oplog of the agent in `agent_mode`.
 pub(crate) async fn remove_oplog_retention(
     storage: &(dyn KeyValueStorage + Send + Sync),
-    agent_id: &AgentId,
+    owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
 ) -> Result<(), String> {
     storage
         .del(
             SVC_NAME,
             "remove_retention",
-            namespace(agent_id),
+            namespace(owned_agent_id),
             field(agent_mode),
         )
         .await
@@ -531,10 +534,7 @@ mod tests {
 
     #[test]
     fn a_page_keeps_its_start_and_is_expired_below_the_retained_start() {
-        let agent_id = AgentId {
-            component_id: golem_common::model::component::ComponentId::new(),
-            agent_id: "paged".to_string(),
-        };
+        let agent_id = AgentId::from_parts(7, 1);
         let page = |retention: OplogRetention, start, last, max| {
             retention.page(&agent_id, idx(start), idx(last), max)
         };
@@ -580,10 +580,7 @@ mod tests {
     }
 
     fn checked_agent() -> AgentId {
-        AgentId {
-            component_id: golem_common::model::component::ComponentId::new(),
-            agent_id: "checked".to_string(),
-        }
+        AgentId::from_parts(7, 2)
     }
 
     #[test]
@@ -659,24 +656,24 @@ mod tests {
     #[test]
     async fn a_record_with_a_start_of_0_is_corrupt() {
         let storage = InMemoryKeyValueStorage::new();
-        let agent_id = AgentId {
-            component_id: golem_common::model::component::ComponentId::new(),
-            agent_id: "start-0".to_string(),
-        };
+        let owned_agent_id = OwnedAgentId::new(
+            golem_common::model::environment::EnvironmentId::new(),
+            &AgentId::from_parts(7, 3),
+        );
         let write = |start: u64| {
             let encoded = serialize(&OplogRetention {
                 retained_start: idx(start),
             })
             .unwrap();
             let storage = &storage;
-            let agent_id = &agent_id;
+            let owned_agent_id = &owned_agent_id;
             async move {
                 storage
                     .set(
                         SVC_NAME,
                         "test",
                         ENTITY_NAME,
-                        namespace(agent_id),
+                        namespace(owned_agent_id),
                         field(AgentMode::Durable),
                         &encoded,
                     )
@@ -685,7 +682,7 @@ mod tests {
             }
         };
         write(0).await;
-        let error = read_oplog_retention(&storage, &agent_id, AgentMode::Durable)
+        let error = read_oplog_retention(&storage, &owned_agent_id, AgentMode::Durable)
             .await
             .unwrap_err();
         assert!(
@@ -694,7 +691,7 @@ mod tests {
         );
         write(1).await;
         assert_eq!(
-            read_oplog_retention(&storage, &agent_id, AgentMode::Durable).await,
+            read_oplog_retention(&storage, &owned_agent_id, AgentMode::Durable).await,
             Ok(OplogRetention::FULL)
         );
     }
@@ -707,17 +704,18 @@ mod tests {
         let inner: Arc<dyn KeyValueStorage + Send + Sync> =
             Arc::new(InMemoryKeyValueStorage::new());
         let storage = FaultInjectingKeyValueStorage::new(inner, faults.clone());
-        let agent_id = AgentId {
-            component_id: golem_common::model::component::ComponentId::new(),
-            agent_id: "stale-writer".to_string(),
-        };
+        let owned_agent_id = OwnedAgentId::new(
+            golem_common::model::environment::EnvironmentId::new(),
+            &AgentId::from_parts(7, 3),
+        );
         let gate = faults.pause_next("advance_retention");
         let (stale, other) = futures::join!(
-            advance_oplog_retention(&storage, &agent_id, AgentMode::Durable, idx(3)),
+            advance_oplog_retention(&storage, &owned_agent_id, AgentMode::Durable, idx(3)),
             async {
                 gate.entered().await;
                 let other =
-                    advance_oplog_retention(&storage, &agent_id, AgentMode::Durable, idx(5)).await;
+                    advance_oplog_retention(&storage, &owned_agent_id, AgentMode::Durable, idx(5))
+                        .await;
                 gate.release();
                 other
             }
@@ -730,13 +728,13 @@ mod tests {
             "the stale writer lost its compare-and-set and wrote nothing after it read 5"
         );
         assert_eq!(
-            read_oplog_retention(&storage, &agent_id, AgentMode::Durable)
+            read_oplog_retention(&storage, &owned_agent_id, AgentMode::Durable)
                 .await
                 .unwrap(),
             at(5)
         );
         assert_eq!(
-            read_oplog_retention(&storage, &agent_id, AgentMode::Ephemeral)
+            read_oplog_retention(&storage, &owned_agent_id, AgentMode::Ephemeral)
                 .await
                 .unwrap(),
             OplogRetention::FULL,
