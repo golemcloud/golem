@@ -1596,6 +1596,8 @@ async fn invoke_owner_method_with_scope(
             constructor: None,
             component_id: Some(fixture.owner_component.id.into()),
             method_name: Some(method.to_string()),
+            allow_streams: false,
+            captured_method_input: None,
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             mode: AgentInvocationMode::Await as i32,
             schedule_at: None,

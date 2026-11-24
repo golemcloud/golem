@@ -22,7 +22,7 @@ use futures::stream::BoxStream;
 use futures::{StreamExt as _, TryStreamExt as _};
 use golem_common::base_model::oplog::PublicUpdateDescription;
 use golem_common::model::agent::{
-    AgentUpdateMode, RevertToOplogIndex, RevertWorkerTarget, UpdateRecord,
+    AgentUpdateMode, ParsedAgentKey, RevertToOplogIndex, RevertWorkerTarget, UpdateRecord,
 };
 use golem_common::model::component::{ComponentDto, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
@@ -85,6 +85,10 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("http_update_effect")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("constructor_parameter_echo")]
     PrecompiledComponent
 );
 inherit_test_dep!(Tracing);
@@ -2599,6 +2603,150 @@ async fn automatic_and_manual_update_contracts_remain_distinct(
 
 #[test]
 #[timeout("120s")]
+async fn queued_methods_validate_against_the_selected_update_revision(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::caller::Caller;
+    use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::model::{AgentInvocation, InvocationId};
+    use golem_common::schema::SchemaValue;
+    use golem_worker_executor::worker::ResultOrSubscription;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let mut http_server = TestHttpServer::start().await;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_key!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), http_server.port().to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "revision_one_only", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        1
+    );
+    let target = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    let mut control = http_server.f1_control(2117).await;
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_clone = agent_id.clone();
+    let held = spawn(async move {
+        executor_clone
+            .invoke_and_await_agent(
+                &component_clone,
+                &agent_clone,
+                "blocking_stable",
+                data_value!(2117u64),
+            )
+            .await
+    });
+    control.await_reached().await;
+    executor
+        .manual_update_worker(&worker_id, target.revision, false)
+        .await?;
+    let pending = wait_for_update_counts(&executor, &worker_id, (1, 0, 0)).await?;
+    assert_eq!(pending.component_revision, component.revision);
+
+    let invocation = |method_name: &str| AgentInvocation::AgentMethod {
+        idempotency_key: InvocationId(uuid::Uuid::new_v4()),
+        method_name: method_name.to_string(),
+        allow_streams: false,
+        input: SchemaValue::Record { fields: vec![] }.try_into().unwrap(),
+        invocation_context: InvocationContextStack::fresh(),
+        caller: Caller::anonymous(),
+        scope_card: None,
+    };
+    let removed = invocation("revision_one_only");
+    let added = invocation("revision_two_only");
+    let worker = executor.active_agent(&worker_id).await.unwrap().primary();
+    for request in [&removed, &added] {
+        assert!(matches!(
+            worker.clone().invoke(request.clone()).await?,
+            ResultOrSubscription::Pending(_)
+        ));
+    }
+    // Both observations use revision one's read-only policy while the update is
+    // pending. Revision two makes the method mutating, so neither caller may
+    // borrow the other key's execution result.
+    let mut reads = [
+        Box::pin(
+            worker
+                .clone()
+                .invoke_and_await(invocation("revision_cache_probe")),
+        ),
+        Box::pin(
+            worker
+                .clone()
+                .invoke_and_await(invocation("revision_cache_probe")),
+        ),
+    ];
+    for read in &mut reads {
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), read)
+                .await
+                .is_err(),
+            "a cache miss cannot complete while the gate is held"
+        );
+    }
+    assert!(!held.is_finished());
+    control.resume();
+    assert_eq!(held.await??.into_typed::<u32>()?, 100);
+
+    assert!(matches!(
+        worker.clone().invoke_and_await(removed).await,
+        Err(WorkerExecutorError::InvalidRequest { details })
+            if details.contains("revision_one_only") && details.contains("not found")
+    ));
+    let output = worker.clone().invoke_and_await(added).await?;
+    assert_eq!(output.component_revision, Some(target.revision));
+    assert!(matches!(
+        output.result,
+        golem_common::model::AgentInvocationResult::AgentMethod {
+            output: SchemaValue::U32(2)
+        }
+    ));
+    let mut values = Vec::new();
+    for read in reads {
+        let output = read.await?;
+        assert_eq!(output.component_revision, Some(target.revision));
+        let golem_common::model::AgentInvocationResult::AgentMethod {
+            output: SchemaValue::U32(value),
+        } = output.result
+        else {
+            panic!("expected the selected revision's counter result");
+        };
+        values.push(value);
+    }
+    values.sort();
+    assert_eq!(values, vec![101, 102]);
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "accumulated_value", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        102
+    );
+    http_server.abort();
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
 async fn snapshot_assisted_restart_before_attempt_and_later_update_modes_succeed(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -4752,6 +4900,216 @@ async fn manual_update_on_idle_with_failing_load(
     assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
     assert_eq!(update_counts(&metadata), (0, 0, 1));
 
+    Ok(())
+}
+
+/// Starts a resident `SaveFaultAgent` whose save hook asks a local server whether to fail: the
+/// server answers with `faults` in order and "ok" after them. Gives the agent, a new revision of
+/// its component to update to, and the count of saves that asked the server.
+async fn start_save_fault_agent(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    constructor_parameter_echo: &PrecompiledComponent,
+    faults: &'static [&'static str],
+) -> anyhow::Result<SaveFaultAgent> {
+    let saves = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let fault_server = spawn({
+        let saves = saves.clone();
+        async move {
+            let route = Router::new().route(
+                "/save-fault",
+                axum::routing::get(move || {
+                    let save = saves.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    async move { faults.get(save).copied().unwrap_or("ok") }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+    });
+
+    let executor = start_with_overrides(
+        deps,
+        context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.memory.system_memory_override = Some(256 * 1024 * 1024);
+                config.memory.worker_memory_ratio = 1.0;
+                config.memory.component_size_coefficient = 0.0;
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, constructor_parameter_echo)
+        .store()
+        .await?;
+    let agent_id = agent_key!("SaveFaultAgent", "resident");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "setFaultPort",
+            data_value!(port as f64),
+        )
+        .await?;
+    for _ in 0..2 {
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+            .await?;
+    }
+    let target = executor
+        .update_component(&component.id, "golem_it_constructor_parameter_echo")
+        .await?;
+    Ok(SaveFaultAgent {
+        executor,
+        component,
+        agent_id,
+        worker_id,
+        target_revision: target.revision,
+        saves,
+        fault_server,
+    })
+}
+
+struct SaveFaultAgent {
+    executor: TestWorkerExecutor,
+    component: ComponentDto,
+    agent_id: ParsedAgentKey,
+    worker_id: OwnedAgentId,
+    target_revision: ComponentRevision,
+    saves: Arc<std::sync::atomic::AtomicUsize>,
+    fault_server: JoinHandle<()>,
+}
+
+impl SaveFaultAgent {
+    /// Requests a manual update, waits until it fails, and gives the details of the failure.
+    async fn failed_update(&self) -> anyhow::Result<String> {
+        self.executor
+            .manual_update_worker(&self.worker_id, self.target_revision, false)
+            .await?;
+        let failed = wait_for_update_counts(&self.executor, &self.worker_id, (0, 0, 1)).await?;
+        Ok(failed
+            .updates
+            .iter()
+            .find_map(|record| match record {
+                UpdateRecord::FailedUpdate(update) => update.details.clone(),
+                _ => None,
+            })
+            .unwrap_or_default())
+    }
+
+    /// Requests the manual update again at once and checks that it succeeds with the second save.
+    async fn retried_update_succeeds(&self) -> anyhow::Result<()> {
+        self.executor
+            .manual_update_worker(&self.worker_id, self.target_revision, false)
+            .await?;
+        let settled = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let metadata = self.executor.get_worker_metadata(&self.worker_id).await?;
+                let (pending, successful, failed) = update_counts(&metadata);
+                if pending == 0 && successful + failed == 2 {
+                    break anyhow::Ok(metadata);
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await??;
+        let failures: Vec<_> = settled
+            .updates
+            .iter()
+            .filter_map(|record| match record {
+                UpdateRecord::FailedUpdate(update) => update.details.clone(),
+                _ => None,
+            })
+            .collect();
+        let saves = self.saves.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            update_counts(&settled),
+            (0, 1, 1),
+            "{failures:?}, saves: {saves}"
+        );
+        assert_eq!(settled.component_revision, self.target_revision);
+        assert_eq!(saves, 2);
+
+        let count = self
+            .executor
+            .invoke_and_await_agent(&self.component, &self.agent_id, "get", data_value!())
+            .await?;
+        assert_eq!(count.into_typed::<f64>()?, 2.0);
+        self.executor
+            .check_oplog_is_queryable(&self.worker_id)
+            .await?;
+        self.fault_server.abort();
+        Ok(())
+    }
+}
+
+/// A save hook that runs out of memory fails the manual update. A second manual update requested
+/// right after it, with no invocation, interrupt or eviction in between, takes its snapshot and
+/// succeeds: the agent restarts with new memory permits, so the save does not run on the instance
+/// that trapped.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_manual_update_after_a_save_hook_ran_out_of_memory_succeeds(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let agent =
+        start_save_fault_agent(deps, &context, constructor_parameter_echo, &["oom"]).await?;
+    assert_eq!(
+        agent.failed_update().await?,
+        "failed to get a snapshot for manual update: Out of memory"
+    );
+    agent.retried_update_succeeds().await
+}
+
+/// A save hook that throws traps the guest (the SDK turns the uncaught error into a panic), and
+/// it throws on every save: a restart would not heal it. So the agent keeps its instance after the
+/// failed update, and a second update requested right after it fails without running the hook
+/// again, as before the out-of-memory restart. The server counts each save that reached the hook.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_manual_update_whose_save_hook_threw_keeps_the_instance(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let agent = start_save_fault_agent(
+        deps,
+        &context,
+        constructor_parameter_echo,
+        &["throw", "throw"],
+    )
+    .await?;
+    let failure = agent.failed_update().await?;
+    assert!(
+        failure.starts_with("failed to get a snapshot for manual update: ")
+            && failure.contains("save fault"),
+        "{failure}"
+    );
+
+    agent
+        .executor
+        .manual_update_worker(&agent.worker_id, agent.target_revision, false)
+        .await?;
+    let settled = wait_for_update_counts(&agent.executor, &agent.worker_id, (0, 0, 2)).await?;
+    let saves = agent.saves.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(saves, 1, "{:?}", settled.updates);
+    assert_ne!(settled.component_revision, agent.target_revision);
+    agent.fault_server.abort();
     Ok(())
 }
 

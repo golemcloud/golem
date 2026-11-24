@@ -313,7 +313,7 @@ impl EffectExternalBridgeGenerator {
         );
         let separator = if signature.is_empty() { "" } else { ", " };
         out.push_str(&format!(
-            "  static create({signature}{separator}{options}?: {options_type}): Effect.Effect<{class}, unknown> {{\n    return Effect.gen(function*() {{\n"
+            "  static create({signature}{separator}{options}?: {options_type}): Effect.Effect<{class}, base.GolemConflictError | Error> {{\n    return Effect.gen(function*() {{\n"
         ));
         let mut args = Vec::new();
         for (index, (name, schema)) in params.iter().enumerate() {
@@ -347,7 +347,7 @@ impl EffectExternalBridgeGenerator {
             "{{ keyed: {options}?.keyed, env: {options}?.env{config} }}"
         ));
         out.push_str(&format!(
-            "      const {value} = yield* Effect.tryPromise({{ try: () => transport.{class}.create({}), catch: error => error }})\n      return new {class}({value})\n    }})\n  }}\n",
+            "      const {value} = yield* Effect.tryPromise({{ try: () => transport.{class}.create({}), catch: error => error }})\n      return new {class}({value})\n    }}).pipe(Effect.mapError(error => error instanceof Error ? error : new Error(String(error))))\n  }}\n",
             args.join(", ")
         ));
         Ok(())

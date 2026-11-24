@@ -123,6 +123,7 @@ impl<Repo: EnvironmentToolGrantRepo> LoggedEnvironmentToolGrantRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: EnvironmentToolGrantRepo> EnvironmentToolGrantRepo
     for LoggedEnvironmentToolGrantRepo<Repo>
 {
@@ -326,6 +327,7 @@ impl GrantKind for ToolReleaseKind {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl EnvironmentToolGrantRepo for DbEnvironmentToolGrantRepo<PostgresPool> {
     async fn create(
         &self,

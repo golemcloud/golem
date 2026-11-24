@@ -239,10 +239,10 @@ impl SentAt {
 /// the time a machine spends suspended; elsewhere the monotonic clock, which is the best the
 /// platform offers. The watchdog still sleeps on the runtime's monotonic clock: that only decides
 /// when the keepalive task wakes, and the gate's check does not depend on it.
+#[cfg(target_os = "linux")]
 mod belief_clock {
     use std::time::Duration;
 
-    #[cfg(target_os = "linux")]
     pub(super) fn now() -> Duration {
         let mut time = libc::timespec {
             tv_sec: 0,
@@ -254,12 +254,14 @@ mod belief_clock {
         assert_eq!(result, 0, "CLOCK_BOOTTIME cannot be read");
         Duration::new(time.tv_sec as u64, time.tv_nsec as u32)
     }
+}
 
-    #[cfg(not(target_os = "linux"))]
+#[cfg(not(target_os = "linux"))]
+mod belief_clock {
+    use std::sync::OnceLock;
+    use std::time::{Duration, Instant};
+
     pub(super) fn now() -> Duration {
-        use std::sync::OnceLock;
-        use std::time::Instant;
-
         static START: OnceLock<Instant> = OnceLock::new();
         START.get_or_init(Instant::now).elapsed()
     }

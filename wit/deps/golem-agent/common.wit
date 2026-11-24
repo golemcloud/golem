@@ -102,7 +102,8 @@ interface common {
     path-prefix:    list<path-segment>,
     auth-details:   option<auth-details>,
     phantom-agent:  bool,
-    phantom-id-binding: option<phantom-id-binding>,
+    agent-id-binding: option<agent-id-binding>,
+    create-route: option<list<path-segment>>,
     cors-options:   cors-options,
     webhook-suffix: list<path-segment>,
     static-bindings: list<file-mapping>,
@@ -113,14 +114,13 @@ interface common {
     openapi-provider-method: option<string>,
   }
 
-  variant phantom-id-binding {
-    path(phantom-id-binding-details),
-    query(phantom-id-binding-details),
+  variant agent-id-binding {
+    path(agent-id-binding-details),
+    query(agent-id-binding-details),
   }
 
-  record phantom-id-binding-details {
+  record agent-id-binding-details {
     name: string,
-    optional: bool,
   }
 
   record cors-options {

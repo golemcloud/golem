@@ -31,6 +31,15 @@ use std::sync::atomic::AtomicU64;
 use tokio::io::AsyncWriteExt;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 use tracing::debug;
+
+#[cfg(unix)]
+#[path = "file_loader/unix.rs"]
+mod platform;
+#[cfg(not(unix))]
+#[path = "file_loader/other.rs"]
+mod platform;
+use platform::set_initial_file_read_only;
+
 // Opaque token for read-only files. This is used to ensure that the file is not deleted while it is in use.
 // Make sure to not drop this token until you are done with the file.
 #[derive(Debug, Clone)]
@@ -351,18 +360,6 @@ impl FileLoader {
     }
 }
 
-fn set_initial_file_read_only(file: &std::fs::File) -> std::io::Result<()> {
-    let mut permissions = file.metadata()?.permissions();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        permissions.set_mode(0o444);
-    }
-    #[cfg(not(unix))]
-    permissions.set_readonly(true);
-    file.set_permissions(permissions)
-}
-
 /// Gives the size of a download after a chunk of `chunk_bytes` bytes, from the size before it.
 /// A size that overflows, or that is larger than `expected_size`, gives an error.
 fn downloaded_size(
@@ -493,6 +490,7 @@ pub(crate) mod scripted_storage {
     }
 
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl BlobStorageBackend for ScriptedSourceStorage {
         async fn get_raw_at(
             &self,

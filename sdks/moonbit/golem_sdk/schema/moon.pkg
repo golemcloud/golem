@@ -14,4 +14,8 @@ import {
   "moonbitlang/core/hashset",
 } for "test"
 
-supported_targets = "+wasm"
+supported_targets = "+wasm+wasm-gc"
+
+options(
+  link: { "wasm-gc": { "export-memory-name": "memory" } },
+)

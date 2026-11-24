@@ -13,15 +13,13 @@
 // limitations under the License.
 
 use super::{
-    Commit, CommitGate, DIRECTORY_ATTEMPTS, FileSystemBlobStorage, PathEntry, STAGING_DIRECTORY,
-    STAGING_FILE_AGE, absent_on_not_found, add_files, add_names, blob_path_of, copy_staged,
-    directory_attempts, encoded_name, first_error, listed_entry, persist_with,
-    remove_unless_dropped, staging_file_is_old, write_if_absent, write_staged,
+    Commit, CommitGate, DIRECTORY_ATTEMPTS, FileSystemBlobStorage, STAGING_DIRECTORY,
+    STAGING_FILE_AGE, absent_on_not_found, blob_path_of, copy_staged, directory_attempts,
+    first_error, listed_entry, persist_with, remove_unless_dropped, staging_file_is_old,
+    write_if_absent, write_staged,
 };
-#[cfg(unix)]
-use crate::storage::blob::{BlobFailure, BlobRefusal};
 use crate::storage::blob::{
-    BlobRangeError, BlobStorage, BlobStorageNamespace, ListedBlob, NormalizedBlobPath, PutIfAbsent,
+    BlobRangeError, BlobStorage, BlobStorageNamespace, NormalizedBlobPath, PutIfAbsent,
     normalized_blob_path,
 };
 use golem_common::model::environment::EnvironmentId;
@@ -39,6 +37,47 @@ fn namespace() -> BlobStorageNamespace {
     BlobStorageNamespace::CustomStorage {
         environment_id: EnvironmentId(Uuid::nil()),
     }
+}
+
+#[test]
+fn filesystem_operations_finish_with_an_idle_current_thread_runtime() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("compilation_cache")).unwrap();
+    std::fs::create_dir(root.path().join("custom_data")).unwrap();
+    let storage = FileSystemBlobStorage::attach_existing(root.path()).unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let handle = runtime.handle().clone();
+    let (done, finished) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let result = handle.block_on(async {
+            storage
+                .put_raw("test", "put", namespace(), Path::new("blob"), b"abcdef")
+                .await?;
+            assert_eq!(
+                storage
+                    .get_raw("test", "get", namespace(), Path::new("blob"))
+                    .await?,
+                Some(b"abcdef".to_vec())
+            );
+            assert_eq!(
+                storage
+                    .get_raw_slice("test", "slice", namespace(), Path::new("blob"), 1, 3)
+                    .await?,
+                Some(b"bcd".to_vec())
+            );
+            Ok::<_, anyhow::Error>(())
+        });
+        let _ = done.send(result);
+    });
+    let result = finished.recv_timeout(Duration::from_secs(10));
+    runtime.shutdown_background();
+    worker.join().unwrap();
+    result
+        .expect("filesystem operations must finish without driving the runtime scheduler")
+        .unwrap();
 }
 
 /// Makes a blob storage in a new temporary directory with the blob `ranges/blob`, which holds
@@ -321,125 +360,131 @@ fn a_read_of_a_blob_deleted_after_its_metadata_gives_none() {
 }
 
 #[cfg(unix)]
-#[test]
-fn a_listing_leaves_out_the_entries_that_a_remove_took_away_and_goes_on() {
-    let root = tempfile::tempdir().unwrap();
-    let on_disk = |name: &str, entry: PathEntry| {
-        root.path()
-            .join(encoded_name(name, entry).collect::<PathBuf>())
-    };
-    std::fs::write(on_disk("kept", PathEntry::Blob), b"kept").unwrap();
-    std::fs::write(on_disk("removed", PathEntry::Blob), b"removed").unwrap();
-    let gone = on_disk("gone", PathEntry::Directory);
-    std::fs::create_dir(&gone).unwrap();
-    std::fs::write(
-        gone.join(on_disk("file", PathEntry::Blob).file_name().unwrap()),
-        b"file",
-    )
-    .unwrap();
-    let entries = std::fs::read_dir(root.path()).unwrap().collect::<Vec<_>>();
-    std::fs::remove_file(on_disk("removed", PathEntry::Blob)).unwrap();
-    std::fs::remove_dir_all(&gone).unwrap();
+mod unix_listing {
+    use super::super::{PathEntry, add_files, add_names, encoded_name};
+    use super::*;
+    use crate::storage::blob::ListedBlob;
+    use pretty_assertions::assert_eq;
+    use test_r::test;
 
-    let listed = add_files(
-        std::iter::once(Err(not_found())).chain(entries),
-        root.path(),
-        Vec::new(),
-    )
-    .unwrap();
+    #[test]
+    fn a_listing_leaves_out_the_entries_that_a_remove_took_away_and_goes_on() {
+        let root = tempfile::tempdir().unwrap();
+        let on_disk = |name: &str, entry: PathEntry| {
+            root.path()
+                .join(encoded_name(name, entry).collect::<PathBuf>())
+        };
+        std::fs::write(on_disk("kept", PathEntry::Blob), b"kept").unwrap();
+        std::fs::write(on_disk("removed", PathEntry::Blob), b"removed").unwrap();
+        let gone = on_disk("gone", PathEntry::Directory);
+        std::fs::create_dir(&gone).unwrap();
+        std::fs::write(
+            gone.join(on_disk("file", PathEntry::Blob).file_name().unwrap()),
+            b"file",
+        )
+        .unwrap();
+        let entries = std::fs::read_dir(root.path()).unwrap().collect::<Vec<_>>();
+        std::fs::remove_file(on_disk("removed", PathEntry::Blob)).unwrap();
+        std::fs::remove_dir_all(&gone).unwrap();
 
-    assert_eq!(
-        listed,
-        vec![ListedBlob {
-            path: Path::new("kept").into(),
-            size: 4,
-        }]
-    );
-}
+        let listed = add_files(
+            std::iter::once(Err(not_found())).chain(entries),
+            root.path(),
+            Vec::new(),
+        )
+        .unwrap();
 
-/// The entries of a directory with the blob `sibling` and the entry `changed`, read while
-/// `changed` is a directory when `was_directory` and a file otherwise. Then `changed` changes its
-/// type. Gives whether the entries saw `changed` with its first type, and the blob paths that
-/// the walk of the entries lists.
-#[cfg(unix)]
-fn listed_after_a_change_of_type(was_directory: bool) -> (bool, Result<Vec<Box<Path>>, ErrorKind>) {
-    let root = tempfile::tempdir().unwrap();
-    let on_disk = |name: &str| {
-        root.path()
-            .join(encoded_name(name, PathEntry::Blob).collect::<PathBuf>())
-    };
-    let changed = on_disk("changed");
-    std::fs::write(on_disk("sibling"), b"sibling").unwrap();
-    let make = |directory: bool| match directory {
-        true => std::fs::create_dir(&changed).unwrap(),
-        false => std::fs::write(&changed, b"file").unwrap(),
-    };
-    make(was_directory);
-    let entries = std::fs::read_dir(root.path()).unwrap().collect::<Vec<_>>();
-    let seen = entries.iter().any(|entry| {
-        let entry = entry.as_ref().unwrap();
-        entry.path() == changed && entry.file_type().unwrap().is_dir() == was_directory
-    });
-    match was_directory {
-        true => std::fs::remove_dir(&changed).unwrap(),
-        false => std::fs::remove_file(&changed).unwrap(),
+        assert_eq!(
+            listed,
+            vec![ListedBlob {
+                path: Path::new("kept").into(),
+                size: 4,
+            }]
+        );
     }
-    make(!was_directory);
 
-    let listed = add_files(entries.into_iter(), root.path(), Vec::new())
-        .map(|listed| listed.into_iter().map(|blob| blob.path).collect::<Vec<_>>())
-        .map_err(|error| error.kind());
-    (seen, listed)
-}
+    /// The entries of a directory with the blob `sibling` and the entry `changed`, read while
+    /// `changed` is a directory when `was_directory` and a file otherwise. Then `changed` changes its
+    /// type. Gives whether the entries saw `changed` with its first type, and the blob paths that
+    /// the walk of the entries lists.
+    fn listed_after_a_change_of_type(
+        was_directory: bool,
+    ) -> (bool, Result<Vec<Box<Path>>, ErrorKind>) {
+        let root = tempfile::tempdir().unwrap();
+        let on_disk = |name: &str| {
+            root.path()
+                .join(encoded_name(name, PathEntry::Blob).collect::<PathBuf>())
+        };
+        let changed = on_disk("changed");
+        std::fs::write(on_disk("sibling"), b"sibling").unwrap();
+        let make = |directory: bool| match directory {
+            true => std::fs::create_dir(&changed).unwrap(),
+            false => std::fs::write(&changed, b"file").unwrap(),
+        };
+        make(was_directory);
+        let entries = std::fs::read_dir(root.path()).unwrap().collect::<Vec<_>>();
+        let seen = entries.iter().any(|entry| {
+            let entry = entry.as_ref().unwrap();
+            entry.path() == changed && entry.file_type().unwrap().is_dir() == was_directory
+        });
+        match was_directory {
+            true => std::fs::remove_dir(&changed).unwrap(),
+            false => std::fs::remove_file(&changed).unwrap(),
+        }
+        make(!was_directory);
 
-/// A directory that a write replaces with a blob after the walk saw it as a directory does not fail
-/// the listing, and the sibling blob is in it.
-#[cfg(unix)]
-#[test]
-fn a_listing_goes_on_when_a_directory_becomes_a_blob_during_the_walk() {
-    assert_eq!(
-        listed_after_a_change_of_type(true),
-        (true, Ok(vec![Box::from(Path::new("sibling"))]))
-    );
-}
+        let listed = add_files(entries.into_iter(), root.path(), Vec::new())
+            .map(|listed| listed.into_iter().map(|blob| blob.path).collect::<Vec<_>>())
+            .map_err(|error| error.kind());
+        (seen, listed)
+    }
 
-/// A file that a write replaces with a directory after the walk saw it as a file is not a blob of
-/// the listing.
-#[cfg(unix)]
-#[test]
-fn a_listing_never_gives_a_directory_that_was_a_file_when_the_walk_saw_it() {
-    assert_eq!(
-        listed_after_a_change_of_type(false),
-        (true, Ok(vec![Box::from(Path::new("sibling"))]))
-    );
-}
+    /// A directory that a write replaces with a blob after the walk saw it as a directory does not fail
+    /// the listing, and the sibling blob is in it.
+    #[test]
+    fn a_listing_goes_on_when_a_directory_becomes_a_blob_during_the_walk() {
+        assert_eq!(
+            listed_after_a_change_of_type(true),
+            (true, Ok(vec![Box::from(Path::new("sibling"))]))
+        );
+    }
 
-/// The walk of the names of a directory goes on when the directory of a part of a long name
-/// becomes a file after the walk saw it, and the sibling name is in the result.
-#[cfg(unix)]
-#[test]
-fn a_listing_of_names_goes_on_when_a_part_directory_becomes_a_file() {
-    let root = tempfile::tempdir().unwrap();
-    let long = "l".repeat(200);
-    let parts = encoded_name(&long, PathEntry::Blob).collect::<Vec<_>>();
-    let part = root.path().join(&parts[0]);
-    std::fs::create_dir(&part).unwrap();
-    std::fs::write(
-        root.path()
-            .join(encoded_name("sibling", PathEntry::Blob).collect::<PathBuf>()),
-        b"sibling",
-    )
-    .unwrap();
-    let entries = std::fs::read_dir(root.path()).unwrap().collect::<Vec<_>>();
-    std::fs::remove_dir(&part).unwrap();
-    std::fs::write(&part, b"file").unwrap();
+    /// A file that a write replaces with a directory after the walk saw it as a file is not a blob of
+    /// the listing.
+    #[test]
+    fn a_listing_never_gives_a_directory_that_was_a_file_when_the_walk_saw_it() {
+        assert_eq!(
+            listed_after_a_change_of_type(false),
+            (true, Ok(vec![Box::from(Path::new("sibling"))]))
+        );
+    }
 
-    let listed = add_names(entries.into_iter(), root.path(), Vec::new()).map_err(|e| e.kind());
+    /// The walk of the names of a directory goes on when the directory of a part of a long name
+    /// becomes a file after the walk saw it, and the sibling name is in the result.
+    #[test]
+    fn a_listing_of_names_goes_on_when_a_part_directory_becomes_a_file() {
+        let root = tempfile::tempdir().unwrap();
+        let long = "l".repeat(200);
+        let parts = encoded_name(&long, PathEntry::Blob).collect::<Vec<_>>();
+        let part = root.path().join(&parts[0]);
+        std::fs::create_dir(&part).unwrap();
+        std::fs::write(
+            root.path()
+                .join(encoded_name("sibling", PathEntry::Blob).collect::<PathBuf>()),
+            b"sibling",
+        )
+        .unwrap();
+        let entries = std::fs::read_dir(root.path()).unwrap().collect::<Vec<_>>();
+        std::fs::remove_dir(&part).unwrap();
+        std::fs::write(&part, b"file").unwrap();
 
-    assert_eq!(
-        (parts.len() > 1, listed),
-        (true, Ok(vec![PathBuf::from("sibling")]))
-    );
+        let listed = add_names(entries.into_iter(), root.path(), Vec::new()).map_err(|e| e.kind());
+
+        assert_eq!(
+            (parts.len() > 1, listed),
+            (true, Ok(vec![PathBuf::from("sibling")]))
+        );
+    }
 }
 
 #[test]
@@ -477,30 +522,36 @@ async fn old_staging_files_are_removed_at_start() {
 }
 
 #[cfg(unix)]
-#[test]
-async fn a_start_whose_old_staging_file_cannot_be_removed_goes_on() {
+mod unix_staging_cleanup {
+    use super::*;
+    use pretty_assertions::assert_eq;
     use std::os::unix::fs::PermissionsExt;
-    let root = tempfile::tempdir().unwrap();
-    let staging = root.path().join(STAGING_DIRECTORY);
-    std::fs::create_dir_all(&staging).unwrap();
-    let old = std::fs::File::create(staging.join("old")).unwrap();
-    old.set_modified(SystemTime::now() - STAGING_FILE_AGE - Duration::from_secs(60))
-        .unwrap();
-    std::fs::write(staging.join("probe"), b"probe").unwrap();
-    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o555)).unwrap();
-    // A process that may write into any directory removes the file anyway, and the case does not
-    // arise for it.
-    let privileged = std::fs::remove_file(staging.join("probe")).is_ok();
+    use test_r::test;
 
-    let started = FileSystemBlobStorage::new(root.path())
-        .await
-        .map(|_| ())
-        .map_err(|error| error.to_string());
-    let old_stays = staging.join("old").exists();
-    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755)).unwrap();
+    #[test]
+    async fn a_start_whose_old_staging_file_cannot_be_removed_goes_on() {
+        let root = tempfile::tempdir().unwrap();
+        let staging = root.path().join(STAGING_DIRECTORY);
+        std::fs::create_dir_all(&staging).unwrap();
+        let old = std::fs::File::create(staging.join("old")).unwrap();
+        old.set_modified(SystemTime::now() - STAGING_FILE_AGE - Duration::from_secs(60))
+            .unwrap();
+        std::fs::write(staging.join("probe"), b"probe").unwrap();
+        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // A process that may write into any directory removes the file anyway, and the case does not
+        // arise for it.
+        let privileged = std::fs::remove_file(staging.join("probe")).is_ok();
 
-    assert_eq!(started, Ok(()));
-    assert_eq!(old_stays, !privileged);
+        let started = FileSystemBlobStorage::new(root.path())
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string());
+        let old_stays = staging.join("old").exists();
+        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(started, Ok(()));
+        assert_eq!(old_stays, !privileged);
+    }
 }
 
 #[test]
@@ -571,82 +622,86 @@ fn a_write_if_absent_a_copy_and_a_remove_whose_calls_were_dropped_before_they_st
 }
 
 #[cfg(unix)]
-#[test]
-async fn a_snapshot_put_replaces_the_blob_whole_with_the_usual_mode() {
+mod unix_put {
+    use super::*;
+    use pretty_assertions::assert_eq;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
-    let root = tempfile::tempdir().unwrap();
-    let storage = FileSystemBlobStorage::new(root.path()).await.unwrap();
-    let blob = Path::new("blob");
-    storage
-        .put_raw("test", "put-raw", snapshots(), blob, b"first and longer")
-        .await
-        .unwrap();
-    let full = storage
-        .blob_of(
-            &snapshots(),
-            &crate::storage::blob::normalized_blob_path(blob).unwrap(),
-        )
-        .unwrap();
-    let first_inode = std::fs::metadata(&full).unwrap().ino();
-    storage
-        .put_raw("test", "put-raw", snapshots(), blob, b"second")
-        .await
-        .unwrap();
-    storage
-        .put_raw("test", "put-raw", namespace(), blob, b"other")
-        .await
-        .unwrap();
-    let other = storage
-        .blob_of(
-            &namespace(),
-            &crate::storage::blob::normalized_blob_path(blob).unwrap(),
-        )
-        .unwrap();
-    let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    use test_r::test;
 
-    assert_eq!(
-        (
-            std::fs::read(&full).unwrap(),
-            std::fs::metadata(&full).unwrap().ino() != first_inode,
-            mode(&full),
-            staged_files(root.path()),
-        ),
-        (b"second".to_vec(), true, mode(&other), Vec::new())
-    );
-}
+    #[test]
+    async fn a_snapshot_put_replaces_the_blob_whole_with_the_usual_mode() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = FileSystemBlobStorage::new(root.path()).await.unwrap();
+        let blob = Path::new("blob");
+        storage
+            .put_raw("test", "put-raw", snapshots(), blob, b"first and longer")
+            .await
+            .unwrap();
+        let full = storage
+            .blob_of(
+                &snapshots(),
+                &crate::storage::blob::normalized_blob_path(blob).unwrap(),
+            )
+            .unwrap();
+        let first_inode = std::fs::metadata(&full).unwrap().ino();
+        storage
+            .put_raw("test", "put-raw", snapshots(), blob, b"second")
+            .await
+            .unwrap();
+        storage
+            .put_raw("test", "put-raw", namespace(), blob, b"other")
+            .await
+            .unwrap();
+        let other = storage
+            .blob_of(
+                &namespace(),
+                &crate::storage::blob::normalized_blob_path(blob).unwrap(),
+            )
+            .unwrap();
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
 
-#[cfg(unix)]
-#[test]
-async fn a_put_of_another_namespace_writes_in_place() {
-    use std::os::unix::fs::MetadataExt;
-    let root = tempfile::tempdir().unwrap();
-    let storage = FileSystemBlobStorage::new(root.path()).await.unwrap();
-    let blob = Path::new("blob");
-    let full = storage
-        .blob_of(
-            &namespace(),
-            &crate::storage::blob::normalized_blob_path(blob).unwrap(),
-        )
-        .unwrap();
-    storage
-        .put_raw("test", "put-raw", namespace(), blob, b"first")
-        .await
-        .unwrap();
-    let first_inode = std::fs::metadata(&full).unwrap().ino();
+        assert_eq!(
+            (
+                std::fs::read(&full).unwrap(),
+                std::fs::metadata(&full).unwrap().ino() != first_inode,
+                mode(&full),
+                staged_files(root.path()),
+            ),
+            (b"second".to_vec(), true, mode(&other), Vec::new())
+        );
+    }
 
-    storage
-        .put_raw("test", "put-raw", namespace(), blob, b"second")
-        .await
-        .unwrap();
+    #[test]
+    async fn a_put_of_another_namespace_writes_in_place() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = FileSystemBlobStorage::new(root.path()).await.unwrap();
+        let blob = Path::new("blob");
+        let full = storage
+            .blob_of(
+                &namespace(),
+                &crate::storage::blob::normalized_blob_path(blob).unwrap(),
+            )
+            .unwrap();
+        storage
+            .put_raw("test", "put-raw", namespace(), blob, b"first")
+            .await
+            .unwrap();
+        let first_inode = std::fs::metadata(&full).unwrap().ino();
 
-    assert_eq!(
-        (
-            std::fs::read(&full).unwrap(),
-            std::fs::metadata(&full).unwrap().ino(),
-            root.path().join(STAGING_DIRECTORY).exists()
-        ),
-        (b"second".to_vec(), first_inode, false)
-    );
+        storage
+            .put_raw("test", "put-raw", namespace(), blob, b"second")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (
+                std::fs::read(&full).unwrap(),
+                std::fs::metadata(&full).unwrap().ino(),
+                root.path().join(STAGING_DIRECTORY).exists()
+            ),
+            (b"second".to_vec(), first_inode, false)
+        );
+    }
 }
 
 #[test]
@@ -840,129 +895,134 @@ fn a_copy_from_a_directory_or_from_below_a_file_gives_false_and_makes_nothing() 
     );
 }
 
-/// A source that does not open for another reason than a missing file fails the copy, and the copy
-/// makes nothing.
 #[cfg(unix)]
-#[test]
-fn a_copy_from_a_source_that_does_not_open_fails_and_makes_nothing() {
-    let root = tempfile::tempdir().unwrap();
-    let commit = Commit {
-        dropped: Arc::new(AtomicBool::new(false)),
-        gate: None,
-    };
-    let staging = root.path().join(STAGING_DIRECTORY);
-    let looped = root.path().join("looped");
-    let other = root.path().join("other");
-    std::os::unix::fs::symlink(&other, &looped).unwrap();
-    std::os::unix::fs::symlink(&looped, &other).unwrap();
+mod unix_copy {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    use test_r::test;
 
-    let copied = copy_staged(
-        &commit,
-        &looped,
-        &staging,
-        &root.path().join("target").join("blob"),
-    );
+    /// A source that does not open for another reason than a missing file fails the copy, and the copy
+    /// makes nothing.
+    #[test]
+    fn a_copy_from_a_source_that_does_not_open_fails_and_makes_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let commit = Commit {
+            dropped: Arc::new(AtomicBool::new(false)),
+            gate: None,
+        };
+        let staging = root.path().join(STAGING_DIRECTORY);
+        let looped = root.path().join("looped");
+        let other = root.path().join("other");
+        symlink(&other, &looped).unwrap();
+        symlink(&looped, &other).unwrap();
 
-    assert!(copied.is_err(), "{copied:?}");
-    assert_eq!(
-        (root.path().join("target").exists(), staging.exists()),
-        (false, false)
-    );
-}
+        let copied = copy_staged(
+            &commit,
+            &looped,
+            &staging,
+            &root.path().join("target").join("blob"),
+        );
 
-/// A copy and a move give the target the permissions of the source: to an absent target, over a
-/// target with other permissions, to another namespace, and in a move, which then removes the
-/// source.
-#[cfg(unix)]
-#[test]
-async fn a_copy_and_a_move_keep_the_permissions_of_the_source() {
-    use std::os::unix::fs::PermissionsExt;
-    let root = tempfile::tempdir().unwrap();
-    let storage = FileSystemBlobStorage::new(root.path()).await.unwrap();
-    let on_disk = |namespace: BlobStorageNamespace, blob: &str| {
+        assert!(copied.is_err(), "{copied:?}");
+        assert_eq!(
+            (root.path().join("target").exists(), staging.exists()),
+            (false, false)
+        );
+    }
+
+    /// A copy and a move give the target the permissions of the source: to an absent target, over a
+    /// target with other permissions, to another namespace, and in a move, which then removes the
+    /// source.
+    #[test]
+    async fn a_copy_and_a_move_keep_the_permissions_of_the_source() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = FileSystemBlobStorage::new(root.path()).await.unwrap();
+        let on_disk = |namespace: BlobStorageNamespace, blob: &str| {
+            storage
+                .blob_of(&namespace, &normalized_blob_path(Path::new(blob)).unwrap())
+                .unwrap()
+        };
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let set_mode = |path: &Path, mode: u32| {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap()
+        };
+        let put = async |namespace: BlobStorageNamespace, blob: &str, data: &[u8], mode: u32| {
+            storage
+                .put_raw("test", "put-raw", namespace.clone(), Path::new(blob), data)
+                .await
+                .unwrap();
+            set_mode(&on_disk(namespace, blob), mode);
+        };
+        put(namespace(), "source", b"shared payload", 0o640).await;
+        put(namespace(), "existing", b"older", 0o604).await;
+        put(namespace(), "moved", b"moved payload", 0o640).await;
+
         storage
-            .blob_of(&namespace, &normalized_blob_path(Path::new(blob)).unwrap())
-            .unwrap()
-    };
-    let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-    let set_mode = |path: &Path, mode: u32| {
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap()
-    };
-    let put = async |namespace: BlobStorageNamespace, blob: &str, data: &[u8], mode: u32| {
-        storage
-            .put_raw("test", "put-raw", namespace.clone(), Path::new(blob), data)
+            .copy(
+                "test",
+                "copy",
+                namespace(),
+                Path::new("source"),
+                Path::new("absent"),
+            )
             .await
             .unwrap();
-        set_mode(&on_disk(namespace, blob), mode);
-    };
-    put(namespace(), "source", b"shared payload", 0o640).await;
-    put(namespace(), "existing", b"older", 0o604).await;
-    put(namespace(), "moved", b"moved payload", 0o640).await;
+        storage
+            .copy(
+                "test",
+                "copy",
+                namespace(),
+                Path::new("source"),
+                Path::new("existing"),
+            )
+            .await
+            .unwrap();
+        storage
+            .copy_between(
+                "test",
+                "copy-between",
+                namespace(),
+                Path::new("source"),
+                snapshots(),
+                Path::new("other"),
+            )
+            .await
+            .unwrap();
+        storage
+            .r#move(
+                "test",
+                "move",
+                namespace(),
+                Path::new("moved"),
+                Path::new("target"),
+            )
+            .await
+            .unwrap();
+        let target = |namespace: BlobStorageNamespace, blob: &str| {
+            let path = on_disk(namespace, blob);
+            (std::fs::read(&path).unwrap(), mode(&path))
+        };
 
-    storage
-        .copy(
-            "test",
-            "copy",
-            namespace(),
-            Path::new("source"),
-            Path::new("absent"),
-        )
-        .await
-        .unwrap();
-    storage
-        .copy(
-            "test",
-            "copy",
-            namespace(),
-            Path::new("source"),
-            Path::new("existing"),
-        )
-        .await
-        .unwrap();
-    storage
-        .copy_between(
-            "test",
-            "copy-between",
-            namespace(),
-            Path::new("source"),
-            snapshots(),
-            Path::new("other"),
-        )
-        .await
-        .unwrap();
-    storage
-        .r#move(
-            "test",
-            "move",
-            namespace(),
-            Path::new("moved"),
-            Path::new("target"),
-        )
-        .await
-        .unwrap();
-    let target = |namespace: BlobStorageNamespace, blob: &str| {
-        let path = on_disk(namespace, blob);
-        (std::fs::read(&path).unwrap(), mode(&path))
-    };
-
-    assert_eq!(
-        (
-            target(namespace(), "absent"),
-            target(namespace(), "existing"),
-            target(snapshots(), "other"),
-            target(namespace(), "target"),
-            on_disk(namespace(), "moved").exists(),
-            staged_files(root.path()),
-        ),
-        (
-            (b"shared payload".to_vec(), 0o640),
-            (b"shared payload".to_vec(), 0o640),
-            (b"shared payload".to_vec(), 0o640),
-            (b"moved payload".to_vec(), 0o640),
-            false,
-            Vec::new(),
-        )
-    );
+        assert_eq!(
+            (
+                target(namespace(), "absent"),
+                target(namespace(), "existing"),
+                target(snapshots(), "other"),
+                target(namespace(), "target"),
+                on_disk(namespace(), "moved").exists(),
+                staged_files(root.path()),
+            ),
+            (
+                (b"shared payload".to_vec(), 0o640),
+                (b"shared payload".to_vec(), 0o640),
+                (b"shared payload".to_vec(), 0o640),
+                (b"moved payload".to_vec(), 0o640),
+                false,
+                Vec::new(),
+            )
+        );
+    }
 }
 
 /// The filesystem backend writes each name of a blob path as hex, cut into parts of at most 242
@@ -1271,123 +1331,127 @@ fn a_write_dropped_while_it_makes_its_directory_never_lands() {
 }
 
 #[cfg(unix)]
-/// Gives the kind of the error of each read of the blob `ranges/blob` of `storage`: `get_raw`,
-/// `get_stream`, `get_range_stream` and `get_raw_slice`, and `None` for a read that passed.
-async fn read_failures(storage: &FileSystemBlobStorage) -> [Option<BlobFailure>; 4] {
-    let path = Path::new("ranges/blob");
-    let failure = |error: anyhow::Error| BlobFailure::of(&error);
-    [
-        storage
-            .get_raw("test", "get-raw", namespace(), path)
-            .await
-            .err()
-            .map(failure),
-        storage
-            .get_stream("test", "get-stream", namespace(), path)
-            .await
-            .err()
-            .map(failure),
-        storage
-            .get_range_stream("test", "get-range-stream", namespace(), path, 0, 2)
-            .await
-            .err()
-            .map(failure),
-        storage
-            .get_raw_slice("test", "get-raw-slice", namespace(), path, 0, 1)
-            .await
-            .err()
-            .map(failure),
-    ]
-}
-
-#[cfg(unix)]
-/// Sets the Unix permission bits of `path` to `mode`.
-fn set_mode(path: &Path, mode: u32) {
+mod unix_read_permissions {
+    use super::*;
+    use crate::storage::blob::{BlobFailure, BlobRefusal};
+    use pretty_assertions::assert_eq;
     use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
-}
+    use test_r::test;
 
-#[cfg(unix)]
-#[test]
-async fn a_read_that_the_permissions_of_the_blob_root_refuse_gives_a_refused_error() {
-    // A directory on the path of the blob that the executor cannot search, or a blob that it
-    // cannot read, is of the setup of the storage, and only an operator can fix it. Each read
-    // gives a `BlobRefusedError` for it, and not `Ok(None)`: the blob can be there.
-    let (_root, storage) = storage_with_blobs().await;
-    let blob = storage
-        .blob_of(
-            &namespace(),
-            &normalized_blob_path(Path::new("ranges/blob")).unwrap(),
-        )
-        .unwrap();
-    let directory = blob.parent().unwrap().to_path_buf();
-    let refused = Some(BlobFailure::Refused(BlobRefusal::AccessDenied));
-
-    set_mode(&blob, 0o000);
-    let unreadable_blob = read_failures(&storage).await;
-    set_mode(&blob, 0o644);
-    set_mode(&directory, 0o000);
-    let unsearchable_directory = read_failures(&storage).await;
-    set_mode(&directory, 0o755);
-
-    assert_eq!(
-        (
-            unreadable_blob,
-            unsearchable_directory,
-            read_failures(&storage).await
-        ),
-        ([refused; 4], [refused; 4], [None; 4])
-    );
-}
-
-#[cfg(unix)]
-#[test]
-async fn an_existence_check_or_a_listing_that_the_permissions_of_the_blob_root_refuse_gives_a_refused_error()
- {
-    // An existence check or a listing that cannot search a directory cannot tell what is in it, so
-    // it gives a `BlobRefusedError` and not `DoesNotExist` or an untyped error.
-    let (_root, storage) = storage_with_blobs().await;
-    let directory = storage
-        .directory_of(
-            &namespace(),
-            &normalized_blob_path(Path::new("ranges")).unwrap(),
-        )
-        .unwrap();
-    let failure = |error: anyhow::Error| BlobFailure::of(&error);
-    let failures = async || {
+    /// Gives the kind of the error of each read of the blob `ranges/blob` of `storage`: `get_raw`,
+    /// `get_stream`, `get_range_stream` and `get_raw_slice`, and `None` for a read that passed.
+    async fn read_failures(storage: &FileSystemBlobStorage) -> [Option<BlobFailure>; 4] {
+        let path = Path::new("ranges/blob");
+        let failure = |error: anyhow::Error| BlobFailure::of(&error);
         [
             storage
-                .exists("test", "exists", namespace(), Path::new("ranges/blob"))
+                .get_raw("test", "get-raw", namespace(), path)
                 .await
                 .err()
                 .map(failure),
             storage
-                .exists("test", "exists", namespace(), Path::new("ranges"))
+                .get_stream("test", "get-stream", namespace(), path)
                 .await
                 .err()
                 .map(failure),
             storage
-                .list_dir("test", "list-dir", namespace(), Path::new("ranges"))
+                .get_range_stream("test", "get-range-stream", namespace(), path, 0, 2)
                 .await
                 .err()
                 .map(failure),
             storage
-                .list_blobs_below("test", "list-blobs-below", namespace(), Path::new("ranges"))
+                .get_raw_slice("test", "get-raw-slice", namespace(), path, 0, 1)
                 .await
                 .err()
                 .map(failure),
         ]
-    };
+    }
 
-    set_mode(&directory, 0o000);
-    let unsearchable_directory = failures().await;
-    set_mode(&directory, 0o755);
+    /// Sets the Unix permission bits of `path` to `mode`.
+    fn set_mode(path: &Path, mode: u32) {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
 
-    assert_eq!(
-        (unsearchable_directory, failures().await),
-        (
-            [Some(BlobFailure::Refused(BlobRefusal::AccessDenied)); 4],
-            [None; 4]
-        )
-    );
+    #[test]
+    async fn a_read_that_the_permissions_of_the_blob_root_refuse_gives_a_refused_error() {
+        // A directory on the path of the blob that the executor cannot search, or a blob that it
+        // cannot read, is of the setup of the storage, and only an operator can fix it. Each read
+        // gives a `BlobRefusedError` for it, and not `Ok(None)`: the blob can be there.
+        let (_root, storage) = storage_with_blobs().await;
+        let blob = storage
+            .blob_of(
+                &namespace(),
+                &normalized_blob_path(Path::new("ranges/blob")).unwrap(),
+            )
+            .unwrap();
+        let directory = blob.parent().unwrap().to_path_buf();
+        let refused = Some(BlobFailure::Refused(BlobRefusal::AccessDenied));
+
+        set_mode(&blob, 0o000);
+        let unreadable_blob = read_failures(&storage).await;
+        set_mode(&blob, 0o644);
+        set_mode(&directory, 0o000);
+        let unsearchable_directory = read_failures(&storage).await;
+        set_mode(&directory, 0o755);
+
+        assert_eq!(
+            (
+                unreadable_blob,
+                unsearchable_directory,
+                read_failures(&storage).await
+            ),
+            ([refused; 4], [refused; 4], [None; 4])
+        );
+    }
+
+    #[test]
+    async fn an_existence_check_or_a_listing_that_the_permissions_of_the_blob_root_refuse_gives_a_refused_error()
+     {
+        // An existence check or a listing that cannot search a directory cannot tell what is in it, so
+        // it gives a `BlobRefusedError` and not `DoesNotExist` or an untyped error.
+        let (_root, storage) = storage_with_blobs().await;
+        let directory = storage
+            .directory_of(
+                &namespace(),
+                &normalized_blob_path(Path::new("ranges")).unwrap(),
+            )
+            .unwrap();
+        let failure = |error: anyhow::Error| BlobFailure::of(&error);
+        let failures = async || {
+            [
+                storage
+                    .exists("test", "exists", namespace(), Path::new("ranges/blob"))
+                    .await
+                    .err()
+                    .map(failure),
+                storage
+                    .exists("test", "exists", namespace(), Path::new("ranges"))
+                    .await
+                    .err()
+                    .map(failure),
+                storage
+                    .list_dir("test", "list-dir", namespace(), Path::new("ranges"))
+                    .await
+                    .err()
+                    .map(failure),
+                storage
+                    .list_blobs_below("test", "list-blobs-below", namespace(), Path::new("ranges"))
+                    .await
+                    .err()
+                    .map(failure),
+            ]
+        };
+
+        set_mode(&directory, 0o000);
+        let unsearchable_directory = failures().await;
+        set_mode(&directory, 0o755);
+
+        assert_eq!(
+            (unsearchable_directory, failures().await),
+            (
+                [Some(BlobFailure::Refused(BlobRefusal::AccessDenied)); 4],
+                [None; 4]
+            )
+        );
+    }
 }

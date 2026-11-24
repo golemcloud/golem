@@ -1,0 +1,28 @@
+[package]
+name = "golem-async-trait"
+version = "0.0.0"
+edition = "2024"
+description = "Region-simple future construction for selected async-trait implementations"
+license-file = "../LICENSE"
+publish = false
+
+[lib]
+proc-macro = true
+
+[[test]]
+name = "contracts"
+path = "tests/contracts.rs"
+harness = false
+
+[dependencies]
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true, features = ["full", "visit-mut"] }
+
+[dev-dependencies]
+async-trait = { workspace = true }
+test-r = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

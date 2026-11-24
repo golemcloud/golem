@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod account;
+pub mod account_path;
 pub mod account_usage;
 pub mod agent;
 pub mod application;
@@ -43,6 +44,7 @@ pub mod oplog;
 pub mod parsed_function_name;
 pub mod permission_share;
 pub mod plan;
+pub mod plan_dimension;
 pub mod plugin_registration;
 pub mod poem;
 pub mod protobuf;

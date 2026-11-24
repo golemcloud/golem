@@ -332,7 +332,7 @@ mod p2 {
 
     macro_rules! pending_case {
         ($name:ident, Storage, $mode:ident) => {
-            pending_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
+            pending_case!(#[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
         };
         ($(#[$attr:meta])* $name:ident, $resource:ident, $mode:ident) => {
             $(#[$attr])*
@@ -344,13 +344,13 @@ mod p2 {
                 #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
                 _tracing: &Tracing,
             ) -> anyhow::Result<()> {
-                super::pending_sleep(
+                crate::api::interruption::host::sleep::pending_sleep(
                     last_unique_id,
                     deps,
                     host_api_tests,
                     support::Resource::$resource,
                     AgentMode::$mode,
-                    super::Abi::P2,
+                    crate::api::interruption::host::sleep::Abi::P2,
                 )
                 .await
             }
@@ -361,12 +361,18 @@ mod p2 {
     pending_case!(ephemeral_p2_sleep_memory_quota, Memory, Ephemeral);
     pending_case!(durable_p2_sleep_compute_quota_prepaid, Compute, Durable);
     pending_case!(ephemeral_p2_sleep_compute_quota_prepaid, Compute, Ephemeral);
-    pending_case!(durable_p2_sleep_managed_xfs_storage_quota, Storage, Durable);
-    pending_case!(
-        ephemeral_p2_sleep_managed_xfs_storage_quota,
-        Storage,
-        Ephemeral
-    );
+    #[cfg(target_os = "linux")]
+    mod storage {
+        use super::*;
+        use test_r::test;
+
+        pending_case!(durable_p2_sleep_managed_xfs_storage_quota, Storage, Durable);
+        pending_case!(
+            ephemeral_p2_sleep_managed_xfs_storage_quota,
+            Storage,
+            Ephemeral
+        );
+    }
 }
 
 mod p3 {
@@ -376,7 +382,7 @@ mod p3 {
 
     macro_rules! pending_case {
         ($name:ident, Storage, $mode:ident) => {
-            pending_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
+            pending_case!(#[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
         };
         ($(#[$attr:meta])* $name:ident, $resource:ident, $mode:ident) => {
             $(#[$attr])*
@@ -388,13 +394,13 @@ mod p3 {
                 #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
                 _tracing: &Tracing,
             ) -> anyhow::Result<()> {
-                super::pending_sleep(
+                crate::api::interruption::host::sleep::pending_sleep(
                     last_unique_id,
                     deps,
                     host_api_tests,
                     support::Resource::$resource,
                     AgentMode::$mode,
-                    super::Abi::P3,
+                    crate::api::interruption::host::sleep::Abi::P3,
                 )
                 .await
             }
@@ -405,10 +411,16 @@ mod p3 {
     pending_case!(ephemeral_p3_sleep_memory_quota, Memory, Ephemeral);
     pending_case!(durable_p3_sleep_compute_quota_prepaid, Compute, Durable);
     pending_case!(ephemeral_p3_sleep_compute_quota_prepaid, Compute, Ephemeral);
-    pending_case!(durable_p3_sleep_managed_xfs_storage_quota, Storage, Durable);
-    pending_case!(
-        ephemeral_p3_sleep_managed_xfs_storage_quota,
-        Storage,
-        Ephemeral
-    );
+    #[cfg(target_os = "linux")]
+    mod storage {
+        use super::*;
+        use test_r::test;
+
+        pending_case!(durable_p3_sleep_managed_xfs_storage_quota, Storage, Durable);
+        pending_case!(
+            ephemeral_p3_sleep_managed_xfs_storage_quota,
+            Storage,
+            Ephemeral
+        );
+    }
 }
