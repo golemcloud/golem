@@ -49,7 +49,7 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::agent::AgentUpdateMode;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::agent::{AgentMetadataDto, ResolvedRevert, RevertWorkerTarget};
-use golem_common::model::caller::Caller;
+use golem_common::model::caller::{Caller, ClaimVisibility};
 use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
@@ -615,7 +615,9 @@ pub trait WorkerClient: Send + Sync {
     ) -> WorkerResult<OplogIndex>;
 
     /// Reads an oplog page. With `range`, the read is a range read: it reads no entry after
-    /// `range.to`, and the response accounts its scan.
+    /// `range.to`, and the response accounts its scan. With `ClaimVisibility::Shown`, the callers
+    /// in the entries hold the users' verified claims; the caller asks for it only after its
+    /// oplog read check.
     #[allow(clippy::too_many_arguments)]
     async fn get_oplog(
         &self,
@@ -624,27 +626,32 @@ pub trait WorkerClient: Send + Sync {
         cursor: Option<OplogCursor>,
         count: u64,
         range: Option<OplogRangeRead>,
+        claims: ClaimVisibility,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
 
+    /// Searches the oplog. `claims` is as for [`WorkerClient::get_oplog`].
     async fn search_oplog(
         &self,
         agent_id: &AgentId,
         cursor: Option<OplogCursor>,
         count: u64,
         query: String,
+        claims: ClaimVisibility,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
 
     /// Reads one oplog entry in full. The executor streams the entry in chunks, so the entry
-    /// can be larger than the gRPC message size limit.
+    /// can be larger than the gRPC message size limit. `claims` is as for
+    /// [`WorkerClient::get_oplog`].
     async fn get_oplog_entry(
         &self,
         agent_id: &AgentId,
         oplog_index: OplogIndex,
         component_revision: Option<ComponentRevision>,
+        claims: ClaimVisibility,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> Result<PublicOplogEntryWithIndex, WorkerServiceError>;
@@ -1569,6 +1576,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         cursor: Option<OplogCursor>,
         count: u64,
         range: Option<OplogRangeRead>,
+        claims: ClaimVisibility,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
@@ -1592,6 +1600,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     auth_ctx: Some(auth_ctx.clone().into()),
                     to_oplog_index: range.map(|range| range.to.into()),
                     scan_allowance: range.and_then(|range| range.allowance).map(Into::into),
+                    claims: claims.to_protobuf(),
                 };
                 Box::pin(worker_executor_client.get_oplog(request))
             },
@@ -1650,6 +1659,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         agent_id: &AgentId,
         oplog_index: OplogIndex,
         component_revision: Option<ComponentRevision>,
+        claims: ClaimVisibility,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> Result<PublicOplogEntryWithIndex, WorkerServiceError> {
@@ -1669,6 +1679,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     auth_ctx: Some(auth_ctx.clone().into()),
                     oplog_index: oplog_index.into(),
                     component_revision: component_revision.map(Into::into),
+                    claims: claims.to_protobuf(),
                 };
                 Box::pin(async move {
                     use workerexecutor::v1::get_oplog_entry_response::Result as Frame;
@@ -1714,6 +1725,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         cursor: Option<OplogCursor>,
         count: u64,
         query: String,
+        claims: ClaimVisibility,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
@@ -1731,7 +1743,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         cursor: cursor.clone().map(|c| c.into()),
                         count,
                         environment_id: Some(environment_id.into()),
-                        auth_ctx: Some(auth_ctx.clone().into())
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        claims: claims.to_protobuf(),
                     }),
                 )
             },
@@ -3687,6 +3700,7 @@ mod rejection_mapping_tests {
     use golem_common::model::account::AccountId;
     use golem_common::model::agent::InvocationFreshnessDisposition;
     use golem_common::model::caller::Caller;
+    use golem_common::model::caller::ClaimVisibility;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::AgentError as OplogAgentError;
     use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
@@ -4594,6 +4608,7 @@ mod rejection_mapping_tests {
                         &agent_id,
                         OplogIndex::from_u64(oplog_index),
                         None,
+                        ClaimVisibility::Hidden,
                         EnvironmentId::new(),
                         AuthCtx::System,
                     )

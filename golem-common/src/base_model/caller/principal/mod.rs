@@ -151,8 +151,9 @@ impl AccountPrincipal {
 /// How an account authenticated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 pub enum AccountAuthentication {
     ApiToken,
     BootstrapToken,
