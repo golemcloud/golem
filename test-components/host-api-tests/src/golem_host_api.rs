@@ -160,6 +160,14 @@ pub trait GolemHostApi {
         agent_type: String,
         constructor: String,
     ) -> Result<String, String>;
+
+    /// Calls `method` on the existing agent with the ID `agent_id`.
+    fn outbound_agent_rpc_invoke_by_id_and_await_result(
+        &self,
+        agent_type: String,
+        agent_id: Uuid,
+        method: String,
+    ) -> Result<(), String>;
     fn outbound_agent_rpc_schedule_result(
         &self,
         agent_type: String,
@@ -726,6 +734,19 @@ impl GolemHostApi for GolemHostApiImpl {
         Ok(golem_rust::Uuid::from(created.agent_id.uuid).to_string())
     }
 
+    fn outbound_agent_rpc_invoke_by_id_and_await_result(
+        &self,
+        agent_type: String,
+        agent_id: Uuid,
+        method: String,
+    ) -> Result<(), String> {
+        let rpc = WasmRpc::get_by_id(&agent_type, AgentId { uuid: agent_id }.into())
+            .map_err(|error| format!("{error:?}"))?;
+        rpc.invoke_and_await(&method, encode_parameters(Vec::new())?, None)
+            .map(|_| ())
+            .map_err(|error| format!("{error:?}"))
+    }
+
     fn outbound_agent_rpc_schedule_result(
         &self,
         agent_type: String,
@@ -967,6 +988,7 @@ impl GolemHostApi for GolemHostApiImpl {
             }),
             actual: oplog::ReplayStep::EndOfHistory,
             mismatched: vec![],
+            replay_start: None,
         });
         let entry = oplog::OplogEntry::FailedUpdate(oplog::FailedUpdateParameters {
             timestamp: golem_rust::wasip3::clocks::system_clock::now(),
