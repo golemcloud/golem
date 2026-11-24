@@ -42,7 +42,8 @@ export const offers = [
     name: "Pro",
     price: "$20",
     period: "a month",
-    priceNote: "Tax added at checkout. €24 in the EU and £19 in the UK, VAT included.",
+    priceNote:
+      "Tax added at checkout. €24 in countries that use the euro and £19 in the UK, VAT included.",
     description:
       "Run your agents and tools on Golem Cloud, with a monthly allowance of each resource.",
     included: [
@@ -67,7 +68,7 @@ export const planNotes = [
   },
   {
     heading: "Payment",
-    body: "Polar, our merchant of record, takes the payment and picks the currency from your location at checkout. You pay in EUR in the EU, in GBP in the UK, and in USD with tax added everywhere else.",
+    body: "Polar, our merchant of record, takes the payment and picks the currency from your location at checkout. You pay in EUR in countries that use the euro, in GBP in the UK, and in USD with tax added everywhere else.",
     link: { label: "Terms of service", href: "/legal" },
   },
 ];
