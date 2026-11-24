@@ -179,11 +179,8 @@ mod tests {
             }
             let source = std::fs::read_to_string(&file).unwrap();
             let count: usize = production_code(&source)
-                .iter()
-                .map(|line| {
-                    line.matches("Caller::anonymous()").count()
-                        + line.matches("Principal::Anonymous").count()
-                })
+                .into_iter()
+                .map(anonymous_callers)
                 .sum();
             if count > 0 {
                 found.push((relative, count));
@@ -199,6 +196,34 @@ mod tests {
             found, allowed,
             "Golem-started work must get its caller from GolemStartedWork::caller"
         );
+    }
+
+    #[test]
+    fn the_scan_counts_only_the_names_that_it_looks_for() {
+        assert_eq!(anonymous_callers("let caller = Caller::anonymous();"), 1);
+        assert_eq!(anonymous_callers("Principal::Anonymous => None,"), 1);
+        assert_eq!(anonymous_callers("caller::Principal::Anonymous"), 1);
+        assert_eq!(
+            anonymous_callers(
+                "PublicPrincipal::Anonymous(_) => oplog::PublicPrincipal::Anonymous,"
+            ),
+            0
+        );
+    }
+
+    /// The anonymous callers that a line of code names. A match counts only where the name starts,
+    /// so `PublicPrincipal::Anonymous`, the public form of a recorded caller, does not count.
+    fn anonymous_callers(line: &str) -> usize {
+        ["Caller::anonymous()", "Principal::Anonymous"]
+            .iter()
+            .flat_map(|name| line.match_indices(name))
+            .filter(|(start, _)| {
+                !line[..*start]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| c.is_alphanumeric() || c == '_')
+            })
+            .count()
     }
 
     fn rust_files(dir: &Path) -> Vec<PathBuf> {
