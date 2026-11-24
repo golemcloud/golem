@@ -632,39 +632,132 @@ mod tests {
 
     #[test]
     fn sqlite_with_a_redis_cache_has_independent_indexed_storage() {
-        let input = Figment::from(Toml::string(
-            r#"
-            state_store = "sqlite"
-            data_dir = "/state"
-            [cache]
-            type = "Redis"
-            "#,
-        ));
-        let executor = project("worker_executor", &input);
+        [
+            json!({"cache": {"type": "Redis"}}),
+            json!({"state_store": "sqlite", "cache": {"type": "Redis"}}),
+        ]
+        .into_iter()
+        .for_each(|settings| {
+            let input = Figment::from(Serialized::defaults(settings))
+                .merge(Serialized::default("data_dir", "/state"));
+            let executor = project("worker_executor", &input);
+            assert_eq!(
+                executor
+                    .extract_inner::<String>("key_value_storage.type")
+                    .unwrap(),
+                "NamespaceRouted"
+            );
+            assert_eq!(
+                executor
+                    .extract_inner::<String>("indexed_storage.type")
+                    .unwrap(),
+                "MultiSqlite"
+            );
+            assert_eq!(
+                executor
+                    .extract_inner::<String>("indexed_storage.config.root_dir")
+                    .unwrap(),
+                "/state/kv-store"
+            );
+            assert_eq!(
+                executor
+                    .extract_inner::<String>("key_value_storage.config.persistent.type")
+                    .unwrap(),
+                "MultiSqlite"
+            );
+        });
+        let uncached = project(
+            "worker_executor",
+            &Figment::from(Serialized::defaults(json!({"state_store": "sqlite"}))),
+        );
         assert_eq!(
-            executor
+            uncached
                 .extract_inner::<String>("key_value_storage.type")
                 .unwrap(),
-            "NamespaceRouted"
-        );
-        assert_eq!(
-            executor
-                .extract_inner::<String>("indexed_storage.type")
-                .unwrap(),
             "MultiSqlite"
         );
-        assert_eq!(
-            executor
-                .extract_inner::<String>("indexed_storage.config.root_dir")
-                .unwrap(),
-            "/state/kv-store"
+        assert!(
+            ["KVStoreMultiSqlite", "MultiSqlite"].contains(
+                &uncached
+                    .extract_inner::<String>("indexed_storage.type")
+                    .unwrap()
+                    .as_str()
+            )
         );
-        assert_eq!(
-            executor
-                .extract_inner::<String>("key_value_storage.config.persistent.type")
-                .unwrap(),
-            "MultiSqlite"
-        );
+    }
+
+    #[test]
+    fn worker_service_sessions_use_the_selected_store() {
+        [("sqlite", "Sqlite"), ("postgres", "Postgres")]
+            .into_iter()
+            .for_each(|(state_store, expected)| {
+                let input = Figment::from(Serialized::defaults(json!({
+                    "state_store": state_store,
+                    "cache": {"type": "Disabled"},
+                })));
+                let persistent = project("worker_service", &input);
+                assert_eq!(
+                    persistent
+                        .extract_inner::<String>("gateway_session_storage.type")
+                        .unwrap(),
+                    expected
+                );
+                assert_eq!(
+                    persistent
+                        .extract_inner::<humantime_serde::Serde<std::time::Duration>>(
+                            "gateway_session_storage.config.pending_login_expiration"
+                        )
+                        .unwrap()
+                        .into_inner(),
+                    std::time::Duration::from_secs(3600)
+                );
+                assert_eq!(
+                    persistent
+                        .extract_inner::<humantime_serde::Serde<std::time::Duration>>(
+                            "gateway_session_storage.config.cleanup_interval"
+                        )
+                        .unwrap()
+                        .into_inner(),
+                    std::time::Duration::from_secs(300)
+                );
+                let cached = project(
+                    "worker_service",
+                    &input.merge(Serialized::default(
+                        "cache",
+                        json!({
+                            "type": "Redis",
+                            "config": {"host": "cache.internal", "port": 16380},
+                        }),
+                    )),
+                );
+                assert_eq!(
+                    cached
+                        .extract_inner::<String>("gateway_session_storage.type")
+                        .unwrap(),
+                    "Redis"
+                );
+                assert_eq!(
+                    cached
+                        .extract_inner::<String>("gateway_session_storage.config.host")
+                        .unwrap(),
+                    "cache.internal"
+                );
+                assert_eq!(
+                    cached
+                        .extract_inner::<u16>("gateway_session_storage.config.port")
+                        .unwrap(),
+                    16380
+                );
+                assert_eq!(
+                    cached
+                        .extract_inner::<humantime_serde::Serde<std::time::Duration>>(
+                            "gateway_session_storage.config.pending_login_expiration"
+                        )
+                        .unwrap()
+                        .into_inner(),
+                    std::time::Duration::from_secs(3600)
+                );
+            });
     }
 
     #[test]
