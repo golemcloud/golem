@@ -9,6 +9,7 @@ use futures_util::{Stream, TryStreamExt};
 use oci_spec::distribution::Reference;
 use reqwest::{Client, RequestBuilder, Response, StatusCode, header};
 use sha2::{Digest, Sha256};
+use std::path::PathBuf;
 use std::time::Duration;
 use url::{Host, Url};
 
@@ -238,7 +239,11 @@ async fn registry_auth(
     // A stuck helper must not hold up Tokio's runtime shutdown after the fetch deadline.
     let (send, receive) = tokio::sync::oneshot::channel();
     std::thread::Builder::new().spawn(move || {
-        let (credentials, hint) = registry_credentials(docker_credential::get_credential(&key));
+        let (credentials, hint) = registry_credentials(read_docker_credentials(
+            &key,
+            std::env::var_os("DOCKER_CONFIG").map(PathBuf::from),
+            dirs::home_dir,
+        ));
         let _ = send.send((credentials, hint));
     })?;
     let (credentials, hint) = receive.await?;
@@ -251,6 +256,20 @@ async fn registry_auth(
         }
     };
     Ok((with_credential_hint(result, hint)?, hint))
+}
+
+fn read_docker_credentials(
+    key: &str,
+    config_dir: Option<PathBuf>,
+    home_dir: impl FnOnce() -> Option<PathBuf>,
+) -> Result<DockerCredential, CredentialRetrievalError> {
+    let dir = config_dir
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .or_else(|| home_dir().map(|home| home.join(".docker")))
+        .ok_or(CredentialRetrievalError::ConfigNotFound)?;
+    let config = std::fs::File::open(dir.join("config.json"))
+        .map_err(|_| CredentialRetrievalError::ConfigReadError)?;
+    docker_credential::get_credential_from_reader(std::io::BufReader::new(config), key)
 }
 
 fn with_credential_hint<T>(result: anyhow::Result<T>, hint: Option<&str>) -> anyhow::Result<T> {
@@ -399,6 +418,31 @@ where
 mod tests {
     use super::*;
     use test_r::test;
+
+    #[test]
+    fn docker_credentials_use_the_platform_home_unless_config_is_overridden() {
+        let home = tempfile::tempdir().unwrap();
+        let override_dir = tempfile::tempdir().unwrap();
+        let default_dir = home.path().join(".docker");
+        std::fs::create_dir(&default_dir).unwrap();
+        std::fs::write(
+            default_dir.join("config.json"),
+            r#"{"auths":{"registry.example":{"auth":"dXNlcjpwYXNz"}}}"#,
+        )
+        .unwrap();
+        for config_dir in [None, Some(PathBuf::new())] {
+            assert!(matches!(
+                read_docker_credentials("registry.example", config_dir, || Some(home.path().into())),
+                Ok(DockerCredential::UsernamePassword(user, password)) if user == "user" && password == "pass"
+            ));
+        }
+        assert!(matches!(
+            read_docker_credentials("registry.example", Some(override_dir.path().into()), || {
+                Some(home.path().into())
+            }),
+            Err(CredentialRetrievalError::ConfigReadError)
+        ));
+    }
 
     #[test]
     fn registry_auth_challenges_prefer_secure_bearer_and_accept_basic() {
