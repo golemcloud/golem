@@ -513,7 +513,7 @@ fn derivation_upper_bound_uses_parent_ceiling_intersection() {
 
     assert!(matches!(
         parent_surface.validate_attenuation(&[], &[], std::slice::from_ref(&read_secret), &[],),
-        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+        Err(CardAlgebraError::UpperDenialNotKept { denial }) if *denial == read_secret
     ));
     assert!(
         parent_surface
