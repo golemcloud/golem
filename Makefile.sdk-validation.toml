@@ -180,15 +180,16 @@ script = '''
 golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem-cli"
 manifest = set "${CARGO_MAKE_WORKING_DIRECTORY}/test-components/agent-sdk-moonbit/golem.yaml"
 presets = array release release-gc
-failed = set 0
 for preset in ${presets}
     exec --fail-on-error ${golem} --app-manifest-path ${manifest} build --yes -P ${preset}
     exec --fail-on-error ${golem} --app-manifest-path ${manifest} --yes -P ${preset} exec copy
-    code = exec --get-exit-code cargo test -p golem-worker-executor-tests --test integration -- agent_sdk_moonbit::moonbit_custom_scopes_stay_with_their_coroutines agent_sdk_moonbit::moonbit_custom_scopes_recover_with_one_completed_and_one_suspended_sibling --test-threads 1 --report-time
-    failed = calc ${failed} + ${code}
 end
-exec --fail-on-error ${golem} --app-manifest-path ${manifest} --yes -P release exec copy
-assert_eq ${failed} 0 "MoonBit worker replay validation failed"
+result = exec %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration -- --exact agent_sdk_moonbit::moonbit_custom_scopes_stay_with_their_coroutines::moonbit_custom_scopes_stay_with_their_coroutines_agent_sdk_moonbit agent_sdk_moonbit::moonbit_custom_scopes_stay_with_their_coroutines::moonbit_custom_scopes_stay_with_their_coroutines_agent_sdk_moonbit_gc agent_sdk_moonbit::moonbit_custom_scopes_recover_with_one_completed_and_one_suspended_sibling::moonbit_custom_scopes_recover_with_one_completed_and_one_suspended_sibling_agent_sdk_moonbit agent_sdk_moonbit::moonbit_custom_scopes_recover_with_one_completed_and_one_suspended_sibling::moonbit_custom_scopes_recover_with_one_completed_and_one_suspended_sibling_agent_sdk_moonbit_gc --test-threads 1 --report-time --color never
+echo ${result.stdout}
+echo ${result.stderr}
+assert_eq ${result.code} 0 "MoonBit worker replay validation failed"
+complete = contains ${result.stdout} "test result: ok; 4 passed; 0 failed; 0 ignored;"
+assert ${complete} "MoonBit worker replay validation must pass all four backend cases"
 '''
 
 [tasks.validate-sdk-rust-check]

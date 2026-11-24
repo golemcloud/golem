@@ -23,16 +23,20 @@ GC components can have smaller code without compiling or starting faster.
 Keep `wasm` unless measurements of your workload justify opting in.
 
 New CLI applications provide `debug-gc` and `release-gc` component presets.
-Use `golem build --preset release-gc --yes` to build GC components. The existing
+Use `golem build --preset release-gc --yes` to build GC components and
+`golem deploy --preset release-gc --yes` to deploy them. Pass the preset again
+for each command that builds, or set the environment's `componentPresets` to
+`release-gc`; a build does not change the environment's default. The existing
 `debug` and `release` presets still build `wasm`. Both presets use the same SDK
 package and generated exports; switching targets needs no source rewrite.
 
 In this repository, `cargo make validate-sdk-moonbit` checks and tests both
 backends, including empty, agent-only, tool-only, and mixed components.
 `cargo make validate-sdk-moonbit-replay` builds the worker fixture with each
-backend and runs the same coroutine and crash-recovery checks. It requires the
-worker test dependencies, including Redis. Run it without another process that
-replaces `test-components/golem_it_agent_sdk_moonbit.wasm`.
+backend and requires all four coroutine and crash-recovery cases to pass. It
+requires the worker test dependencies, including Redis. The backends use separate
+fixture files. Main validation builds both through `build-components.sh moonbit`
+and runs the same cases in worker executor test group 4.
 
 Run SDK tests with `GOLEM_MOONBIT_TARGET=wasm-gc scripts/run-sdk-tests.sh` to
 exercise GC, or omit the variable for `wasm`. Packages whose tests use the fake
