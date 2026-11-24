@@ -4821,7 +4821,7 @@
           "$ref": "#/definitions/AgentLayerManifestPluginVecProperty"
         },
         "files": {
-          "$ref": "#/definitions/AgentLayerManifestFileVecProperty"
+          "$ref": "#/definitions/AgentLayerProvisionFileVecProperty"
         },
         "toolBindings": {
           "$ref": "#/definitions/AgentLayerToolBindingsProperty"
@@ -4851,14 +4851,9 @@
           "properties": {
             "agentTemplate": {
               "type": "array",
-              "items": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "string"
-                }
-              ],
+              "items": {
+                "type": "string"
+              },
               "minItems": 2,
               "maxItems": 2
             }
@@ -5227,7 +5222,7 @@
       },
       "additionalProperties": false
     },
-    "AgentLayerManifestFileVecProperty": {
+    "AgentLayerProvisionFileVecProperty": {
       "type": "object",
       "required": [
         "value",
@@ -5237,32 +5232,32 @@
         "value": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/ManifestInitialComponentFile"
+            "$ref": "#/definitions/ManifestProvisionFile"
           }
         },
         "trace": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/AgentLayerManifestFileVecTraceElem"
+            "$ref": "#/definitions/AgentLayerProvisionFileVecTraceElem"
           }
         }
       },
       "additionalProperties": false
     },
-    "AgentLayerManifestFileVecTraceElem": {
+    "AgentLayerProvisionFileVecTraceElem": {
       "oneOf": [
         {
-          "$ref": "#/definitions/AgentLayerManifestFileAppendTraceElem"
+          "$ref": "#/definitions/AgentLayerProvisionFileAppendTraceElem"
         },
         {
-          "$ref": "#/definitions/AgentLayerManifestFilePrependTraceElem"
+          "$ref": "#/definitions/AgentLayerProvisionFilePrependTraceElem"
         },
         {
-          "$ref": "#/definitions/AgentLayerManifestFileReplaceTraceElem"
+          "$ref": "#/definitions/AgentLayerProvisionFileReplaceTraceElem"
         }
       ]
     },
-    "AgentLayerManifestFileAppendTraceElem": {
+    "AgentLayerProvisionFileAppendTraceElem": {
       "type": "object",
       "required": [
         "type",
@@ -5282,13 +5277,13 @@
         "appendedElems": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/ManifestInitialComponentFile"
+            "$ref": "#/definitions/ManifestProvisionFile"
           }
         }
       },
       "additionalProperties": false
     },
-    "AgentLayerManifestFilePrependTraceElem": {
+    "AgentLayerProvisionFilePrependTraceElem": {
       "type": "object",
       "required": [
         "type",
@@ -5308,13 +5303,13 @@
         "prependedElems": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/ManifestInitialComponentFile"
+            "$ref": "#/definitions/ManifestProvisionFile"
           }
         }
       },
       "additionalProperties": false
     },
-    "AgentLayerManifestFileReplaceTraceElem": {
+    "AgentLayerProvisionFileReplaceTraceElem": {
       "type": "object",
       "required": [
         "type",
@@ -5334,8 +5329,24 @@
         "newElems": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/ManifestInitialComponentFile"
+            "$ref": "#/definitions/ManifestProvisionFile"
           }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ManifestProvisionFile": {
+      "type": "object",
+      "required": [
+        "source",
+        "file"
+      ],
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "file": {
+          "$ref": "#/definitions/ManifestInitialComponentFile"
         }
       },
       "additionalProperties": false

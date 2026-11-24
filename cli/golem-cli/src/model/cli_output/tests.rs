@@ -6608,7 +6608,15 @@ fn arb_agent_layer_properties() -> BoxedStrategy<crate::model::app::AgentLayerPr
         proptest::collection::vec(arb_small_string(), 0..3),
         proptest::collection::hash_map(arb_small_string(), arb_small_string(), 1..3),
         proptest::collection::vec(arb_manifest_plugin_installation(), 1..3),
-        proptest::collection::vec(arb_manifest_initial_component_file(), 1..3),
+        proptest::collection::vec(
+            (arb_small_string(), arb_manifest_initial_component_file()).prop_map(
+                |(source, file)| crate::model::app::ProvisionFile {
+                    source: PathBuf::from(source),
+                    file,
+                },
+            ),
+            1..3,
+        ),
     )
         .prop_map(
             |(layer_id, second_layer_id, selection, config, grants, env, plugins, files)| {
