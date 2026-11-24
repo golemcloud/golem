@@ -581,29 +581,225 @@ fn revoke_requires_possession_of_the_target_or_a_live_ancestor() {
 }
 
 #[test]
-fn attenuation_errors_preserve_the_failed_bound() {
+fn attenuation_errors_keep_the_failed_bound_and_name_the_parent_grant() {
     let grant = parse_pattern_grant(&valid_filesystem_grant()).unwrap();
-    let rendered = grant.render().unwrap();
+    let denial = parse_pattern_grant(&grant_for_resource("/data/secret/**")).unwrap();
+    let rendered_denial = denial.render().unwrap();
 
-    assert!(matches!(
-        permission_error_from_algebra(CardAlgebraError::LowerBoundTooBroad {
+    let lower = [
+        CardAlgebraError::LowerBoundTooBroad {
             grant: Box::new(grant.clone()),
-        }),
-        permissions_types::PermissionError::LowerBoundTooBroad(message)
-            if message == rendered
-    ));
+        },
+        CardAlgebraError::LowerDenialNotKept {
+            grant: Box::new(grant.clone()),
+            denial: Box::new(denial.clone()),
+        },
+    ];
+    for error in lower {
+        let expected = error.to_string();
+        assert!(matches!(
+            permission_error_from_algebra(error),
+            permissions_types::PermissionError::LowerBoundTooBroad(message) if message == expected
+        ));
+    }
+
+    let upper = [
+        CardAlgebraError::UpperDenialNotKept {
+            denial: Box::new(denial.clone()),
+        },
+        CardAlgebraError::UpperCeilingNotKept {
+            ceiling: Box::new(grant.clone()),
+        },
+        CardAlgebraError::UpperBoundTooBroad {
+            grant: Box::new(grant.clone()),
+        },
+    ];
+    for error in upper {
+        let expected = error.to_string();
+        assert!(matches!(
+            permission_error_from_algebra(error),
+            permissions_types::PermissionError::UpperBoundTooBroad(message) if message == expected
+        ));
+    }
+
+    let explicit = permission_error_from_algebra(CardAlgebraError::UpperDenialNotKept {
+        denial: Box::new(denial),
+    });
     assert!(matches!(
-        permission_error_from_algebra(CardAlgebraError::UpperBoundTooBroad {
-            grant: Some(Box::new(grant)),
-        }),
+        explicit,
         permissions_types::PermissionError::UpperBoundTooBroad(message)
-            if message == rendered
+            if message.contains(&rendered_denial) && !message.contains("derive-from-wallet")
     ));
-    assert!(matches!(
-        permission_error_from_algebra(CardAlgebraError::UpperBoundTooBroad { grant: None }),
-        permissions_types::PermissionError::UpperBoundTooBroad(message)
-            if message == "upper-bound grant is too broad"
-    ));
+}
+
+/// The wallet card of the GOL-1075 report: a network grant with an upper-bound secret denial.
+fn wallet_card_with_secret_denial(card_id: u128, holder: &str) -> StoredCard {
+    let network = permissions_types::PatternGrant {
+        class: "network".to_string(),
+        owner: String::new(),
+        recipient: "*".to_string(),
+        verb: "connect".to_string(),
+        resource_id: "*".to_string(),
+    };
+    let secret = permissions_types::PatternGrant {
+        class: "secret".to_string(),
+        owner: "alice@example.com/shop/prod".to_string(),
+        recipient: holder.to_string(),
+        verb: "*".to_string(),
+        resource_id: "*".to_string(),
+    };
+    StoredCard::Concrete(Card {
+        card_id: CardId(Uuid::from_u128(card_id)),
+        parent_ids: Vec::new(),
+        lower_positive: vec![parse_pattern_grant(&network).unwrap()],
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: vec![parse_pattern_grant(&secret).unwrap()],
+        created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        expires_at: None,
+        system_card: false,
+        managed_by: None,
+    })
+}
+
+#[test]
+fn wallet_derivation_names_a_dropped_upper_denial_and_what_to_restate() {
+    let holder = "alice@example.com/shop/prod/cart-svc/CartAgent";
+    let wallet = [wallet_card_with_secret_denial(1, holder)];
+    let StoredCard::Concrete(parent) = &wallet[0] else {
+        unreachable!()
+    };
+    let secret = concrete_pattern_grant(&parent.upper_negative[0]).unwrap();
+    let rendered_secret = parent.upper_negative[0].render().unwrap();
+    let request = permissions_types::PatternGrant {
+        class: "network".to_string(),
+        owner: String::new(),
+        recipient: "*".to_string(),
+        verb: "connect".to_string(),
+        resource_id: "example.com".to_string(),
+    };
+
+    let without_denial =
+        parse_derived_grant_sets(std::slice::from_ref(&request), &[], &[], &[]).unwrap();
+    let error =
+        select_wallet_derivation_parent(&wallet, &wallet_derivation_context(), &without_denial)
+            .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            permissions_types::PermissionError::UpperBoundTooBroad(message)
+                if *message == format!(
+                    "the child card must keep the parent's upper-bound denial `{rendered_secret}`; derive-from-wallet takes complete bounds, so restate this denial in the upper-negative grants of the request"
+                )
+        ),
+        "{error:?}"
+    );
+
+    let with_denial = parse_derived_grant_sets(
+        std::slice::from_ref(&request),
+        &[],
+        &[],
+        std::slice::from_ref(&secret),
+    )
+    .unwrap();
+    assert_eq!(
+        select_wallet_derivation_parent(&wallet, &wallet_derivation_context(), &with_denial)
+            .unwrap()
+            .card_id,
+        CardId(Uuid::from_u128(1))
+    );
+}
+
+#[test]
+fn wallet_derivation_says_that_the_parent_has_a_ceiling() {
+    let ceiling = valid_filesystem_grant();
+    let child = grant_for_resource("/data/public/**");
+    let StoredCard::Concrete(mut parent) = wallet_parent(1, &ceiling) else {
+        unreachable!()
+    };
+    parent.upper_positive = vec![parse_pattern_grant(&ceiling).unwrap()];
+    let rendered_ceiling = parent.upper_positive[0].render().unwrap();
+    let wallet = [StoredCard::Concrete(parent)];
+
+    let without_ceiling =
+        parse_derived_grant_sets(std::slice::from_ref(&child), &[], &[], &[]).unwrap();
+    let error =
+        select_wallet_derivation_parent(&wallet, &wallet_derivation_context(), &without_ceiling)
+            .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            permissions_types::PermissionError::UpperBoundTooBroad(message)
+                if message.starts_with(&format!("the parent card has the upper-bound ceiling `{rendered_ceiling}`"))
+                    && message.contains("an empty upper-positive list means no ceiling")
+                    && message.ends_with("restate this ceiling or a narrower one in the upper-positive grants of the request")
+        ),
+        "{error:?}"
+    );
+
+    let with_ceiling = parse_derived_grant_sets(
+        std::slice::from_ref(&child),
+        &[],
+        std::slice::from_ref(&child),
+        &[],
+    )
+    .unwrap();
+    assert!(
+        select_wallet_derivation_parent(&wallet, &wallet_derivation_context(), &with_ceiling)
+            .is_ok()
+    );
+}
+
+#[test]
+fn wallet_derivation_lists_the_reason_of_each_wallet_card() {
+    let holder = "alice@example.com/shop/prod/cart-svc/CartAgent";
+    let first = wallet_card_with_secret_denial(1, holder);
+    let StoredCard::Concrete(mut second) = wallet_card_with_secret_denial(2, holder) else {
+        unreachable!()
+    };
+    second.upper_negative =
+        vec![parse_pattern_grant(&grant_for_resource("/data/secret/**")).unwrap()];
+    let wallet = [first, StoredCard::Concrete(second)];
+    let request = permissions_types::PatternGrant {
+        class: "network".to_string(),
+        owner: String::new(),
+        recipient: "*".to_string(),
+        verb: "connect".to_string(),
+        resource_id: "example.com".to_string(),
+    };
+    let grants = parse_derived_grant_sets(std::slice::from_ref(&request), &[], &[], &[]).unwrap();
+
+    let error = select_wallet_derivation_parent(&wallet, &wallet_derivation_context(), &grants)
+        .unwrap_err();
+    let permissions_types::PermissionError::UpperBoundTooBroad(message) = &error else {
+        panic!("expected upper-bound-too-broad, got {error:?}");
+    };
+    assert!(
+        message.starts_with(
+            "no wallet card permits the requested derivation: across the whole wallet, the child card must keep the parent's upper-bound denial `"
+        ),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "; card {}: the child card must keep the parent's upper-bound denial `secret(",
+            Uuid::from_u128(1)
+        )),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "; card {}: the child card must keep the parent's upper-bound denial `filesystem(",
+            Uuid::from_u128(2)
+        )),
+        "{message}"
+    );
+    assert!(
+        message.ends_with(
+            "derive-from-wallet takes complete bounds, so restate this denial in the upper-negative grants of the request"
+        ),
+        "{message}"
+    );
 }
 
 fn concrete_parent(grant: &permissions_types::PatternGrant) -> Card {

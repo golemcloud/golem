@@ -839,7 +839,7 @@ func (s *session) handleText(c *sessionConn, data []byte) error {
 		}
 		return s.receiveAck(c, m)
 	case "streamCancel":
-		if err := m.members(kind, []string{"channel", "reason"}); err != nil {
+		if err := m.members(kind, []string{"channel", "reason"}, "message", "sequence"); err != nil {
 			return err
 		}
 		return s.receiveCancel(c, m)
@@ -1483,6 +1483,23 @@ func (s *session) receiveCancel(c *sessionConn, m message) error {
 	poke(in.wake)
 	s.mu.Unlock()
 	in.h.stop(reason)
+	// The server rejected an item the caller sent, so the call fails with it.
+	if reason == "invalid-item" {
+		detail := "invalid stream item"
+		if m.has("message") {
+			if detail, err = m.str("message"); err != nil {
+				return err
+			}
+		}
+		if m.has("sequence") {
+			sequence, err := m.str("sequence")
+			if err != nil {
+				return err
+			}
+			detail = "item " + sequence + ": " + detail
+		}
+		s.abort(&StreamItemError{Err: errors.New("golem: the server rejected stream " + detail)})
+	}
 	return nil
 }
 

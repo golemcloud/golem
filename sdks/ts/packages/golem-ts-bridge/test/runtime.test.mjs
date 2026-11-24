@@ -2170,6 +2170,75 @@ test('input cancellation is replayed on the remapped channel after reconnect', a
   }
 });
 
+test('an input item the server rejects fails the call with an item error', async () => {
+  const local = await server((socket) => {
+    let items = 0;
+    socket.on('message', (data) => {
+      const message = JSON.parse(data);
+      if (message.type === 'invocationStart') {
+        const provisionalRef = message.methodParameters.input.value.provisionalRef;
+        socket.send(
+          JSON.stringify(
+            accepted(message, [
+              {
+                channel: 1,
+                direction: 'input',
+                streamToken: 'input',
+                provisionalRef,
+                inputHighWater: { sequence: '0', terminal: false },
+              },
+            ]),
+          ),
+        );
+      } else if (message.type === 'inputStreamItem' && ++items === 1) {
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'inputStreamAck',
+            channel: 1,
+            highestContiguousSequence: '1',
+            mappings: [],
+            terminal: false,
+          }),
+        );
+      } else if (message.type === 'inputStreamItem') {
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'streamCancel',
+            channel: 1,
+            message: 'stream item does not satisfy its element schema',
+            reason: 'invalid-item',
+            sequence: '1',
+          }),
+        );
+      }
+    });
+  });
+  try {
+    const source = agentStream(
+      (async function* () {
+        yield { kind: 'u32', value: 1 };
+        yield { kind: 'u32', value: 2 };
+      })(),
+    );
+    const method = createStreamingRemoteMethod(
+      () => ({ server: local.endpoint }),
+      () => descriptor,
+      ([input], register) => ({ input: register(input, (value) => value) }),
+      () => undefined,
+    );
+    await assert.rejects(method(source), (error) => {
+      assert.ok(error instanceof StreamingProtocolError);
+      assert.equal(error.code, 'schema-mismatch');
+      assert.match(error.message, /item 1: stream item does not satisfy its element schema/u);
+      return true;
+    });
+  } finally {
+    await local.close();
+  }
+});
+
 test('consumer drop sends cancellation and remains distinct from protocol terminal', async () => {
   let cancellation;
   const local = await server((socket) => {

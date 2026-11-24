@@ -4056,10 +4056,24 @@ class StreamingSession {
         break;
       }
       case 'streamCancel':
-        object(message, ['version', 'type', 'channel', 'reason']);
+        object(message, ['version', 'type', 'channel', 'reason'], ['message', 'sequence']);
         if (typeof message.reason !== 'string')
           throw new StreamingProtocolError('malformed-message', 'invalid cancellation reason');
         this.cancelChannel(message.channel);
+        // The server rejected an item the caller sent, so the call fails with it.
+        if (message.reason === 'invalid-item') {
+          const detail =
+            typeof message.message === 'string' ? message.message : 'invalid stream item';
+          const item =
+            message.sequence !== undefined ? ` ${decimal(message.sequence, 'sequence')}` : '';
+          this.fail(
+            new StreamingProtocolError(
+              'schema-mismatch',
+              `the server rejected stream item${item}: ${detail}`,
+            ),
+          );
+          this.socket?.close(1000);
+        }
         break;
       case 'attachmentRevoked':
         object(message, ['version', 'type', 'reason']);
