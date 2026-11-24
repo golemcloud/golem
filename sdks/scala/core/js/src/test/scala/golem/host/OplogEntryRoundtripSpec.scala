@@ -165,6 +165,21 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         parsed.params.startIndex == BigInt(17)
       )
     },
+    test("AgentInvocationSettled with invocation ID and consumed fuel from dynamic") {
+      val raw = wrapEntry(
+        "agent-invocation-settled",
+        js.Dynamic.literal(
+          timestamp = ts(),
+          invocationId = invocationUuidJs,
+          consumedFuel = js.BigInt("4242")
+        )
+      )
+      val parsed = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.AgentInvocationSettled]
+      assertTrue(
+        parsed.params.invocationId == invocationUuid,
+        parsed.params.consumedFuel == 4242L
+      )
+    },
     test("EndRemoteWrite from dynamic") {
       val raw = wrapEntry(
         "end-remote-write",
@@ -452,6 +467,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
           functionName = "wasi:io/read",
           invocationId = js.Dynamic.literal(anchor = js.BigInt("1"), ordinal = js.BigInt("2")),
           observationalOwner = js.BigInt("11"),
+          driver = js.BigInt("12"),
           request = sampleTypedJs,
           durableFunctionType = js.Dynamic.literal(tag = "read-remote"),
           spanStarted = js.Dynamic.literal(
@@ -487,6 +503,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         s.params.functionName == "wasi:io/read",
         s.params.invocationId.contains(OplogApi.DurableInvocationId(BigInt(1), BigInt(2))),
         s.params.observationalOwner.contains(BigInt(11)),
+        s.params.driver.contains(BigInt(12)),
         s.params.request.isDefined,
         s.params.wrappedFunctionType == DurabilityApi.DurableFunctionType.ReadRemote,
         s.params.denial.contains("access denied"),
@@ -580,6 +597,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
               functionName = "fn",
               invocationId = js.undefined,
               observationalOwner = js.undefined,
+              driver = js.undefined,
               request = js.undefined,
               durableFunctionType = js.Dynamic.literal(tag = "read-local"),
               spanStarted = js.undefined,
@@ -625,6 +643,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         start.params.parentStartIndex.isEmpty,
         start.params.invocationId.isEmpty,
         start.params.observationalOwner.isEmpty,
+        start.params.driver.isEmpty,
         start.params.request.isEmpty,
         end.params.response.isEmpty,
         cancelled.params.partial.isEmpty

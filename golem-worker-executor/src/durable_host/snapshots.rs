@@ -152,6 +152,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             load_snapshot_invocation,
             &component_metadata,
             store.as_context().data().durable_ctx().owner_context(),
+            None,
         )
         .map_err(|err| {
             ManualLoadResult::Failed(format!(
@@ -179,7 +180,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .durable_ctx_mut()
             .begin_call_snapshotting_function();
 
-        let load_result = invoke_observed_and_traced(lowered, store, instance, None).await;
+        let load_result = invoke_observed_and_traced(lowered, store, instance, None, None).await;
         store.as_context_mut().data().set_suspended();
 
         store
@@ -439,6 +440,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             load_snapshot_invocation,
             &component_metadata,
             store.as_context().data().durable_ctx().owner_context(),
+            None,
         ) {
             Ok(lowered) => lowered,
             Err(err) => {
@@ -477,7 +479,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .durable_ctx_mut()
             .begin_call_snapshotting_function();
 
-        let load_result = invoke_observed_and_traced(lowered, store, instance, None).await;
+        let load_result = invoke_observed_and_traced(lowered, store, instance, None, None).await;
         store.as_context_mut().data().set_suspended();
 
         store

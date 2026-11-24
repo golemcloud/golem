@@ -141,12 +141,19 @@ interface oplog {
     ///
     /// `denial` is the reason the host denied the call before it ran. A denied
     /// call never runs its operation, and its `end` holds the denied response.
+    ///
+    /// `driver` is the oplog index of the agent invocation whose settlement waits
+    /// for this call. It is present in two cases: a store task that records after
+    /// its spawning invocation closed records the invocation that resumed it, and
+    /// agent-level work recorded while an invocation runs records that invocation,
+    /// even when the call's invocation id is anchored at the same invocation.
     record start-parameters {
         timestamp: datetime,
         parent-start-index: option<oplog-index>,
         function-name: string,
         invocation-id: option<durable-invocation-id>,
         observational-owner: option<oplog-index>,
+        driver: option<oplog-index>,
         request: option<typed-schema-value>,
         durable-function-type: wrapped-function-type,
         span-started: option<span-started>,
@@ -295,6 +302,12 @@ interface oplog {
         invocation-id: uuid,
         error: string,
         start-index: oplog-index,
+    }
+
+    record agent-invocation-settled-parameters {
+        timestamp: datetime,
+        invocation-id: uuid,
+        consumed-fuel: s64,
     }
 
     enum oplog-error-kind {
@@ -452,6 +465,9 @@ interface oplog {
     record agent-method-invocation-parameters {
         invocation-id: uuid,
         method-name: string,
+        /// Component-independent original-method-input diagnostic envelope, not the
+        /// executed method's input schema. Includes rejected captured JSON fields;
+        /// native values are typed and host capabilities are redacted before encoding.
         function-input: typed-schema-value,
         trace-id: string,
         trace-states: list<string>,
@@ -628,6 +644,8 @@ interface oplog {
         parent-start-index: option<oplog-index>,
         invocation-id: option<durable-invocation-id>,
         observational-owner: option<oplog-index>,
+        /// The invocation that drives the call when it is not the invocation the call belongs to
+        driver: option<oplog-index>,
         /// Whether the call carries a request: true for a durable call, false for a durable scope
         carries-request: bool,
         /// The request of the call, when it is known
@@ -642,6 +660,7 @@ interface oplog {
         observational-owner,
         request-presence,
         parent,
+        driver,
     }
 
     record failed-snapshot-assisted-update-details {
@@ -856,6 +875,7 @@ interface oplog {
         function-name: string,
         invocation-id: option<durable-invocation-id>,
         observational-owner: option<oplog-index>,
+        driver: option<oplog-index>,
         request: option<oplog-payload>,
         durable-function-type: wrapped-function-type,
         span-started: option<span-started>,
@@ -1004,6 +1024,12 @@ interface oplog {
         start-index: oplog-index,
     }
 
+    record raw-agent-invocation-settled-parameters {
+        timestamp: datetime,
+        invocation-id: uuid,
+        consumed-fuel: s64,
+    }
+
     record raw-error-parameters {
         timestamp: datetime,
         kind: oplog-error-kind,
@@ -1145,6 +1171,8 @@ interface oplog {
         /// The agent has completed an invocation
         agent-invocation-finished(raw-agent-invocation-finished-parameters),
         agent-invocation-failed(raw-agent-invocation-failed-parameters),
+        /// The background work of an agent invocation ended after its result was recorded
+        agent-invocation-settled(raw-agent-invocation-settled-parameters),
         /// Agent suspended
         suspend(timestamp),
         /// Agent failed
@@ -1259,6 +1287,8 @@ interface oplog {
         /// The agent has completed an invocation
         agent-invocation-finished(agent-invocation-finished-parameters),
         agent-invocation-failed(agent-invocation-failed-parameters),
+        /// The background work of an agent invocation ended after its result was recorded
+        agent-invocation-settled(agent-invocation-settled-parameters),
         /// Agent suspended
         suspend(timestamp),
         /// Agent failed

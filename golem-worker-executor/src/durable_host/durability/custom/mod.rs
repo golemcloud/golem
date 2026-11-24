@@ -1088,6 +1088,7 @@ async fn begin_custom_invocation<U: Send + 'static, Ctx: WorkerCtx>(
                     function_name,
                     invocation_id: Some(start_invocation_id),
                     observational_owner: None,
+                    driver: None,
                     request: Some(persisted_request),
                     durable_function_type: start_function_type,
                     span_started: None,

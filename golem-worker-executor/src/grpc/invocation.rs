@@ -52,6 +52,9 @@ pub trait CanStartWorker {
     fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, WorkerExecutorError> {
         Ok(None)
     }
+    fn invocation(&self) -> Option<golem_api_grpc::proto::golem::worker::InvocationStart> {
+        None
+    }
 }
 
 trait ProtobufInvocationDetails {
@@ -83,6 +86,9 @@ trait ProtobufInvocationDetails {
     }
     fn proto_idempotency_key(&self) -> Result<Option<IdempotencyKey>, WorkerExecutorError> {
         Ok(None)
+    }
+    fn proto_invocation(&self) -> Option<golem_api_grpc::proto::golem::worker::InvocationStart> {
+        None
     }
 }
 
@@ -140,6 +146,9 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
 
     fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, WorkerExecutorError> {
         self.proto_idempotency_key()
+    }
+    fn invocation(&self) -> Option<golem_api_grpc::proto::golem::worker::InvocationStart> {
+        self.proto_invocation()
     }
 }
 
@@ -224,6 +233,10 @@ impl ProtobufInvocationDetails
 }
 
 impl ProtobufInvocationDetails for golem_api_grpc::proto::golem::worker::InvocationStart {
+    fn proto_invocation(&self) -> Option<golem_api_grpc::proto::golem::worker::InvocationStart> {
+        Some(self.clone())
+    }
+
     fn proto_agent_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::AgentId> {
         &None
     }
@@ -517,7 +530,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             request.caller()?,
             InvocationFreshnessDisposition::MayExist,
             if creates {
-                resolved.invocation_intent(None)
+                resolved.invocation_intent(None, request.invocation())
             } else {
                 CreateIntent::Existing
             },
@@ -622,7 +635,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &invocation_context,
             request.caller()?,
             freshness_disposition,
-            resolved.invocation_intent(request.idempotency_key()?),
+            resolved.invocation_intent(request.idempotency_key()?, request.invocation()),
         )
         .await
     }

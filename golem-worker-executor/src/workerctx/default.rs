@@ -54,7 +54,7 @@ use crate::worker::{InvocationFailureDecision, RetryDecision, Worker};
 use crate::workerctx::{
     CallCountManagement, EntityInvocationManagement, ExternalOperations, FileSystemReading,
     FuelManagement, InvocationContextManagement, InvocationHooks, InvocationManagement,
-    StatusManagement, UpdateManagement, WorkerCtx, WorkerFilesystemContext,
+    ResultRecordedAt, StatusManagement, UpdateManagement, WorkerCtx, WorkerFilesystemContext,
 };
 use anyhow::Error;
 use async_trait::async_trait;
@@ -79,6 +79,7 @@ use golem_common::model::{
 };
 use golem_common::resource_runtime::Uri;
 use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
+use golem_common::schema::SchemaValue;
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
@@ -693,9 +694,10 @@ impl InvocationHooks for Context {
     async fn on_agent_invocation_started(
         &mut self,
         invocation: crate::worker::HydratedInvocation,
+        input: Option<&SchemaValue>,
     ) -> Result<bool, WorkerExecutorError> {
         self.durable_ctx
-            .on_agent_invocation_started(invocation)
+            .on_agent_invocation_started(invocation, input)
             .await
     }
 
@@ -717,9 +719,10 @@ impl InvocationHooks for Context {
         &mut self,
         full_function_name: &str,
         error: AgentError,
+        recorded_at: ResultRecordedAt,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .record_agent_method_failure(full_function_name, error)
+            .record_agent_method_failure(full_function_name, error, recorded_at)
             .await
     }
 
@@ -728,9 +731,10 @@ impl InvocationHooks for Context {
         full_function_name: &str,
         consumed_fuel: u64,
         output: &mut AgentInvocationOutput,
+        recorded_at: ResultRecordedAt,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .on_agent_invocation_success(full_function_name, consumed_fuel, output)
+            .on_agent_invocation_success(full_function_name, consumed_fuel, output, recorded_at)
             .await
     }
 

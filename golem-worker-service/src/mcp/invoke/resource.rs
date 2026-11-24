@@ -110,7 +110,14 @@ pub async fn invoke_resource(
                 &component,
                 &target,
                 Some(mcp_resource.method.name.clone()),
-                Some(proto_method_parameters),
+                Some(golem_common::model::agent::AgentMethodInput::Native(
+                    golem_common::model::agent::NativeMethodInput::capture(
+                        proto_method_parameters,
+                        Vec::new(),
+                    )
+                    .map_err(crate::service::worker::WorkerServiceError::TypeChecker)?
+                    .0,
+                )),
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 None,
                 request_key,
@@ -612,6 +619,7 @@ mod tests {
                 idempotency_key: None,
                 oplog_index: None,
                 agent_fingerprint: None,
+                background_failure: None,
             },
             AgentMode::Ephemeral,
             constructor.clone(),

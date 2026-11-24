@@ -116,8 +116,13 @@ replay-to-live transition before live disposal under the original `Start`.
                                                      committed before the caller sees "accepted"
 #21 AgentInvocationStarted { invocation_id: I, ... } invocation loop picked it up
 #22..#40 durable calls of the invocation
-#41 AgentInvocationFinished { invocation_id: I, result: R }  on_agent_invocation_success,
-                                                     CommitLevel::Always, then waiters are notified
+#41 AgentInvocationFinished { invocation_id: I, result: R, awaits_settlement }
+                                                     on_agent_invocation_success at the export's
+                                                     return, CommitLevel::Always, then waiters are
+                                                     notified
+#42 AgentInvocationSettled { invocation_id: I, consumed_fuel } (h)
+                                                     on_agent_invocation_settled after the
+                                                     background work drained (none here)
 ```
 
 `I` is finalized from the caller's key `K`, its scope, the method and the agent fingerprint (see
@@ -126,7 +131,10 @@ replay-to-live transition before live disposal under the original `Start`.
 Crash after `#20`, before `#21`: reconstruction folds status from the oplog, sees the pending
 invocation, and runs it. Crash between `#21` and `#41`: `replay` replays the recorded prefix
 of this invocation, then the guest continues live from the tail; a recorded `#41` that names
-another invocation is a divergence. Crash after `#41`: a repeated call with key `K`, the same
+another invocation is a divergence. Crash between `#41` and `#42`: the status fold keeps the
+agent `Running` (`settling_invocation = I`), so recovery restarts it without an outside call;
+replay consumes `#41` at the return without a new result, and the drain continues live and
+appends `#42`. Crash after `#41`, in either window: a repeated call with key `K`, the same
 method and the same caller finalizes to `I`, hits `lookup_invocation_result` and returns `R`
 without touching the guest. A different input under the same `I` is an `IdempotencyConflict`.
 Test: `tests/api/mod.rs::invoking_with_same_idempotency_key_is_idempotent_after_restart`.
@@ -148,13 +156,14 @@ Caller C                                             Target T
                                                      #6 AgentInvocationStarted { invocation_id: I }
                                                      ... counter 0 → 1 ...
                                                      #9 AgentInvocationFinished { invocation_id: I, result: 1 }
+                                                     #10 AgentInvocationSettled { invocation_id: I, consumed_fuel } (h)
      ✕ caller crashes before End
 ```
 
 Caller reconstruction: `Start#30` is incomplete. RPC is a `WriteRemote` durable call, so the path
 re-dispatches under the existing `Start` with the *same* key
 (`InvocationFreshnessDisposition::MayExist`). The key finalizes to the same `I` against T's
-unchanged fingerprint, so `lookup_invocation_result(I)` is not `New`; it attaches to invocation `#6..#9` and returns
+unchanged fingerprint, so `lookup_invocation_result(I)` is not `New`; it attaches to invocation `#6..#10` and returns
 `1`. C appends `End { start_index: 30, response: 1 }`. Two caller attempts, one target
 execution, counter 1.
 

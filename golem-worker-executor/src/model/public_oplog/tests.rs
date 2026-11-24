@@ -1280,6 +1280,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             function_name: HostFunctionName::Custom("agent-custom-owner".to_string()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: None,
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: None,
@@ -1307,6 +1308,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             function_name: HostFunctionName::GolemEntityInvoke,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(middleware_request))),
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: None,
@@ -1333,6 +1335,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             function_name: HostFunctionName::Custom("entity-child".to_string()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequestNoInput {}.into()))),
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
@@ -1386,6 +1389,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             function_name: HostFunctionName::GolemEntityInvoke,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(tool_request))),
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: Some(Box::new(SpanStarted {
@@ -1490,6 +1494,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             function_name: HostFunctionName::Custom("observational-call".to_string()),
             invocation_id: None,
             observational_owner: Some(observational_owner),
+            driver: None,
             request: None,
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
@@ -1526,6 +1531,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             function_name: HostFunctionName::Custom("transaction".to_string()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: None,
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,
@@ -1602,6 +1608,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             function_name: HostFunctionName::GolemToolInvocationRejected,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(rejected_request))),
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: None,
@@ -1862,7 +1869,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
 }
 
 #[test]
-async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors() {
+async fn explicit_entity_attribution_rejects_non_start_and_non_entity_anchors() {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let oplog_service = Arc::new(
@@ -1903,6 +1910,7 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
             function_name: HostFunctionName::Custom("not-an-entity".to_string()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: None,
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: None,
@@ -1924,6 +1932,7 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
             function_name: HostFunctionName::GolemEntityInvoke,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(entity_request))),
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: None,
@@ -1952,35 +1961,6 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
         ))
         .await
         .unwrap();
-    let invalid_forward_index = invalid_non_entity.next();
-    let future_entity_start = invalid_forward_index.next();
-    assert_eq!(
-        oplog
-            .add(OplogEntry::remove_retry_policy(
-                Some(future_entity_start),
-                "test-policy".to_string()
-            ))
-            .await
-            .unwrap(),
-        invalid_forward_index
-    );
-    assert_eq!(
-        oplog
-            .add(OplogEntry::Start {
-                timestamp: Timestamp::now_utc(),
-                parent_start_index: None,
-                function_name: HostFunctionName::GolemEntityInvoke,
-                invocation_id: None,
-                observational_owner: None,
-                request: None,
-                durable_function_type: DurableFunctionType::WriteLocal,
-                span_started: None,
-                denial: None,
-            })
-            .await
-            .unwrap(),
-        future_entity_start
-    );
     oplog.commit(CommitLevel::Always).await.unwrap();
 
     let components: Arc<dyn ComponentService> = Arc::new(PanicComponentService);
@@ -2006,10 +1986,6 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
     for (index, expected_error) in [
         (invalid_non_start, "does not reference a Start"),
         (invalid_non_entity, "is not an entity invocation"),
-        (
-            invalid_forward_index,
-            "has non-causal entity parent Start index",
-        ),
     ] {
         let result = get_public_oplog_chunk(
             components.clone(),
@@ -2336,6 +2312,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             function_name: HostFunctionName::P3HttpClientConsumeBodyChunk,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(cancelled_request_payload),
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,
@@ -2623,6 +2600,86 @@ async fn open_test_oplog(
         .await
         .unwrap();
     (oplog_service, owned_agent_id, oplog)
+}
+
+#[test]
+async fn pending_and_started_methods_expose_original_input_without_component_metadata() {
+    use golem_common::model::agent::{AgentMethodInput, JsonMethodInput, PublicMethodInput};
+    use golem_common::model::caller::Caller;
+    use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
+    use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::model::{AgentInvocationPayload, InvocationId};
+    use golem_common::schema::FromSchema;
+
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("original-input").await;
+    let key = InvocationId(Uuid::new_v4());
+    let context = InvocationContextStack::fresh();
+    let input = JsonMethodInput::capture(br#"{"rejected":1e400,"signedZero":-0.0}"#).unwrap();
+    let (operation, payload) = AgentInvocationPayload::AgentMethod {
+        method_name: "removed_method".into(),
+        allow_streams: false,
+        input: AgentMethodInput::PublicJson(input.clone()),
+        caller: Caller::anonymous(),
+        scope_card: None,
+    }
+    .into_stored();
+    let payload = oplog.upload_payload(&payload).await.unwrap();
+    let pending = OplogEntry::pending_agent_invocation(
+        None,
+        key,
+        Box::new(operation.clone()),
+        payload.clone(),
+        context.trace_id.clone(),
+        context.trace_states.clone(),
+        context.to_oplog_data(),
+    );
+    let started = OplogEntry::AgentInvocationStarted {
+        timestamp: Timestamp::now_utc(),
+        invocation_id: key,
+        operation: Box::new(operation),
+        payload,
+        trace_id: context.trace_id.clone(),
+        trace_states: context.trace_states.clone(),
+        invocation_context: context.to_oplog_data(),
+        wallet_pin: Box::new(InvocationWalletPin {
+            wallet_token: WalletVersionToken {
+                wallet_id_hash: [0; 32],
+                generation: 0,
+            },
+            pinned_card_ids: Vec::new(),
+            scope_card_id: None,
+        }),
+    };
+    for entry in [pending, started] {
+        let public = PublicOplogEntry::from_oplog_entry(
+            OplogIndex::INITIAL,
+            entry,
+            oplog_service.clone(),
+            Arc::new(PanicComponentService),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+        )
+        .await
+        .unwrap();
+        let invocation = match public {
+            PublicOplogEntry::PendingAgentInvocation(params) => params.invocation,
+            PublicOplogEntry::AgentInvocationStarted(params) => params.invocation,
+            _ => panic!("expected a method invocation"),
+        };
+        let PublicAgentInvocation::AgentMethodInvocation(method) = invocation else {
+            panic!("expected original method input")
+        };
+        let PublicMethodInput::PublicJson(raw) =
+            PublicMethodInput::from_value(method.function_input.value()).unwrap()
+        else {
+            panic!("expected captured JSON")
+        };
+        assert_eq!(raw, input.as_str());
+    }
 }
 
 fn log_entry(message_size: usize) -> OplogEntry {

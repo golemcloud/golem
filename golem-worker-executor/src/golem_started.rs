@@ -157,6 +157,11 @@ mod tests {
             "services/worker_proxy.rs",
             "an invocation status lookup starts no work",
         ),
+        (
+            "worker/invocation.rs",
+            "the validation of a fresh invocation builds a placeholder invocation that neither \
+             registers streams nor enters a guest, so it starts no work",
+        ),
     ];
 
     #[test]
@@ -233,11 +238,12 @@ mod tests {
             let mut depth = 0i64;
             let mut opened = false;
             let mut first = true;
+            let mut literal = Literal::None;
             for item_line in lines.by_ref() {
                 if !opened && item_line.trim_start().starts_with("#[") {
                     continue;
                 }
-                depth += braces(item_line);
+                depth += braces(item_line, &mut literal);
                 opened |= item_line.contains('{');
                 let end = item_line.trim_end();
                 // A field or a match arm ends at the comma of its first line.
@@ -252,32 +258,80 @@ mod tests {
         result
     }
 
-    /// The change in brace depth over a line, ignoring braces in string and char literals and in
-    /// line comments.
-    fn braces(line: &str) -> i64 {
+    /// The literal that a line ends in, so that the next line of the same item continues it.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Literal {
+        None,
+        String,
+        /// A raw string, with the number of `#` that close it.
+        Raw(usize),
+    }
+
+    /// The change in brace depth over a line, ignoring braces in string, raw string and char
+    /// literals and in line comments. A string or raw string can span lines: `literal` holds the
+    /// one that the previous line left open, and the one that this line leaves open.
+    fn braces(line: &str, literal: &mut Literal) -> i64 {
+        let chars: Vec<char> = line.chars().collect();
         let mut depth = 0;
-        let mut in_string = false;
-        let mut chars = line.chars().peekable();
-        while let Some(c) = chars.next() {
-            match c {
-                '\\' if in_string => {
-                    chars.next();
+        let mut i = 0;
+        while i < chars.len() {
+            let c = chars[i];
+            match *literal {
+                Literal::String => {
+                    match c {
+                        '\\' => i += 1,
+                        '"' => *literal = Literal::None,
+                        _ => {}
+                    }
+                    i += 1;
+                    continue;
                 }
-                '"' => in_string = !in_string,
-                '\'' if !in_string => {
-                    // A char literal such as '{' or '\''; a lifetime has no closing quote.
-                    let rest: String = chars.clone().take(3).collect();
-                    if rest.starts_with('\\') {
-                        chars.nth(2);
-                    } else if rest.chars().nth(1) == Some('\'') {
-                        chars.nth(1);
+                Literal::Raw(hashes) => {
+                    if c == '"'
+                        && chars[i + 1..]
+                            .iter()
+                            .take(hashes)
+                            .filter(|c| **c == '#')
+                            .count()
+                            == hashes
+                    {
+                        *literal = Literal::None;
+                        i += hashes;
+                    }
+                    i += 1;
+                    continue;
+                }
+                Literal::None => {}
+            }
+            let starts_word = i == 0 || !(chars[i - 1].is_alphanumeric() || chars[i - 1] == '_');
+            match c {
+                'r' if starts_word
+                    || (i == 1 && chars[0] == 'b')
+                    || (i >= 2
+                        && chars[i - 1] == 'b'
+                        && !(chars[i - 2].is_alphanumeric() || chars[i - 2] == '_')) =>
+                {
+                    let hashes = chars[i + 1..].iter().take_while(|c| **c == '#').count();
+                    if chars.get(i + 1 + hashes) == Some(&'"') {
+                        *literal = Literal::Raw(hashes);
+                        i += hashes + 1;
                     }
                 }
-                '/' if !in_string && chars.peek() == Some(&'/') => break,
-                '{' if !in_string => depth += 1,
-                '}' if !in_string => depth -= 1,
+                '"' => *literal = Literal::String,
+                '\'' => {
+                    // A char literal such as '{' or '\''; a lifetime has no closing quote.
+                    if chars.get(i + 1) == Some(&'\\') {
+                        i += 3;
+                    } else if chars.get(i + 2) == Some(&'\'') {
+                        i += 2;
+                    }
+                }
+                '/' if chars.get(i + 1) == Some(&'/') => break,
+                '{' => depth += 1,
+                '}' => depth -= 1,
                 _ => {}
             }
+            i += 1;
         }
         depth
     }

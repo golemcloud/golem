@@ -34,6 +34,8 @@ pub enum InvocationState {
     Retrying,
     Interrupted,
     Completed,
+    /// The invocation recorded its result, then the agent gave up during its background work.
+    BackgroundFailed,
     Failed,
     Cancelled,
 }
@@ -68,11 +70,12 @@ impl InvocationListEntry {
                 InvocationEnd::Completed => InvocationState::Completed,
                 InvocationEnd::Failed | InvocationEnd::Retrying => InvocationState::Failed,
                 InvocationEnd::Cancelled => InvocationState::Cancelled,
+                InvocationEnd::BackgroundFailed { .. } => InvocationState::BackgroundFailed,
             },
+            last_change: position.last_change(),
             operation: position.operation,
             accepted_at: position.accepted_at.map(Timestamp::rounded),
             changed_at: position.changed_at.rounded(),
-            last_change: position.terminal,
         }
     }
 
@@ -447,7 +450,8 @@ fn keep_latest(
 ) {
     match results.get(&key) {
         Some(known)
-            if known.terminal >= position.terminal || position.end == InvocationEnd::Cancelled => {}
+            if known.last_change() >= position.last_change()
+                || position.end == InvocationEnd::Cancelled => {}
         _ => {
             results.insert(key, position);
         }

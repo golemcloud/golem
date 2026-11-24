@@ -24,7 +24,7 @@ golem invocation get --agent <AGENT_ID> --idempotency-key <IDEMPOTENCY_KEY>
 golem invocation get <INVOCATION_ID>
 ```
 
-Shows the invocation's state (`scheduled`, `pending`, `running`, `waiting`, `retrying`, `interrupted`, `completed`, `failed` or `cancelled`), its operation and timestamps, and the result of a `completed` or `failed` invocation. The command exits with code **130** when the invocation, or one of the invocations that the key selects, was cancelled.
+Shows the invocation's state (`scheduled`, `pending`, `running`, `waiting`, `retrying`, `interrupted`, `completed`, `background-failed`, `failed` or `cancelled`), its operation and timestamps, and the result of a `completed`, `background-failed` or `failed` invocation. A `background-failed` invocation recorded its result, then the agent failed during the background work that the method started; `get` shows both the result and the error. The command exits with code **130** when the invocation, or one of the invocations that the key selects, was cancelled.
 
 ## `invocation list` — List the Invocations of an Agent
 
@@ -42,7 +42,7 @@ golem invocation cancel <INVOCATION_ID>
 ```
 
 - Prints the invocation after the cancel: its state is `cancelled` when the cancel took effect
-- An invocation that already finished keeps its state and result
+- An invocation that already finished keeps its state and result. This includes an invocation whose result is recorded while its background work still runs: it is `completed`, and the cancel leaves it unchanged
 - A running invocation cannot be canceled; the command fails
 
 ### Examples

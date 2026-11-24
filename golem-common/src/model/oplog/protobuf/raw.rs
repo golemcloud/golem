@@ -472,11 +472,11 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
         use golem_api_grpc::proto::golem::worker::raw_oplog_entry::Entry;
         use golem_api_grpc::proto::golem::worker::{
             RawActivatePluginParameters, RawAgentInvocationFailedParameters,
-            RawAgentInvocationFinishedParameters, RawAgentInvocationStartedParameters,
-            RawBeginRemoteTransactionParameters, RawCancelPendingInvocationParameters,
-            RawCancelledParameters, RawCardDerivedParameters, RawCardEventQueuedParameters,
-            RawCardInstallFailedParameters, RawCardInstalledParameters,
-            RawCardRevokedCascadeParameters, RawCardRevokedParameters,
+            RawAgentInvocationFinishedParameters, RawAgentInvocationSettledParameters,
+            RawAgentInvocationStartedParameters, RawBeginRemoteTransactionParameters,
+            RawCancelPendingInvocationParameters, RawCancelledParameters, RawCardDerivedParameters,
+            RawCardEventQueuedParameters, RawCardInstallFailedParameters,
+            RawCardInstalledParameters, RawCardRevokedCascadeParameters, RawCardRevokedParameters,
             RawCardTransferConfirmedParameters, RawCardTransferStartedParameters,
             RawCardTransferredParameters, RawCompletionDeliveredParameters,
             RawCompletionDiscardedParameters, RawCreateParameters, RawCreateResourceParameters,
@@ -558,6 +558,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 function_name,
                 invocation_id,
                 observational_owner,
+                driver,
                 request,
                 durable_function_type,
                 span_started,
@@ -568,6 +569,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 function_name: function_name.to_string(),
                 invocation_id: invocation_id.map(Into::into),
                 observational_owner: observational_owner.map(|id| id.as_u64()),
+                driver: driver.map(|id| id.as_u64()),
                 request: request.map(oplog_payload_to_proto).transpose()?,
                 durable_function_type: Some(durable_function_type_to_proto(durable_function_type)),
                 span_started: span_started.map(|span| raw_span_started_to_proto(*span)),
@@ -634,6 +636,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 method_name,
                 consumed_fuel,
                 component_revision,
+                awaits_settlement,
                 ..
             } => Entry::AgentInvocationFinished(RawAgentInvocationFinishedParameters {
                 invocation_id: Some(invocation_id.into()),
@@ -641,16 +644,27 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 method_name,
                 consumed_fuel,
                 component_revision: component_revision.into(),
+                awaits_settlement,
             }),
             OplogEntry::AgentInvocationFailed {
                 invocation_id,
                 error,
                 start_index,
+                awaits_settlement,
                 ..
             } => Entry::AgentInvocationFailed(RawAgentInvocationFailedParameters {
                 invocation_id: Some(invocation_id.into()),
                 error: Some(error.into()),
                 start_index: start_index.into(),
+                awaits_settlement,
+            }),
+            OplogEntry::AgentInvocationSettled {
+                invocation_id,
+                consumed_fuel,
+                ..
+            } => Entry::AgentInvocationSettled(RawAgentInvocationSettledParameters {
+                invocation_id: Some(invocation_id.into()),
+                consumed_fuel,
             }),
             OplogEntry::Suspend { .. } => Entry::Suspend(RawTimestampOnly {}),
             OplogEntry::Error {
@@ -1231,6 +1245,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     observational_owner: p
                         .observational_owner
                         .map(crate::base_model::OplogIndex::from_u64),
+                    driver: p.driver.map(crate::base_model::OplogIndex::from_u64),
                     request,
                     durable_function_type,
                     span_started: p
@@ -1312,6 +1327,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     method_name: p.method_name,
                     consumed_fuel: p.consumed_fuel,
                     component_revision,
+                    awaits_settlement: p.awaits_settlement,
                 })
             }
             Entry::AgentInvocationFailed(p) => Ok(OplogEntry::AgentInvocationFailed {
@@ -1320,6 +1336,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 invocation_id: p.invocation_id.ok_or("Missing invocation_id")?.into(),
                 error: p.error.ok_or("Missing error")?.try_into()?,
                 start_index: OplogIndex::from_u64(p.start_index),
+                awaits_settlement: p.awaits_settlement,
+            }),
+            Entry::AgentInvocationSettled(p) => Ok(OplogEntry::AgentInvocationSettled {
+                timestamp,
+                invocation_id: p.invocation_id.ok_or("Missing invocation_id")?.into(),
+                consumed_fuel: p.consumed_fuel,
             }),
             Entry::Suspend(_) => Ok(OplogEntry::Suspend { timestamp }),
             Entry::Error(p) => {

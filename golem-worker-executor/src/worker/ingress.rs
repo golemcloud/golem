@@ -61,7 +61,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: Arc<Self>,
         invocation: AgentInvocation,
     ) -> Result<ResultOrSubscription, WorkerExecutorError> {
+        self.invoke_with_attachment(invocation, None, true).await
+    }
+
+    async fn invoke_with_attachment(
+        self: Arc<Self>,
+        invocation: AgentInvocation,
+        attachment: Option<StreamSessionAttachedRecord>,
+        allow_cache: bool,
+    ) -> Result<ResultOrSubscription, WorkerExecutorError> {
         self.ensure_invocation_owner(&invocation)?;
+        if let Some(attachment) = &attachment {
+            self.ensure_matching_stream_attachment(attachment).await?;
+        }
         let idempotency_key = Self::require_idempotency_key(&invocation)?;
 
         // Recorded requests take precedence over a newer read-only cache entry.
@@ -77,7 +89,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         // Classification uses the in-memory component snapshot - no metadata
         // fetch on the hot path.
-        let read_only_ctx = self.read_only_context_for(&invocation);
+        let read_only_ctx = allow_cache
+            .then(|| self.read_only_context_for(&invocation))
+            .flatten();
 
         let effect = if read_only_ctx.is_some() {
             read_only_cache::InvocationEffect::ReadOnly
@@ -120,8 +134,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             }
                             LookupResult::New => {}
                         }
-                        drop(instance_guard);
-                        return Ok(ResultOrSubscription::Finished(Ok(entry.output.clone())));
+                        if self.current_component.load().revision == ro.component_revision
+                            && self.read_only_cache_epoch.load(Ordering::SeqCst) == cur_epoch
+                            && !entry.is_expired(tokio::time::Instant::now())
+                        {
+                            return Ok(ResultOrSubscription::Finished(Ok(entry.output.clone())));
+                        }
                     } else {
                         // Only evict if the stored entry is still ours.
                         let me = entry.clone();
@@ -175,7 +193,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // For ReadOnly the helper returns the epoch captured under the
                 // enqueue lock; using any other epoch could store stale data.
                 let captured = self
-                    .enqueue_worker_invocation_with_effect(invocation, effect, None)
+                    .enqueue_worker_invocation_with_attachment(invocation, effect, None, attachment)
                     .await?
                     .0;
                 (ResultOrSubscription::Pending(subscription), captured)
@@ -425,9 +443,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn invoke_and_await_with_notifier(
         self: Arc<Self>,
         invocation: AgentInvocation,
+        admission: Option<tokio::sync::oneshot::Sender<read_only_cache::AdmissionSignal>>,
+    ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
+        self.invoke_and_await_with_attachment(invocation, admission, None)
+            .await
+    }
+
+    pub(crate) async fn invoke_and_await_with_attachment(
+        self: Arc<Self>,
+        invocation: AgentInvocation,
         mut admission: Option<tokio::sync::oneshot::Sender<read_only_cache::AdmissionSignal>>,
+        attachment: Option<StreamSessionAttachedRecord>,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         self.ensure_invocation_owner(&invocation)?;
+        if let Some(attachment) = &attachment {
+            self.ensure_matching_stream_attachment(attachment).await?;
+        }
         let idempotency_key = Self::require_idempotency_key(&invocation)?;
 
         // Fast path: read-only Await coalescing.
@@ -512,109 +543,118 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
 
         if let Some((ro, LookupResult::New)) = lookup_for_coalesce {
-            // Use the same key shape as the `invoke` cache HIT path so a hit
-            // there and a coalesced miss here see the same entry.
-            let cur_epoch = self.read_only_cache_epoch.load(Ordering::SeqCst);
-            let key = read_only_cache::build_read_only_cache_key(
-                &ro.method_name,
-                &ro.input,
-                &ro.caller,
-                ro.component_revision,
-                cur_epoch,
-            );
-
-            // Honor TTL up front: a stale entry must miss, not hit (mirrors
-            // the `Worker::invoke` HIT path).
-            if let Some(entry) = self.read_only_cache.try_get(&key).await {
-                if !entry.is_expired(tokio::time::Instant::now()) {
-                    // Apply the same `is_deleting` / `startup_failure` guard
-                    // the HIT path in `invoke` applies, so we don't return a
-                    // cached value for a worker that's about to disappear.
-                    let instance_guard = self.lock_non_stopping_worker().await;
-                    if instance_guard.ensure_not_deleting().is_err() {
-                        return Err(WorkerExecutorError::invalid_request(
-                            "Cannot enqueue invocation to a deleting worker",
-                        ));
-                    }
-                    if let Some(err) = instance_guard.startup_failure() {
-                        return Err(err.clone());
-                    }
-                    let recorded = self.lookup_matching_invocation(&invocation).await?;
-                    drop(instance_guard);
-                    match recorded {
-                        LookupResult::Complete(result) => {
-                            if let Some(tx) = admission.take() {
-                                let signal = match &result {
-                                    Ok(_) => read_only_cache::AdmissionSignal::Immediate,
-                                    Err(error) => {
-                                        read_only_cache::AdmissionSignal::Failure(error.clone())
-                                    }
-                                };
-                                let _ = tx.send(signal);
-                            }
-                            return result;
-                        }
-                        LookupResult::Pending => {
-                            Worker::start_if_needed(self.clone()).await?;
-                            if let Some(tx) = admission.take() {
-                                let _ = tx.send(read_only_cache::AdmissionSignal::Queued);
-                            }
-                            return self.await_enqueued_invocation(idempotency_key).await;
-                        }
-                        LookupResult::Interrupted => {
-                            return Err(InterruptKind::Interrupt(Timestamp::now_utc()).into());
-                        }
-                        LookupResult::New => {}
-                    }
-                    if let Some(tx) = admission.take() {
-                        let _ = tx.send(read_only_cache::AdmissionSignal::Immediate);
-                    }
-                    return Ok(entry.output.clone());
-                } else {
-                    let me = entry.clone();
-                    let _ = self
-                        .read_only_cache
-                        .remove_if_cached(&key, move |current| Arc::ptr_eq(current, &me))
-                        .await;
+            'observation: {
+                // Use the same key shape as the `invoke` cache HIT path so a hit
+                // there and a coalesced miss here see the same entry.
+                let cur_epoch = self.read_only_cache_epoch.load(Ordering::SeqCst);
+                let key = read_only_cache::build_read_only_cache_key(
+                    &ro.method_name,
+                    &ro.input,
+                    &ro.caller,
+                    ro.component_revision,
+                    cur_epoch,
+                );
+                let observation_guard = self.lock_non_stopping_worker().await;
+                observation_guard.ensure_not_deleting()?;
+                if let Some(error) = observation_guard.startup_failure() {
+                    return Err(error.clone());
                 }
-            }
+                if self.current_component.load().revision != ro.component_revision
+                    || self.read_only_cache_epoch.load(Ordering::SeqCst) != cur_epoch
+                {
+                    break 'observation;
+                }
 
-            // Coalesce concurrent first-time misses for this key. Only the
-            // first caller spawns the underlying invocation; subsequent
-            // concurrent callers wait on the same pending entry inside
-            // `get_or_insert_simple_spawned` and receive the same
-            // `ReadOnlyCacheEntry`.
-            //
-            // The spawned closure runs `invoke_and_await_uncoalesced` to
-            // bypass this coalescing path. Returning Err removes the pending
-            // entry so a later caller retries (failures must not poison the
-            // cache).
-            //
-            // The closure is spawned via `tokio::task::spawn` (see
-            // [`Cache::get_or_insert_spawned`]) so that cancellation of any
-            // single Await caller does NOT leave the pending entry stuck
-            // forever — the spawned owner future survives caller drop and
-            // resolves the entry one way or the other.
-            let ro_for_closure = ro.clone();
-            let worker = self.clone();
-            let invocation_for_closure = invocation.clone();
-            let idem_for_closure = idempotency_key;
+                // Honor TTL up front: a stale entry must miss, not hit (mirrors
+                // the `Worker::invoke` HIT path).
+                if let Some(entry) = self.read_only_cache.try_get(&key).await {
+                    if !entry.is_expired(tokio::time::Instant::now()) {
+                        // Apply the same `is_deleting` / `startup_failure` guard
+                        // the HIT path in `invoke` applies, so we don't return a
+                        // cached value for a worker that's about to disappear.
+                        let recorded = self.lookup_matching_invocation(&invocation).await?;
+                        match recorded {
+                            LookupResult::Complete(result) => {
+                                if let Some(tx) = admission.take() {
+                                    let signal = match &result {
+                                        Ok(_) => read_only_cache::AdmissionSignal::Immediate,
+                                        Err(error) => {
+                                            read_only_cache::AdmissionSignal::Failure(error.clone())
+                                        }
+                                    };
+                                    let _ = tx.send(signal);
+                                }
+                                return result;
+                            }
+                            LookupResult::Pending => {
+                                drop(observation_guard);
+                                Worker::start_if_needed(self.clone()).await?;
+                                if let Some(tx) = admission.take() {
+                                    let _ = tx.send(read_only_cache::AdmissionSignal::Queued);
+                                }
+                                return self.await_enqueued_invocation(idempotency_key).await;
+                            }
+                            LookupResult::Interrupted => {
+                                return Err(InterruptKind::Interrupt(Timestamp::now_utc()).into());
+                            }
+                            LookupResult::New => {}
+                        }
+                        if self.current_component.load().revision != ro.component_revision
+                            || self.read_only_cache_epoch.load(Ordering::SeqCst) != cur_epoch
+                            || entry.is_expired(tokio::time::Instant::now())
+                        {
+                            break 'observation;
+                        }
+                        if let Some(tx) = admission.take() {
+                            let _ = tx.send(read_only_cache::AdmissionSignal::Immediate);
+                        }
+                        return Ok(entry.output.clone());
+                    } else {
+                        let me = entry.clone();
+                        let _ = self
+                            .read_only_cache
+                            .remove_if_cached(&key, move |current| Arc::ptr_eq(current, &me))
+                            .await;
+                    }
+                }
 
-            // The owner future is spawned and deliberately survives this caller, so
-            // it cannot run inside the caller's span - that would hold the gRPC span
-            // open for the whole invocation. It links back instead, so the coalesced
-            // execution is still reachable from the request that started it.
-            //
-            // Captured before the wait span rather than inside it, unlike
-            // `enqueue_worker_invocation_with_effect`: N callers coalesce onto one
-            // execution, so linking to any one
-            // caller's wait would pick an arbitrary winner. The request that owns the
-            // execution is the honest originator.
-            let origin = TraceOrigin::capture_current();
-            let owner_agent_id = self.owned_agent_id.agent_id;
-            let owner_idempotency_key = idempotency_key;
+                // Coalesce concurrent first-time misses for this key. Only the
+                // first caller spawns the underlying invocation; subsequent
+                // concurrent callers wait on the same pending entry inside
+                // `get_or_insert_simple_spawned` and receive the same
+                // `ReadOnlyCacheEntry`.
+                //
+                // The spawned closure runs `invoke_and_await_uncoalesced` to
+                // bypass this coalescing path. Returning Err removes the pending
+                // entry so a later caller retries (failures must not poison the
+                // cache).
+                //
+                // The closure is spawned via `tokio::task::spawn` (see
+                // [`Cache::get_or_insert_spawned`]) so that cancellation of any
+                // single Await caller does NOT leave the pending entry stuck
+                // forever — the spawned owner future survives caller drop and
+                // resolves the entry one way or the other.
+                let ro_for_closure = ro.clone();
+                let worker = self.clone();
+                let invocation_for_closure = invocation.clone();
+                let idem_for_closure = idempotency_key;
+                let owner_attachment = attachment.clone();
 
-            let pending_or_final = async {
+                // The owner future is spawned and deliberately survives this caller, so
+                // it cannot run inside the caller's span - that would hold the gRPC span
+                // open for the whole invocation. It links back instead, so the coalesced
+                // execution is still reachable from the request that started it.
+                //
+                // Captured before the wait span rather than inside it, unlike
+                // `enqueue_worker_invocation_with_effect`: N callers coalesce onto one
+                // execution, so linking to any one
+                // caller's wait would pick an arbitrary winner. The request that owns the
+                // execution is the honest originator.
+                let origin = TraceOrigin::capture_current();
+                let owner_agent_id = self.owned_agent_id.agent_id;
+                let owner_idempotency_key = idempotency_key;
+
+                let pending_or_final = async {
                 self.read_only_cache
                     .get_or_insert_pending(
                         &key,
@@ -640,6 +680,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 invocation_for_closure,
                                 idem_for_closure,
                                 Some(pending.clone()),
+                                owner_attachment,
                             )
                             .await.inspect_err(|error| {
                                 pending.publish(read_only_cache::AdmissionSignal::Failure(error.clone()));
@@ -665,83 +706,113 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 idempotency_key = %idempotency_key,
             ))
             .await;
-            let entry_result = match pending_or_final {
-                Ok(entry) => match entry {
-                    PendingOrFinal::Final(entry) => {
-                        self.ensure_matching_invocation_payload(
-                            &idempotency_key,
-                            &invocation.clone().into_parts().1,
-                        )
-                        .await?;
+                let namespace_current = self.current_component.load().revision
+                    == ro.component_revision
+                    && self.read_only_cache_epoch.load(Ordering::SeqCst) == cur_epoch;
+                drop(observation_guard);
+                if !namespace_current {
+                    break 'observation;
+                }
+                let entry_result = match pending_or_final {
+                    Ok(entry) => match entry {
+                        PendingOrFinal::Final(entry) => {
+                            self.ensure_matching_invocation_payload(
+                                &idempotency_key,
+                                &invocation.clone().into_parts().1,
+                            )
+                            .await?;
+                            Ok(entry)
+                        }
+                        PendingOrFinal::Pending(mut pending) => {
+                            let pending_invocation = match &pending.value {
+                                read_only_cache::PendingReadOnlyCacheEntry::Immediate => None,
+                                read_only_cache::PendingReadOnlyCacheEntry::Invocation(value) => {
+                                    Some(value.clone())
+                                }
+                            };
+                            if let Some(value) = &pending_invocation {
+                                let _ = value.admission().await;
+                            }
+                            let own_admission =
+                                match self.lookup_matching_invocation(&invocation).await? {
+                                    LookupResult::Pending => {
+                                        Some(read_only_cache::AdmissionSignal::Queued)
+                                    }
+                                    LookupResult::Complete(Ok(_)) => {
+                                        Some(read_only_cache::AdmissionSignal::Immediate)
+                                    }
+                                    LookupResult::Complete(Err(error)) => {
+                                        Some(read_only_cache::AdmissionSignal::Failure(error))
+                                    }
+                                    LookupResult::Interrupted => {
+                                        return Err(
+                                            InterruptKind::Interrupt(Timestamp::now_utc()).into()
+                                        );
+                                    }
+                                    LookupResult::New => None,
+                                };
+                            if let Some(signal) = own_admission
+                                && let Some(tx) = admission.take()
+                            {
+                                let _ = tx.send(signal);
+                            }
+
+                            pending
+                                .completion
+                                .wait_for(|value| value.is_some())
+                                .await
+                                .map_err(|_| {
+                                    WorkerExecutorError::runtime("read-only owner disappeared")
+                                })?
+                                .clone()
+                                .expect("completion watch was observed as Some")
+                        }
+                    },
+                    Err(error) => Err(error),
+                };
+
+                // Stale-populate guard: if the epoch bumped while the owner ran,
+                // the entry we just inserted is keyed on the old epoch and is
+                // already unreachable for any future lookup. We could leave it
+                // for the LRU; explicitly removing it keeps the cache tidy.
+                if self.read_only_cache_epoch.load(Ordering::SeqCst) != cur_epoch
+                    && let Ok(entry) = &entry_result
+                {
+                    let me = entry.clone();
+                    let _ = self
+                        .read_only_cache
+                        .remove_if_cached(&key, move |current| Arc::ptr_eq(current, &me))
+                        .await;
+                }
+
+                // A follower owns no persisted identity. If this identity was accepted while
+                // joining the cache owner, its recorded request and output still take precedence.
+                match self.lookup_matching_invocation(&invocation).await? {
+                    LookupResult::Complete(result) => return result,
+                    LookupResult::Pending => {
+                        return self.await_enqueued_invocation(idempotency_key).await;
+                    }
+                    LookupResult::Interrupted => {
+                        return Err(InterruptKind::Interrupt(Timestamp::now_utc()).into());
+                    }
+                    LookupResult::New => {}
+                }
+                match entry_result {
+                    Ok(entry) if entry.output.component_revision == Some(ro.component_revision) => {
                         if let Some(tx) = admission.take() {
                             let _ = tx.send(read_only_cache::AdmissionSignal::Immediate);
                         }
-                        Ok(entry)
+                        return Ok(entry.output.clone());
                     }
-                    PendingOrFinal::Pending(mut pending) => {
-                        let pending_invocation = match &pending.value {
-                            read_only_cache::PendingReadOnlyCacheEntry::Immediate => None,
-                            read_only_cache::PendingReadOnlyCacheEntry::Invocation(value) => {
-                                Some(value.clone())
-                            }
-                        };
-                        let signal = match &pending_invocation {
-                            Some(value) => value.admission().await,
-                            None => read_only_cache::AdmissionSignal::Immediate,
-                        };
-                        self.ensure_matching_invocation_payload(
-                            &idempotency_key,
-                            &invocation.clone().into_parts().1,
-                        )
-                        .await?;
-                        if let Some(tx) = admission.take() {
-                            let _ = tx.send(signal.clone());
-                        }
-                        if let read_only_cache::AdmissionSignal::Failure(error) = signal {
-                            return Err(error);
-                        }
-
-                        pending
-                            .completion
-                            .wait_for(|value| value.is_some())
-                            .await
-                            .map_err(|_| {
-                                WorkerExecutorError::runtime("read-only owner disappeared")
-                            })?
-                            .clone()
-                            .expect("completion watch was observed as Some")
+                    Ok(entry) => {
+                        let _ = self
+                            .read_only_cache
+                            .remove_if_cached(&key, move |current| Arc::ptr_eq(current, &entry))
+                            .await;
                     }
-                },
-                Err(error) => Err(error),
-            };
-
-            // Stale-populate guard: if the epoch bumped while the owner ran,
-            // the entry we just inserted is keyed on the old epoch and is
-            // already unreachable for any future lookup. We could leave it
-            // for the LRU; explicitly removing it keeps the cache tidy.
-            if self.read_only_cache_epoch.load(Ordering::SeqCst) != cur_epoch
-                && let Ok(entry) = &entry_result
-            {
-                let me = entry.clone();
-                let _ = self
-                    .read_only_cache
-                    .remove_if_cached(&key, move |current| Arc::ptr_eq(current, &me))
-                    .await;
-            }
-
-            // A follower owns no persisted identity. If this identity was accepted while
-            // joining the cache owner, its recorded request and output still take precedence.
-            match self.lookup_matching_invocation(&invocation).await? {
-                LookupResult::Complete(result) => return result,
-                LookupResult::Pending => {
-                    return self.await_enqueued_invocation(idempotency_key).await;
+                    Err(_) => {}
                 }
-                LookupResult::Interrupted => {
-                    return Err(InterruptKind::Interrupt(Timestamp::now_utc()).into());
-                }
-                LookupResult::New => {}
             }
-            return entry_result.map(|entry| entry.output.clone());
         }
 
         // Non-cacheable path: `NoCache` read-only methods and all
@@ -751,7 +822,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .map(|_| read_only_cache::PendingReadOnlyInvocation::new());
         let admission_wait = pending.clone();
         let result = self
-            .invoke_owned_prefix(invocation, pending)
+            .invoke_owned_prefix_with_attachment(invocation, pending, attachment, false)
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??;
         if let Some(tx) = admission.take() {
@@ -803,9 +874,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         invocation: AgentInvocation,
         admission: Option<read_only_cache::PendingReadOnlyInvocation>,
     ) -> tasks::FinishOnDrop<'_, Result<ResultOrSubscription, WorkerExecutorError>> {
+        self.invoke_owned_prefix_with_attachment(invocation, admission, None, true)
+    }
+
+    fn invoke_owned_prefix_with_attachment(
+        self: &Arc<Self>,
+        invocation: AgentInvocation,
+        admission: Option<read_only_cache::PendingReadOnlyInvocation>,
+        attachment: Option<StreamSessionAttachedRecord>,
+        allow_cache: bool,
+    ) -> tasks::FinishOnDrop<'_, Result<ResultOrSubscription, WorkerExecutorError>> {
         let worker = self.clone();
         self.tasks.finish_on_drop(tokio::spawn(async move {
-            let result = match worker.clone().invoke(invocation).await {
+            let result = match worker
+                .clone()
+                .invoke_with_attachment(invocation, attachment, allow_cache)
+                .await
+            {
                 Ok(result) => result,
                 Err(error) => {
                     if let Some(admission) = &admission {
@@ -844,9 +929,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         invocation: AgentInvocation,
         idempotency_key: InvocationId,
         admission: Option<read_only_cache::PendingReadOnlyInvocation>,
+        attachment: Option<StreamSessionAttachedRecord>,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         let result = self
-            .invoke_owned_prefix(invocation, admission)
+            .invoke_owned_prefix_with_attachment(invocation, admission, attachment, true)
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??;
         self.await_invocation_result(idempotency_key, result).await
@@ -879,7 +965,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerExecutorError::invalid_request("Invocation has no idempotency key")
         })
     }
-    async fn lookup_matching_invocation(
+    pub(in crate::worker) async fn lookup_matching_invocation(
         &self,
         invocation: &AgentInvocation,
     ) -> Result<LookupResult, WorkerExecutorError> {
@@ -1090,6 +1176,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         read_only_cache_effect: read_only_cache::InvocationEffect,
         not_before: Option<Timestamp>,
     ) -> Result<(Option<u64>, Option<OplogIndex>), WorkerExecutorError> {
+        self.enqueue_worker_invocation_with_attachment(
+            invocation,
+            read_only_cache_effect,
+            not_before,
+            None,
+        )
+        .await
+    }
+
+    pub(in crate::worker) async fn enqueue_worker_invocation_with_attachment(
+        &self,
+        invocation: AgentInvocation,
+        read_only_cache_effect: read_only_cache::InvocationEffect,
+        not_before: Option<Timestamp>,
+        attachment: Option<StreamSessionAttachedRecord>,
+    ) -> Result<(Option<u64>, Option<OplogIndex>), WorkerExecutorError> {
         self.ensure_invocation_owner(&invocation)?;
         // Carried on the span so the two sides of the hand-off share a searchable
         // key: the execution runs in its own trace, linked rather than nested, so
@@ -1137,6 +1239,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     &invocation.clone().into_parts().1,
                 )
                 .await?;
+                if let Some(attachment) = &attachment {
+                    self.ensure_matching_stream_attachment(attachment).await?;
+                }
                 return Ok((None, None));
             }
 
@@ -1170,6 +1275,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     {
                         self.ensure_matching_invocation_payload(idempotency_key, &caller_payload)
                             .await?;
+                        if let Some(attachment) = &attachment {
+                            self.ensure_matching_stream_attachment(attachment).await?;
+                        }
                         return Ok((None, None));
                     }
                     let current = self.last_known_status.load();
@@ -1223,6 +1331,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .state_actor
                         .append_invocation_if_version(
                             entry.clone(),
+                            attachment.clone(),
                             *idempotency_key,
                             status.invocation_results.change_generation(),
                             status.invocation_results.revert_generation(),
@@ -1635,20 +1744,6 @@ pub(in crate::worker) fn into_pending_invocation_parts(
         payload,
         invocation_context,
     )
-}
-
-pub(in crate::worker) fn replace_invocation_input(
-    mut invocation: AgentInvocation,
-    replacement: TypedSchemaValue,
-) -> AgentInvocation {
-    match &mut invocation {
-        AgentInvocation::AgentMethod { input, .. } => *input = replacement.into_parts().1,
-        AgentInvocation::ExternalTool { input, .. } => {
-            **input = replacement;
-        }
-        _ => {}
-    }
-    invocation
 }
 
 pub(in crate::worker) fn inactive_ephemeral_agent_error() -> WorkerExecutorError {

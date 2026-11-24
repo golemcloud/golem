@@ -632,13 +632,11 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .await?;
 
         let agent_id = OwnedAgentId::new(component.environment_id, &AgentId(result.agent_id));
-        match result.result {
-            Some(typed_output) => {
-                let (_graph, value) = typed_output.into_inner().into_parts();
-                Ok(AgentResult::new(Some(value), agent_id))
-            }
-            None => Ok(AgentResult::new(None, agent_id)),
-        }
+        let background_failure = result.background_failure.map(|failure| failure.error);
+        let value = result
+            .result
+            .map(|typed_output| typed_output.into_inner().into_parts().1);
+        Ok(AgentResult::new(value, agent_id).with_background_failure(background_failure))
     }
 
     async fn revert(

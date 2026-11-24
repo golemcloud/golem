@@ -315,6 +315,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             save_snapshot_invocation,
             &component_metadata,
             &self.parent.owner_context,
+            None,
         ) {
             Ok(lowered) => lowered,
             Err(err) => {
@@ -499,7 +500,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .data_mut()
             .durable_ctx_mut()
             .begin_call_snapshotting_function();
-        let result = invoke_observed_and_traced(lowered, self.store, self.instance, None).await;
+        let result =
+            invoke_observed_and_traced(lowered, self.store, self.instance, None, None).await;
         self.store.data().set_suspended();
         self.store
             .data_mut()
@@ -537,6 +539,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             save_snapshot_invocation,
             &component_metadata,
             &self.parent.owner_context,
+            None,
         ) {
             Ok(lowered) => lowered,
             Err(err) => {

@@ -43,7 +43,8 @@ fn increment(idempotency_key: InvocationId) -> AgentInvocation {
     AgentInvocation::AgentMethod {
         idempotency_key,
         method_name: "increment".into(),
-        input: data_value!().value().clone(),
+        allow_streams: false,
+        input: data_value!().value().clone().try_into().unwrap(),
         invocation_context: InvocationContextStack::fresh(),
         caller: callers::anonymous(),
         scope_card: None,
@@ -327,6 +328,15 @@ async fn commit_gate_observes_either_entry_from_both_pair_append_apis(
         .invoke_and_await_agent(&component, &name, "increment", data_value!())
         .await?;
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    // The result is delivered at the export's return; the invocation's `AgentInvocationSettled`
+    // follows, and only then does the oplog stay still.
+    executor
+        .wait_for_status(
+            &owned,
+            golem_common::model::AgentStatus::Idle,
+            Duration::from_secs(20),
+        )
+        .await?;
     let worker = executor.active_agent(&owned).await.unwrap().primary();
     let oplog = worker.oplog();
 

@@ -104,6 +104,7 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
         function_name: function_name,
         invocation_id: invocation_id.map(durable_invocation_id_to_wit),
         observational_owner: observational_owner.map(|i| i.into()),
+        driver: driver.map(|i| i.into()),
         request: request.map(encode_public_typed_schema_value).transpose()?,
         durable_function_type: durable_function_type.into(),
         span_started: span_started.map(public_span_started_to_wit),
@@ -141,6 +142,11 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
         invocation_id: invocation_id.0.into(),
         error: error,
         start_index: start_index.into(),
+    } }
+    AgentInvocationSettled { record AgentInvocationSettledParams => AgentInvocationSettledParameters {
+        timestamp: timestamp.into(),
+        invocation_id: invocation_id.0.into(),
+        consumed_fuel: consumed_fuel,
     } }
     Suspend { override (PublicOplogEntry::Suspend(SuspendParams { timestamp })) => Ok({
                     Self::Suspend(timestamp.into())

@@ -90,6 +90,17 @@ use tokio::runtime::Handle;
 use uuid::Uuid;
 use wasmtime_wasi_http::HttpConnectionPool;
 
+/// The owner fields of the source's fork call `Start`, including its parent. The copied `Start`
+/// in the target repeats them, so the target's replay claims it under the same identity and owner
+/// as the source's, also when an entity body made the call.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, desert_rust::BinaryCodec)]
+pub struct ForkCallOwner {
+    pub parent_start_index: Option<OplogIndex>,
+    pub invocation_id: Option<DurableInvocationId>,
+    pub observational_owner: Option<OplogIndex>,
+    pub driver: Option<OplogIndex>,
+}
+
 #[async_trait]
 pub trait WorkerForkService: Send + Sync {
     async fn fork_stream_slot(&self, request: ForkStreamSlotRequest) -> ForkStreamSlotResponse;
@@ -112,8 +123,7 @@ pub trait WorkerForkService: Send + Sync {
         source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
-        copied_scope_start: Option<OplogIndex>,
-        invocation_id: Option<DurableInvocationId>,
+        owner: ForkCallOwner,
         auth_ctx: &AuthCtx,
         fork_request: CreateRequest,
     ) -> Result<(), WorkerExecutorError>;
@@ -1064,7 +1074,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         source: &OwnedAgentId,
         target_agent_id: &AgentId,
         cut: OplogIndex,
-        guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>)>,
+        guest_result: Option<ForkCallOwner>,
         auth_ctx: &AuthCtx,
         fork_request: CreateRequest,
         expected_fingerprint: Option<AgentFingerprint>,
@@ -1142,7 +1152,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         cut: OplogIndex,
         source_fingerprint: AgentFingerprint,
         hash: [u8; 32],
-        guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>)>,
+        guest_result: Option<ForkCallOwner>,
         fork_request: &CreateRequest,
     ) -> Result<(), WorkerExecutorError> {
         let reconcile =
@@ -1164,14 +1174,8 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     fork_request,
                 )
                 .await?;
-            if let Some((scope, invocation_id)) = guest_result {
-                publication::write_guest_result(
-                    oplog.as_ref(),
-                    scope,
-                    invocation_id,
-                    &target.agent_id,
-                )
-                .await?;
+            if let Some(owner) = guest_result {
+                publication::write_guest_result(oplog.as_ref(), owner, &target.agent_id).await?;
             }
             oplog.commit(CommitLevel::Always).await?;
             let last = oplog.current_oplog_index().await;
@@ -1359,17 +1363,25 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
-        copied_scope_start: Option<OplogIndex>,
-        invocation_id: Option<DurableInvocationId>,
+        owner: ForkCallOwner,
         auth_ctx: &AuthCtx,
         fork_request: CreateRequest,
     ) -> Result<(), WorkerExecutorError> {
+        // The fork call's Start follows its parent and the cut is the entry before that Start,
+        // so the copied prefix holds the parent the copy repeats.
+        if let Some(parent) = owner.parent_start_index
+            && parent > oplog_index_cut_off
+        {
+            return Err(WorkerExecutorError::runtime(format!(
+                "the fork call's parent {parent} lies after the cut {oplog_index_cut_off}"
+            )));
+        }
         self.perform_fork(
             fork_account_id,
             source_agent_id,
             target_agent_id,
             oplog_index_cut_off,
-            Some((copied_scope_start, invocation_id)),
+            Some(owner),
             auth_ctx,
             fork_request,
             None,
@@ -1558,7 +1570,10 @@ mod tests {
                 method_name: "test".to_string(),
             }),
             payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
-                input: SchemaValue::Record { fields: Vec::new() },
+                input: SchemaValue::Record { fields: Vec::new() }
+                    .try_into()
+                    .unwrap(),
+                allow_streams: false,
                 caller: Caller::anonymous(),
                 scope_card: None,
             })),

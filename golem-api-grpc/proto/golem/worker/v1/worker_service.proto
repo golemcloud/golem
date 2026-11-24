@@ -73,6 +73,8 @@ message LaunchNewWorkerRequest {
   // Unset: the keyed agent of `constructor`. Set: an agent without a key at this
   // pre-allocated ID.
   optional golem.worker.AgentId unkeyed_id = 12;
+  // The invocation demanding creation, required by PrepareWorker for a missing owner.
+  optional golem.worker.InvocationStart invocation = 14;
 }
 
 message LaunchNewWorkerResponse {

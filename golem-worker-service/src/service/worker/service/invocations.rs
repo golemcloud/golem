@@ -19,8 +19,9 @@ use super::{
     native_tool_result,
 };
 use crate::api::invocation::{
-    Invocation, InvocationFailure, InvocationKind, InvocationMethodResult, InvocationOutcome,
-    InvocationPage, InvocationState, InvocationSummary, InvocationToolResult,
+    Invocation, InvocationBackgroundFailure, InvocationFailure, InvocationKind,
+    InvocationMethodResult, InvocationOutcome, InvocationPage, InvocationState, InvocationSummary,
+    InvocationToolResult,
 };
 use chrono::{DateTime, Utc};
 use golem_api_grpc::proto::golem::worker::{Cursor, InvocationStart};
@@ -30,8 +31,8 @@ use golem_common::model::caller::Caller;
 use golem_common::model::card::{AgentInvocationIdPattern, AgentResourcePattern, AgentVerb};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{
-    AgentId, AgentInvocationResult, IdempotencyKey, OwnedAgentId, OwnedInvocationId,
-    RESERVED_TYPE_TAG,
+    AgentId, AgentInvocationResult, BackgroundFailure, IdempotencyKey, OwnedAgentId,
+    OwnedInvocationId, RESERVED_TYPE_TAG,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
@@ -71,7 +72,9 @@ impl WorkerService {
             .invocation_summary(environment_id, invocation_id, auth_ctx.clone())
             .await?;
         let result = match summary.state {
-            InvocationState::Completed | InvocationState::Failed => {
+            InvocationState::Completed
+            | InvocationState::BackgroundFailed
+            | InvocationState::Failed => {
                 self.invocation_outcome(&agent, invocation_id, &summary, auth_ctx)
                     .await?
             }
@@ -282,6 +285,7 @@ impl WorkerService {
                 return Ok(None);
             }
         };
+        let background_failure = output.background_failure.map(background_failure);
         let decoded = match output.result {
             AgentInvocationResult::AgentMethod { output: value } => {
                 let method_name = summary.operation.as_deref().ok_or_else(|| {
@@ -322,14 +326,36 @@ impl WorkerService {
                 .map(|result| Some(InvocationOutcome::Tool(InvocationToolResult { result }))),
             _ => Ok(None),
         };
-        Ok(decoded.unwrap_or_else(|error| {
+        let decoded = decoded.unwrap_or_else(|error| {
             warn!(
                 invocation_id = %invocation_id,
                 error = error.to_safe_string(),
                 "Failed to decode the result of a completed invocation"
             );
             None
-        }))
+        });
+        Ok(match background_failure {
+            Some(InvocationFailure { error }) => Some(InvocationOutcome::BackgroundFailure(
+                InvocationBackgroundFailure {
+                    value: match decoded {
+                        Some(InvocationOutcome::Method(InvocationMethodResult { value })) => {
+                            Some(value)
+                        }
+                        _ => None,
+                    },
+                    error,
+                },
+            )),
+            None => decoded,
+        })
+    }
+}
+
+/// The failure of the agent during the background work of an invocation that recorded its
+/// result, shown as the error that a fresh invocation of the failed agent gets.
+pub(super) fn background_failure(failure: BackgroundFailure) -> InvocationFailure {
+    InvocationFailure {
+        error: WorkerServiceError::GolemError(WorkerExecutorError::from(failure)).to_safe_string(),
     }
 }
 
@@ -387,6 +413,7 @@ impl From<InvocationState> for executor::InvocationLifecycleState {
             InvocationState::Retrying => Self::Retrying,
             InvocationState::Interrupted => Self::Interrupted,
             InvocationState::Completed => Self::Completed,
+            InvocationState::BackgroundFailed => Self::BackgroundFailed,
             InvocationState::Failed => Self::Failed,
             InvocationState::Cancelled => Self::Cancelled,
         }
@@ -405,6 +432,7 @@ impl TryFrom<i32> for InvocationState {
             Ok(executor::InvocationLifecycleState::Retrying) => Ok(Self::Retrying),
             Ok(executor::InvocationLifecycleState::Interrupted) => Ok(Self::Interrupted),
             Ok(executor::InvocationLifecycleState::Completed) => Ok(Self::Completed),
+            Ok(executor::InvocationLifecycleState::BackgroundFailed) => Ok(Self::BackgroundFailed),
             Ok(executor::InvocationLifecycleState::Failed) => Ok(Self::Failed),
             Ok(executor::InvocationLifecycleState::Cancelled) => Ok(Self::Cancelled),
             Ok(executor::InvocationLifecycleState::Unspecified) | Err(_) => {

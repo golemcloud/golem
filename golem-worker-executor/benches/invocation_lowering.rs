@@ -168,7 +168,8 @@ fn agent_method_invocation() -> AgentInvocation {
     AgentInvocation::AgentMethod {
         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
         method_name: METHOD_NAME.to_string(),
-        input: method_input_value(),
+        input: method_input_value().try_into().unwrap(),
+        allow_streams: false,
         invocation_context: InvocationContextStack::fresh(),
         caller: Caller::anonymous(),
         scope_card: None,
@@ -185,8 +186,13 @@ fn bench_lower_invocation(c: &mut Criterion) {
             || invocation.clone(),
             |invocation| {
                 black_box(
-                    lower_invocation(invocation, black_box(&metadata), black_box(&owner_context))
-                        .is_ok(),
+                    lower_invocation(
+                        invocation,
+                        black_box(&metadata),
+                        black_box(&owner_context),
+                        None,
+                    )
+                    .is_ok(),
                 )
             },
             BatchSize::SmallInput,
