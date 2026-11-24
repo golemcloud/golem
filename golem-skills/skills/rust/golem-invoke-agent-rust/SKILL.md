@@ -19,7 +19,7 @@ This invokes a method on a deployed agent and **waits for the result**. Addresse
 
 Pass one shell argument per user-supplied method parameter, in signature order. Exclude `self` and config parameters. Do not pass a JSON object wrapping all parameters. A struct-valued parameter is one argument.
 
-Skip host-injected `Principal` fields and retain the order of the user-supplied inputs. Do not supply a principal value or placeholder. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
+Skip an `InvocationContext` parameter (the SDK supplies it) and keep the order of the user-supplied inputs. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
 
 | Method signature | CLI method and arguments |
 |------------------|--------------------------|
