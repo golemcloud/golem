@@ -44,8 +44,11 @@ decodes and validates the method, including secret-hold checks, before committin
 foreign-input `TopologyPrepared`, `Prepared` and `AgentInvocationStarted` in one batch linked to
 that Pending entry. Only after commit are endpoints published and readiness sent. Queued resumes
 use Attached and the existing attachment epochs; slot operations wait for preparation instead of
-guessing a revision. A same-origin observer is accepted against the retained request and authority
-before waiting for readiness, so an execution rejection remains an accepted invocation's failure.
+guessing a revision. A fork target's session has no preparation of its own: its slot operations
+resolve against, and wait for the preparation of, the copy of the source invocation that
+`ExportForkInitialized` names (`stream_session_content_key`). A same-origin observer is accepted
+against the retained request and authority before waiting for readiness, so an execution rejection
+remains an accepted invocation's failure.
 External tools retain their descriptor-based preparation path. Remote attachment prepare/activate
 runs after preparation commits; recovery uses that topology evidence without replacing the original
 request or input bindings. Resume serialization follows producer admission, session lock, then

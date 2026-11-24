@@ -1482,6 +1482,43 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
             assert!(read.expiry_deadline_millis.is_some());
         }
     }
+    // A session is ready when its invocation has prepared its slots. The worker service reads
+    // with `WaitReady` before it appends, because an append does not wait for the preparation.
+    let wait_ready = |agent: AgentId, session: String| {
+        let mut client = executor.client.clone();
+        let request = ReadStreamSlotRequest {
+            route_scope: "[\"environment\",\"1\",\"route\"]".into(),
+            agent_id: Some(agent.into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(AuthCtx::System.into()),
+            session,
+            slot: "input".into(),
+            expected_method: "echo".into(),
+            admission: StreamSlotReadAdmission::WaitReady as i32,
+            ..Default::default()
+        };
+        async move {
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                let response = client
+                    .read_stream_slot(request)
+                    .await?
+                    .into_inner()
+                    .message()
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("the read returned no message"))?;
+                let Some(read_stream_slot_response::Result::Success(ready)) = response.result
+                else {
+                    anyhow::bail!("{response:?}");
+                };
+                anyhow::Ok(ready)
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("the session of {agent} never became ready"))?
+        }
+    };
+    // The session of a fork target is ready when the copy of the source invocation is prepared.
+    let ready = wait_ready(target, session.clone()).await?;
+    assert!(!ready.queued);
     let nested_target = fresh_fork_target(&source).agent_id;
     let mut nested = request.clone();
     nested.source_agent_id = Some(target.into());
@@ -1720,6 +1757,15 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         "an expired target receipt must not be replayed: {retry_after_target_expiry:?}"
     );
 
+    // The agent starts one invocation at a time, and the open input of `session` keeps its
+    // `echo` running, so a later session of `source` stays queued and has no prepared slots.
+    // A following session that must start therefore runs on an agent of its own.
+    let concurrent_source = executor
+        .start_agent(
+            &component.id,
+            agent_key!("DurableStreamAgent", "export-fork-concurrent"),
+        )
+        .await?;
     let concurrent_session = Uuid::new_v4().to_string();
     let input = schema_value_to_proto_with_streams(
         SchemaValue::Record {
@@ -1739,7 +1785,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
             expiry_policy: None,
             creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
             invocation: Some(InvocationStart {
-                target: Some(crate::agent::id_target(&source)),
+                target: Some(crate::agent::id_target(&concurrent_source)),
                 constructor: None,
                 component_id: None,
                 environment_id: Some(component.environment_id.into()),
@@ -1758,7 +1804,8 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         created.result,
         Some(create_stream_session_response::Result::Success(_))
     ));
-    let mut concurrent_append = append(&source.agent_id, "concurrent");
+    wait_ready(concurrent_source.agent_id, concurrent_session.clone()).await?;
+    let mut concurrent_append = append(&concurrent_source.agent_id, "concurrent");
     concurrent_append.session = concurrent_session.clone();
     let accepted = executor
         .client
@@ -1772,7 +1819,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     ));
     let concurrent_request = |target: AgentId| ForkStreamSlotRequest {
         route_scope: "[\"environment\",\"1\",\"route\"]".into(),
-        source_agent_id: Some(source.agent_id.into()),
+        source_agent_id: Some(concurrent_source.agent_id.into()),
         target_agent_id: Some(target.into()),
         environment_id: Some(component.environment_id.into()),
         auth_ctx: Some(AuthCtx::System.into()),
@@ -1786,7 +1833,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
-    let new_target = || anyhow::Ok(fresh_fork_target(&source).agent_id);
+    let new_target = || anyhow::Ok(fresh_fork_target(&concurrent_source).agent_id);
     let left = concurrent_request(new_target()?);
     let right = concurrent_request(new_target()?);
     let mut left_client = executor.client.clone();
@@ -1816,6 +1863,9 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         "{results:?}"
     );
 
+    // The open input of `session` keeps `source` busy, so this session stays queued until it
+    // expires. Its invocation never starts, so the expiry requests the cancellation of the
+    // invocation and has no streams to cancel.
     let expired_session = Uuid::new_v4().to_string();
     let input = schema_value_to_proto_with_streams(
         SchemaValue::Record {
@@ -1894,9 +1944,10 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         matches!(record, StreamSessionRecord::CancelRequested(record)
             if record.session_key.idempotency_key() == &first_key)
     }));
-    assert!(expiry_records.iter().any(|record| {
-        matches!(record, StreamSessionRecord::ConsumerCancelIntent(record)
-            if record.consumer_invocation == first_key)
+    assert!(!expiry_records.iter().any(|record| {
+        matches!(record, StreamSessionRecord::Prepared(record) if record.session_key == first_key)
+            || matches!(record, StreamSessionRecord::ConsumerCancelIntent(record)
+                if record.consumer_invocation == first_key)
     }));
     let expired = executor
         .client
