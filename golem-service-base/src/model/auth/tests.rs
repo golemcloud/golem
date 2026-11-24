@@ -339,7 +339,6 @@ mod authorizer {
         EnvironmentTarget, Operation, Resource, Scope, Target,
     };
     use golem_common::model::caller::Caller;
-    use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::{AgentFingerprint, AgentId};
     use std::sync::Arc;
@@ -379,14 +378,11 @@ mod authorizer {
         }
     }
 
-    fn agent(name: &str) -> Target {
+    fn agent(h: u128) -> Target {
         Target::Agent(AgentTarget {
             environment_id: EnvironmentId(Uuid::from_u128(0xe0)),
             agent_type: AgentTypeName("Report".to_string()),
-            agent_id: AgentId {
-                component_id: ComponentId(Uuid::from_u128(0xc0)),
-                agent_id: format!("Report(\"{name}\")"),
-            },
+            agent_id: AgentId::from_parts(7, h),
             fingerprint: AgentFingerprint(Uuid::from_u128(0xf1)),
         })
     }
@@ -398,7 +394,7 @@ mod authorizer {
         });
         let authorizer: Arc<dyn Authorizer> = Arc::new(FixedAuthorizer {
             decision: denial.clone(),
-            visible: vec![agent("r1")],
+            visible: vec![agent(1)],
         });
         let listing = AuthorizationRequest::new(
             Caller::anonymous(),
@@ -415,12 +411,7 @@ mod authorizer {
         );
 
         assert!(authorizer.decide(&listing).await == denial);
-        assert!(
-            authorizer
-                .filter(&listing, vec![agent("r1"), agent("r2")])
-                .await
-                == vec![agent("r1")]
-        );
+        assert!(authorizer.filter(&listing, vec![agent(1), agent(2)]).await == vec![agent(1)]);
         assert!(
             authorizer.scope(&listing).await.agent_types
                 == vec![AgentTypeName("Report".to_string())]

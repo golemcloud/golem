@@ -18,7 +18,6 @@ use crate::base_model::agent::AgentTypeName;
 use crate::base_model::application::ApplicationId;
 use crate::base_model::caller::test_support::{account_principal, sample_caller};
 use crate::base_model::card::CardId;
-use crate::base_model::component::ComponentId;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::security_scheme::SecuritySchemeId;
 use crate::base_model::tool::ToolName;
@@ -32,10 +31,7 @@ fn agent() -> AgentTarget {
     AgentTarget {
         environment_id: EnvironmentId(Uuid::from_u128(0xe0)),
         agent_type: AgentTypeName("Relay".to_string()),
-        agent_id: AgentId {
-            component_id: ComponentId(Uuid::from_u128(0xc0)),
-            agent_id: "Relay(\"r\")".to_string(),
-        },
+        agent_id: AgentId::from_parts(7, 0xa1),
         fingerprint: AgentFingerprint(Uuid::from_u128(0xf1)),
     }
 }
