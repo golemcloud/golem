@@ -17,12 +17,14 @@ mod config;
 pub mod extraction;
 mod invocation;
 mod key;
+mod method_input;
 mod normalisation;
 mod protobuf;
 mod resolved_names;
 mod status;
 
 pub use key::AgentKey;
+pub use method_input::{AgentMethodInput, JsonMethodInput, NativeMethodInput, PublicMethodInput};
 pub use resolved_names::{
     FollowedLookups, MAX_RESOLVED_NAME_LINKS, OpenLookup, ResolvedNameIndex, ResolvedNames,
 };

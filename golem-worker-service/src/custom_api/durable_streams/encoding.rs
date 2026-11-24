@@ -170,6 +170,13 @@ fn render_items(
     r: &ReadStreamSlotSuccess,
     representation: DurableStreamRepresentation,
 ) -> Result<Vec<u8>, RequestHandlerError> {
+    if r.queued {
+        return Ok(if representation == DurableStreamRepresentation::Bytes {
+            Vec::new()
+        } else {
+            b"[]".to_vec()
+        });
+    }
     if representation == DurableStreamRepresentation::Bytes {
         let mut bytes = Vec::new();
         for item in &r.items {

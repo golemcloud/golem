@@ -128,7 +128,7 @@ impl CallAgentHandler {
             fields: method_params,
         };
 
-        let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
+        let method_input: golem_common::model::agent::AgentMethodInput =
             method_params_value.try_into().map_err(|error| {
                 anyhow!("method parameters cannot cross the worker boundary: {error}")
             })?;
@@ -149,7 +149,7 @@ impl CallAgentHandler {
                 &component,
                 &target,
                 Some(behaviour.method_name.clone()),
-                Some(proto_method_parameters),
+                Some(method_input),
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 None,
                 request_key,
@@ -733,8 +733,7 @@ mod tests {
     }
 
     #[test]
-    async fn id_selection_skips_nonempty_constructor_and_does_not_create_missing_agent() {
-        use crate::service::worker::WorkerServiceError;
+    async fn id_selection_skips_nonempty_constructor_and_dispatches_existing_only() {
         use golem_common::schema::NamedField;
         let harness = crate::mcp::InvocationHarness::with_run_method(AgentMode::Durable);
         let handler = CallAgentHandler::new(harness.worker_service.clone());
@@ -790,22 +789,25 @@ mod tests {
                 )
                 .is_err()
             );
-            let error = handler
+            let response = handler
                 .handle_call_agent_behaviour(&mut RichRequest::new(request), &route, &behaviour)
                 .await
-                .unwrap_err();
-            assert!(
-                matches!(error, RequestHandlerError::AgentInvocationFailed(
-                WorkerServiceError::AgentNotFound(id)
-            ) if id == agent_id),
-                "{error:?}"
-            );
+                .unwrap();
+            assert_eq!(response.status, http::StatusCode::NO_CONTENT);
         }
-        assert_eq!(
-            *harness.metadata_reads.lock().unwrap(),
-            vec![agent_id, agent_id]
-        );
-        assert!(harness.targets.lock().unwrap().is_empty());
+        assert!(harness.metadata_reads.lock().unwrap().is_empty());
+        let targets = harness.targets.lock().unwrap();
+        assert_eq!(targets.len(), 2);
+        for target in targets.iter() {
+            assert_eq!(target.agent_id, agent_id);
+            let (target, constructor, _) = target.invoke_fields();
+            assert!(matches!(
+                target.target,
+                Some(golem_api_grpc::proto::golem::worker::agent_target::Target::Id(_))
+            ));
+            assert!(constructor.is_none());
+        }
+        assert!(harness.creates.calls.lock().unwrap().is_empty());
     }
 
     #[test]

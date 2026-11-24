@@ -39,6 +39,8 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_common::SafeDisplay;
 use golem_common::model::InvocationId;
+#[cfg(test)]
+use golem_common::model::invocation_session_public::encode_client_text;
 use golem_common::model::invocation_session_public::{
     BinaryMessage, BinaryMessageKind, BinaryMessageMetadata, DecimalU64, MAX_LOGICAL_VALUE_SIZE,
     MAX_STREAM_MAPPINGS, MAX_WEBSOCKET_MESSAGE_SIZE, PublicAttachmentRevokedReason,
@@ -459,6 +461,7 @@ struct ProvisionalBinding {
 
 struct AdapterState {
     protocol_state: InvocationSessionState,
+    raw_input: Option<golem_common::model::agent::JsonMethodInput>,
     graph: Option<SchemaGraph>,
     output_schema: Option<SchemaType>,
     identity: Option<SessionAgentIdentity>,
@@ -491,6 +494,7 @@ impl AdapterState {
     fn with_first_channel(first_channel: u32) -> Self {
         Self {
             protocol_state: InvocationSessionState::default(),
+            raw_input: None,
             graph: None,
             output_schema: None,
             identity: None,
@@ -512,13 +516,27 @@ impl AdapterState {
         self.protocol_state
             .validate_trusted_request(&started.initial_request)
             .map_err(AdapterError::protocol)?;
+        if let Some(invocation_request::Request::Start(start)) = &started.initial_request.request
+            && let Some(input) = &start.captured_method_input
+        {
+            let input = golem_common::serialization::deserialize(input)
+                .map_err(|error| AdapterError::protocol(error.to_string()))?;
+            if let golem_common::model::agent::AgentMethodInput::PublicJson(input) = input {
+                self.raw_input = Some(input);
+                self.next_transport_id = 0;
+            }
+        }
         self.graph = Some(started.schema.clone());
         self.output_schema = started.output_schema.clone();
         self.application = Some(started.application.0.clone());
         self.environment = Some(started.environment.0.clone());
         self.identity = Some(SessionAgentIdentity {
             component_id: started.component_id.0,
-            component_revision: started.component_revision.get(),
+            component_revision: matches!(
+                started.target,
+                SessionInvocationTarget::ExternalTool { .. }
+            )
+            .then_some(started.component_revision.get()),
             agent_id: started.agent_id,
             target: started.target.clone(),
         });
@@ -1223,6 +1241,7 @@ async fn serve_session_messages(
         );
         let server = handle_private_responses(
             responses,
+            Some(worker_service.clone()),
             outbound.clone(),
             state,
             keyring,
@@ -1900,6 +1919,7 @@ async fn translate_client_binary(
 
 async fn handle_private_responses<S>(
     mut responses: S,
+    worker_service: Option<Arc<WorkerService>>,
     outbound: Outbound,
     state: Arc<Mutex<AdapterState>>,
     keyring: Arc<InvocationSessionTokenKeyring>,
@@ -1928,6 +1948,74 @@ async fn handle_private_responses<S>(
                 return;
             }
         };
+        let (selected, original) = match response.response.as_ref() {
+            Some(invocation_response::Response::Ready(ready))
+            | Some(invocation_response::Response::Accepted(ready)) => (
+                ready.component_revision,
+                ready.captured_method_input.as_deref(),
+            ),
+            _ => (None, None),
+        };
+        if let (Some(service), Some(revision)) = (&worker_service, selected) {
+            let identity = state.lock().await.identity.clone();
+            if let Some(identity) = identity
+                && matches!(identity.target, SessionInvocationTarget::Method { .. })
+            {
+                let selected = async {
+                    let revision = golem_common::model::component::ComponentRevision::new(revision)
+                        .map_err(|error| AdapterError::protocol(error.to_string()))?;
+                    let (graph, output) = service
+                        .selected_public_method_schema(&identity, revision)
+                        .await
+                        .map_err(|error| AdapterError::protocol(error.to_string()))?;
+                    let mut state = state.lock().await;
+                    if state.raw_input.is_none()
+                        && state.provisional_refs.is_empty()
+                        && let Some(original) = original
+                    {
+                        let original = golem_common::serialization::deserialize(original)
+                            .map_err(|error| AdapterError::protocol(error.to_string()))?;
+                        if let golem_common::model::agent::AgentMethodInput::PublicJson(input) =
+                            original
+                        {
+                            state.raw_input = Some(input);
+                            state.next_transport_id = 0;
+                        }
+                    }
+                    if let Some(input) = state.raw_input.take() {
+                        let json = serde_json::from_str(input.as_str())
+                            .map_err(|error| AdapterError::protocol(error.to_string()))?;
+                        decode_public_schema_value_with_charge(
+                            &graph,
+                            &graph.root,
+                            &json,
+                            PublicStreamReferencePolicy::Provisional,
+                            |reference, schema| {
+                                state.register_provisional(
+                                    reference,
+                                    schema,
+                                    ProvisionalOwner::Initial,
+                                )
+                            },
+                        )?;
+                    }
+                    state.graph = Some(graph);
+                    state.output_schema = output;
+                    Ok::<_, AdapterError>(())
+                }
+                .await;
+                if selected.is_err() {
+                    fail_session(
+                        &outbound,
+                        &state,
+                        attempt_id,
+                        PublicErrorCode::InternalError,
+                    )
+                    .await;
+                    return;
+                }
+            }
+        }
         let translated = translate_private_response(
             response,
             &state,
@@ -2052,9 +2140,11 @@ async fn translate_private_response(
     let response = response
         .response
         .ok_or_else(|| AdapterError::protocol("private response has no payload"))?;
+    let ready = matches!(response, invocation_response::Response::Ready(_));
     match response {
-        invocation_response::Response::Accepted(accepted) => {
-            let message = translate_accepted(
+        invocation_response::Response::Accepted(accepted)
+        | invocation_response::Response::Ready(accepted) => {
+            let mut message = translate_accepted(
                 &mut state,
                 accepted,
                 keyring,
@@ -2062,6 +2152,27 @@ async fn translate_private_response(
                 token_key_id,
                 attempt_id,
             )?;
+            if ready {
+                let PublicServerMessage::InvocationAccepted {
+                    attempt_id,
+                    agent_id,
+                    idempotency_key,
+                    mappings,
+                    session_token,
+                    version,
+                } = message
+                else {
+                    unreachable!()
+                };
+                message = PublicServerMessage::InvocationReady {
+                    attempt_id,
+                    agent_id,
+                    idempotency_key,
+                    mappings,
+                    session_token,
+                    version,
+                };
+            }
             Ok(vec![frame(text_message(&message)?)])
         }
         invocation_response::Response::Rejected(rejected) => {
@@ -2257,7 +2368,7 @@ fn translate_accepted(
         ));
     }
     if let Some(revision) = accepted.component_revision {
-        identity.component_revision = revision;
+        identity.component_revision = Some(revision);
     }
     match &identity.target {
         SessionInvocationTarget::Method { method, .. } => {
@@ -3505,6 +3616,7 @@ mod tests {
             channels,
             channel_by_transport,
             provisional_refs: HashMap::new(),
+            raw_input: None,
             private_mappings: HashMap::new(),
             byte_roles: HashMap::new(),
             tokens: Some(TokenContext {
@@ -3636,6 +3748,7 @@ mod tests {
         let keyring = Arc::new(keyring());
         let server = handle_private_responses(
             tokio_stream::wrappers::ReceiverStream::new(received_responses),
+            None,
             outbound,
             state,
             keyring.clone(),
@@ -4147,7 +4260,7 @@ mod tests {
             state.graph = Some(SchemaGraph::empty());
             state.identity = Some(SessionAgentIdentity {
                 component_id: Uuid::from_u128(20),
-                component_revision: 12,
+                component_revision: Some(12),
                 agent_id: session_agent_id(),
                 target: if native {
                     SessionInvocationTarget::ExternalTool {
@@ -4240,7 +4353,7 @@ mod tests {
                 decode_session_agent_identity(&session.agent)
                     .unwrap()
                     .component_revision,
-                revision.unwrap_or(12)
+                revision.or(Some(12))
             );
             assert_eq!(mappings.len(), if native { 2 } else { 0 });
             if native {
@@ -4296,7 +4409,7 @@ mod tests {
         let mut state = AdapterState::new();
         state.identity = Some(SessionAgentIdentity {
             component_id: Uuid::from_u128(20),
-            component_revision: 12,
+            component_revision: Some(12),
             agent_id: session_agent_id(),
             target: SessionInvocationTarget::Method {
                 agent_type: "test-agent".to_string(),
@@ -4627,6 +4740,7 @@ mod tests {
             let outbound = Outbound { sender, budgets };
             handle_private_responses(
                 futures::stream::iter(responses),
+                None,
                 outbound,
                 state.clone(),
                 Arc::new(keyring()),
@@ -4763,6 +4877,7 @@ mod tests {
             )]),
             channel_by_transport: HashMap::from([(8, 1)]),
             provisional_refs: HashMap::new(),
+            raw_input: None,
             private_mappings: HashMap::new(),
             byte_roles: HashMap::new(),
             tokens: None,
@@ -4863,7 +4978,7 @@ mod tests {
         state.output_schema = Some(SchemaType::stream(Some(SchemaType::u8())));
         state.identity = Some(SessionAgentIdentity {
             component_id: Uuid::from_u128(20),
-            component_revision: 12,
+            component_revision: Some(12),
             agent_id: session_agent_id(),
             target: SessionInvocationTarget::Method {
                 agent_type: "test-agent".to_string(),
@@ -5165,7 +5280,7 @@ mod tests {
         let logical_invocation_id = Uuid::from_u128(10);
         let identity = SessionAgentIdentity {
             component_id: Uuid::from_u128(20),
-            component_revision: 12,
+            component_revision: Some(12),
             agent_id: session_agent_id(),
             target: SessionInvocationTarget::Method {
                 agent_type: "test-agent".to_string(),
@@ -5204,7 +5319,7 @@ mod tests {
             version: 1,
         };
         let budgets = SessionBudgets::new();
-        let message = Message::text(encode_text(&message).unwrap());
+        let message = Message::text(encode_client_text(&message).unwrap());
         let admission = budgets
             .admit_inbound_frame(message_size(&message))
             .await
@@ -5253,7 +5368,7 @@ mod tests {
         let logical_invocation_id = Uuid::from_u128(10);
         let identity = SessionAgentIdentity {
             component_id: Uuid::from_u128(20),
-            component_revision: 12,
+            component_revision: Some(12),
             agent_id: session_agent_id(),
             target: SessionInvocationTarget::Method {
                 agent_type: "test-agent".to_string(),
@@ -5297,7 +5412,7 @@ mod tests {
             version: 1,
         };
         let budgets = SessionBudgets::new();
-        let message = Message::text(encode_text(&message).unwrap());
+        let message = Message::text(encode_client_text(&message).unwrap());
         let admission = budgets
             .admit_inbound_frame(message_size(&message))
             .await

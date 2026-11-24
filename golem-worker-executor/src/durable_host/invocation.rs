@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::schema::SchemaValue;
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Settles a returned method error, including session work that must keep driving the Store.
@@ -647,6 +648,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     async fn on_agent_invocation_started(
         &mut self,
         hydrated: crate::worker::HydratedInvocation,
+        input: Option<&SchemaValue>,
     ) -> Result<bool, WorkerExecutorError> {
         let crate::worker::HydratedInvocation {
             invocation,
@@ -683,12 +685,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             )
             .await;
 
-            let input = match &invocation {
-                AgentInvocation::AgentInitialization { input, .. }
-                | AgentInvocation::AgentMethod { input, .. } => Some(input),
-                AgentInvocation::ExternalTool { input, .. } => Some(input.value()),
-                _ => None,
-            };
             if let Some(input) = input
                 && !self.secret_holds_allowed_for_value(input).await?
             {
@@ -696,6 +692,11 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 return Err(WorkerExecutorError::permission_denied("permission denied"));
             }
 
+            let selected_preparation = self
+                .public_state
+                .worker()
+                .selected_method_preparation(&invocation, input, &self.state.component_metadata)
+                .await?;
             let (idempotency_key, _, _) = invocation.into_parts();
             let _boundary = self.lock_synchronized_card_event_boundary().await?;
             let wallet = self.state.owner_wallet.snapshot();
@@ -715,6 +716,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         pinned_card_ids: wallet.cards.keys().copied().collect(),
                         scope_card_id: scope_card.map(|card| card.scope_card_id),
                     },
+                    selected_preparation,
                 )
                 .await?;
             let Some(start_index) = start_index else {
@@ -966,6 +968,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .authority
                 .reach_final_outcome();
             self.rederive_agent_effective_surface_from_wallet();
+            self.clear_invocation_scope_card().await;
             // Terminal worker failures also fail queued invocations. A rejected request completes
             // only its own idempotency key so later queued work remains available.
             if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
@@ -991,7 +994,11 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             latest_status_before.current_retry_state, decision
         );
 
-        InvocationFailureDecision::Retry(decision)
+        if rejection_persisted {
+            InvocationFailureDecision::Rejected
+        } else {
+            InvocationFailureDecision::Retry(decision)
+        }
     }
 
     async fn record_agent_method_failure(

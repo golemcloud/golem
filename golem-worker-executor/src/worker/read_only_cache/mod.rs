@@ -283,12 +283,33 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let agent_type_opt = self.parsed_agent_id.as_ref().map(|p| p.agent_type.clone());
 
         let agent_type = agent_type_opt.as_ref()?;
+        if metadata
+            .agent_method_stream_metadata(agent_type, method_name)?
+            .uses_streams()
+        {
+            return None;
+        }
         let method = read_only_cache::resolve_read_only_method(metadata, agent_type, method_name)?;
         let cfg = method.read_only.as_ref()?;
+        let agent_type = metadata.find_agent_type_by_name_ref(agent_type)?;
+        if matches!(input, golem_common::model::agent::AgentMethodInput::Native(input) if input.is_external_rest())
+            && let Some(output) = method.output_schema.schema()
+            && golem_schema::schema::host_managed::find_host_managed_type(
+                &agent_type.schema,
+                output,
+            )
+            .ok()?
+            .is_some()
+        {
+            return None;
+        }
+        let input =
+            crate::worker::invocation::decode_method_input(input, agent_type, &method, None)
+                .ok()?;
 
         Some(ReadOnlyContext {
             method_name: method_name.clone(),
-            input: input.clone(),
+            input,
             caller: caller.clone(),
             cfg: cfg.clone(),
             component_revision,
@@ -355,7 +376,9 @@ pub(in crate::worker) async fn populate_read_only_cache(
     // result. It would otherwise sit under the pre-mutation epoch and be
     // unreachable, but storing it would still let a future epoch wrap hit it
     // (defensive).
-    if read_only_cache_epoch.load(Ordering::SeqCst) != epoch {
+    if read_only_cache_epoch.load(Ordering::SeqCst) != epoch
+        || output.component_revision != Some(ro.component_revision)
+    {
         return;
     }
 
@@ -385,11 +408,17 @@ pub(in crate::worker) fn build_read_only_cache_entry(
     ro: &ReadOnlyContext,
     output: AgentInvocationOutput,
 ) -> Arc<read_only_cache::ReadOnlyCacheEntry> {
-    let expires_at = match &ro.cfg.cache_policy {
-        CachePolicy::Ttl(ttl) => {
-            tokio::time::Instant::now().checked_add(Duration::from_nanos(ttl.duration_nanos))
+    // Revisions are immutable: equality preserves the selected method's read-only,
+    // cache and principal policy. A different execution cannot serve this observation.
+    let expires_at = if output.component_revision != Some(ro.component_revision) {
+        Some(tokio::time::Instant::now())
+    } else {
+        match &ro.cfg.cache_policy {
+            CachePolicy::Ttl(ttl) => {
+                tokio::time::Instant::now().checked_add(Duration::from_nanos(ttl.duration_nanos))
+            }
+            CachePolicy::UntilWrite(_) | CachePolicy::NoCache(_) => None,
         }
-        CachePolicy::UntilWrite(_) | CachePolicy::NoCache(_) => None,
     };
     Arc::new(read_only_cache::ReadOnlyCacheEntry { output, expires_at })
 }
