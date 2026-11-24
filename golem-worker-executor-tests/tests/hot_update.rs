@@ -2745,6 +2745,116 @@ async fn queued_methods_validate_against_the_selected_update_revision(
     Ok(())
 }
 
+/// A repeated trigger with an accepted key is answered by the retained invocation, even after an
+/// update removed its method: only a new admission validates against the selected revision.
+#[test]
+#[timeout("120s")]
+async fn repeated_trigger_after_an_update_keeps_the_retained_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::{
+        AgentInvocationMode, InvocationFreshnessDisposition, InvocationStart,
+    };
+    use golem_common::model::{IdempotencyKey, InvocationRequestKey};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let http_server = TestHttpServer::start().await;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_key!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), http_server.port().to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let (_, input) = data_value!().into_parts();
+    let trigger = |method_name: &str| -> anyhow::Result<InvocationStart> {
+        Ok(InvocationStart {
+            target: Some(crate::agent::id_target(&worker_id)),
+            component_id: Some(component.id.into()),
+            method_name: Some(method_name.to_string()),
+            input: Some(input.clone().try_into().map_err(anyhow::Error::msg)?),
+            mode: AgentInvocationMode::Schedule as i32,
+            idempotency_key: Some(key.clone().into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            caller: Some(golem_worker_executor_test_utils::callers::anonymous().into()),
+            freshness_disposition: InvocationFreshnessDisposition::MayExist as i32,
+            request_key: Some(
+                InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key))
+                    .into(),
+            ),
+            ..Default::default()
+        })
+    };
+    let starts = |entries: &[golem_common::model::oplog::PublicOplogEntryWithIndex]| {
+        entries
+            .iter()
+            .filter(|entry| {
+                matches!(&entry.entry,
+                    PublicOplogEntry::AgentInvocationStarted(start)
+                        if matches!(&start.invocation,
+                            PublicAgentInvocation::AgentMethodInvocation(call)
+                                if call.method_name == "revision_one_only"))
+            })
+            .count()
+    };
+
+    executor
+        .invoke_agent_session(trigger("revision_one_only")?)
+        .await?;
+    // Invocations run in order, so this read returns after the trigger finished.
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "accumulated_value", data_value!())
+        .await?;
+    // Revision two cannot replay the removed method, so the update restores a snapshot.
+    let target = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, target.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(&worker_id, target.revision, Duration::from_secs(30))
+        .await?;
+
+    executor
+        .invoke_agent_session(trigger("revision_one_only")?)
+        .await?;
+    assert_eq!(
+        starts(&executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?),
+        1,
+        "the repeated trigger must not execute the method again"
+    );
+
+    // A new key still validates against the selected revision, which removed the method.
+    let error = executor
+        .invoke_agent_session(InvocationStart {
+            idempotency_key: Some(IdempotencyKey::fresh().into()),
+            request_key: Some(InvocationRequestKey::external(None, None).into()),
+            ..trigger("revision_one_only")?
+        })
+        .await
+        .expect_err("a new trigger of a removed method must be rejected");
+    assert!(
+        error.to_string().contains("revision_one_only"),
+        "unexpected error: {error}"
+    );
+    http_server.abort();
+    Ok(())
+}
+
 #[test]
 #[timeout("120s")]
 async fn snapshot_assisted_restart_before_attempt_and_later_update_modes_succeed(
@@ -3455,7 +3565,7 @@ async fn snapshot_only_recovery_reconciles_memory_before_subsequent_growth(
                 &component,
                 &agent_id,
                 "write_file",
-                data_value!("/large-input".to_string(), "b".repeat(12 * 1024 * 1024)),
+                data_value!("/large-input".to_string(), "b".repeat(16 * 1024 * 1024)),
             )
             .await?;
         let grown = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -3517,7 +3627,7 @@ async fn snapshot_only_recovery_reconciles_memory_before_subsequent_growth(
             .await?;
         assert_eq!(
             file.into_typed::<Option<String>>()?,
-            Some("b".repeat(12 * 1024 * 1024))
+            Some("b".repeat(16 * 1024 * 1024))
         );
         Ok(())
     })

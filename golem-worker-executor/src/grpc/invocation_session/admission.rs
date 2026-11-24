@@ -600,14 +600,22 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     (None, None) => unreachable!("a missing agent without an owner is rejected"),
                 };
                 let input = super::capture_method_input(request)?;
-                crate::worker::invocation::validate_detached_invocation(
-                    &method_name,
-                    &input,
-                    &component.metadata,
-                    &golem_common::model::agent::ResolvedOwnerContext::Agent(Box::new(
-                        parsed_agent_id,
-                    )),
-                )?;
+                let validate = || {
+                    crate::worker::invocation::validate_detached_invocation(
+                        &method_name,
+                        &input,
+                        &component.metadata,
+                        &golem_common::model::agent::ResolvedOwnerContext::Agent(Box::new(
+                            parsed_agent_id.clone(),
+                        )),
+                    )
+                };
+                // A missing agent is validated before it is created. An existing agent can hold
+                // the key already, and then its retained invocation answers the request, even
+                // when the selected revision no longer accepts it.
+                if existing_metadata.is_none() {
+                    validate()?;
+                }
                 let (worker, _response_lease) = match pinned {
                     Some(pinned) => pinned,
                     None => {
@@ -633,13 +641,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .id();
                 let invocation = AgentInvocation::AgentMethod {
                     idempotency_key: ik,
-                    method_name,
+                    method_name: method_name.clone(),
                     allow_streams: false,
-                    input,
+                    input: input.clone(),
                     invocation_context,
                     caller,
                     scope_card,
                 };
+                if existing_metadata.is_some()
+                    && worker.lookup_matching_invocation(&invocation).await?
+                        == crate::model::LookupResult::New
+                {
+                    validate()?;
+                }
 
                 match schedule_at {
                     Some(scheduled_time) => {
