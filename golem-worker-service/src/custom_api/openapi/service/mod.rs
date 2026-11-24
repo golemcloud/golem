@@ -141,6 +141,7 @@ impl ProviderInvoker for WorkerProviderInvoker {
                 None,
                 call.key.clone(),
                 None,
+                None,
                 freshness_disposition,
                 vec![],
                 call.environment_id,

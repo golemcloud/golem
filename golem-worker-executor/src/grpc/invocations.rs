@@ -28,7 +28,6 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetInvocationRequest, InvocationLifecycleState, InvocationSummary, ListInvocationsRequest,
     ListInvocationsSuccess, LookupInvocationsRequest,
 };
-use golem_common::model::caller::Caller;
 use golem_common::model::{
     AgentFingerprint, IdempotencyKey, IdempotencyScope, InvocationId, InvocationRequestKey,
     OplogIndex, Timestamp,
@@ -92,6 +91,7 @@ impl From<InvocationState> for InvocationLifecycleState {
             InvocationState::Retrying => Self::Retrying,
             InvocationState::Interrupted => Self::Interrupted,
             InvocationState::Completed => Self::Completed,
+            InvocationState::BackgroundFailed => Self::BackgroundFailed,
             InvocationState::Failed => Self::Failed,
             InvocationState::Cancelled => Self::Cancelled,
         }
@@ -110,6 +110,7 @@ impl TryFrom<i32> for InvocationState {
             Ok(InvocationLifecycleState::Retrying) => Ok(Self::Retrying),
             Ok(InvocationLifecycleState::Interrupted) => Ok(Self::Interrupted),
             Ok(InvocationLifecycleState::Completed) => Ok(Self::Completed),
+            Ok(InvocationLifecycleState::BackgroundFailed) => Ok(Self::BackgroundFailed),
             Ok(InvocationLifecycleState::Failed) => Ok(Self::Failed),
             Ok(InvocationLifecycleState::Cancelled) => Ok(Self::Cancelled),
             Ok(InvocationLifecycleState::Unspecified) | Err(_) => Err(
@@ -213,7 +214,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(owned_agent_id)?;
         Self::validate_auth_ctx(auth_ctx)?;
         self.ensure_not_being_deleted(owned_agent_id).await?;
-        self.get_existing_for_management(owned_agent_id, Caller::anonymous(), operation)
+        self.get_existing_for_management(owned_agent_id, operation)
             .await
     }
 

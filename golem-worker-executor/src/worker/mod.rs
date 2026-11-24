@@ -655,6 +655,9 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     #[allow(dead_code)]
     metrics_status: Arc<WorkerStatusMetric>,
     last_known_status_detached: Arc<AtomicBool>,
+    /// Set while an `AgentInvocationSettled` that the invocation loop appended waits for the
+    /// commit of the next `AgentInvocationStarted` (see [`Worker::defer_settlement_commit`]).
+    settlement_commit_deferred: AtomicBool,
     status_flusher: Arc<status_flusher::AgentStatusFlusher>,
     status_checkpointer: status_checkpointer::StatusCheckpointer,
     // Note: std lock for wasmtime reasons
@@ -932,33 +935,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.initial_worker_metadata.clone()
     }
 
-    /// This agent as a principal, under the Golem issuer. An owner that has no agent type gets
-    /// the fixed type name of its owner kind.
+    /// This agent as a principal, under the Golem issuer.
     pub(crate) fn self_principal(
         &self,
         issuer: &golem_common::model::golem_issuer::GolemIssuer,
     ) -> golem_common::model::caller::Principal {
-        use golem_common::model::agent::{AgentTypeName, OwnerKind};
-        use golem_common::model::caller::{AgentPrincipal, Principal};
-
-        let metadata = &self.initial_worker_metadata;
-        let agent_type = match (&metadata.agent_type_name, metadata.owner_kind) {
-            (Some(agent_type), _) => agent_type.clone(),
-            (None, OwnerKind::EphemeralExternalTool) => {
-                AgentTypeName("~golem-external-tool-owner".to_string())
-            }
-            (None, OwnerKind::OplogProcessor) => {
-                AgentTypeName("~golem-oplog-processor".to_string())
-            }
-            (None, OwnerKind::ComponentAgent) => AgentTypeName(String::new()),
-        };
-        Principal::Agent(AgentPrincipal::of_agent(
-            issuer.to_string(),
-            self.owned_agent_id.agent_id,
-            metadata.fingerprint,
-            agent_type,
-            self.owned_agent_id.environment_id,
-        ))
+        crate::golem_started::agent_principal(
+            issuer,
+            &self.owned_agent_id,
+            &self.initial_worker_metadata,
+        )
     }
 
     pub(crate) fn owned_agent_id(&self) -> &OwnedAgentId {
@@ -1298,6 +1284,8 @@ enum InvocationResult {
     Cancelled,
     Lazy {
         oplog_idx: OplogIndex,
+        /// The give-up entry of a background failure after the result at `oplog_idx`.
+        background_failure: Option<OplogIndex>,
     },
 }
 
@@ -1501,7 +1489,7 @@ use ingress::{inactive_ephemeral_agent_error, validate_resolved_invocation_ident
 use interrupt::register_interrupt_request;
 use lifecycle::retirement::owned_shard_epoch;
 pub(crate) use lifecycle::retirement::retired_by_assignment;
-use lifecycle::stop::invocation_keys_to_fail;
+use lifecycle::stop::{invocation_keys_failed_on_giving_up, invocation_keys_to_fail};
 use read_only_cache::{build_read_only_cache_entry, is_no_cache, populate_read_only_cache};
 use runtime::shared_linear_memory_error;
 use streaming::sessions::{

@@ -5,4 +5,22 @@ import {
   "golemcloud/golem_sdk/interface/wasi/clocks/system-clock",
 }
 
-supported_targets = "+wasm"
+supported_targets = "+wasm+wasm-gc"
+
+// BEGIN generated backend
+#cfg(target = "wasm-gc")
+import {
+  "golemcloud/golem_sdk/gen/cabi" @witCabi,
+}
+// END generated backend
+
+// BEGIN generated backend
+options(
+  targets: {
+    "ffi.mbt": ["wasm"],
+    "ffi_gc.mbt": ["wasm-gc"],
+    "top.mbt": ["wasm"],
+    "top_gc.mbt": ["wasm-gc"],
+  },
+)
+// END generated backend

@@ -35,6 +35,7 @@ async fn seed_persisted_data_child(oplog: &FrameTestOplog, bytes: &[u8]) -> Oplo
             function_name: HostFunctionName::P3HttpClientConsumeBody,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 HostRequestNoInput {},
             )))),
@@ -51,6 +52,7 @@ async fn seed_persisted_data_child(oplog: &FrameTestOplog, bytes: &[u8]) -> Oplo
             function_name: HostFunctionName::P3HttpClientConsumeBodyChunk,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 HostRequestNoInput {},
             )))),

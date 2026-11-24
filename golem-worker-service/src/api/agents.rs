@@ -1,4 +1,5 @@
 use crate::api::common::ApiEndpointError;
+use crate::api::invocation::InvocationFailure;
 use crate::api::invocation_session::serve_public_invocation_session;
 use crate::invocation_session_token::InvocationSessionTokenKeyring;
 use crate::metrics::{ActiveHttpApiStream, HttpApiStreamKind};
@@ -630,6 +631,10 @@ pub struct AgentInvocationResult {
     pub idempotency_key: InvocationId,
     pub result: Option<ExternalTypedSchemaValue>,
     pub component_revision: Option<ComponentRevision>,
+    // Present when the invocation recorded `result`, then the agent failed during the
+    // invocation's background work. A doc comment would make the schema an `allOf`, which the
+    // client generator does not support.
+    pub background_failure: Option<InvocationFailure>,
 }
 
 /// Select exactly one target: `agentId` for an existing real owner, or `componentId`

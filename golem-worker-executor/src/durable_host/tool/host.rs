@@ -542,6 +542,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingInvokeResultWithStore<U>
                 &accessor,
                 response,
                 crate::durable_host::concurrent::InvocationIdSource::GuestImport,
+                None,
             )
             .await?;
             Ok(project_tool_response(&accessor, response))
@@ -682,6 +683,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
                         accessor,
                         *response,
                         crate::durable_host::concurrent::InvocationIdSource::GuestImport,
+                        None,
                     )
                     .await?;
                     accessor.with(|mut access| {

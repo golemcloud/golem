@@ -138,7 +138,10 @@ fn server_command(ctx: &TestContext, global_args: &[&str]) -> tokio::process::Co
     command
 }
 
-async fn mcp_client(ctx: &TestContext, global_args: &[&str]) -> RunningService<RoleClient, ()> {
+pub(super) async fn mcp_client(
+    ctx: &TestContext,
+    global_args: &[&str],
+) -> RunningService<RoleClient, ()> {
     let (transport, _) = TokioChildProcess::builder(server_command(ctx, global_args))
         .stderr(Stdio::inherit())
         .spawn()
@@ -146,7 +149,7 @@ async fn mcp_client(ctx: &TestContext, global_args: &[&str]) -> RunningService<R
     ().serve(transport).await.unwrap()
 }
 
-async fn call(
+pub(super) async fn call(
     client: &RunningService<RoleClient, ()>,
     tool: &str,
     arguments: Value,
@@ -180,7 +183,7 @@ async fn send_call(
         .unwrap()
 }
 
-fn structured(result: &CallToolResult) -> &Value {
+pub(super) fn structured(result: &CallToolResult) -> &Value {
     assert_ne!(result.is_error, Some(true), "{result:?}");
     result
         .structured_content

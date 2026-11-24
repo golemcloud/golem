@@ -19,6 +19,7 @@
 //! body handle back to [`EntityInvocationDurability::drive_owned`].
 
 use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::attribution;
 pub(crate) use crate::durable_host::concurrent::EntitySettlementContext;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, DurableCallSession, HistoricalReconstruction, InvocationIdSource,
@@ -544,8 +545,10 @@ impl EntityInvocationDurability {
         Ctx: WorkerCtx,
     {
         let parent_start_index = parent.start_index();
+        // The entity inherits the scope card of the call that started it, also when the
+        // invocation's export returned since.
         let (owner, invocation_scope_card, enclosing_invocation_id, interest, calling_principal) =
-            store.with(|mut access| {
+            attribution::with_import_access(store, |mut access| {
                 let ctx = get_ctx(access.data_mut());
                 (
                     ctx.state.owned_agent_id.clone(),
@@ -1125,6 +1128,16 @@ impl EntityInvocationDurability {
                         context
                             .replay
                             .await_unconsumed_scope_entry(invocation.start_index(), active_bodies),
+                        BodyRecords {
+                            claimed: context
+                                .replay
+                                .await_body_records_claimed(invocation.start_index()),
+                            left: || {
+                                context
+                                    .replay
+                                    .retained_record_of_body(invocation.start_index())
+                            },
+                        },
                         || abort.abort(),
                         historical_reconstruction,
                         cancellation.as_ref(),
@@ -1480,32 +1493,30 @@ where
     })
 }
 
-/// Fails a settled entity body that returned without claiming one of its recorded descendant
-/// `Start`s. The cursor retains unclaimed `Start`s instead of parking on them, so this is the
-/// structural divergence a stalled cursor used to surface through
-/// [`ReplayState::await_unconsumed_scope_entry`]. Only outcomes whose body ran to completion are
-/// checked: an aborted or cancelled body legitimately leaves its recorded subtree unclaimed.
+/// Fails a settled entity body that left a retained `Start` whose nearest entity body it is:
+/// the body did not claim a call it recorded. The cursor retains unclaimed `Start`s instead of
+/// parking on them, so this is the structural divergence a stalled cursor used to surface through
+/// [`ReplayState::await_unconsumed_scope_entry`]. A body with a recorded `Cancelled` is aborted
+/// only after it claimed its recorded calls, so it is checked like a completed body. A body that
+/// the live caller cancelled during an incomplete replay is not: the cancellation stops it before
+/// it re-claims its calls.
 async fn ensure_body_claimed_retained_descendants<R, H>(
     replay_state: &ReplayState,
     invocation: &EntityInvocationId,
     reconstruction: &EntityReconstructionOutcome<R, H>,
 ) -> Result<(), WorkerExecutorError> {
-    let body_completed = match reconstruction {
+    let checked = match reconstruction {
         EntityReconstructionOutcome::Replayed(_)
-        | EntityReconstructionOutcome::Incomplete { .. } => true,
-        EntityReconstructionOutcome::Cancelled(_)
-        | EntityReconstructionOutcome::IncompleteCancelled { .. }
+        | EntityReconstructionOutcome::Incomplete { .. }
+        | EntityReconstructionOutcome::Cancelled(_) => true,
+        EntityReconstructionOutcome::IncompleteCancelled { .. }
         | EntityReconstructionOutcome::IncompleteLiveAdmissionCancelled { .. } => false,
     };
-    if !body_completed {
+    if !checked {
         return Ok(());
     }
-    let active_bodies = replay_state
-        .historical_reconstruction_bodies()
-        .borrow()
-        .clone();
     match replay_state
-        .unclaimed_retained_descendant(invocation.start_index(), active_bodies)
+        .retained_record_of_body(invocation.start_index())
         .await?
     {
         None => Ok(()),
@@ -1531,12 +1542,21 @@ impl ReconstructionGuard for HistoricalReconstruction {
     }
 }
 
-async fn coordinate_entity_reconstruction<R, H, B, F, S, A, G>(
+/// The calls an entity body recorded before the cursor's position: `claimed` resolves once the
+/// body claimed all of them, and `left` returns one it did not claim.
+struct BodyRecords<C, L> {
+    claimed: C,
+    left: L,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn coordinate_entity_reconstruction<R, H, B, F, S, C, L, LF, A, G>(
     invocation: &EntityInvocationId,
     execution_mode: InvocationExecutionMode,
     body: B,
     replay: F,
     structural_stall: S,
+    body_records: BodyRecords<C, L>,
     abort: A,
     mut historical_reconstruction: Option<G>,
     cancellation: Option<&tokio_util::sync::CancellationToken>,
@@ -1546,6 +1566,9 @@ where
     B: Future<Output = Result<EntityBodyOutcome<R>, WorkerExecutorError>>,
     F: Future<Output = Result<EntityReconstructionResolution<R, H>, WorkerExecutorError>>,
     S: Future<Output = Result<OplogIndex, WorkerExecutorError>>,
+    C: Future<Output = Result<(), WorkerExecutorError>>,
+    L: FnOnce() -> LF,
+    LF: Future<Output = Result<Option<OplogIndex>, WorkerExecutorError>>,
     A: FnOnce(),
     G: ReconstructionGuard,
 {
@@ -1555,6 +1578,7 @@ where
         body,
         replay,
         structural_stall,
+        body_records,
         abort,
         &mut historical_reconstruction,
         cancellation,
@@ -1562,12 +1586,14 @@ where
     .await
 }
 
-async fn coordinate_entity_reconstruction_inner<R, H, B, F, S, A, G>(
+#[allow(clippy::too_many_arguments)]
+async fn coordinate_entity_reconstruction_inner<R, H, B, F, S, C, L, LF, A, G>(
     invocation: &EntityInvocationId,
     _execution_mode: InvocationExecutionMode,
     body: B,
     replay: F,
     structural_stall: S,
+    body_records: BodyRecords<C, L>,
     abort: A,
     historical_reconstruction: &mut Option<G>,
     _cancellation: Option<&tokio_util::sync::CancellationToken>,
@@ -1577,12 +1603,20 @@ where
     B: Future<Output = Result<EntityBodyOutcome<R>, WorkerExecutorError>>,
     F: Future<Output = Result<EntityReconstructionResolution<R, H>, WorkerExecutorError>>,
     S: Future<Output = Result<OplogIndex, WorkerExecutorError>>,
+    C: Future<Output = Result<(), WorkerExecutorError>>,
+    L: FnOnce() -> LF,
+    LF: Future<Output = Result<Option<OplogIndex>, WorkerExecutorError>>,
     A: FnOnce(),
     G: ReconstructionGuard,
 {
+    let BodyRecords {
+        claimed: records_claimed,
+        left: records_left,
+    } = body_records;
     tokio::pin!(body);
     tokio::pin!(replay);
     tokio::pin!(structural_stall);
+    tokio::pin!(records_claimed);
 
     enum First<B, R> {
         Body(B),
@@ -1634,6 +1668,43 @@ where
 
     match replay_result {
         EntityReconstructionResolution::Cancelled(recorded) => {
+            // The cursor committed the body's recorded `Cancelled`, and every record of the body
+            // precedes it. The body is aborted only once it claimed those records, so a closed
+            // call returns its recorded result and an unclosed one resolves as incomplete,
+            // exactly as the live run left it.
+            let body_result = match body_result {
+                Some(result) => Some(result),
+                None => tokio::select! {
+                    claimed = &mut records_claimed => {
+                        if let Err(error) = claimed {
+                            abort.take().unwrap()();
+                            let _ = body.await;
+                            if let Some(reconstruction) = historical_reconstruction.as_mut() {
+                                reconstruction.body_settled();
+                            }
+                            return Err(error);
+                        }
+                        None
+                    }
+                    result = &mut body => {
+                        if let Some(reconstruction) = historical_reconstruction.as_mut() {
+                            reconstruction.body_settled();
+                        }
+                        Some(result)
+                    }
+                },
+            };
+            if body_result.is_some()
+                && let Some(unclaimed) = records_left().await?
+            {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    unclaimed,
+                    format!("cancelled replay body for {invocation}"),
+                    format!(
+                        "entity body returned before consuming its recorded descendant at {unclaimed}"
+                    ),
+                ));
+            }
             abort.take().unwrap()();
             let joined = if let Some(result) = body_result {
                 result
@@ -1742,6 +1813,17 @@ pub(crate) mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use test_r::test;
     use tokio::sync::oneshot;
+
+    #[allow(clippy::type_complexity)]
+    fn no_body_records() -> BodyRecords<
+        std::future::Ready<Result<(), WorkerExecutorError>>,
+        fn() -> std::future::Ready<Result<Option<OplogIndex>, WorkerExecutorError>>,
+    > {
+        BodyRecords {
+            claimed: std::future::ready(Ok(())),
+            left: || std::future::ready(Ok(None)),
+        }
+    }
 
     fn no_structural_stall() -> impl Future<Output = Result<OplogIndex, WorkerExecutorError>> {
         std::future::pending()
@@ -2170,6 +2252,7 @@ pub(crate) mod tests {
                 Ok(EntityReconstructionResolution::<u64, ()>::Cancelled(9))
             },
             no_structural_stall(),
+            no_body_records(),
             move || abort_flag.store(true, Ordering::Release),
             None::<()>,
             None,
@@ -2195,6 +2278,7 @@ pub(crate) mod tests {
             },
             async { Ok(EntityReconstructionResolution::<u64, ()>::Cancelled(9)) },
             no_structural_stall(),
+            no_body_records(),
             move || {
                 abort_flag.store(true, Ordering::Release);
                 let _ = body_cancelled.send(());
@@ -2207,6 +2291,77 @@ pub(crate) mod tests {
 
         assert!(matches!(result, EntityReconstructionOutcome::Cancelled(9)));
         assert!(aborted.load(Ordering::Acquire));
+    }
+
+    #[test]
+    async fn cancelled_body_is_aborted_only_after_its_recorded_calls_are_claimed() {
+        let (records_claimed, wait_for_claims) = oneshot::channel::<()>();
+        let (body_cancelled, wait_for_cancellation) = oneshot::channel();
+        let aborted = Arc::new(AtomicBool::new(false));
+        let abort_flag = aborted.clone();
+        let invocation = invocation();
+        let coordination = coordinate_entity_reconstruction(
+            &invocation,
+            InvocationExecutionMode::ReplayingCompleted,
+            async move {
+                let _ = wait_for_cancellation.await;
+                Ok::<_, WorkerExecutorError>(EntityBodyOutcome::<u64>::Cancelled)
+            },
+            async { Ok(EntityReconstructionResolution::<u64, ()>::Cancelled(9)) },
+            no_structural_stall(),
+            BodyRecords {
+                claimed: async move {
+                    let _ = wait_for_claims.await;
+                    Ok(())
+                },
+                left: || std::future::ready(Ok(None)),
+            },
+            move || {
+                abort_flag.store(true, Ordering::Release);
+                let _ = body_cancelled.send(());
+            },
+            None::<()>,
+            None,
+        );
+        tokio::pin!(coordination);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), &mut coordination)
+                .await
+                .is_err(),
+            "the body keeps running until it claimed its recorded calls"
+        );
+        assert!(!aborted.load(Ordering::Acquire));
+        records_claimed.send(()).unwrap();
+        let result = coordination.await.unwrap();
+        assert!(matches!(result, EntityReconstructionOutcome::Cancelled(9)));
+        assert!(aborted.load(Ordering::Acquire));
+    }
+
+    #[test]
+    async fn cancelled_body_that_returns_with_unclaimed_records_is_a_divergence() {
+        let error = coordinate_entity_reconstruction(
+            &invocation(),
+            InvocationExecutionMode::ReplayingCompleted,
+            async { Ok::<_, WorkerExecutorError>(EntityBodyOutcome::<u64>::Cancelled) },
+            async {
+                tokio::task::yield_now().await;
+                Ok(EntityReconstructionResolution::<u64, ()>::Cancelled(9))
+            },
+            no_structural_stall(),
+            BodyRecords {
+                claimed: std::future::pending(),
+                left: || std::future::ready(Ok(Some(OplogIndex::from_u64(5)))),
+            },
+            || {},
+            None::<()>,
+            None,
+        )
+        .await
+        .expect_err("a cancelled body that returns with unclaimed records diverges");
+        assert!(
+            error.to_string().contains("recorded descendant at 5"),
+            "unexpected error: {error}"
+        );
     }
 
     struct DropProbe(Arc<AtomicBool>);
@@ -2248,6 +2403,7 @@ pub(crate) mod tests {
                 ))
             },
             no_structural_stall(),
+            no_body_records(),
             move || {
                 abort_flag.store(true, Ordering::Release);
                 let _ = body_cancelled.send(());
@@ -2281,6 +2437,7 @@ pub(crate) mod tests {
                     Ok(EntityReconstructionResolution::<u64, ()>::Incomplete(()))
                 },
                 no_structural_stall(),
+                no_body_records(),
                 || {},
                 Some(BodySettlementProbe(body_settled.clone())),
                 None,
@@ -2315,6 +2472,7 @@ pub(crate) mod tests {
             },
             async { Ok(EntityReconstructionResolution::<u64, ()>::LiveAdmissionCancelled(())) },
             no_structural_stall(),
+            no_body_records(),
             move || {
                 abort_flag.store(true, Ordering::Release);
                 let _ = body_cancelled.send(());
@@ -2341,6 +2499,7 @@ pub(crate) mod tests {
             async { Ok::<_, WorkerExecutorError>(EntityBodyOutcome::Completed(7)) },
             async { Ok(EntityReconstructionResolution::<u64, ()>::Replayed(8)) },
             no_structural_stall(),
+            no_body_records(),
             || {},
             None::<()>,
             None,
@@ -2370,6 +2529,7 @@ pub(crate) mod tests {
                 Ok(EntityReconstructionResolution::<u64, ()>::Replayed(7))
             },
             no_structural_stall(),
+            no_body_records(),
             || {},
             None::<()>,
             None,
@@ -2408,6 +2568,7 @@ pub(crate) mod tests {
                     Ok(EntityReconstructionResolution::<u64, ()>::Replayed(7))
                 },
                 no_structural_stall(),
+                no_body_records(),
                 || {},
                 Some(DropProbe(fence_dropped.clone())),
                 None,
@@ -2436,6 +2597,7 @@ pub(crate) mod tests {
                     Result<EntityReconstructionResolution<u64, ()>, WorkerExecutorError>,
                 >(),
                 no_structural_stall(),
+                no_body_records(),
                 || {},
                 None::<()>,
                 None,
@@ -2460,6 +2622,7 @@ pub(crate) mod tests {
                     Result<EntityReconstructionResolution<u64, ()>, WorkerExecutorError>,
                 >(),
                 async { Ok(OplogIndex::from_u64(3)) },
+                no_body_records(),
                 || {},
                 None::<()>,
                 None,
@@ -2484,6 +2647,7 @@ pub(crate) mod tests {
             },
             async { Ok(EntityReconstructionResolution::<u64, ()>::Incomplete(())) },
             no_structural_stall(),
+            no_body_records(),
             || {},
             None::<()>,
             None,
@@ -2514,6 +2678,7 @@ pub(crate) mod tests {
                 Ok(EntityReconstructionResolution::<u64, ()>::Incomplete(()))
             },
             no_structural_stall(),
+            no_body_records(),
             || {},
             None::<()>,
             Some(&cancellation),
@@ -2545,6 +2710,7 @@ pub(crate) mod tests {
                 async move { Err::<EntityBodyOutcome<u64>, _>(failure) },
                 async { Ok(EntityReconstructionResolution::<u64, ()>::Incomplete(())) },
                 no_structural_stall(),
+                no_body_records(),
                 || {},
                 None::<()>,
                 Some(&cancellation),
@@ -2576,6 +2742,7 @@ pub(crate) mod tests {
             },
             async { Ok(EntityReconstructionResolution::<u64, ()>::LiveAdmissionCancelled(())) },
             no_structural_stall(),
+            no_body_records(),
             move || {
                 let _ = aborted.send(());
             },
@@ -2621,6 +2788,7 @@ pub(crate) mod tests {
                     },
                     async move { Ok(resolution) },
                     no_structural_stall(),
+                    no_body_records(),
                     || {},
                     None::<()>,
                     Some(&cancellation),
