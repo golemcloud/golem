@@ -74,9 +74,9 @@ pub(crate) enum ImportNumbering {
 /// context exchanges). So an import takes its ordinal only when it reserves it
 /// ([`Self::reserve_import_identity`]): at its first durable call, or at entry for a host
 /// function that `await`s before its first durable call. The reservation must happen while the
-/// import is the guest's newest import; a later reservation is refused, because its place in the
-/// guest's call order is lost. The reserved ordinals then follow the guest's call order, which is
-/// the same in the live run and in every replay.
+/// import is the guest's newest import with no later identified built-in operation. A later
+/// reservation is refused, because its place in the guest's call order is lost. The reserved
+/// ordinals then follow the guest's call order, which is the same live and in every replay.
 ///
 /// Imports in the body of a custom durable invocation are numbered under that invocation's
 /// `Start`, because replay of a completed custom invocation does not run its body.
@@ -96,7 +96,7 @@ enum ImportState {
 struct NumberingState {
     /// The numbering decided by the call hook for the import that starts next.
     next: Option<ImportNumbering>,
-    /// The guest's newest import: the only one that can still reserve in guest call order.
+    /// The newest import that can still reserve before any later identified built-in operation.
     latest: Option<RuntimeActivityId>,
     /// The root anchor the ordinals belong to. A new root starts a new agent invocation or
     /// entity body, and drops the ordinals of the previous one.
@@ -141,7 +141,7 @@ impl NumberingState {
                 if self.latest != Some(activity) {
                     return Err(WorkerExecutorError::runtime(
                         "a guest import reserved its durable invocation id after the guest made \
-                         another import call; a host function that awaits before its first \
+                         another guest call; a host function that awaits before its first \
                          durable call must reserve its invocation id at entry",
                     ));
                 }
@@ -202,7 +202,7 @@ impl GuestImportNumbering {
     ///
     /// Fails for an activity that is not a guest import, such as a task the import spawned (such
     /// a task must be given the identity of the import that spawned it), and for an import that
-    /// reserves after the guest made another import call.
+    /// reserves after the guest made another import call or identified built-in operation.
     pub(crate) fn reserve_import_identity(
         &self,
         activity: Option<RuntimeActivityId>,
@@ -214,6 +214,14 @@ impl GuestImportNumbering {
                 "a durable call was made outside any runtime activity",
             )),
         }
+    }
+
+    /// Numbers a built-in operation at its synchronous guest boundary, outside a custom
+    /// invocation body. Unlike an import, the operation has no runtime import activity.
+    pub(crate) fn reserve_builtin_identity(&self, root: OplogIndex) -> DurableInvocationId {
+        let mut state = self.state.lock().unwrap();
+        state.latest = None;
+        state.next_id(root, root)
     }
 
     /// The identity of a durable call made by Store-holding host code.

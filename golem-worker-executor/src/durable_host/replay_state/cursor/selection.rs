@@ -543,14 +543,10 @@ impl CursorTx<'_> {
     pub(in crate::durable_host::replay_state) fn unclaimed_start_with_invocation_id(
         &self,
         invocation_id: DurableInvocationId,
-        function: Option<&StartClaim>,
     ) -> Option<(OplogIndex, RecordedStart)> {
-        self.retained_start_with_invocation_id(invocation_id, function)
+        self.retained_start_with_invocation_id(invocation_id)
             .or_else(|| {
-                let index = self.unclaimed_start_ahead(invocation_id, |recorded| {
-                    function
-                        .is_none_or(|claim| claim.matches_function_name(&recorded.function_name))
-                })?;
+                let index = self.unclaimed_start_ahead(invocation_id, |_| true)?;
                 let recorded = self
                     .cursor
                     .start_invocation_ids
@@ -566,17 +562,14 @@ impl CursorTx<'_> {
     fn retained_start_with_invocation_id(
         &self,
         invocation_id: DurableInvocationId,
-        function: Option<&StartClaim>,
     ) -> Option<(OplogIndex, RecordedStart)> {
         self.st
             .starts
             .retained_iter()
             .find_map(|(index, retained)| {
                 let recorded = RecordedStart::of(&retained.entry)?;
-                (start_invocation_id(&retained.entry) == Some(invocation_id)
-                    && function
-                        .is_none_or(|claim| claim.matches_function_name(&recorded.function_name)))
-                .then_some((*index, recorded))
+                (start_invocation_id(&retained.entry) == Some(invocation_id))
+                    .then_some((*index, recorded))
             })
     }
 
@@ -736,7 +729,7 @@ impl CursorTx<'_> {
         // may have drained a conflicting Start while this claim waited for an earlier delivery.
         if let Some(invocation_id) = claim.expected_invocation_id()
             && self
-                .retained_start_with_invocation_id(invocation_id, None)
+                .retained_start_with_invocation_id(invocation_id)
                 .is_some()
             && self
                 .unclaimed_start_ahead(invocation_id, |recorded| claim.matches_recorded(recorded))

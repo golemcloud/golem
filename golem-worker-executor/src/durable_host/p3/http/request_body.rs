@@ -1878,15 +1878,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostRequestWithStore<U> for Durab
         let task_context = store
             .as_context_mut()
             .guest_task_context::<GuestTaskContext>()?;
-        let invocation_id = {
+        let intercept_writes = {
             let mut access = store.as_context_mut();
             let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
             let owner = resolve_current_observational_owner(ctx, task_context.as_deref())?;
-            if owner.is_none() && ctx.runtime == crate::durable_host::OwnerRuntime::Agent {
-                Some(import_invocation_id(ctx, owner)?)
-            } else {
-                None
-            }
+            owner.is_none() && ctx.runtime == crate::durable_host::OwnerRuntime::Agent
         };
         // Recovering a host-produced HTTP body can also close its trailers reader.
         // Only guest-produced bodies keep both aliases alive until send.
@@ -1894,16 +1890,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostRequestWithStore<U> for Durab
             Some(contents) => contents.is_guest_produced(store.as_context_mut())?,
             None => true,
         };
-        let contents_write = if let Some(invocation_id) = invocation_id
-            && guest_body
-            && contents.is_some()
-        {
+        let contents_write = if intercept_writes && guest_body && contents.is_some() {
             let interceptor = super::request_write::write_interceptor::<
                 Ctx,
                 U,
                 golem_common::model::oplog::host_functions::P3HttpRequestContentsWrite,
                 u8,
-            >(&mut store, invocation_id)?;
+            >(&mut store)?;
             let reader = contents
                 .take()
                 .unwrap()
@@ -1913,7 +1906,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostRequestWithStore<U> for Durab
         } else {
             None
         };
-        let trailers_write = if let Some(invocation_id) = invocation_id
+        let trailers_write = if intercept_writes
             && guest_body
             && trailers.is_guest_produced(store.as_context_mut())?
         {
@@ -1922,7 +1915,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostRequestWithStore<U> for Durab
                 U,
                 golem_common::model::oplog::host_functions::P3HttpRequestTrailersWrite,
                 _,
-            >(&mut store, invocation_id)?;
+            >(&mut store)?;
             let reader = trailers.try_into_future_any(store.as_context_mut())?;
             trailers = FutureReader::try_from_future_any(reader.clone())?;
             Some((reader, interceptor))

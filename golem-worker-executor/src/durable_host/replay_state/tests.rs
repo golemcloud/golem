@@ -6949,13 +6949,14 @@ fn unpinned_invocation_started() -> OplogEntry {
 
 #[test]
 #[test_r::timeout("30s")]
-async fn deferred_observation_missing_contents_does_not_claim_shared_id_trailers() {
+async fn deferred_observation_missing_contents_does_not_claim_distinct_id_trailers() {
     let id = test_invocation_id(7);
+    let trailers_id = test_invocation_id(8);
     let mut start = start_named(HostFunctionName::P3HttpRequestTrailersWrite);
     let OplogEntry::Start { invocation_id, .. } = &mut start else {
         unreachable!()
     };
-    *invocation_id = Some(id);
+    *invocation_id = Some(trailers_id);
     let rs = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
@@ -6988,7 +6989,7 @@ async fn deferred_observation_missing_contents_does_not_claim_shared_id_trailers
                 &HostFunctionName::P3HttpRequestTrailersWrite,
                 &DurableFunctionType::ReadLocal,
             )
-            .with_invocation_id(Some(id)),
+            .with_invocation_id(Some(trailers_id)),
         )
         .await
         .unwrap()
@@ -7002,42 +7003,53 @@ async fn deferred_observation_missing_contents_does_not_claim_shared_id_trailers
         ReplayStartClaimOutcome::ReplayEnded
     ));
 
-    let mut start = start_named(HostFunctionName::P3HttpRequestContentsWrite);
-    let OplogEntry::Start {
-        invocation_id,
-        parent_start_index,
-        ..
-    } = &mut start
-    else {
-        unreachable!()
-    };
-    *invocation_id = Some(id);
-    *parent_start_index = Some(OplogIndex::from_u64(99));
-    let rs = replay_state_over(vec![
-        OplogEntry::RecoverySucceeded {
-            timestamp: Timestamp::now_utc(),
-        },
-        start,
-        end_for(2, 23),
-    ])
-    .await;
-    let result = rs
-        .claim_start_for_store_with_observation(
-            StartClaim::unowned(
-                &HostFunctionName::P3HttpRequestContentsWrite,
-                &DurableFunctionType::ReadLocal,
-            )
-            .with_invocation_id(Some(id)),
-            false,
-            |_, _| {},
-            None,
-            true,
-        )
+    for (function, parent) in [
+        (
+            HostFunctionName::P3HttpRequestContentsWrite,
+            Some(OplogIndex::from_u64(99)),
+        ),
+        (HostFunctionName::P3HttpRequestTrailersWrite, None),
+    ] {
+        let mut start = start_named(function);
+        let OplogEntry::Start {
+            invocation_id,
+            parent_start_index,
+            ..
+        } = &mut start
+        else {
+            unreachable!()
+        };
+        *invocation_id = Some(id);
+        *parent_start_index = parent;
+        let rs = replay_state_over(vec![
+            OplogEntry::RecoverySucceeded {
+                timestamp: Timestamp::now_utc(),
+            },
+            start,
+            end_for(2, 23),
+        ])
         .await;
-    assert!(
-        result.is_err(),
-        "the same function with a different parent is divergence"
-    );
+        let result = rs
+            .claim_start_for_store_with_observation(
+                StartClaim::unowned(
+                    &HostFunctionName::P3HttpRequestContentsWrite,
+                    &DurableFunctionType::ReadLocal,
+                )
+                .with_invocation_id(Some(id)),
+                false,
+                |_, _| {},
+                None,
+                true,
+            )
+            .await;
+        match result {
+            Err(WorkerExecutorError::UnexpectedOplogEntry { divergence }) => {
+                assert_eq!(divergence.oplog_index, OplogIndex::from_u64(2));
+                assert_ne!(divergence.expected, divergence.actual);
+            }
+            _ => panic!("a different function or parent with the same identity must diverge"),
+        }
+    }
 }
 
 #[test]

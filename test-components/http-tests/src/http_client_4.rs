@@ -189,6 +189,9 @@ pub trait HttpClient4 {
     /// Cancels a pending body write after starting send, then writes the body again.
     async fn send_retained_request(&mut self) -> u16;
 
+    /// Cancels an unjoined queued write, or writes contents after completed trailers.
+    async fn send_intercepted_request(&mut self, scenario: u8) -> u16;
+
     /// Sends a raw wasip3 GET over `https` to a plain-HTTP server, which fails
     /// the TLS handshake with a permanent (non-retried) `ErrorCode`. The error
     /// returned by `client::send` is stored in agent state and returned.
@@ -395,6 +398,76 @@ impl HttpClient4 for HttpClient4Impl {
         let status = response.get_status_code();
         drop(response);
         status
+    }
+
+    async fn send_intercepted_request(&mut self, scenario: u8) -> u16 {
+        use futures_concurrency::future::Join;
+        use golem_rust::wasip3::wit_stream::StreamPayload;
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let (request, mut writer, trailers, transmit) = self.retained_request.take().unwrap();
+        let mut send = Box::pin(golem_rust::wasip3::http::client::send(request));
+        poll_fn(|cx| {
+            assert!(send.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        let (response, (), result) = (
+            send,
+            async {
+                let mut trailers = Some(trailers);
+                if scenario == 2 {
+                    trailers.take().unwrap().write(Ok(None)).await.unwrap();
+                }
+                if scenario == 1 {
+                    let bytes = b"deferred".to_vec();
+                    let vtable = <u8 as StreamPayload>::VTABLE;
+                    // Keep the write unjoined so only native cancel can consume its queued event.
+                    // The buffer stays alive and unchanged until cancellation returns its ownership.
+                    assert_eq!(
+                        unsafe {
+                            (vtable.start_write)(writer.handle(), bytes.as_ptr(), bytes.len())
+                        },
+                        u32::MAX
+                    );
+                    let port = std::env::var("PORT").unwrap();
+                    let headers = types::Fields::from_list(&[]).unwrap();
+                    let (done, trailers) = golem_rust::wasip3::wit_future::new(|| Ok(None));
+                    let (request, transmitted) = types::Request::new(headers, None, trailers, None);
+                    request.set_method(&types::Method::Get).unwrap();
+                    request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+                    request
+                        .set_authority(Some(&format!("localhost:{port}")))
+                        .unwrap();
+                    request.set_path_with_query(Some("/release-write")).unwrap();
+                    let (response, (), result) = (
+                        golem_rust::wasip3::http::client::send(request),
+                        async { done.write(Ok(None)).await.unwrap() },
+                        transmitted,
+                    )
+                        .join()
+                        .await;
+                    result.unwrap();
+                    assert_eq!(response.unwrap().get_status_code(), 200);
+                    assert_eq!(
+                        unsafe { (vtable.cancel_write)(writer.handle()) },
+                        (8 << 4) | 2
+                    );
+                } else {
+                    assert!(writer.write_all(b"deferred".to_vec()).await.is_empty());
+                }
+                drop(writer);
+                if let Some(trailers) = trailers {
+                    trailers.write(Ok(None)).await.unwrap();
+                }
+            },
+            transmit,
+        )
+            .join()
+            .await;
+        result.unwrap();
+        response.unwrap().get_status_code()
     }
 
     async fn transition_clock_probe(&self, post: bool) -> u16 {

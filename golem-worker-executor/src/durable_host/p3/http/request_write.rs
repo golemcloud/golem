@@ -7,8 +7,9 @@
 use super::response_body::{HttpFutureDelivery, HttpFutureDeliveryGuard};
 use crate::durable_host::concurrent::{
     AccessClaimOptions, DeferredCallReplayOutcome, DurableCallSession, InvocationIdSource,
-    LeaveIncompleteOnDrop, ReplayAccessStartOutcome,
+    LeaveIncompleteOnDrop, ReplayAccessStartOutcome, resolve_current_observational_owner,
 };
+use crate::durable_host::durability::GuestTaskContext;
 use crate::durable_host::p3::{DurableP3, durable_worker_ctx};
 use crate::durable_host::tail_work::TailActivity;
 use crate::services::oplog::OplogOps;
@@ -16,9 +17,11 @@ use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::payload::HostPayloadPair;
 use golem_common::model::oplog::payload::types::SerializableP3HttpWriteOutcome;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestP3HttpRequestBodyWrite, HostResponseP3HttpRequestBodyWrite,
-    OplogEntry,
+    DurableFunctionType, DurableInvocationId, HostRequestP3HttpRequestBodyWrite,
+    HostResponseP3HttpRequestBodyWrite, OplogEntry,
 };
+use golem_service_base::error::worker_executor::WorkerExecutorError;
+use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
@@ -30,6 +33,7 @@ use wasmtime::{AsContextMut, StoreContextMut};
 
 struct WriteDemand {
     offered: usize,
+    invocation_id: InvocationIdSource,
     plan: oneshot::Sender<WritePlan>,
     accepted: oneshot::Receiver<SerializableP3HttpWriteOutcome>,
     delivery: oneshot::Sender<HttpFutureDeliveryGuard>,
@@ -68,6 +72,12 @@ enum WriteState<T> {
 pub(super) struct HttpRequestWriteInterceptor<T> {
     demands: mpsc::Sender<WriteDemand>,
     state: WriteState<T>,
+    identify: fn(
+        &mut dyn Any,
+        Option<&GuestTaskContext>,
+    ) -> wasmtime::Result<Option<DurableInvocationId>>,
+    write_ready: fn(&mut dyn Any) -> wasmtime::Result<()>,
+    issued: Option<InvocationIdSource>,
 }
 
 fn stream_result(outcome: &SerializableP3HttpWriteOutcome) -> (StreamResult, usize) {
@@ -81,6 +91,21 @@ fn stream_result(outcome: &SerializableP3HttpWriteOutcome) -> (StreamResult, usi
 impl<D: 'static, T: Lift + Send + Sync + Unpin + 'static> GuestWriteInterceptor<D, T>
     for HttpRequestWriteInterceptor<T>
 {
+    fn write_started(
+        self: Pin<&mut Self>,
+        mut store: StoreContextMut<'_, D>,
+    ) -> wasmtime::Result<()> {
+        let task_context = store
+            .as_context_mut()
+            .guest_task_context::<GuestTaskContext>()?;
+        let this = self.get_mut();
+        this.issued = Some(InvocationIdSource::Reserved((this.identify)(
+            store.data_mut(),
+            task_context.as_deref(),
+        )?));
+        Ok(())
+    }
+
     fn poll_write(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -105,6 +130,11 @@ impl<D: 'static, T: Lift + Send + Sync + Unpin + 'static> GuestWriteInterceptor<
                     this.demands
                         .try_send(WriteDemand {
                             offered,
+                            invocation_id: this.issued.take().ok_or_else(|| {
+                                wasmtime::Error::msg(
+                                    "a native write issue must precede its first poll",
+                                )
+                            })?,
                             plan: plan_tx,
                             accepted: accepted_rx,
                             delivery: delivery_tx,
@@ -232,6 +262,7 @@ impl<D: 'static, T: Lift + Send + Sync + Unpin + 'static> GuestWriteInterceptor<
                     source.register_write_observer(&mut store, move |consumption| {
                         guard.observe(consumption)
                     })?;
+                    (this.write_ready)(store.data_mut())?;
                     let result = *result;
                     this.state = WriteState::Idle;
                     return Poll::Ready(Ok(result));
@@ -243,7 +274,6 @@ impl<D: 'static, T: Lift + Send + Sync + Unpin + 'static> GuestWriteInterceptor<
 
 pub(super) fn write_interceptor<Ctx, U, Pair, T>(
     store: &mut Access<U, DurableP3<Ctx>>,
-    invocation_id: InvocationIdSource,
 ) -> wasmtime::Result<HttpRequestWriteInterceptor<T>>
 where
     Ctx: WorkerCtx,
@@ -265,24 +295,49 @@ where
     };
     store.spawn(async move |accessor| {
         captured
-            .run(record_writes::<Ctx, U, Pair>(
-                accessor,
-                receive,
-                invocation_id,
-                activity,
-            ))
+            .run(record_writes::<Ctx, U, Pair>(accessor, receive, activity))
             .await
     })?;
     Ok(HttpRequestWriteInterceptor {
         demands,
         state: WriteState::Idle,
+        identify: |data, task_context| {
+            let ctx = data
+                .downcast_mut::<Ctx>()
+                .ok_or_else(|| {
+                    wasmtime::Error::msg(
+                        "HTTP write interceptor store data must be its worker context",
+                    )
+                })?
+                .durable_ctx_mut();
+            let owner = resolve_current_observational_owner(ctx, task_context)?;
+            if owner.is_some()
+                || task_context.and_then(GuestTaskContext::current).is_some()
+                || ctx.state.snapshotting_mode
+            {
+                return Ok(None);
+            }
+            Ok(ctx
+                .invocation_anchor()
+                .map(|root| ctx.guest_imports.reserve_builtin_identity(root)))
+        },
+        write_ready: |data| {
+            let ctx = data
+                .downcast_mut::<Ctx>()
+                .ok_or_else(|| wasmtime::Error::msg("HTTP write interceptor context mismatch"))?
+                .durable_ctx_mut();
+            if let Some(hook) = ctx.replay_admission_hook() {
+                hook.http_request_write_ready(Pair::FQFN);
+            }
+            Ok(())
+        },
+        issued: None,
     })
 }
 
 async fn record_writes<Ctx, U, Pair>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     mut demands: mpsc::Receiver<WriteDemand>,
-    invocation_id: InvocationIdSource,
     activity: Arc<TailActivity>,
 ) -> wasmtime::Result<()>
 where
@@ -295,6 +350,7 @@ where
 {
     let mut sequence = 0;
     while let Some(demand) = activity.park(demands.recv()).await {
+        let invocation_id = demand.invocation_id;
         let write_sequence = sequence;
         sequence += 1;
         let claim =
@@ -332,15 +388,26 @@ where
             )
             .map_err(wasmtime::Error::msg)?;
             if recorded.sequence != write_sequence || recorded.offered != demand.offered as u64 {
-                return Err(wasmtime::Error::msg(format!(
-                    "HTTP write replay request differs: recorded {recorded:?}, sequence {write_sequence}, offered {}",
-                    demand.offered,
-                )));
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    handle.start_index(),
+                    format!(
+                        "HTTP write sequence {}, offered {}",
+                        recorded.sequence, recorded.offered,
+                    ),
+                    format!(
+                        "HTTP write sequence {write_sequence}, offered {}",
+                        demand.offered
+                    ),
+                )
+                .into());
             }
             if stream_result(&recorded.outcome).1 > demand.offered {
-                return Err(wasmtime::Error::msg(
-                    "recorded HTTP write exceeds offered items",
-                ));
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    handle.start_index(),
+                    format!("HTTP write outcome {:?}", recorded.outcome),
+                    format!("HTTP write offered {} items", demand.offered),
+                )
+                .into());
             }
             if demand
                 .plan

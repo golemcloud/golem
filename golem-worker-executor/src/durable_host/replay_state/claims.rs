@@ -575,11 +575,8 @@ impl ReplayState {
                                 // Draining the cursor can retain calls the guest has not
                                 // reproduced. Exhaustion does not permit changing their identity.
                                 if let Some(invocation_id) = owned_claim.expected_invocation_id()
-                                    && let Some((index, recorded)) = tx
-                                        .unclaimed_start_with_invocation_id(
-                                            invocation_id,
-                                            deferred_observation.then_some(&owned_claim),
-                                        )
+                                    && let Some((index, recorded)) =
+                                        tx.unclaimed_start_with_invocation_id(invocation_id)
                                 {
                                     return Err(WorkerExecutorError::replay_divergence(
                                         owned_claim.divergence_from_start(index, &recorded),

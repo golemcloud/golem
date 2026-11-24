@@ -173,6 +173,9 @@ pub trait ReplayAdmissionHook: Send + Sync {
     /// Runs synchronously on the Store-holding direct path right before a positional replay
     /// read expecting the `expected` marker entry.
     fn before_positional_replay_read(&self, expected: &str);
+
+    /// Runs synchronously while the Store queues an intercepted HTTP write acknowledgement.
+    fn http_request_write_ready(&self, _function: &'static str) {}
 }
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context

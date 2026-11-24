@@ -125,8 +125,9 @@ where
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
         ctx.state.p3_http_transmissions.requests.remove(&req.rep())
     });
-    // Install before the first await: cancellation before native consumption must
-    // cross the same acknowledgement boundary in live execution and replay.
+    // Install contents then trailers before the first await and before the native send
+    // constructs GuestBody or pipes its trailers. Pending writes take their identity here;
+    // later writes take it at issue, before consumer polling can reorder them.
     if let Some(pending) = &mut pending_transmission {
         store
             .with(|mut access| pending.install_write_interceptors(access.as_context_mut()))
