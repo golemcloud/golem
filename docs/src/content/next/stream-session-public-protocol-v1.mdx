@@ -262,6 +262,11 @@ Fields:
 - `inputHighWater` is required for input mappings and forbidden for output
   mappings. `sequence` is the cumulative count of durably accepted logical
   items. `terminal` reports whether input has durably ended or been cancelled.
+  `outcome` is present only when `terminal` is `true` and the server, not the
+  client, ended the input, for example at an invalid item (see §8). It has the
+  `outcome` form of a stream terminal. A client that gets it MUST stop that
+  input, MUST NOT replay unacknowledged items, and fails the call when the
+  outcome is `failed`.
 
 Mappings in one message MUST have distinct channels, stream tokens, and
 provisional references. A stream token cannot be rebound to a different
@@ -658,6 +663,8 @@ that channel. When the consumer has already cancelled the input, the server
 drops the invalid item like the other frames of the cancelled input. Protocol
 violations (wrong channel or lane, framing, item count, gap, conflicting
 retry, and resource limits) stay fatal and are checked before the value.
+A client that resumes after the server ended an input gets the same outcome in
+`inputHighWater.outcome` of that input mapping (§4.3).
 
 One WebSocket carries one invocation session and multiplexes all of its input
 and output streams.

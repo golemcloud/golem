@@ -338,12 +338,14 @@ object StreamSession {
     }
     def cancel(channel: Long, reason: String): Future[Unit] =
       send(StreamSessionProtocol.streamEnd(channel, "output", 0, Json.obj("kind" -> Json.string("consumer-cancelled"), "details" -> Json.string(reason))))
-    def highWater(mapping: Json): (BigInt, Boolean) = {
+    def highWater(mapping: Json): (BigInt, Boolean, Option[StreamOutcome]) = {
       val value = Json.requireField(mapping, "inputHighWater").fold(e => throw BridgeException(e), identity)
-      StreamSessionProtocol.validateObject(value, Set("sequence", "terminal"), "inputHighWater")
+      StreamSessionProtocol.validateObject(value, Set("sequence", "terminal"), "inputHighWater", Set("outcome"))
       val sequence = StreamSessionProtocol.u64(value, "sequence")
       val terminal = Json.requireField(value, "terminal").flatMap(Json.asBoolean).fold(e => throw BridgeException(e), identity)
-      sequence -> terminal
+      val outcome = Json.field(value, "outcome").map(StreamSessionProtocol.streamOutcome)
+      if (outcome.nonEmpty && !terminal) throw BridgeException("input high-water has an outcome but is not terminal")
+      (sequence, terminal, outcome)
     }
     final case class Mapping(
       channel: Long,
@@ -351,7 +353,7 @@ object StreamSession {
       direction: String,
       provisional: Option[String],
       input: Option[Input],
-      inputHighWater: Option[(BigInt, Boolean)]
+      inputHighWater: Option[(BigInt, Boolean, Option[StreamOutcome])]
     )
     def install(json: Json, complete: Boolean = false): Unit = Json.field(json, "mappings").foreach { value =>
       val mappings = Json.asArray(value).fold(e => throw BridgeException(e), identity)
@@ -412,6 +414,7 @@ object StreamSession {
         }
       }
       val pumps = collection.mutable.HashSet.empty[Input]
+      var serverFailure: Option[StreamOutcome.Failed] = None
       parsed.foreach { mapping =>
         session.stableDirections.putIfAbsent(mapping.token, mapping.direction)
         channels.putIfAbsent(mapping.channel, mapping.token)
@@ -422,18 +425,28 @@ object StreamSession {
         mapping.input.foreach { in =>
           val previous = session.inputTokens.putIfAbsent(mapping.token, in)
           if (previous != null && (previous ne in)) throw BridgeException("input stream token was rebound")
-          val (sequence, terminal) = mapping.inputHighWater.get
-          val replay = in.state.remap(mapping.channel, sequence, terminal)
-          replay.foreach { case (pending, mappedChannel) =>
-            pending.send(mappedChannel).failed.foreach(_ => reconnectAction.get()())
+          mapping.inputHighWater.get match {
+            case (_, _, Some(outcome)) =>
+              // The server ended the input, so the items it did not accept are dropped.
+              in.stop()
+              outcome match {
+                case failed: StreamOutcome.Failed => if (serverFailure.isEmpty) serverFailure = Some(failed)
+                case _ => ()
+              }
+            case (sequence, terminal, None) =>
+              val replay = in.state.remap(mapping.channel, sequence, terminal)
+              replay.foreach { case (pending, mappedChannel) =>
+                pending.send(mappedChannel).failed.foreach(_ => reconnectAction.get()())
+              }
+              if (!terminal && !in.state.isTerminal && replay.isEmpty) pumps.add(in)
           }
-          if (!terminal && !in.state.isTerminal && replay.isEmpty) pumps.add(in)
         }
         Option(session.outputs.get(mapping.token)).flatMap(_.remapCancel(reason => cancel(mapping.channel, reason))).foreach(
           _.failed.foreach(_ => reconnectAction.get()())
         )
       }
       pumps.foreach(pump)
+      serverFailure.foreach(failed => fatal(AgentStreamEnded(failed)))
     }
     def endInput(input: Input, outcome: Json): Unit = {
       val first = input.state.nextSequence

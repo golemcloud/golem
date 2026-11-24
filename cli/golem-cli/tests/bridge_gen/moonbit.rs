@@ -3401,6 +3401,7 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
         ("input-failure-replay", "", window, STABLE),
         ("input-eof-replay", "", window, STABLE),
         ("input-server-failure", "", window, STABLE),
+        ("input-server-outcome-resume", "", window, STABLE),
         ("output-failed", "typed-failure", window, STABLE),
         ("output-cancel-race", "", window, STABLE),
         ("output-cancel-after-resume-head", "", window, STABLE),

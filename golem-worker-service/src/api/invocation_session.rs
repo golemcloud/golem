@@ -713,6 +713,7 @@ impl AdapterState {
                 PublicInputHighWater {
                     sequence: DecimalU64(state.next_input_sequence),
                     terminal: state.terminal,
+                    outcome: public_server_outcome(mapping)?,
                 },
             ),
             provisional_ref: state.provisional_ref,
@@ -874,6 +875,7 @@ impl AdapterState {
             Some(PublicInputHighWater {
                 sequence: DecimalU64(sequence),
                 terminal,
+                outcome: public_server_outcome(&private.mapping)?,
             })
         } else {
             None
@@ -2924,6 +2926,29 @@ fn end_input_at_invalid_item(
     }))
 }
 
+/// The public outcome of an input that the server ended, from its private high-water.
+fn public_server_outcome(
+    mapping: &DurableStreamMapping,
+) -> Result<Option<PublicStreamOutcome>, AdapterError> {
+    let Some(high_water) = &mapping.high_water else {
+        return Ok(None);
+    };
+    let Some(outcome) = high_water.server_outcome.clone() else {
+        return Ok(None);
+    };
+    if !high_water.terminal {
+        return Err(AdapterError::protocol(
+            "an open input high-water has a server outcome",
+        ));
+    }
+    let terminal: golem_common::model::durable_stream::StreamTerminal = outcome
+        .try_into()
+        .map_err(|_| AdapterError::protocol("invalid input server outcome"))?;
+    PublicStreamOutcome::try_from(terminal)
+        .map(Some)
+        .map_err(|_| AdapterError::protocol("invalid public input server outcome"))
+}
+
 fn input_channel(
     state: &AdapterState,
     channel: u32,
@@ -4596,6 +4621,57 @@ mod tests {
     }
 
     #[test]
+    #[test_r::timeout("15s")]
+    async fn input_terminal_of_an_invalid_item_reaches_the_executor_when_the_client_closes() {
+        let state = active_input_state_with_schema(restricted_u8());
+        let budgets = SessionBudgets::new();
+        let mut messages = Vec::new();
+        for item in [input_item(0, 11), input_item(1, 9)] {
+            messages.push(Ok(AdmittedMessage {
+                message: Message::text(encode_client_text(&item).unwrap()),
+                admission: budgets.admit_inbound_frame(1).await.unwrap(),
+            }));
+        }
+        messages.push(Ok(AdmittedMessage {
+            message: Message::Close(None),
+            admission: budgets.admit_inbound_frame(1).await.unwrap(),
+        }));
+        // The executor has not acknowledged anything when the client closes.
+        let (requests, mut received) = mpsc::channel(4);
+        let (sender, mut outgoing) = mpsc::channel(4);
+        handle_client_messages(
+            futures::stream::iter(messages),
+            requests,
+            Outbound {
+                sender,
+                budgets: budgets.clone(),
+            },
+            state.clone(),
+            budgets,
+            Uuid::new_v4(),
+        )
+        .await;
+        let Some(invocation_request::Request::InputItem(item)) =
+            received.recv().await.unwrap().request.request
+        else {
+            panic!("the valid item was not forwarded")
+        };
+        assert_eq!(item.sequence, 0);
+        let Some(invocation_request::Request::StreamEnd(end)) =
+            received.recv().await.unwrap().request.request
+        else {
+            panic!("the input terminal was not forwarded before the request stream ended")
+        };
+        assert_eq!(end.producer_sequence, 1);
+        assert_eq!(end.authored_by(), StreamTerminalAuthor::Protocol);
+        assert!(received.recv().await.is_none());
+        assert!(
+            outgoing.recv().await.is_none(),
+            "the invalid item was rejected instead of ending its input"
+        );
+    }
+
+    #[test]
     fn connections_receive_fresh_channel_ranges() {
         let mut first = AdapterState::new_connection(Uuid::from_u128(0));
         let mut second = AdapterState::new_connection(Uuid::from_u128(1_u128 << 96));
@@ -4730,6 +4806,87 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn acceptance_carries_the_input_outcome_that_the_server_selected() {
+        use golem_common::model::durable_stream::{StreamError, StreamTerminal};
+        let keyring = keyring();
+        let bindings = token_bindings(&AuthCtx::system());
+        for terminal in [true, false] {
+            let mut state = AdapterState::new();
+            state.identity = Some(SessionAgentIdentity {
+                component_id: Uuid::from_u128(20),
+                component_revision: Some(12),
+                agent_id: session_agent_id(),
+                target: SessionInvocationTarget::ExternalTool {
+                    tool_name: "tool".to_string(),
+                    command_path: vec!["run".to_string()],
+                },
+            });
+            state.application = Some("app".to_string());
+            state.environment = Some("env".to_string());
+            let schema = SchemaType::u8();
+            let graph = SchemaGraph {
+                defs: Vec::new(),
+                root: SchemaType::stream(Some(schema.clone())),
+            };
+            state.graph = Some(graph.clone());
+            let fingerprint = schema_fingerprint_v1(&graph, Some(&schema)).unwrap().0;
+            let mut stdin = private_mapping(7, StreamMappingRole::Input, fingerprint);
+            stdin.tool_byte_stream_role = Some(ToolByteStreamRole::Stdin as i32);
+            stdin.high_water = Some(golem_api_grpc::proto::golem::worker::InputStreamHighWater {
+                highest_contiguous_sequence: 2,
+                resulting_offset: durable_offset(2),
+                terminal,
+                server_outcome: Some(
+                    StreamTerminal::Failed(StreamError::Interrupted(
+                        "input item 2 does not satisfy the element schema".to_string(),
+                    ))
+                    .try_into()
+                    .unwrap(),
+                ),
+            });
+            let accepted = translate_accepted(
+                &mut state,
+                InvocationAccepted {
+                    agent_id: Some(proto_agent_id()),
+                    idempotency_key: idempotency_key(),
+                    component_revision: Some(12),
+                    attachment_id: Some(proto_uuid(1)),
+                    attempt_id: Some(proto_uuid(2)),
+                    epoch: 1,
+                    callee_fingerprint: Some(proto_uuid(4)),
+                    tool_name: Some("tool".to_string()),
+                    command_path: vec!["run".to_string()],
+                    stream_mappings: vec![stdin],
+                    ..Default::default()
+                },
+                &keyring,
+                &bindings,
+                keyring.active_key_id(),
+                Uuid::from_u128(2),
+            );
+            if !terminal {
+                assert!(accepted.is_err(), "an open high-water carried an outcome");
+                continue;
+            }
+            let PublicServerMessage::InvocationAccepted { mappings, .. } = accepted.unwrap() else {
+                panic!("expected acceptance")
+            };
+            assert_eq!(
+                mappings[0].input_high_water,
+                Some(PublicInputHighWater {
+                    sequence: DecimalU64(2),
+                    terminal: true,
+                    outcome: Some(PublicStreamOutcome::Failed {
+                        error: PublicStreamError::Interrupted {
+                            message: "input item 2 does not satisfy the element schema".to_string(),
+                        },
+                    }),
+                })
+            );
         }
     }
 

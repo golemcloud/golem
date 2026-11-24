@@ -1103,6 +1103,7 @@ func (s *session) install(mappings []mapping, complete bool) error {
 			}
 		}
 	}
+	var serverFailure error
 	for _, mp := range mappings {
 		s.directions[mp.token] = mp.direction
 		s.channels[mp.channel] = mp.token
@@ -1114,6 +1115,20 @@ func (s *session) install(mappings []mapping, complete bool) error {
 				in = s.byProvisional[mp.provisional]
 				in.token = mp.token
 				s.byToken[mp.token] = in
+			}
+			if mp.endedByServer {
+				// The server ended the input, so items it did not accept are dropped.
+				in.channel = mp.channel
+				in.cancelled = true
+				in.ended = true
+				in.release()
+				poke(in.wake)
+				go in.h.stop("ended by the server")
+				var failure *StreamError
+				if errors.As(mp.serverEnd, &failure) && serverFailure == nil {
+					serverFailure = &StreamItemError{Err: fmt.Errorf("golem: the server ended input stream item %d: %w", mp.highWater, failure)}
+				}
+				continue
 			}
 			if err := in.remap(mp.channel, mp.highWater, mp.terminal); err != nil {
 				return err
@@ -1131,7 +1146,7 @@ func (s *session) install(mappings []mapping, complete bool) error {
 			}
 		}
 	}
-	return nil
+	return serverFailure
 }
 
 func (s *session) installFrom(c *sessionConn, m message) (bool, error) {

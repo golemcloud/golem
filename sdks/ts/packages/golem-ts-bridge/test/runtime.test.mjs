@@ -3217,6 +3217,133 @@ test('mapping installation rejects duplicate channels without accepting the sess
   }
 });
 
+for (const outcome of [
+  {
+    kind: 'failed',
+    error: { kind: 'interrupted', message: 'input item 1 does not satisfy the element schema' },
+  },
+  { kind: 'consumer-cancelled', details: 'consumer-drop' },
+]) {
+  test(`a resumed client gets the input outcome that the server selected: ${outcome.kind}`, async () => {
+    let connection = 0;
+    let idempotencyKey;
+    let returned = 0;
+    const local = await server((socket) => {
+      connection += 1;
+      socket.once('message', (data) => {
+        const operation = JSON.parse(data);
+        if (connection === 1) {
+          idempotencyKey = operation.idempotencyKey;
+          const provisionalRef = operation.methodParameters.input.value.provisionalRef;
+          socket.send(
+            JSON.stringify(
+              accepted(operation, [
+                {
+                  channel: 1,
+                  direction: 'input',
+                  streamToken: 'input',
+                  provisionalRef,
+                  inputHighWater: { sequence: '0', terminal: false },
+                },
+              ]),
+            ),
+          );
+          let items = 0;
+          socket.on('message', (message) => {
+            if (JSON.parse(message).type !== 'inputStreamItem') return;
+            items += 1;
+            if (items === 1)
+              socket.send(
+                JSON.stringify({
+                  version: 1,
+                  type: 'inputStreamAck',
+                  channel: 1,
+                  highestContiguousSequence: '1',
+                  mappings: [],
+                  terminal: false,
+                }),
+              );
+            // The server ends the input at item 1, and the connection is lost
+            // before its stream-end reaches the client.
+            else socket.terminate();
+          });
+          return;
+        }
+        assert.equal(operation.type, 'resumeAttach');
+        socket.send(
+          JSON.stringify(
+            accepted(
+              operation,
+              [
+                {
+                  channel: 9,
+                  direction: 'input',
+                  streamToken: 'input',
+                  inputHighWater: { sequence: '1', terminal: true, outcome },
+                },
+              ],
+              idempotencyKey,
+            ),
+          ),
+        );
+        if (outcome.kind !== 'failed') {
+          socket.send(
+            JSON.stringify({
+              version: 1,
+              type: 'invocationResult',
+              mappings: [],
+              result: { kind: 'none' },
+            }),
+          );
+          socket.send(
+            JSON.stringify({
+              version: 1,
+              type: 'invocationFinished',
+              outcome: { kind: 'success' },
+            }),
+          );
+        }
+      });
+    });
+    try {
+      let pulls = 0;
+      const source = agentStream({
+        [Symbol.asyncIterator]() {
+          return {
+            next: async () => {
+              pulls += 1;
+              if (pulls <= 2) return { done: false, value: { kind: 'u32', value: pulls } };
+              return new Promise(() => {});
+            },
+            return: async () => {
+              returned += 1;
+              return { done: true };
+            },
+          };
+        },
+      });
+      const method = createStreamingRemoteMethod(
+        () => ({ server: local.endpoint }),
+        () => descriptor,
+        ([input], register) => ({ input: register(input, (value) => value) }),
+        () => undefined,
+      );
+      if (outcome.kind === 'failed')
+        await assert.rejects(method(source), (error) => {
+          assert.ok(error instanceof StreamingProtocolError);
+          assert.equal(error.code, 'interrupted');
+          assert.match(error.message, /item 1: input item 1 does not satisfy the element schema/u);
+          return true;
+        });
+      else await method(source);
+      assert.equal(connection, 2);
+      assert.ok(returned >= 1);
+    } finally {
+      await local.close();
+    }
+  });
+}
+
 test('input source failure terminal is replayed on the remapped channel after reconnect', async () => {
   const cancellations = [];
   let connection = 0;

@@ -502,6 +502,25 @@ impl Peer {
                 "outcome":{"kind":"failed", "error":{"kind":"interrupted", "message":"input item 1 does not satisfy the element schema"}}})).await?;
             return Ok(());
         }
+        if mode == "input-server-outcome-resume" {
+            let mut conn = self.connect().await?;
+            let start = receive(&mut conn).await?;
+            accepted(&mut conn, &start, "input-session", json!([{"direction":"input", "channel":1, "streamToken":"input",
+                "provisionalRef":start["methodParameters"]["value"]["provisionalRef"], "inputHighWater":{"sequence":"0", "terminal":false}}])).await?;
+            let item = receive(&mut conn).await?;
+            assert_eq!(item["sequence"], "0");
+            ack(&mut conn, 1, false).await?;
+            let item = receive(&mut conn).await?;
+            assert_eq!(item["sequence"], "1");
+            drop(conn);
+            let mut conn = self.connect().await?;
+            let resume = receive(&mut conn).await?;
+            assert_eq!(resume["type"], "resumeAttach");
+            accepted(&mut conn, &resume, "input-session", json!([{"direction":"input", "channel":5, "streamToken":"input",
+                "inputHighWater":{"sequence":"1", "terminal":true, "outcome":{"kind":"failed",
+                "error":{"kind":"interrupted", "message":"input item 1 does not satisfy the element schema"}}}}])).await?;
+            return Ok(());
+        }
         if matches!(mode, "input-failure-replay" | "input-eof-replay") {
             let mut conn = self.connect().await?;
             let start = receive(&mut conn).await?;

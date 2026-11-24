@@ -3448,6 +3448,7 @@ mod tests {
             highest_contiguous_sequence: 2,
             resulting_offset: durable_offset(2),
             terminal: false,
+            server_outcome: None,
         });
         state.validate_response(&acceptance).unwrap();
         state
@@ -4209,6 +4210,7 @@ mod tests {
             highest_contiguous_sequence: 0,
             resulting_offset: durable_offset(2),
             terminal: false,
+            server_outcome: None,
         });
         retried.validate_response(&acceptance).unwrap();
         retried.validate_public_request(&end).unwrap();

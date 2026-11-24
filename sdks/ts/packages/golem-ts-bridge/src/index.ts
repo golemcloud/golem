@@ -3495,6 +3495,25 @@ function streamOutcome(value: unknown): StreamOutcome {
   return outcome as StreamOutcome;
 }
 
+/**
+ * The error of an input that the server ended. A failed input end is at an item that the
+ * caller sent, so the call fails with it; a consumer cancellation only stops the input.
+ */
+function inputEndFailure(
+  outcome: StreamOutcome,
+  sequence: string,
+): StreamingProtocolError | undefined {
+  if (outcome.kind !== 'failed') return undefined;
+  const detail =
+    'message' in outcome.error ? outcome.error.message : `input stream ${outcome.error.kind}`;
+  return new StreamingProtocolError(
+    outcome.error.kind,
+    `the server ended the input at item ${sequence}: ${detail}`,
+    undefined,
+    outcome,
+  );
+}
+
 /** Validates a v1 terminal frame without applying attachment state. */
 export function decodeStreamSessionEnd(value: unknown): {
   version: 1;
@@ -4375,22 +4394,9 @@ class StreamingSession {
         const terminal = decodeStreamSessionEnd(message);
         if (terminal.direction === 'input') {
           this.cancelChannel(terminal.channel);
-          // A failed input end is at an item the caller sent, so the call fails with it.
-          // A consumer cancellation only stops the input.
-          const outcome = terminal.outcome;
-          if (outcome.kind === 'failed') {
-            const detail =
-              'message' in outcome.error
-                ? outcome.error.message
-                : `input stream ${outcome.error.kind}`;
-            this.fail(
-              new StreamingProtocolError(
-                outcome.error.kind,
-                `the server ended the input at item ${terminal.sequence}: ${detail}`,
-                undefined,
-                outcome,
-              ),
-            );
+          const failure = inputEndFailure(terminal.outcome, terminal.sequence);
+          if (failure) {
+            this.fail(failure);
             this.socket?.close(1000);
           }
           break;
@@ -4546,6 +4552,7 @@ class StreamingSession {
   }
 
   private install(mappings: any[], complete = false): void {
+    let serverFailure: StreamingProtocolError | undefined;
     if (!Array.isArray(mappings) || mappings.length > 4096)
       throw new StreamingProtocolError('malformed-message', 'invalid stream mappings');
     const messageChannels = new Set<number>();
@@ -4559,6 +4566,7 @@ class StreamingSession {
       input?: InputState;
       highWater?: bigint;
       terminal?: boolean;
+      endedByServer?: boolean;
     }> = [];
     for (const mapping of mappings) {
       object(
@@ -4615,6 +4623,7 @@ class StreamingSession {
       let input: InputState | undefined;
       let highWater: bigint | undefined;
       let terminal: boolean | undefined;
+      let endedByServer = false;
       if (mapping.direction === 'input') {
         const provisionalInput =
           mapping.provisionalRef === undefined
@@ -4634,12 +4643,24 @@ class StreamingSession {
           )
         )
           throw new StreamingProtocolError('stream-conflict', 'input stream was rebound');
-        object(mapping.inputHighWater, ['sequence', 'terminal']);
+        object(mapping.inputHighWater, ['sequence', 'terminal'], ['outcome']);
         highWater = decimal(mapping.inputHighWater.sequence, 'sequence');
         terminal = mapping.inputHighWater.terminal;
         if (typeof terminal !== 'boolean')
           throw new StreamingProtocolError('stream-conflict', 'invalid input high-water');
-        this.validateInputReconcile(input, highWater, terminal);
+        if (mapping.inputHighWater.outcome !== undefined) {
+          if (!terminal)
+            throw new StreamingProtocolError(
+              'stream-conflict',
+              'open input high-water has an outcome',
+            );
+          serverFailure ??= inputEndFailure(
+            streamOutcome(mapping.inputHighWater.outcome),
+            mapping.inputHighWater.sequence,
+          );
+          // The server ended the input, so local items it did not accept are discarded.
+          endedByServer = true;
+        } else this.validateInputReconcile(input, highWater, terminal);
       } else if (mapping.provisionalRef !== undefined) {
         throw new StreamingProtocolError('stream-conflict', 'output mapping has provisional input');
       }
@@ -4651,6 +4672,7 @@ class StreamingSession {
         input,
         highWater,
         terminal,
+        endedByServer,
       });
     }
     if (new Set([...this.stableMappings.keys(), ...messageTokens]).size > 4096)
@@ -4702,12 +4724,21 @@ class StreamingSession {
         const input = mapping.input as InputState;
         this.inputTokens.set(mapping.token, input);
         input.channel = mapping.channel;
+        if (mapping.endedByServer) {
+          this.stopInput(input);
+          continue;
+        }
         this.reconcileInput(input, mapping.highWater as bigint, mapping.terminal as boolean);
         if (input.pending) this.socket?.send(input.pending.render(mapping.channel));
         else pumps.add(input);
       }
     }
     pumps.forEach((input) => void this.pump(input));
+    // The server ended an input at an item that the caller sent before this connection.
+    if (serverFailure) {
+      this.fail(serverFailure);
+      this.socket?.close(1000);
+    }
   }
 
   private async pump(input: InputState): Promise<void> {
@@ -5211,6 +5242,9 @@ class StreamingSession {
         'invalid-channel',
         'cancellation referenced an unknown input',
       );
+    this.stopInput(input);
+  }
+  private stopInput(input: InputState): void {
     input.terminal = true;
     this.clearBufferedInput(input);
     this.clearPendingInput(input);

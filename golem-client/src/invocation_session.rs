@@ -737,6 +737,17 @@ impl InputReplayBuffer {
         Ok(())
     }
 
+    /// Ends the input because the server ended it. Items that the server did not accept are
+    /// dropped.
+    fn end_by_server(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("input replay buffer mutex poisoned");
+        state.terminal = true;
+        state.queue.clear();
+    }
+
     pub fn initialize_high_water(
         &self,
         highest_contiguous_sequence: u64,
@@ -2348,6 +2359,7 @@ impl InvocationSession {
             && input_mappings.len() == 1
             && self.inputs[0].stream_token.is_none();
         let mut installed = vec![false; self.inputs.len()];
+        let mut server_failure = None;
         for mapping in &input_mappings {
             let matches = self
                 .inputs
@@ -2385,6 +2397,17 @@ impl InvocationSession {
                 .input_high_water
                 .as_ref()
                 .ok_or(SessionTransportError::InvalidMapping)?;
+            if let Some(outcome) = &high_water.outcome {
+                // The server ended the input, so the items it did not accept are dropped.
+                if !high_water.terminal {
+                    return Err(SessionTransportError::InvalidMapping);
+                }
+                input.buffer.end_by_server();
+                if server_failure.is_none() {
+                    server_failure = input_terminal_failure(outcome, high_water.sequence);
+                }
+                continue;
+            }
             input
                 .buffer
                 .initialize_high_water(high_water.sequence.0, high_water.terminal)?;
@@ -2394,7 +2417,10 @@ impl InvocationSession {
                 "invocation acceptance omitted a registered input stream mapping".to_string(),
             ));
         }
-        Ok(())
+        match server_failure {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 }
 
@@ -5207,6 +5233,7 @@ mod tests {
                                 input_high_water: Some(PublicInputHighWater {
                                     sequence: DecimalU64(0),
                                     terminal: false,
+                                    outcome: None,
                                 }),
                                 provisional_ref: None,
                                 stream_token: "native-stdin".to_string(),
@@ -5631,6 +5658,7 @@ mod tests {
                                 input_high_water: Some(PublicInputHighWater {
                                     sequence: DecimalU64(0),
                                     terminal: false,
+                                    outcome: None,
                                 }),
                                 provisional_ref: None,
                                 stream_token: "native-stdin".to_string(),
@@ -5826,6 +5854,7 @@ mod tests {
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(0),
                                 terminal: stdin_terminal,
+                                outcome: None,
                             }),
                             provisional_ref: None,
                             stream_token: "native-stdin".to_string(),
@@ -7289,6 +7318,7 @@ mod tests {
                     golem_common::model::invocation_session_public::PublicInputHighWater {
                         sequence: DecimalU64(0),
                         terminal: false,
+                        outcome: None,
                     },
                 ),
                 provisional_ref: None,
@@ -7690,6 +7720,7 @@ mod tests {
                                 input_high_water: Some(PublicInputHighWater {
                                     sequence: DecimalU64(0),
                                     terminal: false,
+                                    outcome: None,
                                 }),
                                 provisional_ref: Some(provisional_ref),
                                 stream_token: "input-stream".to_string(),
@@ -7778,6 +7809,114 @@ mod tests {
                 assert!(!result.unwrap(), "a consumer cancellation failed the call");
             }
             session.close().await.unwrap();
+            server.await.unwrap();
+        }
+    }
+
+    #[test]
+    async fn accepted_input_mapping_carries_the_outcome_that_the_server_selected() {
+        for (outcome, fails) in [
+            (
+                PublicStreamOutcome::Failed {
+                    error: PublicStreamError::Interrupted {
+                        message: "input item 2 does not satisfy the element schema".to_string(),
+                    },
+                },
+                true,
+            ),
+            (
+                PublicStreamOutcome::ConsumerCancelled {
+                    details: Some("consumer-drop".to_string()),
+                },
+                false,
+            ),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let attempt_id = uuid::Uuid::new_v4();
+            let provisional_ref = uuid::Uuid::new_v4();
+            let initial = start_request(attempt_id);
+            let server_initial = initial.clone();
+            let server_outcome = outcome.clone();
+            let server = tokio::spawn(async move {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut socket =
+                    accept_hdr_async(socket, |request: &Request, response: Response| {
+                        Ok(select_session_subprotocol(request, response))
+                    })
+                    .await
+                    .unwrap();
+                assert_eq!(receive_client_message(&mut socket).await, server_initial);
+                socket
+                    .send(Message::Text(
+                        encode_text(&PublicServerMessage::InvocationAccepted {
+                            attempt_id,
+                            agent_id: accepted_agent_id(),
+                            idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
+                            mappings: vec![PublicStreamMapping {
+                                channel: 4,
+                                direction: PublicStreamDirection::Input,
+                                byte_role: None,
+                                input_high_water: Some(PublicInputHighWater {
+                                    sequence: DecimalU64(1),
+                                    terminal: true,
+                                    outcome: Some(server_outcome),
+                                }),
+                                provisional_ref: Some(provisional_ref),
+                                stream_token: "input-stream".to_string(),
+                            }],
+                            session_token: "session-token".to_string(),
+                            version: 1,
+                        })
+                        .unwrap()
+                        .into(),
+                    ))
+                    .await
+                    .unwrap();
+                while let Some(frame) = socket.next().await {
+                    if matches!(frame, Err(_) | Ok(Message::Close(_))) {
+                        break;
+                    }
+                }
+            });
+
+            let mut session = InvocationSession::open(
+                Arc::new(StaticRequestProvider(format!("ws://{address}"))),
+                None,
+                ReconnectPolicy::Unlimited,
+                InvocationSessionStateSnapshot {
+                    delivered_output_cursors: BTreeMap::new(),
+                    stable_stream_bindings: BTreeMap::new(),
+                    pending_operation: Some(initial),
+                    session_token: None,
+                    accepted_invocation: None,
+                },
+                false,
+                Arc::new(()),
+            )
+            .await
+            .unwrap();
+            let buffer = InputReplayBuffer::new(GENERATED_INPUT_BYTES, GENERATED_INPUT_ITEMS);
+            session
+                .register_input(provisional_ref, None, buffer.clone())
+                .unwrap();
+            let result = session.receive().await;
+            if fails {
+                let Err(SessionTransportError::InputStreamFailed { sequence, error }) = &result
+                else {
+                    panic!(
+                        "expected the failed input error, got {:?}",
+                        result.as_ref().err()
+                    )
+                };
+                assert_eq!(*sequence, 1);
+                assert!(matches!(**error, PublicStreamError::Interrupted { .. }));
+            } else {
+                result.unwrap();
+            }
+            assert!(buffer.is_terminal(), "the server-ended input stays open");
+            assert!(buffer.is_empty());
+            session.close().await.ok();
             server.await.unwrap();
         }
     }
@@ -8671,6 +8810,7 @@ mod tests {
                         input_high_water: Some(PublicInputHighWater {
                             sequence: DecimalU64(0),
                             terminal: false,
+                            outcome: None,
                         }),
                         provisional_ref: Some(provisional_ref),
                         stream_token: "input".to_string(),
@@ -8800,6 +8940,7 @@ mod tests {
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(0),
                                 terminal: false,
+                                outcome: None,
                             }),
                             provisional_ref: Some(provisional_ref),
                             stream_token: "input-stream".to_string(),
@@ -8848,6 +8989,7 @@ mod tests {
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(0),
                                 terminal: false,
+                                outcome: None,
                             }),
                             provisional_ref: Some(provisional_ref),
                             stream_token: "input-stream".to_string(),
@@ -9285,6 +9427,7 @@ mod tests {
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(3),
                                 terminal: false,
+                                outcome: None,
                             }),
                             provisional_ref: None,
                             stream_token: "replacement-input".to_string(),
@@ -9357,6 +9500,7 @@ mod tests {
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(3),
                                 terminal: false,
+                                outcome: None,
                             }),
                             provisional_ref: None,
                             stream_token: "stable-input".to_string(),
@@ -9795,6 +9939,7 @@ mod tests {
                         input_high_water: Some(PublicInputHighWater {
                             sequence: DecimalU64(0),
                             terminal: false,
+                            outcome: None,
                         }),
                         provisional_ref: Some(retry_ref),
                         stream_token: "input".to_string(),

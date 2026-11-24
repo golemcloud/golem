@@ -128,7 +128,8 @@ async test "streaming recovery rejects or completes" {
     run_input_terminal_recovery("__MODE__" == "input-failure-replay")
     return
   }
-  if "__MODE__" == "input-server-failure" {
+  if "__MODE__" == "input-server-failure" ||
+    "__MODE__" == "input-server-outcome-resume" {
     run_input_server_failure()
     return
   }
@@ -219,6 +220,7 @@ async fn run_input_terminal_recovery(failed : Bool) -> Unit {
 ///|
 /// A failed input end from the server is at an item the caller sent, so the
 /// call fails with that failure.
+/// A resumed acceptance can carry the same failure as the input outcome.
 async fn run_input_server_failure() -> Unit {
   let source : AgentStream[String] = AgentStream::from_next(fn() {
     Some("item")

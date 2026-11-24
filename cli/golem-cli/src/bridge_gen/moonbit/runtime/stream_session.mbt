@@ -1113,10 +1113,10 @@ fn apply_input_high_water(
 }
 
 ///|
-fn install_mappings(
+async fn install_mappings(
   session : LiveStreamSession,
   message : Map[String, Json],
-) -> Unit raise {
+) -> Unit {
   let mappings = expect_array(get_field(message, "mappings"))
   if mappings.length() > 4096 {
     raise BridgeError("resource-exhausted: too many stream mappings")
@@ -1124,6 +1124,7 @@ fn install_mappings(
   let channels : Map[UInt32, Bool] = Map([])
   let tokens : Map[String, Bool] = Map([])
   let provisionals : Map[String, Bool] = Map([])
+  let mut server_failure : BridgeError? = None
   for mapping_json in mappings {
     let mapping = expect_object(mapping_json)
     validate_object_fields(mapping, ["channel", "direction", "streamToken"], [
@@ -1152,7 +1153,7 @@ fn install_mappings(
     match expect_string(get_field(mapping, "direction")) {
       "input" => {
         let high_water = expect_object(get_field(mapping, "inputHighWater"))
-        validate_object_fields(high_water, ["sequence", "terminal"], [])
+        validate_object_fields(high_water, ["sequence", "terminal"], ["outcome"])
         let input = match field_opt(mapping, "provisionalRef") {
           Some(value) => {
             let provisional = expect_string(value)
@@ -1182,12 +1183,31 @@ fn install_mappings(
         session.input_tokens[token] = input
         input.stream_token = Some(token)
         input.channel = Some(channel)
-        apply_input_high_water(
-          session,
-          input,
-          parse_canonical_u64(get_field(high_water, "sequence")),
-          expect_bool(get_field(high_water, "terminal")),
-        )
+        let terminal = expect_bool(get_field(high_water, "terminal"))
+        match field_opt(high_water, "outcome") {
+          Some(outcome) => {
+            if !terminal {
+              raise BridgeError(
+                "malformed-message: input high-water has an outcome but is not terminal",
+              )
+            }
+            // The server ended the input, so the items it did not accept are dropped.
+            let failure = decode_stream_outcome(outcome)
+            release_input_replay(input)
+            input.terminal = true
+            (input.cancel)()
+            if server_failure is None && failure is Some(StreamFailed(_)) {
+              server_failure = failure
+            }
+          }
+          None =>
+            apply_input_high_water(
+              session,
+              input,
+              parse_canonical_u64(get_field(high_water, "sequence")),
+              terminal,
+            )
+        }
       }
       "output" => {
         if field_opt(mapping, "provisionalRef") is Some(_) ||
@@ -1215,6 +1235,9 @@ fn install_mappings(
       }
       _ => raise BridgeError("malformed-message: invalid mapping direction")
     }
+  }
+  if server_failure is Some(failure) {
+    raise failure
   }
 }
 

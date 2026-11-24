@@ -15,6 +15,7 @@
 use super::WorkerExecutorImpl;
 use crate::durable_host::durable_session::{
     StreamSession, durable_stream_mapping_from_proto, durable_stream_mapping_to_proto,
+    with_input_server_terminals,
 };
 use crate::durable_host::durable_stream::{ProducerRegistrationRequest, SessionError};
 use crate::grpc::invocation::from_proto_invocation_context;
