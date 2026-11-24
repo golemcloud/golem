@@ -22,9 +22,14 @@ use test_r::{test, timeout};
 use tokio::process::Command;
 
 async fn run_cli(dir: &Path, args: &[&str]) -> std::process::Output {
+    run_cli_with_env(dir, args, &[]).await
+}
+
+async fn run_cli_with_env(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_golem-cli"))
         .kill_on_drop(true)
         .current_dir(dir)
+        .envs(env.iter().copied())
         .arg("--config-dir")
         .arg(dir.join("isolated-config"))
         .args(["--format", "json"])
@@ -172,6 +177,67 @@ async fn development_package_build_reads_its_current_component_without_a_lock() 
         "Development package tool borrowed cannot select a file package",
     )
     .await;
+}
+
+#[test]
+#[timeout("5 minutes")]
+async fn development_package_build_uses_its_typescript_dependencies() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let producer = root.join("producer");
+    let consumer = root.join("consumer");
+    let sdk = crate::workspace_path().join("sdks/ts/packages");
+    let env = [("GOLEM_TS_PACKAGES_PATH", sdk.to_str().unwrap())];
+    let result = run_cli_with_env(
+        root,
+        &[
+            "new",
+            "producer",
+            "--template",
+            "ts",
+            "--component-name",
+            "editable:guest",
+            "--yes",
+        ],
+        &env,
+    )
+    .await;
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    let manifest = producer.join("golem.yaml");
+    fs::write(
+        &manifest,
+        format!(
+            "{}\npackage: {{name: editable, version: 1.0.0}}\n",
+            fs::read_to_string(&manifest).unwrap()
+        ),
+    )
+    .unwrap();
+    fs::create_dir(&consumer).unwrap();
+    fs::write(consumer.join("golem.yaml"), format!("manifestVersion: {}\napp: consumer\nenvironments:\n  local: {{server: local, componentPresets: quick}}\npackages:\n  editable: {{path: ../producer}}\n", versions::sdk::MANIFEST)).unwrap();
+
+    let result = run_cli_with_env(&consumer, &["build", "--yes"], &env).await;
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        producer
+            .join("node_modules/@golemcloud/golem-ts-sdk")
+            .is_dir()
+    );
+    assert!(!consumer.join("package.json").exists());
+    assert!(!consumer.join("node_modules").exists());
+    assert!(
+        consumer
+            .join("golem-temp/agents/editable_guest.dynamic.wasm")
+            .is_file()
+    );
 }
 
 #[test]

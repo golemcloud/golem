@@ -48,7 +48,14 @@ pub async fn execute_build_command(
     let go_component = component.guest_language() == Some(GuestLanguage::Go);
     match command {
         app_raw::BuildCommand::External(external_command) => {
-            execute_external_command(ctx, &base_build_dir, external_command, go_component).await
+            execute_external_command(
+                ctx,
+                &base_build_dir,
+                external_command,
+                go_component,
+                ctx.application().component_build_root(component_name),
+            )
+            .await
         }
         app_raw::BuildCommand::QuickJSCrate(command) => {
             execute_quickjs_create(ctx, &base_build_dir, command)
@@ -180,7 +187,15 @@ pub async fn execute_custom_command(
         let _indent = LogIndent::new();
 
         for step in &command.value {
-            if let Err(error) = execute_external_command(ctx, &command.source, step, false).await {
+            if let Err(error) = execute_external_command(
+                ctx,
+                &command.source,
+                step,
+                false,
+                ctx.application().app_root_dir(),
+            )
+            .await
+            {
                 return Err(CustomCommandError::CommandError { error });
             }
         }
@@ -201,9 +216,14 @@ pub async fn execute_custom_command(
 
             for step in custom_command {
                 let go_component = component.guest_language() == Some(GuestLanguage::Go);
-                if let Err(error) =
-                    execute_external_command(ctx, component.component_dir(), step, go_component)
-                        .await
+                if let Err(error) = execute_external_command(
+                    ctx,
+                    component.component_dir(),
+                    step,
+                    go_component,
+                    ctx.application().component_build_root(component_name),
+                )
+                .await
                 {
                     return Err(CustomCommandError::CommandError { error });
                 }
@@ -318,11 +338,12 @@ fn execute_quickjs_d_ts(
 /// Runs one external command. `go_component` says whether it belongs to a Go
 /// component: only then is `go` the managed toolchain and the component's
 /// `go.mod` tidied first; anywhere else `go` is whatever is on `PATH`.
-pub async fn execute_external_command(
+async fn execute_external_command(
     ctx: &BuildContext<'_>,
     base_command_dir: &Path,
     command: &app_raw::ExternalCommand,
     go_component: bool,
+    build_root: &Path,
 ) -> anyhow::Result<()> {
     let app_root_dir = ctx.application().app_root_dir();
 
@@ -408,6 +429,7 @@ pub async fn execute_external_command(
                     command_tokens[0].as_str(),
                     &build_dir,
                     go_component,
+                    build_root,
                 )
                 .await?;
 
@@ -469,24 +491,25 @@ fn external_command_display_name(command: &str) -> &str {
         .unwrap_or(command)
 }
 
-pub async fn ensure_common_deps_for_tool(
+async fn ensure_common_deps_for_tool(
     ctx: &BuildContext<'_>,
     tool: &str,
     build_dir: &Path,
     go_component: bool,
+    build_root: &Path,
 ) -> anyhow::Result<()> {
     let normalized = normalized_program_name(tool);
     match normalized.as_str() {
         "node" | "npx" => {
-            let package_json_path = ctx.application().app_root_dir().join("package.json");
+            let package_json_path = build_root.join("package.json");
             if !package_json_path.exists() {
                 return Ok(());
             }
 
-            let app_root_dir = ctx.application().app_root_dir().to_path_buf();
+            let ensure_key = format!("node:{}", build_root.display());
             ctx.tools_with_ensured_common_deps()
-                .ensure_common_deps_for_tool_once("node", || async {
-                    ensure_npm_dependencies(ctx, &app_root_dir).await
+                .ensure_common_deps_for_tool_once(&ensure_key, || async {
+                    ensure_npm_dependencies(ctx, build_root).await
                 })
                 .await
         }
@@ -553,7 +576,7 @@ async fn ensure_npm_dependencies(
     };
 
     let marker = TaskResultMarker::new(
-        &ctx.application().task_result_marker_dir(),
+        &app_root_dir.join(ctx.application().task_result_marker_dir()),
         NpmInstallDepsMarkerHash {
             package_json_hash: &package_json_hash,
             package_lock_hash: package_lock_hash.as_deref(),

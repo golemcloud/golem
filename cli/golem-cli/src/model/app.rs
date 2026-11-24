@@ -858,7 +858,7 @@ pub struct Application {
     app_root_dir_str: String,
     golem_temp_dir_str: String,
     cargo_workspace_mode: bool,
-    development_sources: BTreeSet<PathBuf>,
+    development_roots: BTreeMap<PathBuf, PathBuf>,
 
     application_name: WithSource<ApplicationName>,
     environments: BTreeMap<EnvironmentName, app_raw::Environment>,
@@ -962,11 +962,18 @@ impl Application {
     /// cargo (see [`resolve_cargo_target_dir`]) lazily, when a template actually references
     /// `cargoTarget`.
     fn cargo_manifest_dir_for(&self, source: &Path, component_dir: &str) -> String {
-        if self.cargo_workspace_mode && !self.development_sources.contains(source) {
+        if self.cargo_workspace_mode && !self.development_roots.contains_key(source) {
             self.app_root_dir_str.clone()
         } else {
             component_dir.to_string()
         }
+    }
+
+    pub(crate) fn component_build_root(&self, name: &ComponentName) -> &Path {
+        self.development_roots
+            .get(self.component(name).source())
+            .map(PathBuf::as_path)
+            .unwrap_or(&self.app_root_dir)
     }
 
     pub fn preload_from_raw_apps(
@@ -2293,6 +2300,7 @@ pub struct ComponentLayerApplyContext {
     env: minijinja::Environment<'static>,
     component_name: Option<ComponentName>,
     app_root_dir: Option<String>,
+    npm_root_dir: Option<String>,
     golem_temp_dir: Option<String>,
     component_dir: Option<String>,
     component_dir_rel: Option<String>,
@@ -2356,6 +2364,7 @@ impl ComponentLayerApplyContext {
             env: Self::new_template_env(),
             component_name,
             app_root_dir,
+            npm_root_dir: None,
             golem_temp_dir,
             component_dir,
             component_dir_rel,
@@ -2395,6 +2404,7 @@ impl ComponentLayerApplyContext {
         minijinja::Value::from_object(ComponentLayerTemplateContext {
             component_name: self.component_name.as_ref().map(|name| name.0.clone()),
             app_root_dir: self.app_root_dir.clone(),
+            npm_root_dir: self.npm_root_dir.clone(),
             golem_temp_dir: self.golem_temp_dir.clone(),
             component_dir: self.component_dir.clone(),
             component_dir_rel: self.component_dir_rel.clone(),
@@ -2414,6 +2424,7 @@ impl ComponentLayerApplyContext {
 struct ComponentLayerTemplateContext {
     component_name: Option<String>,
     app_root_dir: Option<String>,
+    npm_root_dir: Option<String>,
     golem_temp_dir: Option<String>,
     component_dir: Option<String>,
     component_dir_rel: Option<String>,
@@ -2428,6 +2439,11 @@ impl minijinja::value::Object for ComponentLayerTemplateContext {
                 self.component_name.as_deref().map(minijinja::Value::from)
             }
             "appRootDir" => self.app_root_dir.as_deref().map(minijinja::Value::from),
+            "npmRootDir" => self
+                .npm_root_dir
+                .as_deref()
+                .or(self.app_root_dir.as_deref())
+                .map(minijinja::Value::from),
             "golemTempDir" => self.golem_temp_dir.as_deref().map(minijinja::Value::from),
             "componentDir" => self.component_dir.as_deref().map(minijinja::Value::from),
             "componentDirRel" => self
@@ -4599,7 +4615,7 @@ mod app_builder {
         app_root_dir_str: String,
         golem_temp_dir_str: String,
         cargo_workspace_mode: bool,
-        development_sources: BTreeSet<PathBuf>,
+        development_roots: BTreeMap<PathBuf, PathBuf>,
 
         // For app build
         include: Vec<String>,
@@ -4714,7 +4730,7 @@ mod app_builder {
                 app_root_dir_str: builder.app_root_dir_str,
                 golem_temp_dir_str: builder.golem_temp_dir_str,
                 cargo_workspace_mode: builder.cargo_workspace_mode,
-                development_sources: builder.development_sources,
+                development_roots: builder.development_roots,
                 environments,
                 environment_sources: builder.environment_sources,
                 component_preset_selector: component_presets,
@@ -4872,8 +4888,8 @@ mod app_builder {
                 |validation| {
                     let app_source_dir = fs::parent_or_err(&app.source).expect("Failed to get parent");
                     self.all_sources.insert(app.source.clone());
-                    if app.is_development_package {
-                        self.development_sources.insert(app.source.clone());
+                    if let Some(root) = app.development_root {
+                        self.development_roots.insert(app.source.clone(), root);
                     }
 
                     for environment_name in app.application.environments.keys() {
@@ -5965,19 +5981,29 @@ mod app_builder {
                     }
                 };
 
-            let ctx = ComponentLayerApplyContext::new(
+            let development_root = self.development_roots.get(&source);
+            let build_root = match development_root
+                .map(|root| fs::path_to_str(root))
+                .transpose()
+            {
+                Ok(root) => root.unwrap_or(&self.app_root_dir_str),
+                Err(err) => {
+                    validation.add_error(err.to_string());
+                    return;
+                }
+            };
+            let mut ctx = ComponentLayerApplyContext::new(
                 Some(component_name.clone()),
                 Some(self.app_root_dir_str.clone()),
                 Some(self.golem_temp_dir_str.clone()),
                 Some(component_dir_str.clone()),
-                Some(
-                    if self.cargo_workspace_mode && !self.development_sources.contains(&source) {
-                        self.app_root_dir_str.clone()
-                    } else {
-                        component_dir_str.clone()
-                    },
-                ),
+                Some(if self.cargo_workspace_mode && development_root.is_none() {
+                    self.app_root_dir_str.clone()
+                } else {
+                    component_dir_str.clone()
+                }),
             );
+            ctx.npm_root_dir = Some(build_root.to_owned());
 
             match self.component_layer_store.value(
                 &ComponentLayerId::ComponentCustomPresets(component_name.clone()),

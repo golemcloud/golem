@@ -65,6 +65,7 @@ Available template variables:
 
 - `componentName` (alias `component_name`): the current component name.
 - `appRootDir`: the absolute application root directory.
+- `npmRootDir`: in a component build template, the absolute npm project root. For a `path:` package it is the package directory; otherwise it is the application root.
 - `golemTempDir`: the absolute Golem temporary directory for this application.
 - `componentDir`: the absolute effective component directory, including its `dir` override.
 - `componentDirRel`: the component directory relative to the application root, with `/` separators; empty for the root or a component outside it.

@@ -728,6 +728,24 @@ impl ApplicationContext {
         &self.selected_component_names
     }
 
+    pub(crate) fn ensure_component_npm_common(&self, name: &ComponentName) -> anyhow::Result<()> {
+        let root = self.application.component_build_root(name);
+        if root != self.application.app_root_dir()
+            && let Some(language @ (GuestLanguage::TypeScript | GuestLanguage::Effect)) =
+                self.application.component(name).guest_language()
+            && let Some(template) =
+                AppTemplateRepo::get(self.config.dev_mode)?.common_on_demand_template(language)?
+        {
+            // Node resolves the Rollup config's imports from its file location.
+            template.generate(
+                self.application.application_name(),
+                root,
+                &root.join(Application::on_demand_common_dir_for_language(language)),
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn component_names(&self) -> BTreeSet<ComponentName> {
         self.application.component_names().cloned().collect()
     }
@@ -1059,7 +1077,7 @@ fn package_manifest(
     Ok(app_raw::ApplicationWithSource {
         source,
         application: serde_json::from_str(&declarations)?,
-        is_development_package: false,
+        development_root: None,
     })
 }
 
@@ -1090,9 +1108,8 @@ fn package_tool_selections(
     let path_packages = package_root(loaded)
         .into_iter()
         .flat_map(|root| &root.packages)
-        .filter_map(|(name, entry)| {
-            matches!(entry, crate::package::PackageEntry::Path { .. }).then(|| name.clone())
-        })
+        .filter(|(_, entry)| matches!(entry, crate::package::PackageEntry::Path { .. }))
+        .map(|(name, _)| name.clone())
         .collect::<BTreeSet<_>>();
     let mut selections = BTreeMap::<String, Vec<ToolSelection>>::new();
     let mut declarations = BTreeMap::new();
@@ -1284,7 +1301,7 @@ fn development_manifests(
                 }
                 manifests.push(app_raw::ApplicationWithSource {
                     source,
-                    is_development_package: true,
+                    development_root: Some(fs::normalize_path_lexically(&directory)),
                     application: app_raw::Application {
                         component_templates: raw.component_templates,
                         components: raw.components,

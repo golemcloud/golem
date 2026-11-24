@@ -125,4 +125,8 @@ Edit the files in that directory and rebuild; you do not need to pack or install
 the package after each edit. A development path has no entry in `golem.lock` and
 cannot be included in a published package.
 
+TypeScript and Effect development packages need their own `package.json` in the
+package directory. The CLI installs npm dependencies there, not in the consuming
+application.
+
 Registry publishing is not available through these commands.

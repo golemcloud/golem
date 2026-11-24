@@ -42,6 +42,8 @@ pub async fn build_components(
         );
         let _indent = LogIndent::new();
 
+        ctx.application_context()
+            .ensure_component_npm_common(component_name)?;
         for build_step in build_commands {
             execute_build_command(ctx, component_name, &build_step).await?;
         }
