@@ -643,6 +643,19 @@ Explicit cancellation and readable output drop propagate cancellation.
 Natural input exhaustion is a normal input end. Input source failure is
 `source-unavailable`.
 
+An input item that fails its element schema after acceptance (a
+`validation-error` or `unsupported-value` item at the next expected sequence)
+ends only that input stream. The server records the input terminal at the
+sequence of the invalid item and sends the client a `stream-end` with
+`direction` `input` and the outcome
+`{"kind":"failed","error":{"kind":"interrupted","message":"..."}}` in place of
+the ACK of that terminal. The session and its other streams continue. The
+server drops the later items and the `stream-end` that the client sends on
+that channel. When the consumer has already cancelled the input, the server
+drops the invalid item like the other frames of the cancelled input. Protocol
+violations (wrong channel or lane, framing, item count, gap, conflicting
+retry, and resource limits) stay fatal and are checked before the value.
+
 One WebSocket carries one invocation session and multiplexes all of its input
 and output streams.
 
