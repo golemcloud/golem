@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::convert::Infallible;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -108,17 +108,6 @@ pub type WireToolDescriptorFn = fn(
     crate::agentic::ExtendedToolType<crate::agentic::WireTypeRef>,
     crate::agentic::ToolBuildError,
 >;
-
-#[doc(hidden)]
-pub trait ToolClientWithParts: Sized {
-    fn __golem_tool_client_with_parts(
-        root_tool_name: String,
-        root_descriptor: Option<WireToolDescriptorFn>,
-        command_path: Vec<String>,
-        schema_path: Vec<String>,
-        inherited_prefix: Vec<DirectInputValue>,
-    ) -> Self;
-}
 
 trait DirectInputEncoder {
     fn preflight(
@@ -300,10 +289,22 @@ pub async fn encode_direct_tool_input_with_descriptor(
 ) -> Result<crate::schema::wit::wire::TypedSchemaValue, String> {
     match descriptor {
         Some(descriptor) => {
-            encode_direct_tool_input_from_descriptor(values, descriptor, command_path).await
+            let model = descriptor_input_model(descriptor, command_path)?;
+            encode_direct_tool_input_from_model(values, &model).await
         }
         None => encode_direct_tool_input(values, field_order).await,
     }
+}
+
+/// Encodes against the per-command schema builder generated for a standalone
+/// refined client, without constructing the tool's command tree or outputs.
+#[doc(hidden)]
+pub async fn encode_direct_tool_input_with_schema(
+    values: &[DirectInputValue],
+    schema: fn() -> Result<Rc<ToolInputModel>, String>,
+) -> Result<crate::schema::wit::wire::TypedSchemaValue, String> {
+    let model = schema()?;
+    encode_direct_tool_input_from_model(values, &model).await
 }
 
 struct DescriptorInputField {
@@ -313,9 +314,31 @@ struct DescriptorInputField {
     is_option: bool,
 }
 
-struct DescriptorInputModel {
+/// The immutable canonical input schema shared by calls to a generated command.
+#[doc(hidden)]
+pub struct ToolInputModel {
     graph: crate::schema::wit::wire::SchemaGraph,
     fields: Vec<DescriptorInputField>,
+}
+
+impl ToolInputModel {
+    /// Initializes a command's thread-local schema only after a successful build.
+    #[doc(hidden)]
+    pub fn cached(
+        cache: &OnceCell<Rc<Self>>,
+        build: fn() -> Result<
+            crate::agentic::WireCanonicalInputModel,
+            crate::agentic::ToolBuildError,
+        >,
+    ) -> Result<Rc<Self>, String> {
+        if let Some(model) = cache.get() {
+            return Ok(Rc::clone(model));
+        }
+        let model = build().map_err(|error| format!("tool input schema build failed: {error}"))?;
+        let model = Rc::new(input_model(model)?);
+        let _ = cache.set(Rc::clone(&model));
+        Ok(model)
+    }
 }
 
 impl DescriptorInputField {
@@ -326,8 +349,7 @@ impl DescriptorInputField {
     }
 }
 
-type DescriptorInputModels =
-    std::collections::HashMap<(usize, Vec<String>), Rc<DescriptorInputModel>>;
+type DescriptorInputModels = std::collections::HashMap<(usize, Vec<String>), Rc<ToolInputModel>>;
 
 thread_local! {
     static DESCRIPTOR_INPUT_MODELS: RefCell<DescriptorInputModels> = RefCell::new(DescriptorInputModels::new());
@@ -336,7 +358,7 @@ thread_local! {
 fn descriptor_input_model(
     descriptor: WireToolDescriptorFn,
     command_path: &[String],
-) -> Result<Rc<DescriptorInputModel>, String> {
+) -> Result<Rc<ToolInputModel>, String> {
     let key = (descriptor as usize, command_path.to_vec());
     if let Some(model) = DESCRIPTOR_INPUT_MODELS.with(|models| models.borrow().get(&key).cloned()) {
         return Ok(model);
@@ -349,48 +371,36 @@ fn descriptor_input_model(
 fn build_descriptor_input_model(
     descriptor: WireToolDescriptorFn,
     command_path: &[String],
-) -> Result<DescriptorInputModel, String> {
-    use crate::schema::wit::wire::SchemaTypeBody;
+) -> Result<ToolInputModel, String> {
     let schema = crate::agentic::WireToolSchema::default();
-    let tool = descriptor(&schema)
-        .and_then(|tool| tool.into_wire(schema))
-        .map_err(|error| format!("tool descriptor build failed: {error}"))?;
-    let tool = crate::schema::tool::wit::decode_tool(tool)
-        .map_err(|error| format!("tool descriptor decoding failed: {error}"))?;
-    let command_index = tool.command_index_by_path(command_path).ok_or_else(|| {
-        format!(
-            "tool descriptor has no command body at path `{}`",
-            command_path.join(" ")
-        )
-    })?;
-    let record_schema = tool
-        .canonical_input_record_schema_unvalidated(command_index)
-        .map_err(|error| error.to_string())?;
-    let graph =
-        crate::schema::wit::encode_graph(&record_schema).map_err(|error| error.to_string())?;
+    let tool =
+        descriptor(&schema).map_err(|error| format!("tool descriptor build failed: {error}"))?;
+    let model = tool.canonical_wire_input_model(&schema, command_path)?;
+    input_model(model)
+}
+
+fn input_model(model: crate::agentic::WireCanonicalInputModel) -> Result<ToolInputModel, String> {
+    use crate::schema::wit::wire::SchemaTypeBody;
+    let graph = model.graph;
     let Some(SchemaTypeBody::RecordType(record)) =
         resolve_wire_type(&graph, graph.root).map(|node| &node.body)
     else {
         return Err("canonical tool input schema is not a record".to_string());
     };
-    let fields = tool.canonical_input_fields(command_index);
-    if record.len() != fields.len() {
-        return Err("canonical tool input schema does not match its fields".to_string());
-    }
-    let fields = fields
-        .into_iter()
-        .zip(record)
-        .map(|(field, record_field)| DescriptorInputField {
+    let fields = record
+        .iter()
+        .zip(model.aliases)
+        .map(|(record_field, aliases)| DescriptorInputField {
             is_option: matches!(
                 resolve_wire_type(&graph, record_field.body).map(|node| &node.body),
                 Some(SchemaTypeBody::OptionType(_))
             ),
-            name: field.name,
-            aliases: field.aliases,
+            name: record_field.name.clone(),
+            aliases,
             body: record_field.body,
         })
         .collect();
-    Ok(DescriptorInputModel { graph, fields })
+    Ok(ToolInputModel { graph, fields })
 }
 
 fn resolve_wire_type(
@@ -409,10 +419,9 @@ fn resolve_wire_type(
     None
 }
 
-async fn encode_direct_tool_input_from_descriptor(
+async fn encode_direct_tool_input_from_model(
     values: &[DirectInputValue],
-    descriptor: WireToolDescriptorFn,
-    command_path: &[String],
+    model: &ToolInputModel,
 ) -> Result<crate::schema::wit::wire::TypedSchemaValue, String> {
     use crate::schema::wit::direct::{WirePreflight, WireSchemaBuilder, WireWriter};
     use crate::schema::wit::wire::{SchemaTypeBody, SchemaValueNode};
@@ -438,7 +447,6 @@ async fn encode_direct_tool_input_from_descriptor(
         value.encoder.prepare().await.map_err(|e| e.to_string())?;
     }
 
-    let model = descriptor_input_model(descriptor, command_path)?;
     let mut ordered: Vec<Option<&DirectInputValue>> = vec![None; model.fields.len()];
     for value in selected {
         let index = model

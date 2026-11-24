@@ -151,6 +151,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             load_snapshot_invocation,
             &component_metadata,
             store.as_context().data().durable_ctx().owner_context(),
+            None,
         )
         .map_err(|err| {
             ManualLoadResult::Failed(format!(
@@ -437,6 +438,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             load_snapshot_invocation,
             &component_metadata,
             store.as_context().data().durable_ctx().owner_context(),
+            None,
         ) {
             Ok(lowered) => lowered,
             Err(err) => {
@@ -685,7 +687,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
     fn snapshot_boundary_blocker(&self) -> Option<SnapshotBoundaryBlocker> {
         self.state.snapshot_boundary_blocker()

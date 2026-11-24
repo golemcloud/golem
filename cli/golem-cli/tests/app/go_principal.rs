@@ -21,7 +21,8 @@ use test_r::{inherit_test_dep, test, timeout};
 inherit_test_dep!(Tracing);
 
 /// A Go agent reads the caller of each invocation from its context: the CLI's account for a
-/// call from the CLI, the calling agent for a call over RPC.
+/// call from the CLI. A call over RPC keeps the CLI's account as the original caller and has the
+/// calling agent as the immediate one.
 #[test]
 #[timeout("15 minutes")]
 async fn test_go_principal() {
@@ -88,8 +89,8 @@ async fn test_go_principal() {
     let direct = invoke("LedgerAgent(\"direct\")", "whoami", &[]).await;
     assert!(direct.contains("method=account agent=account"), "{direct}");
 
-    // A relay creates the second ledger over RPC: both principals are the relay, named by its
-    // agent ID.
+    // A relay creates the second ledger over RPC: the relay is the immediate caller and the
+    // CLI's account stays the original one.
     let created = invoke("RelayAgent(\"r\")", "ask", &["\"created\""]).await;
     let relay = ctx
         .cli([
@@ -108,14 +109,15 @@ async fn test_go_principal() {
         .find_map(|document| document["metadata"]["agentId"].as_str().map(str::to_string))
         .expect("agent get prints the agent ID");
     assert!(
-        created.contains(&format!("method=agent:{relay_id} agent=agent:{relay_id}")),
+        created.contains(&format!("method=agent:{relay_id} agent=account")),
         "{created}"
     );
 
-    // Calling the CLI's ledger through the relay makes the relay the caller, in both roles.
+    // Calling the CLI's ledger through the relay makes the relay the immediate caller; the
+    // original caller is still the CLI's account.
     let relayed = invoke("RelayAgent(\"r\")", "ask", &["\"direct\""]).await;
     assert!(
-        relayed.contains(&format!("method=agent:{relay_id} agent=agent:{relay_id}")),
+        relayed.contains(&format!("method=agent:{relay_id} agent=account")),
         "{relayed}"
     );
 }

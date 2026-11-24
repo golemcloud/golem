@@ -12,12 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{mcp_http_transport_config, mcp_transport};
+use super::{mcp_http_transport_config, stateless_transport};
 use crate::mcp::McpDeployment;
 use crate::mcp::serving::{McpServing, StatelessServing};
-use crate::mcp::session::McpReplica;
-use crate::mcp::session::store::SqliteMcpSessionStore;
-use golem_service_base::mcp::CompiledMcp;
+use futures::StreamExt;
 use poem::endpoint::TowerCompatExt;
 use poem::{
     Body, Endpoint, Request,
@@ -65,11 +63,16 @@ async fn mcp_export_transport_accepts_deployment_domain_hosts() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
-/// Opens a session's GET stream through an idle proxy, with or without keep-alive comments, and
-/// returns whether the stream was closed within `SILENCE` and what it carried.
-async fn idle_mcp_stream(keep_alive: bool) -> (bool, Vec<u8>) {
+/// POSTs a native tool call that never answers through an idle proxy, with or without
+/// keep-alive comments, and returns whether the response stream was closed within `SILENCE`
+/// and what it carried.
+async fn idle_mcp_call(keep_alive: bool) -> (bool, Vec<u8>) {
     use crate::config::McpConfig;
+    use crate::mcp::invoke::test_support::NativeSessions;
+    use crate::mcp::{GolemAgentMcpServer, InvocationHarness};
     use crate::transport_test_support::{INTERVAL, SILENCE, idle_proxy, server};
+    use golem_common::model::agent::AgentMode;
+    use golem_common::model::deployment::DeploymentRevision;
     use poem::EndpointExt;
 
     let config = McpConfig {
@@ -80,106 +83,77 @@ async fn idle_mcp_stream(keep_alive: bool) -> (bool, Vec<u8>) {
         },
         ..McpConfig::default()
     };
-    let db = tempfile::NamedTempFile::new().unwrap();
-    let pool = crate::custom_api::oidc::session_store::migrated_sqlite_pool(
-        &golem_common::config::DbSqliteConfig {
-            database: db.path().to_string_lossy().into_owned(),
-            max_connections: 1,
-            foreign_keys: false,
-        },
+    let harness = InvocationHarness::with_run_method(AgentMode::Durable);
+    harness.answer_native_sessions(NativeSessions::Hold);
+    let deployment = Arc::new(McpDeployment::new(harness.compiled_mcp(
+        "127.0.0.1",
+        DeploymentRevision::INITIAL,
+        true,
+    )));
+    let worker_service = harness.worker_service.clone();
+    let endpoint = stateless_transport(
+        move || GolemAgentMcpServer::new(Arc::new(super::tests::Lookup), worker_service.clone()),
+        &config,
     )
-    .await
-    .unwrap();
-    let store = Arc::new(SqliteMcpSessionStore::new(
-        pool,
-        std::time::Duration::from_secs(3600),
-    ));
-    let replica = McpReplica::new(store, &config);
-    let deployment = Arc::new(McpDeployment::new(CompiledMcp {
-        account_id: golem_common::model::account::AccountId::new(),
-        account_email: golem_common::model::account::AccountEmail::new("owner@example.com"),
-        application_name: golem_common::model::application::ApplicationName("app".into()),
-        environment_id: golem_common::model::environment::EnvironmentId::new(),
-        environment_name: golem_common::model::environment::EnvironmentName("env".into()),
-        deployment_revision: golem_common::model::deployment::DeploymentRevision::INITIAL,
-        domain: golem_common::model::domain_registration::Domain("127.0.0.1".into()),
-        security_scheme_name: None,
-        security_scheme: None,
-        registered_agent_types: vec![],
-        tools: vec![],
-    }));
-    let events = replica.event_store();
-    let endpoint = mcp_transport(|| Server, replica, events, &config)
-        .before(move |mut request: Request| {
-            let serving: Arc<dyn McpServing> = Arc::new(StatelessServing(deployment.clone()));
-            request.extensions_mut().insert(deployment.clone());
-            request.extensions_mut().insert(serving);
-            async move { Ok(request) }
-        })
-        .map_to_response();
+    .before(move |mut request: Request| {
+        let serving: Arc<dyn McpServing> = Arc::new(StatelessServing(deployment.clone()));
+        request.extensions_mut().insert(deployment.clone());
+        request.extensions_mut().insert(serving);
+        async move { Ok(request) }
+    })
+    .map_to_response();
     let (address, _server) = server(endpoint).await;
     let (proxy, _proxy) = idle_proxy(address).await;
-    let url = format!("http://{proxy}/mcp");
-    let client = reqwest::Client::new();
-    let initialized = client
-        .post(&url)
+    let mut response = reqwest::Client::new()
+        .post(format!("http://{proxy}/mcp"))
         .header("Accept", "application/json, text/event-stream")
+        .header("MCP-Protocol-Version", "2025-06-18")
         .json(&json!({
-            "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-                "protocolVersion": "2025-03-26", "capabilities": {},
-                "clientInfo": {"name": "keep-alive-test", "version": "1"}
-            }
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "native", "arguments": {}}
         }))
         .send()
         .await
         .unwrap();
-    assert!(initialized.status().is_success());
-    let session = initialized.headers()["Mcp-Session-Id"].clone();
-    initialized.bytes().await.unwrap();
-    let notified = client
-        .post(&url)
-        .header("Accept", "application/json, text/event-stream")
-        .header("Mcp-Session-Id", session.clone())
-        .json(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
-        .send()
-        .await
-        .unwrap();
-    assert!(notified.status().is_success());
-    let mut response = client
-        .get(&url)
-        .header("Accept", "text/event-stream")
-        .header("Mcp-Session-Id", session)
-        .send()
-        .await
-        .unwrap();
     assert!(response.status().is_success());
+    harness.native_sessions_opened(1).await;
     let mut bytes = Vec::new();
-    let closed = tokio::time::timeout(SILENCE, async {
-        while let Ok(Some(chunk)) = response.chunk().await {
-            bytes.extend_from_slice(&chunk);
+    let read = futures::stream::unfold(&mut response, |response| async move {
+        match response.chunk().await {
+            Ok(Some(chunk)) => Some((chunk, response)),
+            _ => None,
         }
     })
-    .await
-    .is_ok();
+    .for_each(|chunk| {
+        bytes.extend_from_slice(&chunk);
+        std::future::ready(())
+    });
+    let closed = tokio::time::timeout(SILENCE, read).await.is_ok();
     (closed, bytes)
 }
 
 #[test]
 #[test_r::timeout("15s")]
 async fn mcp_sse_without_keep_alive_loses_proxy_connection() {
-    let (closed, _) = idle_mcp_stream(false).await;
+    let (closed, bytes) = idle_mcp_call(false).await;
     assert!(closed, "the proxy must close an idle SSE connection");
-    eprintln!("without MCP SSE keep-alive: stream closed by the 1s-idle proxy");
+    assert!(
+        !String::from_utf8_lossy(&bytes).contains("notifications/message"),
+        "{bytes:?}"
+    );
 }
 
 #[test]
 #[test_r::timeout("15s")]
-async fn mcp_sse_keep_alive_survives_idle_proxy() {
-    let (closed, bytes) = idle_mcp_stream(true).await;
+async fn mcp_sse_keep_alive_keeps_a_slow_call_open_through_an_idle_proxy() {
+    let (closed, bytes) = idle_mcp_call(true).await;
     assert!(!closed, "the SSE stream must stay open");
     assert!(
         bytes.windows(3).any(|bytes| bytes == b":\n\n"),
-        "expected RMCP keep-alive comments, got {bytes:?}"
+        "expected rmcp keep-alive comments, got {bytes:?}"
     );
-    eprintln!("with MCP SSE keep-alive: stream stayed open for 3s through a 1s-idle proxy");
+    assert!(
+        !String::from_utf8_lossy(&bytes).contains("notifications/message"),
+        "{bytes:?}"
+    );
 }

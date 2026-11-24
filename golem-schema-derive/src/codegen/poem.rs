@@ -688,7 +688,17 @@ fn json_codec(ident: &Ident) -> TokenStream {
 /// applying serde's `Option<T>` → nullable rule (poem's `Option<T>` is not
 /// nullable by itself, so we merge `nullable: true` explicitly).
 fn type_schema_ref_expr(ty: &Type) -> TokenStream {
-    if is_option_type(ty) {
+    if matches!(ty, Type::Path(path) if path.qself.is_none() && path.path.is_ident("char")) {
+        quote! {
+            ::poem_openapi::registry::MetaSchemaRef::Inline(::std::boxed::Box::new(
+                ::poem_openapi::registry::MetaSchema {
+                    min_length: ::core::option::Option::Some(1),
+                    max_length: ::core::option::Option::Some(1),
+                    ..::poem_openapi::registry::MetaSchema::new("string")
+                }
+            ))
+        }
+    } else if is_option_type(ty) {
         quote! {
             ::poem_openapi::registry::MetaSchemaRef::merge(
                 <#ty as ::poem_openapi::types::Type>::schema_ref(),

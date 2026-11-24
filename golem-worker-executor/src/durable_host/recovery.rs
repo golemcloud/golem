@@ -137,18 +137,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 &agent_invocation,
                                 &component_metadata,
                                 agent_id.as_ref(),
-                            );
-                            let agent_invocation = if uses_streams {
-                                worker
-                                    .rehydrate_durable_streaming_invocation(agent_invocation)
-                                    .await?
-                            } else {
-                                agent_invocation
-                            };
+                            ) || worker.prepared_stream_session(&idempotency_key).await?.is_some();
+                            let execution_input = worker
+                                .rehydrate_durable_streaming_input(&agent_invocation)
+                                .await?;
                             let lowered = lower_invocation(
                                 agent_invocation,
                                 &component_metadata,
                                 store.as_context().data().durable_ctx().owner_context(),
+                                execution_input,
                             )?;
                             Ok::<_, WorkerExecutorError>((worker, uses_streams, lowered))
                         }
@@ -410,6 +407,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                             .await
                                         {
                                             InvocationFailureDecision::Retry(decision) => decision,
+                                            InvocationFailureDecision::Rejected => RetryDecision::None,
                                             // The start retries the replay when the storage
                                             // answers again.
                                             InvocationFailureDecision::Infrastructure(error) => {
@@ -585,7 +583,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
     type ExtraDeps = Ctx::ExtraDeps;
 

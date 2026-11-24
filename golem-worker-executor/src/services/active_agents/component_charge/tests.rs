@@ -56,6 +56,7 @@ impl FakeChargeSource {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl ChargeSource for FakeChargeSource {
     type Charge = FakeCharge;
 

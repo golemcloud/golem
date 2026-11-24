@@ -167,15 +167,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    // Warm invocation-cache errors can be synthetic. Resolve through the durable result index
-    // before changing any failure into AgentCreationFailed. The caller holds no task-scope bind,
-    // so a deletion may already have stopped the state actor.
+    // Warm invocation-cache errors can be synthetic. Committed completions retain their exact
+    // terminal positions independently of payload eviction; other failures still resolve through
+    // the result index before changing into AgentCreationFailed. The caller holds no task-scope
+    // bind, so a deletion may already have stopped the state actor.
     async fn recorded_initialization_result(
         &self,
         key: &InvocationId,
     ) -> Result<bool, WorkerExecutorError> {
         let status = self.try_get_last_known_status().await?;
-        let index = if let Some(index) = status.invocation_results.get(key) {
+        let cached_index = {
+            let cache = self.hydrated_invocation_results.read().await;
+            cache
+                .unprojected_completion_index(key, &status)
+                .or_else(|| {
+                    cache.get_valid(key, &status).and_then(|(result, index)| {
+                        matches!(result.as_ref(), InvocationResult::Cached { result: Ok(_) })
+                            .then_some(index)
+                    })
+                })
+        };
+        let index = if let Some(index) = cached_index {
+            Some(index)
+        } else if let Some(index) = status.invocation_results.get(key) {
             Some(*index)
         } else if !status.invocation_results.is_exact_complete()
             && status.invocation_results.might_contain(key)
@@ -616,7 +630,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Finds the accepted caller payload. A pending request is read from its pending entry. A
     /// running or finished one is read from the request entry its status or result index holds,
     /// so a duplicate request reads one entry however long the invocation ran.
-    pub(in crate::worker) async fn accepted_invocation_payload(
+    pub(crate) async fn accepted_invocation_payload(
         &self,
         key: &InvocationId,
     ) -> Result<Option<AgentInvocationPayload>, WorkerExecutorError> {
@@ -1055,15 +1069,23 @@ impl HydratedInvocationResultCache {
         status: &AgentStatusRecord,
     ) -> bool {
         self.get_valid(key, status).is_some()
-            || self
-                .unprojected_completions
-                .get(key)
-                .is_some_and(|completion| {
-                    completion.revert_generation == status.invocation_results.revert_generation()
-                        && !status
-                            .deleted_regions
-                            .is_in_deleted_region(completion.oplog_idx)
-                })
+            || self.unprojected_completion_index(key, status).is_some()
+    }
+
+    fn unprojected_completion_index(
+        &self,
+        key: &InvocationId,
+        status: &AgentStatusRecord,
+    ) -> Option<OplogIndex> {
+        self.unprojected_completions
+            .get(key)
+            .and_then(|completion| {
+                (completion.revert_generation == status.invocation_results.revert_generation()
+                    && !status
+                        .deleted_regions
+                        .is_in_deleted_region(completion.oplog_idx))
+                .then_some(completion.oplog_idx)
+            })
     }
 
     pub(in crate::worker) fn insert_unprojected_completion(

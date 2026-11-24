@@ -22,6 +22,24 @@
 //! the durable sockets plan, the test says so and names the ticket that changes it.
 
 use crate::Tracing;
+#[cfg(target_os = "linux")]
+mod platform {
+    pub(super) fn assert_write_reset(error: &str) {
+        assert_ne!(error, "closed", "Linux reports the reset");
+    }
+
+    pub(super) fn assert_read_reset(read: &Result<Vec<u8>, String>) {
+        assert!(read.is_err(), "the read reports the reset: {read:?}");
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+mod platform {
+    pub(super) fn assert_write_reset(_error: &str) {}
+
+    pub(super) fn assert_read_reset(_read: &Result<Vec<u8>, String>) {}
+}
+
 use golem_common::model::agent::{
     ParsedAgentKey, RevertToOplogIndex, RevertWorkerTarget, UpdateRecord,
 };
@@ -1246,9 +1264,7 @@ async fn p2_tcp_write_error_replays_and_is_not_sent_again(
         .expect("the failed write is recorded");
     // Linux reports the reset to the next write; macOS may report the stream closed instead,
     // which has no code.
-    if cfg!(target_os = "linux") {
-        assert_ne!(error, "closed", "Linux reports the reset");
-    }
+    platform::assert_write_reset(&error);
     if error != "closed" {
         assert!(
             error.starts_with("last-operation-failed: "),
@@ -1313,9 +1329,7 @@ async fn p2_tcp_read_error_records_its_code_and_replays(
         .await?;
     // Linux reports the reset to the read; another OS may report the end of the stream, which
     // the component returns as the bytes read so far.
-    if cfg!(target_os = "linux") {
-        assert!(read.is_err(), "the read reports the reset: {read:?}");
-    }
+    platform::assert_read_reset(&read);
     if read.is_err() {
         let ends = ends_of(
             &session.oplog().await?,

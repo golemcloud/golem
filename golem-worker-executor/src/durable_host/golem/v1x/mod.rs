@@ -39,7 +39,6 @@ use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::PromiseId;
 use golem_common::model::RetryContext;
-use golem_common::model::caller::Caller;
 use golem_common::model::card::AgentResourcePattern;
 use golem_common::model::card::AgentVerb;
 use golem_common::model::card::owner::AgentOwnerLeafPattern;
@@ -704,6 +703,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
             let owned_source_agent_id = OwnedAgentId::new(environment_id, &source_agent_id);
             let retry_properties = RetryContext::golem_api("fork-agent");
+            let caller = self.outgoing_caller();
             let result = loop {
                 let result = self
                     .state
@@ -712,7 +712,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         &owned_source_agent_id,
                         &target_agent_id,
                         &oplog_index_cut_off,
-                        Caller::entry(self.self_principal()),
+                        caller.clone(),
                         handle.agent_auth_ctx(),
                     )
                     .await;
@@ -1014,7 +1014,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let fork_request = CreateRequest::new(
                 CreateRequestKind::Fork,
                 None,
-                Caller::entry(self.self_principal()),
+                self.outgoing_caller(),
                 &self.clone_as_inherited_stack(&self.state.invocation_state().current_span_id),
             );
             let fork_result = loop {

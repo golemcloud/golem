@@ -35,10 +35,13 @@ async fn only_implemented_capabilities_are_live() {
             );
         }
         use golem_rust::load_snapshot::exports::golem::api::load_snapshot;
-        let result = <Component as load_snapshot::Guest>::load(load_snapshot::Snapshot {
-            payload: b"not a snapshot envelope".to_vec(),
-            mime_type: "application/json".into(),
-        })
+        let result = <Component as load_snapshot::Guest>::load(
+            load_snapshot::Snapshot {
+                payload: b"not a snapshot envelope".to_vec(),
+                mime_type: "application/json".into(),
+            },
+            input(),
+        )
         .await;
         assert_eq!(
             result.unwrap_err(),

@@ -241,7 +241,7 @@ pub(in crate::worker) async fn fold_committed_status<T>(
     agent_mode: AgentMode,
     commit_level: CommitLevel,
     appended_through: OplogIndex,
-    baseline: AgentStatusRecord,
+    mut baseline: AgentStatusRecord,
     mut entries: BTreeMap<OplogIndex, OplogEntry>,
 ) -> (
     Result<Option<AgentStatusRecord>, StatusError>,
@@ -283,29 +283,24 @@ where
     if contiguous && baseline_is_readable {
         // Live appends keep the decoded lookup payloads; only a payload without one downloads.
         let deleted = deleted_regions(baseline.deleted_regions.clone(), &entries);
-        let status = match hydrate_lookup_payloads(
-            this,
-            owned_agent_id,
-            agent_mode,
-            &baseline,
-            &deleted,
-            &mut entries,
-        )
-        .await
-        {
-            Ok(()) => validate_delivery_snapshots(owned_agent_id, &deleted, &entries)
+        let status = async {
+            hydrate_lookup_payloads(
+                this,
+                owned_agent_id,
+                agent_mode,
+                &baseline,
+                &deleted,
+                &mut entries,
+            )
+            .await?;
+            validate_delivery_snapshots(owned_agent_id, &deleted, &entries)?;
+            let reader =
+                StatusOplogReader::new(this, owned_agent_id, agent_mode, Some(oplog), horizon);
+            hydrate_initial_pending_evidence(&reader, &mut baseline, &entries).await?;
+            update_status_with_new_entries(agent_mode, baseline, entries, &this.config().retry)
                 .map_err(StatusError::from)
-                .and_then(|()| {
-                    update_status_with_new_entries(
-                        agent_mode,
-                        baseline,
-                        entries,
-                        &this.config().retry,
-                    )
-                    .map_err(StatusError::from)
-                }),
-            Err(error) => Err(error),
-        };
+        }
+        .await;
         (status, false, horizon)
     } else {
         // Opened-oplog reads include ephemeral handoffs. Never flush the newer buffered tail.
@@ -689,13 +684,11 @@ pub(super) async fn hydrate_initial_pending_evidence(
         let StreamSessionRecord::Attached(attached) = record.as_ref() else {
             continue;
         };
-        let Some(status) = baseline
+        let status = baseline
             .durable_stream_sessions
             .get(&attached.session_key)
             .cloned()
-        else {
-            continue;
-        };
+            .unwrap_or_default();
         if status.lifecycle_error.is_some() || status.validated_initial_pending_invocation.is_some()
         {
             continue;

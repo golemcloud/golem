@@ -26,8 +26,8 @@ use golem_test_framework::config::{
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use pretty_assertions::assert_matches;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Once};
 use std::time::Duration;
 use test_r::{define_matrix_dimension, test, test_dep, timeout};
 use tracing::Instrument;
@@ -46,15 +46,25 @@ define_matrix_dimension!(db: EnvBasedTestDependencies -> "postgres", "sqlite");
 #[derive(Debug)]
 pub struct Tracing;
 
+// The global subscriber can be installed only once per process, and a retry of a failed test
+// creates its dependencies again in the same process.
+static TRACING_INIT: Once = Once::new();
+
+#[cfg(unix)]
+#[path = "platform/unix.rs"]
+mod platform;
+#[cfg(not(unix))]
+#[path = "platform/non_unix.rs"]
+mod platform;
+
 impl Tracing {
     pub fn init() -> Self {
-        #[cfg(unix)]
-        unsafe {
-            backtrace_on_stack_overflow::enable()
-        };
-        init_tracing_with_default_debug_env_filter(
-            &TracingConfig::test_pretty_without_time("integration-tests").with_env_overrides(),
-        );
+        TRACING_INIT.call_once(|| {
+            platform::enable_stack_overflow_backtrace();
+            init_tracing_with_default_debug_env_filter(
+                &TracingConfig::test_pretty_without_time("integration-tests").with_env_overrides(),
+            );
+        });
         Self
     }
 }

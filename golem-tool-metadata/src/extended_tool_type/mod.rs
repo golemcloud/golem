@@ -31,7 +31,7 @@ mod schema_graph;
 pub use schema_graph::option_collected_graph;
 use schema_graph::{
     canonical_option_graph, canonical_positional_graph, flag_graph, list_wrapper_graph,
-    option_input_graph, resolves_to_map, schema_graph_root,
+    option_input_graph, resolves_to_map,
 };
 mod conversion;
 pub use conversion::native_tool_value_schema;

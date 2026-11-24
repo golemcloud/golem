@@ -120,9 +120,13 @@ pub fn render_output_schema(
 pub fn request_validation_error_schema(
     components: &mut Map<String, Value>,
 ) -> Result<Value, String> {
+    api_type_schema::<ErrorsBody>(components)
+}
+
+pub fn api_type_schema<T: Type>(components: &mut Map<String, Value>) -> Result<Value, String> {
     let mut registry = Registry::new();
-    ErrorsBody::register(&mut registry);
-    let root = serde_json::to_value(ErrorsBody::schema_ref()).map_err(|err| err.to_string())?;
+    T::register(&mut registry);
+    let root = serde_json::to_value(T::schema_ref()).map_err(|err| err.to_string())?;
     let schemas = serde_json::to_value(registry.schemas).map_err(|err| err.to_string())?;
     merge_bundle(
         json!({ "root": root, "components": { "schemas": schemas } }),

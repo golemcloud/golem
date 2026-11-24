@@ -473,6 +473,7 @@ async fn an_ephemeral_constructor_completes_while_its_archive_write_is_pending(
             configure: Some(Arc::new(|config| {
                 config.oplog = blob_archiving_config();
                 config.invocation_results.recent_capacity = 0;
+                config.invocation_results.hydrated_cache_capacity = 0;
                 config.invocation_results.bloom_bits = 1;
                 config.invocation_results.bloom_hashes = 1;
             })),

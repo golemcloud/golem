@@ -72,6 +72,7 @@ fn fail_once(failed: &mut bool) -> StreamError {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl wasmtime_wasi::p2::Pollable for LostTcpInputStream {
     async fn ready(&mut self) {}
 }
@@ -88,6 +89,7 @@ impl wasmtime_wasi::p2::InputStream for LostTcpInputStream {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl wasmtime_wasi::p2::Pollable for LostTcpOutputStream {
     async fn ready(&mut self) {}
 }

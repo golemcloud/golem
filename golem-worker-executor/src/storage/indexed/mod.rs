@@ -274,6 +274,13 @@ fn scan_prefix_upper_bound(prefix: &str) -> Option<String> {
 /// where each entry has a numeric identifier and an arbitrary binary payload. The numeric
 /// identifiers are unique and monotonically increasing within each index, but not necessarily
 /// contiguous.
+///
+/// Keys portable across all backends use [`OwnedAgentId::storage_key`]:
+/// `{environment-uuid}/{agent-uuid}`, with canonical lowercase, hyphenated UUIDs.
+/// In [`IndexedStorageNamespace::StagedOpLog`], a key may also have a `#{stage-uuid}` suffix,
+/// whose UUID uses the same canonical spelling. Postgres requires these formats and returns
+/// [`IndexedStorageError::Other`] for other keys; other backends may accept arbitrary strings.
+/// This restriction applies to index keys, not literal scan prefixes or marker bounds.
 #[async_trait]
 pub trait IndexedStorage: Debug + Sync {
     /// Gets the number of available replicas in the storage cluster

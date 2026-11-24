@@ -293,6 +293,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
     async fn status(
         &self,

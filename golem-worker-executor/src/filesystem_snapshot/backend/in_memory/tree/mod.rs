@@ -24,6 +24,14 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
 
+#[cfg(unix)]
+#[path = "unix.rs"]
+mod platform;
+#[cfg(not(unix))]
+#[path = "other.rs"]
+mod platform;
+use platform::create_symlink;
+
 /// One entry below the root of a tree.
 pub(super) struct TreeEntry {
     /// The path of the entry, relative to the root.
@@ -99,9 +107,7 @@ fn read_entry(path: &Path, relative: Box<Path>) -> io::Result<TreeEntry> {
         TreeNode::Directory
     } else if file_type.is_symlink() {
         // The store cannot make a symlink on such a platform, so it does not keep one either.
-        if cfg!(not(unix)) {
-            return Err(symlinks_unsupported());
-        }
+        platform::check_symlink_support()?;
         TreeNode::Symlink(std::fs::read_link(path)?.into_boxed_path())
     } else if file_type.is_file() {
         TreeNode::File(std::fs::read(path)?.into_boxed_slice())
@@ -207,22 +213,4 @@ fn set_directory_attributes(entry: &TreeEntry, into: &Path) -> io::Result<()> {
         Some(fs_set_times::SystemTimeSpec::Absolute(entry.modified)),
     )?;
     std::fs::set_permissions(&target, entry.permissions.clone())
-}
-
-#[cfg(unix)]
-fn create_symlink(target: &Path, link: &Path) -> io::Result<()> {
-    std::os::unix::fs::symlink(target, link)
-}
-
-#[cfg(not(unix))]
-fn create_symlink(_target: &Path, _link: &Path) -> io::Result<()> {
-    Err(symlinks_unsupported())
-}
-
-/// Gives the error of a symlink on a platform other than unix, where the store makes no symlink.
-fn symlinks_unsupported() -> io::Error {
-    io::Error::new(
-        ErrorKind::Unsupported,
-        "the in-memory snapshot store cannot make symlinks on this platform",
-    )
 }

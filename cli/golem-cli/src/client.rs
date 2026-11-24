@@ -834,11 +834,13 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(requests.load(Ordering::SeqCst), 1);
-        let rendered = ServiceError {
-            service_name: "Me",
-            kind: ServiceErrorKind::MiddlewareError(error),
-        }
-        .to_string();
+        let rendered = strip_ansi_escapes::strip_str(
+            ServiceError {
+                service_name: "Me",
+                kind: ServiceErrorKind::MiddlewareError(error),
+            }
+            .to_string(),
+        );
         assert!(
             rendered.contains(
                 "The Golem server is still starting: provisioning built-in tools. Retry when the server is ready."

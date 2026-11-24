@@ -13,8 +13,6 @@
 // limitations under the License.
 
 use super::SandboxFilesystem;
-#[cfg(target_os = "linux")]
-use super::sandbox_provisioning::managed;
 use crate::filesystem::errors::OperationContext;
 use crate::filesystem::sandbox::FilesystemStorageError;
 use golem_common::model::RetryConfig;
@@ -23,6 +21,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
+
+pub(in crate::filesystem::sandbox) use platform::*;
 
 pub(in crate::filesystem::sandbox) static FILESYSTEM_LEASES: OnceLock<
     std::sync::Mutex<HashMap<PathBuf, Weak<AsyncMutex<()>>>>,
@@ -83,34 +83,90 @@ impl Drop for RestoringLeaseState<'_> {
     }
 }
 
-pub(in crate::filesystem::sandbox) enum NativeCleanup {
-    Directory {
-        path: PathBuf,
-        cleanup_retry: RetryConfig,
-    },
-    #[cfg(target_os = "linux")]
-    Managed(Box<managed::ManagedProjectCleanup>),
-}
+#[cfg(target_os = "linux")]
+mod platform {
+    use super::super::sandbox_provisioning::managed;
+    use super::*;
 
-impl NativeCleanup {
-    pub(super) async fn delete(&mut self) -> Result<(), FilesystemStorageError> {
-        match self {
-            Self::Directory {
-                path,
-                cleanup_retry,
-            } => remove_and_verify(path, "delete runtime directory", cleanup_retry).await,
-            #[cfg(target_os = "linux")]
-            Self::Managed(cleanup) => cleanup.delete().await,
+    pub(in crate::filesystem::sandbox) enum NativeCleanup {
+        Directory {
+            path: PathBuf,
+            cleanup_retry: RetryConfig,
+        },
+        Managed(Box<managed::ManagedProjectCleanup>),
+    }
+
+    impl NativeCleanup {
+        pub(in crate::filesystem::sandbox::host_adapter) async fn delete(
+            &mut self,
+        ) -> Result<(), FilesystemStorageError> {
+            match self {
+                Self::Directory {
+                    path,
+                    cleanup_retry,
+                } => remove_and_verify(path, "delete runtime directory", cleanup_retry).await,
+                Self::Managed(cleanup) => cleanup.delete().await,
+            }
+        }
+
+        pub(in crate::filesystem::sandbox::host_adapter) fn delete_blocking(
+            &mut self,
+        ) -> Result<(), FilesystemStorageError> {
+            match self {
+                Self::Directory { path, .. } => {
+                    remove_and_verify_blocking(path, "delete runtime directory")
+                }
+                Self::Managed(cleanup) => cleanup.delete_blocking(),
+            }
         }
     }
 
-    pub(super) fn delete_blocking(&mut self) -> Result<(), FilesystemStorageError> {
-        match self {
-            Self::Directory { path, .. } => {
-                remove_and_verify_blocking(path, "delete runtime directory")
+    pub(in crate::filesystem::sandbox) async fn verify_fresh_open_directory(
+        path: &Path,
+    ) -> Result<(), FilesystemStorageError> {
+        let metadata = tokio::fs::metadata(path).await.map_err(|error| {
+            FilesystemStorageError::io("verify runtime directory", Some(path), error)
+        })?;
+        if !metadata.is_dir() {
+            return Err(FilesystemStorageError::from(
+                OperationContext::verification("verify fresh runtime directory", Some(path)),
+            ));
+        }
+        verify_empty_directory(path).await
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+mod platform {
+    use super::*;
+
+    pub(in crate::filesystem::sandbox) enum NativeCleanup {
+        Directory {
+            path: PathBuf,
+            cleanup_retry: RetryConfig,
+        },
+    }
+
+    impl NativeCleanup {
+        pub(in crate::filesystem::sandbox::host_adapter) async fn delete(
+            &mut self,
+        ) -> Result<(), FilesystemStorageError> {
+            match self {
+                Self::Directory {
+                    path,
+                    cleanup_retry,
+                } => remove_and_verify(path, "delete runtime directory", cleanup_retry).await,
             }
-            #[cfg(target_os = "linux")]
-            Self::Managed(cleanup) => cleanup.delete_blocking(),
+        }
+
+        pub(in crate::filesystem::sandbox::host_adapter) fn delete_blocking(
+            &mut self,
+        ) -> Result<(), FilesystemStorageError> {
+            match self {
+                Self::Directory { path, .. } => {
+                    remove_and_verify_blocking(path, "delete runtime directory")
+                }
+            }
         }
     }
 }
@@ -221,21 +277,6 @@ pub(in crate::filesystem::sandbox) async fn verify_fresh_directory(
         FilesystemStorageError::io("verify runtime directory", Some(path), error)
     })?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err(FilesystemStorageError::from(
-            OperationContext::verification("verify fresh runtime directory", Some(path)),
-        ));
-    }
-    verify_empty_directory(path).await
-}
-
-#[cfg(target_os = "linux")]
-pub(in crate::filesystem::sandbox) async fn verify_fresh_open_directory(
-    path: &Path,
-) -> Result<(), FilesystemStorageError> {
-    let metadata = tokio::fs::metadata(path).await.map_err(|error| {
-        FilesystemStorageError::io("verify runtime directory", Some(path), error)
-    })?;
-    if !metadata.is_dir() {
         return Err(FilesystemStorageError::from(
             OperationContext::verification("verify fresh runtime directory", Some(path)),
         ));

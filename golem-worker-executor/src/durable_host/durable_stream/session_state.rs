@@ -338,7 +338,7 @@ impl SessionControlMetadata {
     }
     /// Checks whether whole-session cancellation can be requested.
     pub fn can_request_cancellation(&self) -> Result<bool, String> {
-        if self.prepared.is_none() {
+        if self.prepared.is_none() && self.initial_attached.is_none() {
             return Ok(false);
         }
         if self.malformed_record || self.topology_error.is_some() {

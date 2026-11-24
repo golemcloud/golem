@@ -384,8 +384,19 @@ func TestStreamsFlowBothWays(t *testing.T) {
 		if selector["method"] != "transform" || selector["agentType"] != "Target" || selector["application"] != "app" || selector["environment"] != "env" || len(selector) != 5 {
 			t.Errorf("selector %v", selector)
 		}
+		wantTarget := map[string]any{"kind": "key", "constructorParameters": map[string]any{
+			"kind": "record", "value": map[string]any{"fields": []any{map[string]any{"kind": "string", "value": "t1"}}},
+		}}
+		if !reflect.DeepEqual(selector["target"], wantTarget) {
+			t.Errorf("target = %#v, want %#v", selector["target"], wantTarget)
+		}
 		refs := provisionalRefs(t, start)
-		accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
+		accept(c, start, "queued")
+		c.send("invocationReady", map[string]any{
+			"attemptId": start.m["attemptId"], "idempotencyKey": start.m["idempotencyKey"],
+			"agentId": testAgentID, "sessionToken": "sess",
+			"mappings": []map[string]any{inputMapping(1, refs[0], "in", 0, false)},
+		})
 		got = consumeInput(c, 1)
 		streamResult(c, 2, "out", u32StreamGraph)
 		outputItem(c, 2, 0, "c0", 10)

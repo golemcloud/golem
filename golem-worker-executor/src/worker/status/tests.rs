@@ -99,8 +99,8 @@ async fn invalid_initial_pending_bounds_do_not_read_the_referent() {
     let attempt = AttemptId::fresh();
     for pending in [
         OplogIndex::NONE,
-        OplogIndex::from_u64(10),
         OplogIndex::from_u64(13),
+        OplogIndex::from_u64(14),
     ] {
         let mut baseline = AgentStatusRecord::default();
         baseline.durable_stream_sessions.insert(
@@ -116,6 +116,8 @@ async fn invalid_initial_pending_bounds_do_not_read_the_referent() {
         let attached = StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
             session_key: session_key.idempotency_key,
+            acceptance: crate::services::worker_fork::lineage::tests::prepared(&session_key)
+                .acceptance(),
             attachment_id: AttachmentId::primary(
                 session_key.callee_environment_id,
                 &session_key.callee,
@@ -1498,7 +1500,10 @@ async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
                 }),
                 payload: OplogPayload::Inline(Box::new(
                     StoredAgentInvocationPayload::AgentMethod {
-                        input: SchemaValue::Record { fields: Vec::new() },
+                        input: SchemaValue::Record { fields: Vec::new() }
+                            .try_into()
+                            .unwrap(),
+                        allow_streams: false,
                         caller: Caller::anonymous(),
                         scope_card: None,
                     },
@@ -1838,32 +1843,37 @@ async fn invocation_failure_is_classified_separately_from_recovery_failure() {
 }
 
 #[test]
-async fn recovery_permission_denied_is_not_treated_as_an_invocation_rejection() {
+async fn recovery_errors_are_not_treated_as_invocation_rejections() {
     let retry_from = OplogIndex::from_u64(1);
-    let test_case = TestCase::builder(0)
-        .add(
-            OplogEntry::error(
-                None,
-                OplogErrorKind::Recovery,
-                None,
-                AgentError::PermissionDenied("startup denied".to_string()),
-                retry_from,
-                Some(RetryPolicyState::Terminal),
-                None,
-                None,
-            ),
-            move |mut status| {
-                status.status = AgentStatus::Failed;
-                status.last_error_kind = Some(OplogErrorKind::Recovery);
-                status
-                    .current_retry_state
-                    .insert(retry_from, RetryPolicyState::Terminal);
-                status
-            },
-        )
-        .build();
+    for error in [
+        AgentError::PermissionDenied("startup denied".to_string()),
+        AgentError::InvalidRequest("invalid startup".to_string()),
+    ] {
+        let test_case = TestCase::builder(0)
+            .add(
+                OplogEntry::error(
+                    None,
+                    OplogErrorKind::Recovery,
+                    None,
+                    error,
+                    retry_from,
+                    Some(RetryPolicyState::Terminal),
+                    None,
+                    None,
+                ),
+                move |mut status| {
+                    status.status = AgentStatus::Failed;
+                    status.last_error_kind = Some(OplogErrorKind::Recovery);
+                    status
+                        .current_retry_state
+                        .insert(retry_from, RetryPolicyState::Terminal);
+                    status
+                },
+            )
+            .build();
 
-    run_test_case(test_case).await;
+        run_test_case(test_case).await;
+    }
 }
 
 #[test]
@@ -2010,7 +2020,10 @@ fn recovery_errors_are_not_invocation_results() {
                 }),
                 payload: OplogPayload::Inline(Box::new(
                     StoredAgentInvocationPayload::AgentMethod {
-                        input: SchemaValue::Record { fields: Vec::new() },
+                        input: SchemaValue::Record { fields: Vec::new() }
+                            .try_into()
+                            .unwrap(),
+                        allow_streams: false,
                         caller: Caller::anonymous(),
                         scope_card: None,
                     },
@@ -2059,7 +2072,10 @@ fn started_invocation(key: &InvocationId) -> OplogEntry {
             method_name: "agent:method".to_string(),
         }),
         payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
-            input: SchemaValue::Record { fields: Vec::new() },
+            input: SchemaValue::Record { fields: Vec::new() }
+                .try_into()
+                .unwrap(),
+            allow_streams: false,
             caller: Caller::anonymous(),
             scope_card: None,
         })),
@@ -2118,7 +2134,10 @@ fn pending_invocation_entry(key: &InvocationId) -> OplogEntry {
             method_name: "agent:method".to_string(),
         }),
         OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
-            input: SchemaValue::Record { fields: Vec::new() },
+            input: SchemaValue::Record { fields: Vec::new() }
+                .try_into()
+                .unwrap(),
+            allow_streams: false,
             caller: Caller::anonymous(),
             scope_card: None,
         })),
@@ -2174,40 +2193,45 @@ fn invocation_error_naming_a_finished_invocation_keeps_its_result() {
 }
 
 #[test]
-fn permission_denied_error_is_attributed_to_the_cancelled_invocation_while_another_runs() {
+fn rejection_error_is_attributed_to_the_cancelled_invocation_while_another_runs() {
     let running = InvocationId(Uuid::new_v4());
     let denied = InvocationId(Uuid::new_v4());
 
     // A hint separates the cancellation from the error, so the error is not positionally adjacent
     // to the `CancelPendingInvocation` of the invocation it names.
-    let (results, current) = fold_results(vec![
-        pending_invocation_entry(&denied),
-        started_invocation(&running),
-        OplogEntry::cancel_pending_invocation(denied),
-        OplogEntry::log(
-            None,
-            golem_common::model::oplog::LogLevel::Stderr,
-            String::new(),
-            "denied\n".to_string(),
-            None,
-        ),
-        OplogEntry::error(
-            None,
-            OplogErrorKind::Invocation,
-            Some(denied),
-            AgentError::PermissionDenied("permission denied".to_string()),
-            OplogIndex::INITIAL,
-            None,
-            None,
-            None,
-        ),
-    ]);
+    for error in [
+        AgentError::PermissionDenied("permission denied".to_string()),
+        AgentError::InvalidRequest("method not found".to_string()),
+    ] {
+        let (results, current) = fold_results(vec![
+            pending_invocation_entry(&denied),
+            started_invocation(&running),
+            OplogEntry::cancel_pending_invocation(denied),
+            OplogEntry::log(
+                None,
+                golem_common::model::oplog::LogLevel::Stderr,
+                String::new(),
+                "denied\n".to_string(),
+                None,
+            ),
+            OplogEntry::error(
+                None,
+                OplogErrorKind::Invocation,
+                Some(denied),
+                error,
+                OplogIndex::INITIAL,
+                None,
+                None,
+                None,
+            ),
+        ]);
 
-    assert_eq!(
-        results,
-        vec![(denied, result(3, Some(1))), (denied, result(5, Some(1))),]
-    );
-    assert_eq!(current, Some(running));
+        assert_eq!(
+            results,
+            vec![(denied, result(3, Some(1))), (denied, result(5, Some(1))),]
+        );
+        assert_eq!(current, Some(running));
+    }
 }
 
 #[test]
@@ -3452,9 +3476,12 @@ async fn multiple_reverts() {
         .pending_invocation(AgentInvocation::AgentMethod {
             idempotency_key: k2,
             method_name: "b".to_string(),
+            allow_streams: false,
             input: SchemaValue::Record {
                 fields: vec![SchemaValue::Bool(true)],
-            },
+            }
+            .try_into()
+            .unwrap(),
             invocation_context: InvocationContextStack::fresh(),
             caller: Caller::anonymous(),
             scope_card: None,
@@ -3497,9 +3524,12 @@ async fn cancel_pending_invocation() {
         .pending_invocation(AgentInvocation::AgentMethod {
             idempotency_key: k1,
             method_name: "a".to_string(),
+            allow_streams: false,
             input: SchemaValue::Record {
                 fields: vec![SchemaValue::Bool(true)],
-            },
+            }
+            .try_into()
+            .unwrap(),
             invocation_context: InvocationContextStack::fresh(),
             caller: Caller::anonymous(),
             scope_card: None,
@@ -3507,7 +3537,8 @@ async fn cancel_pending_invocation() {
         .pending_invocation(AgentInvocation::AgentMethod {
             idempotency_key: k2,
             method_name: "b".to_string(),
-            input: SchemaValue::Record { fields: vec![] },
+            allow_streams: false,
+            input: SchemaValue::Record { fields: vec![] }.try_into().unwrap(),
             invocation_context: InvocationContextStack::fresh(),
             caller: Caller::anonymous(),
             scope_card: None,
@@ -3525,12 +3556,16 @@ async fn permission_denied_rejection_survives_status_reconstruction() {
         .pending_invocation(AgentInvocation::AgentMethod {
             idempotency_key,
             method_name: "denied".to_string(),
-            input: SchemaValue::Record { fields: vec![] },
+            allow_streams: false,
+            input: SchemaValue::Record { fields: vec![] }.try_into().unwrap(),
             invocation_context: InvocationContextStack::fresh(),
             caller: Caller::anonymous(),
             scope_card: None,
         })
-        .permission_denied_pending_invocation(idempotency_key)
+        .rejected_pending_invocation(
+            idempotency_key,
+            AgentError::PermissionDenied("permission denied".to_string()),
+        )
         .build();
     let expected = test_case.entries.last().unwrap().expected_status.clone();
     let pending_baseline = test_case.entries[1].expected_status.clone();
@@ -3562,6 +3597,49 @@ async fn permission_denied_rejection_survives_status_reconstruction() {
         expected.invocation_results.get(&idempotency_key),
         Some(&expected.oplog_idx)
     );
+}
+
+#[test]
+async fn invalid_request_rejection_survives_status_reconstruction() {
+    let idempotency_key = InvocationId(Uuid::new_v4());
+    let test_case = TestCase::builder(0)
+        .pending_invocation(AgentInvocation::AgentMethod {
+            idempotency_key,
+            method_name: "removed_method".to_string(),
+            allow_streams: false,
+            input: SchemaValue::Record { fields: vec![] }.try_into().unwrap(),
+            invocation_context: InvocationContextStack::fresh(),
+            caller: Caller::anonymous(),
+            scope_card: None,
+        })
+        .rejected_pending_invocation(
+            idempotency_key,
+            AgentError::InvalidRequest("method not found".to_string()),
+        )
+        .build();
+    let expected = test_case.entries.last().unwrap().expected_status.clone();
+    for baseline in [
+        None,
+        Some(test_case.entries[1].expected_status.clone()),
+        Some(test_case.entries[2].expected_status.clone()),
+    ] {
+        let actual = calculate_last_known_status_for_existing_worker(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            baseline,
+        )
+        .await
+        .unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(actual.status, AgentStatus::Idle);
+        assert!(actual.pending_invocations.is_empty());
+        assert_eq!(actual.running, None);
+        assert_eq!(
+            actual.invocation_results.get(&idempotency_key),
+            Some(&actual.oplog_idx)
+        );
+    }
 }
 
 #[test]
@@ -4551,6 +4629,99 @@ fn jump_repair_fixture(
 
 #[test]
 #[test_r::timeout("30s")]
+async fn committed_acceptance_retains_attachment_authority_before_and_after_preparation() {
+    use crate::services::oplog::{CommitLevel, gated_ephemeral_fixture};
+
+    for split_pending in [false, true] {
+        let test_case = TestCase::builder(0)
+            .agent_mode(AgentMode::Ephemeral)
+            .build();
+        let fixture = gated_ephemeral_fixture(100).await;
+        let key = StreamInvocationId {
+            callee_environment_id: test_case.owned_agent_id.environment_id,
+            callee: test_case.owned_agent_id.agent_id(),
+            callee_fingerprint: AgentFingerprint::new(),
+            idempotency_key: InvocationId(Uuid::new_v4()),
+        };
+        let prepared = crate::services::worker_fork::lineage::tests::prepared(&key);
+        let attached = StreamSessionRecord::Attached(StreamSessionAttachedRecord {
+            format_version: 1,
+            session_key: key.idempotency_key,
+            attachment_id: prepared.attempt.attachment_id,
+            attempt_id: prepared.attempt.attempt_id,
+            epoch: 7,
+            pending_invocation_oplog_index: OplogIndex::from_u64(2),
+            acceptance: prepared.acceptance(),
+        });
+        fixture
+            .oplog
+            .add(test_case.entries[0].oplog_entry.clone())
+            .await
+            .unwrap();
+        fixture
+            .oplog
+            .add(pending_invocation_entry(&key.idempotency_key))
+            .await
+            .unwrap();
+        let mut baseline = AgentStatusRecord::default();
+        for record in [
+            None,
+            Some(attached),
+            Some(StreamSessionRecord::Prepared(prepared.clone())),
+        ] {
+            if record.is_none() && !split_pending {
+                continue;
+            }
+            if let Some(record) = record {
+                fixture
+                    .oplog
+                    .add(OplogEntry::StreamSession {
+                        timestamp: Timestamp::now_utc(),
+                        entity_parent_start_index: None,
+                        record: OplogPayload::Inline(Box::new(record)),
+                        summary: None,
+                    })
+                    .await
+                    .unwrap();
+            }
+            let receipt = fixture.oplog.commit(CommitLevel::Deferred).await.unwrap();
+            let horizon = *receipt.last_key_value().unwrap().0;
+            let (folded, gap, _) = fold_committed_status(
+                &test_case,
+                &test_case.owned_agent_id,
+                fixture.oplog.as_ref(),
+                AgentMode::Ephemeral,
+                CommitLevel::Deferred,
+                horizon,
+                baseline,
+                receipt,
+            )
+            .await;
+            baseline = folded.unwrap().unwrap();
+            assert!(!gap);
+            if horizon.as_u64() >= 3 {
+                let status = baseline
+                    .durable_stream_sessions
+                    .get(&key.idempotency_key)
+                    .unwrap();
+                assert_eq!(status.attachment_epoch, Some(7));
+                assert_eq!(
+                    status.attachment_attempt_id,
+                    Some(prepared.attempt.attempt_id)
+                );
+                assert_eq!(status.attachment_attached, Some(true));
+                assert_eq!(status.prepared.is_some(), horizon.as_u64() >= 4);
+                assert_eq!(status.lifecycle_error, None);
+            }
+        }
+        fixture.archive.release(3);
+        fixture.oplog.retire();
+        fixture.oplog.closed().await.unwrap();
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
 async fn bounded_reconstruction_reads_handoff_without_flushing_newer_buffer() {
     use crate::services::oplog::{CommitLevel, OplogArchive, gated_ephemeral_fixture};
 
@@ -5114,7 +5285,8 @@ impl TestCaseBuilder {
     ) -> Self {
         let payload = AgentInvocationPayload::AgentMethod {
             method_name: function_name.to_string(),
-            input: SchemaValue::Record { fields: request },
+            allow_streams: false,
+            input: SchemaValue::Record { fields: request }.try_into().unwrap(),
             caller: Caller::anonymous(),
             scope_card: None,
         };
@@ -5444,13 +5616,17 @@ impl TestCaseBuilder {
         })
     }
 
-    pub fn permission_denied_pending_invocation(self, idempotency_key: InvocationId) -> Self {
+    pub fn rejected_pending_invocation(
+        self,
+        idempotency_key: InvocationId,
+        error: AgentError,
+    ) -> Self {
         self.cancel_pending_invocation(idempotency_key).add_at(
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
                 Some(idempotency_key),
-                AgentError::PermissionDenied("permission denied".to_string()),
+                error,
                 OplogIndex::INITIAL,
                 None,
                 None,
@@ -6148,6 +6324,7 @@ impl HasComponentService for TestCase {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentService for TestCase {
     async fn get(
         &self,
@@ -9304,9 +9481,12 @@ mod invocation_payloads {
                 method_name: "a".to_string(),
             }),
             payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
+                allow_streams: false,
                 input: SchemaValue::Record {
                     fields: vec![SchemaValue::String("input".to_string())],
-                },
+                }
+                .try_into()
+                .unwrap(),
                 caller: Caller::anonymous(),
                 scope_card: None,
             })),

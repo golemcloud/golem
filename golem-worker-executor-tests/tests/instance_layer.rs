@@ -1198,6 +1198,7 @@ async fn initialize_entity(
         init.clone(),
         &metadata,
         &ResolvedOwnerContext::Agent(Box::new(parsed_agent_id.clone())),
+        None,
     )?;
     let result = invoke_observed_and_traced(lowered, store, instance, None).await?;
     match result {
@@ -1230,7 +1231,8 @@ async fn invoke_sleep_p3(
     let method = AgentInvocation::AgentMethod {
         idempotency_key: method_key,
         method_name: "sleep_p3".to_string(),
-        input: data_value!(seconds).value().clone(),
+        allow_streams: false,
+        input: data_value!(seconds).value().clone().try_into().unwrap(),
         invocation_context: InvocationContextStack::fresh(),
         caller,
         scope_card: None,
@@ -1239,6 +1241,7 @@ async fn invoke_sleep_p3(
         method.clone(),
         &metadata,
         &ResolvedOwnerContext::Agent(Box::new(parsed_agent_id.clone())),
+        None,
     )?;
     let result = invoke_observed_and_traced(lowered, store, instance, None).await?;
     assert!(matches!(
@@ -1267,7 +1270,8 @@ async fn invoke_entity_method(
     let method = AgentInvocation::AgentMethod {
         idempotency_key: method_key,
         method_name: method_name.to_string(),
-        input,
+        allow_streams: false,
+        input: input.try_into().unwrap(),
         invocation_context: InvocationContextStack::fresh(),
         caller,
         scope_card: None,
@@ -1276,6 +1280,7 @@ async fn invoke_entity_method(
         method.clone(),
         &metadata,
         &ResolvedOwnerContext::Agent(Box::new(parsed_agent_id.clone())),
+        None,
     )?;
     match invoke_observed_and_traced(lowered, store, instance, None).await? {
         InvokeResult::Succeeded { result, .. } => Ok(*result),
@@ -1416,6 +1421,7 @@ fn activation_with_policy(
             }
         },
         source,
+        shell: false,
     };
 
     EntityActivation::new(

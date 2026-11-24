@@ -214,6 +214,7 @@ impl RegistryServiceMcpCapabilityLookup {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl McpCapabilityLookup for RegistryServiceMcpCapabilityLookup {
     async fn invalidate(&self, domain: &Domain) {
         self.domain_generation(domain)

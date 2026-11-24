@@ -282,11 +282,15 @@ export function schemaType(
   return { body, metadata };
 }
 
+export type PublicAgentTarget =
+  | { kind: 'key'; constructorParameters: PublicValue }
+  | { kind: 'id'; agentId: AgentId; expectedFingerprint?: AgentFingerprint };
+
 export interface StreamingInvocationDescriptor {
   application: string;
   environment: string;
   agentType: string;
-  constructorParameters: PublicValue;
+  target: PublicAgentTarget;
   config: Array<{ path: string[]; value: PublicValue }>;
   method: string;
   idempotencyKey?: string;
@@ -511,6 +515,16 @@ export class GolemServiceError extends Error {
   }
 }
 
+/** A keyed create found a current agent with the same key. */
+export class GolemConflictError extends GolemServiceError {
+  readonly _tag = 'GolemConflictError';
+
+  constructor(params: ConstructorParameters<typeof GolemServiceError>[0]) {
+    super(params);
+    Object.defineProperty(this, 'name', { value: 'GolemConflictError', configurable: true });
+  }
+}
+
 function formatGolemServiceErrorMessage(params: {
   operation: GolemServiceOperation;
   status: number;
@@ -616,7 +630,9 @@ async function throwGolemServiceError(
   response: Response,
 ): Promise<never> {
   const bodyText = await response.text().catch(() => undefined);
-  throw new GolemServiceError({
+  const ErrorType =
+    operation === 'createAgent' && response.status === 409 ? GolemConflictError : GolemServiceError;
+  throw new ErrorType({
     operation,
     status: response.status,
     statusText: response.statusText,
@@ -907,7 +923,7 @@ async function agentTypeUrl(
 
 /**
  * Creates an agent and resolves after its initialization. A keyed create rejects with a 409
- * {@link GolemServiceError} when the keyed agent of the parameters exists.
+ * {@link GolemConflictError} when the keyed agent of the parameters exists.
  */
 export async function createAgent(
   server: GolemServer,
@@ -3772,6 +3788,7 @@ class OutputStream<T> implements AgentStream<T> {
 class StreamingSession {
   private socket?: WebSocket;
   private accepted = false;
+  private executionReady = false;
   private everAccepted = false;
   private pendingResume = false;
   private resumeOperation: 'resume' | 'takeover' = 'resume';
@@ -3912,7 +3929,7 @@ class StreamingSession {
         application: this.descriptor.application,
         environment: this.descriptor.environment,
         agentType: this.descriptor.agentType,
-        constructorParameters: this.descriptor.constructorParameters,
+        target: this.descriptor.target,
         method: this.descriptor.method,
       },
       config: this.descriptor.config,
@@ -4209,9 +4226,13 @@ class StreamingSession {
         'message received after invocation finish',
       );
     switch (message.type) {
-      case 'invocationAccepted': {
-        if (this.accepted)
+      case 'invocationAccepted':
+      case 'invocationReady': {
+        const ready = message.type === 'invocationReady';
+        if (this.accepted && !ready)
           throw new StreamingProtocolError('protocol-error', 'duplicate invocation acceptance');
+        if (ready && (!this.accepted || this.executionReady))
+          throw new StreamingProtocolError('protocol-error', 'unexpected invocation readiness');
         object(message, [
           'version',
           'type',
@@ -4244,10 +4265,11 @@ class StreamingSession {
             'accepted invocation identity changed',
           );
         validateOpaqueToken(message.sessionToken, 'session token');
-        this.install(message.mappings, true);
+        this.install(message.mappings, ready || message.mappings.length !== 0);
         this.acceptedInvocation = { agentId, idempotencyKey: message.idempotencyKey };
         this.sessionToken = message.sessionToken;
         this.accepted = true;
+        this.executionReady = ready || message.mappings.length !== 0;
         this.everAccepted = true;
         this.pendingResume = false;
         this.acceptedAt = Date.now();
@@ -5148,6 +5170,7 @@ class StreamingSession {
         });
       }
       this.accepted = false;
+      this.executionReady = false;
       await this.connectRetry();
     } catch (error) {
       this.fail(error);

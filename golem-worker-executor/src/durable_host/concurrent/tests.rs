@@ -1363,6 +1363,7 @@ impl InMemoryOplog {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Oplog for InMemoryOplog {
     async fn add(
         &self,
@@ -2089,6 +2090,7 @@ impl RetryHostProbe {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl InFunctionRetryHost for RetryHostProbe {
     fn current_retry_point(&self) -> OplogIndex {
         self.current_retry_point

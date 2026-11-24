@@ -327,6 +327,7 @@ impl PrimaryOplogService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogService for PrimaryOplogService {
     async fn lock_lifecycle(&self, agent_id: &AgentId) -> OplogLifecycleGuard {
         self.oplogs.lock_lifecycle(agent_id).await
