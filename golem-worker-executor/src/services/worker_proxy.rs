@@ -223,12 +223,15 @@ pub trait WorkerProxy: Send + Sync {
         card: &StoredCard,
     ) -> Result<(), WorkerProxyError>;
 
+    /// Asks the worker service to update an agent. `requester` is who asked for the update; the
+    /// target records it in the update's `PendingUpdate` entries.
     async fn update(
         &self,
         owned_agent_id: &OwnedAgentId,
         target_revision: ComponentRevision,
         mode: UpdateMode,
         disable_wakeup: bool,
+        requester: Caller,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError>;
 
@@ -910,6 +913,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         target_revision: ComponentRevision,
         mode: UpdateMode,
         disable_wakeup: bool,
+        requester: Caller,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         debug!("Updating remote worker to revision {target_revision} in {mode:?} mode");
@@ -924,6 +928,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     auth_ctx: Some(auth_ctx.clone().into()),
                     disable_wakeup,
                     environment_id: Some(owned_agent_id.environment_id.into()),
+                    caller: Some(requester.clone().into()),
                 }))
             })
             .await?

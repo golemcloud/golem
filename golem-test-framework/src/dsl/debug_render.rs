@@ -156,6 +156,7 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 PublicAgentInvocation::ManualUpdate(inner) => {
                     let _ = writeln!(result, "{pad}type:              manual update");
                     let _ = writeln!(result, "{pad}target revision:   {}", inner.target_revision,);
+                    write_requester(&mut result, pad, &inner.requester);
                 }
             }
             if let Some(caller) = params.invocation.caller() {
@@ -291,6 +292,7 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                         "{pad}target revision: {}",
                         inner_params.target_revision,
                     );
+                    write_requester(&mut result, pad, &inner_params.requester);
                 }
             }
             if let Some(caller) = params.invocation.caller() {
@@ -319,6 +321,7 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                     }
                 }
             }
+            write_requester(&mut result, pad, &params.requester);
         }
         PublicOplogEntry::SuccessfulUpdate(params) => {
             let _ = writeln!(result, "SUCCESSFUL UPDATE");
@@ -718,6 +721,16 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
     }
 
     result
+}
+
+/// Who requested an update, in both roles.
+fn write_requester(
+    output: &mut String,
+    pad: &str,
+    requester: &golem_common::model::caller::PublicCaller,
+) {
+    let _ = writeln!(output, "{pad}original requester:  {}", requester.original);
+    let _ = writeln!(output, "{pad}immediate requester: {}", requester.immediate);
 }
 
 fn log_plugin_description(output: &mut String, pad: &str, value: &PluginInstallationDescription) {

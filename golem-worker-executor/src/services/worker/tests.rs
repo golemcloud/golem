@@ -335,7 +335,9 @@ fn invocation_pair(
             operation: Box::new(InvocationRequestOperation::ManualUpdate {
                 target_revision: ComponentRevision::INITIAL,
             }),
-            payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate)),
+            payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate {
+                requester: golem_common::model::caller::Caller::anonymous(),
+            })),
             trace_id: TraceId::generate(),
             trace_states: Vec::new(),
             invocation_context: Vec::new(),
@@ -3415,7 +3417,9 @@ async fn invocation_result_index_keeps_a_result_when_a_later_chunk_withdraws_its
             Box::new(InvocationRequestOperation::ManualUpdate {
                 target_revision: ComponentRevision::INITIAL,
             }),
-            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate)),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate {
+                requester: golem_common::model::caller::Caller::anonymous(),
+            })),
             TraceId::generate(),
             Vec::new(),
             Vec::new(),
@@ -3520,7 +3524,9 @@ async fn a_user_cancellation_of_a_bloom_positive_key_is_not_a_definitive_index_m
             Box::new(InvocationRequestOperation::ManualUpdate {
                 target_revision: ComponentRevision::INITIAL,
             }),
-            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate)),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate {
+                requester: golem_common::model::caller::Caller::anonymous(),
+            })),
             TraceId::generate(),
             Vec::new(),
             Vec::new(),
@@ -3749,7 +3755,9 @@ async fn a_background_failure_after_newer_results_is_not_answered_from_an_older_
             Box::new(InvocationRequestOperation::ManualUpdate {
                 target_revision: ComponentRevision::INITIAL,
             }),
-            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate)),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate {
+                requester: golem_common::model::caller::Caller::anonymous(),
+            })),
             TraceId::generate(),
             Vec::new(),
             Vec::new(),

@@ -46,6 +46,9 @@ pub enum AgentInvocationKind {
 pub enum AgentInvocation {
     ManualUpdate {
         target_revision: ComponentRevision,
+        /// Who asked for the update. It is not a caller: the update's snapshot save runs as the
+        /// agent itself, never as the requester.
+        requester: Caller,
     },
     AgentInitialization {
         idempotency_key: InvocationId,
@@ -100,6 +103,8 @@ pub enum AgentInvocation {
 pub enum AgentInvocationPayload {
     ManualUpdate {
         target_revision: ComponentRevision,
+        /// Who asked for the update.
+        requester: Caller,
     },
     AgentInitialization {
         input: SchemaValue,
@@ -195,7 +200,10 @@ impl InvocationRequestOperation {
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub enum StoredAgentInvocationPayload {
-    ManualUpdate,
+    ManualUpdate {
+        /// Who asked for the update.
+        requester: Caller,
+    },
     AgentInitialization {
         input: SchemaValue,
         caller: Caller,
@@ -240,8 +248,11 @@ impl StoredAgentInvocationPayload {
     ) -> Result<AgentInvocationPayload, String> {
         type Op = InvocationRequestOperation;
         Ok(match (self, operation) {
-            (Self::ManualUpdate, Op::ManualUpdate { target_revision }) => {
-                AgentInvocationPayload::ManualUpdate { target_revision }
+            (Self::ManualUpdate { requester }, Op::ManualUpdate { target_revision }) => {
+                AgentInvocationPayload::ManualUpdate {
+                    target_revision,
+                    requester,
+                }
             }
             (Self::AgentInitialization { input, caller }, Op::AgentInitialization) => {
                 AgentInvocationPayload::AgentInitialization { input, caller }
@@ -321,7 +332,7 @@ impl StoredAgentInvocationPayload {
 
     fn variant_name(&self) -> &'static str {
         match self {
-            Self::ManualUpdate => "ManualUpdate",
+            Self::ManualUpdate { .. } => "ManualUpdate",
             Self::AgentInitialization { .. } => "AgentInitialization",
             Self::AgentMethod { .. } => "AgentMethod",
             Self::ExternalTool { .. } => "ExternalTool",
@@ -341,7 +352,9 @@ impl AgentInvocationPayload {
 
     pub fn request_operation(&self) -> InvocationRequestOperation {
         match self {
-            Self::ManualUpdate { target_revision } => InvocationRequestOperation::ManualUpdate {
+            Self::ManualUpdate {
+                target_revision, ..
+            } => InvocationRequestOperation::ManualUpdate {
                 target_revision: *target_revision,
             },
             Self::AgentInitialization { .. } => InvocationRequestOperation::AgentInitialization,
@@ -367,9 +380,13 @@ impl AgentInvocationPayload {
         type Op = InvocationRequestOperation;
         type Stored = StoredAgentInvocationPayload;
         match self {
-            Self::ManualUpdate { target_revision } => {
-                (Op::ManualUpdate { target_revision }, Stored::ManualUpdate)
-            }
+            Self::ManualUpdate {
+                target_revision,
+                requester,
+            } => (
+                Op::ManualUpdate { target_revision },
+                Stored::ManualUpdate { requester },
+            ),
             Self::AgentInitialization { input, caller } => (
                 Op::AgentInitialization,
                 Stored::AgentInitialization { input, caller },
@@ -796,9 +813,13 @@ impl AgentInvocation {
         invocation_context: InvocationContextStack,
     ) -> Self {
         match payload {
-            AgentInvocationPayload::ManualUpdate { target_revision } => {
-                Self::ManualUpdate { target_revision }
-            }
+            AgentInvocationPayload::ManualUpdate {
+                target_revision,
+                requester,
+            } => Self::ManualUpdate {
+                target_revision,
+                requester,
+            },
             AgentInvocationPayload::AgentInitialization { input, caller } => {
                 Self::AgentInitialization {
                     idempotency_key,
@@ -875,9 +896,15 @@ impl AgentInvocation {
 
     pub fn into_parts(self) -> (InvocationId, AgentInvocationPayload, InvocationContextStack) {
         match self {
-            Self::ManualUpdate { target_revision } => (
+            Self::ManualUpdate {
+                target_revision,
+                requester,
+            } => (
                 InvocationId(Uuid::new_v4()),
-                AgentInvocationPayload::ManualUpdate { target_revision },
+                AgentInvocationPayload::ManualUpdate {
+                    target_revision,
+                    requester,
+                },
                 InvocationContextStack::fresh(),
             ),
             Self::AgentInitialization {

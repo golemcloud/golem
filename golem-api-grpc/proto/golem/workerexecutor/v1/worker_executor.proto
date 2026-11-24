@@ -362,6 +362,7 @@ message UpdateWorkerRequest {
   bool disable_wakeup = 6;
   reserved 7;
   reserved "principal";
+  // The caller of the request. The executor records it as the requester of the update.
   golem.component.Caller caller = 9;
   golem.common.UUID expected_fingerprint = 8;
 }

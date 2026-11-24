@@ -542,7 +542,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let owned_agent_id =
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
 
-        extract_caller(&request.caller)?;
+        let caller = extract_caller(&request.caller)?;
 
         let target_revision = request.target_revision.try_into().map_err(|e| {
             WorkerExecutorError::invalid_request(format!(
@@ -564,6 +564,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             mode,
             target_revision,
             request.disable_wakeup,
+            caller,
             request
                 .expected_fingerprint
                 .map(|fingerprint| AgentFingerprint(fingerprint.into())),

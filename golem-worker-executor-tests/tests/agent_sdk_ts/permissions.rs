@@ -312,6 +312,7 @@ impl WorkerProxy for LocalCardTransferProxy {
         target_revision: ComponentRevision,
         mode: golem_api_grpc::proto::golem::worker::UpdateMode,
         disable_wakeup: bool,
+        requester: golem_common::model::caller::Caller,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         self.inner
@@ -320,6 +321,7 @@ impl WorkerProxy for LocalCardTransferProxy {
                 target_revision,
                 mode,
                 disable_wakeup,
+                requester,
                 auth_ctx,
             )
             .await
