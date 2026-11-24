@@ -476,6 +476,7 @@ mod tests {
             account_roles: BTreeSet::new(),
             effective_surface: EffectiveSurface::default(),
             delegation_surface: None,
+            authenticated_by: None,
         });
 
         assert!(ensure_account_owner(owner_id, &owner).is_ok());
@@ -500,6 +501,7 @@ mod tests {
             account_roles: BTreeSet::from([AccountRole::Admin]),
             effective_surface: EffectiveSurface::default(),
             delegation_surface: None,
+            authenticated_by: None,
         });
         let user = AuthCtx::User(UserAuthCtx {
             account_id: target_id,
@@ -508,6 +510,7 @@ mod tests {
             account_roles: BTreeSet::new(),
             effective_surface: EffectiveSurface::default(),
             delegation_surface: None,
+            authenticated_by: None,
         });
         let impersonation = AuthCtx::admin_impersonation(
             admin_id,

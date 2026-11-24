@@ -5107,6 +5107,7 @@ pub async fn test_owner_override_mutations_include_active_admin_grant_metadata(d
         account_roles: BTreeSet::new(),
         effective_surface,
         delegation_surface: None,
+        authenticated_by: None,
     });
     let overrides = AccountResourceOverrideService::new(
         deps.account_resource_override_repo.clone(),

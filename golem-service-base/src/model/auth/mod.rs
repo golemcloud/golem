@@ -24,7 +24,7 @@ use golem_common::SafeDisplay;
 use golem_common::base_model::api::error_code::AUTH_UNAUTHORIZED;
 use golem_common::base_model::error::ErrorBody;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::auth::{AccountRole, TokenSecret};
+use golem_common::model::auth::{AccountRole, TokenId, TokenSecret};
 use golem_common::model::authority::{AuthorizationRequest, Decision, Scope, Target};
 use golem_common::model::card::{
     CardAlgebraError, DelegationSurface, EffectiveSurface, PermissionTarget,
@@ -209,6 +209,8 @@ pub struct UserAuthCtx {
     pub account_roles: BTreeSet<AccountRole>,
     pub effective_surface: EffectiveSurface,
     pub delegation_surface: Option<DelegationSurface>,
+    /// The token that authenticated the request, when a token did.
+    pub authenticated_by: Option<TokenId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -234,6 +236,8 @@ pub struct AdminImpersonationAuthCtx {
     pub target_account_plan_id: PlanId,
     pub effective_surface: EffectiveSurface,
     pub delegation_surface: Option<DelegationSurface>,
+    /// The token that authenticated the request, when a token did.
+    pub authenticated_by: Option<TokenId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -335,6 +339,7 @@ impl AuthCtx {
             target_account_plan_id,
             effective_surface,
             delegation_surface: None,
+            authenticated_by: None,
         })
     }
 
@@ -402,6 +407,15 @@ impl AuthCtx {
             Self::User(user) => &user.account_roles,
             Self::Agent(_) => &EMPTY_ACCOUNT_ROLES,
             Self::AdminImpersonation(ctx) => &ctx.target_account_roles,
+        }
+    }
+
+    /// The token that authenticated the request, when a token did.
+    pub fn authenticated_by(&self) -> Option<TokenId> {
+        match self {
+            Self::System | Self::Agent(_) => None,
+            Self::User(user) => user.authenticated_by,
+            Self::AdminImpersonation(ctx) => ctx.authenticated_by,
         }
     }
 
@@ -479,6 +493,7 @@ mod invocation_scope_tests {
             account_roles: BTreeSet::new(),
             effective_surface: surface.clone(),
             delegation_surface: None,
+            authenticated_by: None,
         });
         let agent = AuthCtx::agent_with_effective_surface(account, email.clone(), surface.clone());
         let admin = AuthCtx::admin_impersonation(
@@ -799,7 +814,7 @@ mod protobuf {
     };
     use applying::Apply;
     use golem_common::model::account::AccountEmail;
-    use golem_common::model::auth::AccountRole;
+    use golem_common::model::auth::{AccountRole, TokenId};
     use golem_common::model::card::{
         CardId, DelegationSurface, EffectiveSurface, GrantSurface, PermissionTarget,
     };
@@ -921,6 +936,7 @@ mod protobuf {
                 account_plan_id: value.plan_id.ok_or("missing plan id")?.try_into()?,
                 effective_surface,
                 delegation_surface: deserialize_delegation_surface(value.delegation_surface)?,
+                authenticated_by: value.authenticated_by.map(|id| TokenId(id.into())),
             })
         }
     }
@@ -938,6 +954,7 @@ mod protobuf {
                     .collect(),
                 effective_surface: Some(serialize_effective_surface(value.effective_surface)),
                 delegation_surface: serialize_delegation_surface(value.delegation_surface),
+                authenticated_by: value.authenticated_by.map(|id| id.0.into()),
             }
         }
     }
@@ -1008,6 +1025,7 @@ mod protobuf {
                     .try_into()?,
                 effective_surface,
                 delegation_surface: deserialize_delegation_surface(value.delegation_surface)?,
+                authenticated_by: value.authenticated_by.map(|id| TokenId(id.into())),
             })
         }
     }
@@ -1028,6 +1046,7 @@ mod protobuf {
                 target_account_plan_id: Some(value.target_account_plan_id.into()),
                 effective_surface: Some(serialize_effective_surface(value.effective_surface)),
                 delegation_surface: serialize_delegation_surface(value.delegation_surface),
+                authenticated_by: value.authenticated_by.map(|id| id.0.into()),
             }
         }
     }

@@ -116,6 +116,7 @@ impl AuthService {
                     account_plan_id: target_account.plan_id,
                     effective_surface,
                     delegation_surface: Some(delegation_surface),
+                    authenticated_by: Some(TokenId(record.token_id)),
                 }))
             }
             // Impersonation flow
@@ -138,6 +139,7 @@ impl AuthService {
                         account_plan_id: admin_account.plan_id,
                         effective_surface,
                         delegation_surface: Some(delegation_surface),
+                        authenticated_by: None,
                     });
 
                     if admin_auth_ctx
@@ -169,6 +171,7 @@ impl AuthService {
                     target_account_plan_id: target_account.plan_id,
                     effective_surface,
                     delegation_surface: Some(delegation_surface),
+                    authenticated_by: Some(TokenId(record.token_id)),
                 }))
             }
         }
@@ -193,6 +196,7 @@ impl AuthService {
             account_roles,
             effective_surface,
             delegation_surface: Some(delegation_surface),
+            authenticated_by: None,
         }))
     }
 

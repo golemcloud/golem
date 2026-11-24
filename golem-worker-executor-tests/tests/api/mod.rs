@@ -2076,6 +2076,7 @@ async fn card_transfer_delivery_is_durable_idempotent_and_rejects_payload_confli
         account_roles: context.account_roles.clone(),
         effective_surface: EffectiveSurface::default(),
         delegation_surface: None,
+        authenticated_by: None,
     });
     let non_system_transfer_id = uuid::Uuid::new_v4();
     assert!(matches!(
@@ -10989,6 +10990,7 @@ async fn worker_created_by_reflects_component_owner_not_caller(
             upper: Vec::new(),
         },
         delegation_surface: None,
+        authenticated_by: None,
     })
     .into();
 
@@ -11085,6 +11087,7 @@ async fn create_rejects_an_environment_that_does_not_own_the_component(
             upper: Vec::new(),
         },
         delegation_surface: None,
+        authenticated_by: None,
     })
     .into();
 
@@ -11228,6 +11231,7 @@ async fn resource_limits_initialized_for_component_owner_not_caller(
             upper: Vec::new(),
         },
         delegation_surface: None,
+        authenticated_by: None,
     })
     .into();
 

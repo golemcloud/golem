@@ -1089,6 +1089,7 @@ impl TestWorkerExecutor {
                 upper: Vec::new(),
             },
             delegation_surface: None,
+            authenticated_by: None,
         })
     }
 

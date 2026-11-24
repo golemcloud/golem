@@ -26,6 +26,7 @@ message UserAuthCtx {
   AuthEffectiveSurface effective_surface = 4;
   string account_email = 5;
   optional bytes delegation_surface = 6;
+  optional golem.common.UUID authenticated_by = 7;
 }
 
 message AgentAuthCtx {
@@ -43,6 +44,7 @@ message AdminImpersonationAuthCtx {
   AuthEffectiveSurface effective_surface = 5;
   string target_account_email = 6;
   optional bytes delegation_surface = 7;
+  optional golem.common.UUID authenticated_by = 8;
 }
 
 message AuthCtx {
