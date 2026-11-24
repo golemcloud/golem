@@ -436,6 +436,13 @@ export const routes = HttpRouter.use((router) =>
                     successUrl: `${home}?checkout_id={CHECKOUT_ID}`,
                     returnUrl: home
                   })
+                  // The app has no prices for another currency, so the person must never pay
+                  // such a checkout. The route never sends its URL, so nobody can pay it: the
+                  // route does not record it, and no deletion hold covers it. A later click
+                  // creates a new checkout, in the currency of the prices of the product then.
+                  if (!isCurrency(session.currency)) {
+                    return { unsupported: session }
+                  }
                   yield* subscriptions.recordCheckout({
                     checkoutId: session.id,
                     accountId,
@@ -451,21 +458,18 @@ export const routes = HttpRouter.use((router) =>
               notice.searchParams.set("checkout_id", started.paid)
               return HttpServerResponse.redirect(notice.href, { status: 303 })
             }
-            const { session, reasons } = started
-            // The app has no prices for another currency, so the person must never pay such a
-            // checkout. Polar selects the currency at the creation of the checkout, so the route
-            // refuses also each later click that would reuse it.
-            if (!isCurrency(session.currency)) {
+            if (started.unsupported !== undefined) {
               yield* Effect.logError("Refused a checkout in a currency that the app has no prices for").pipe(
                 Effect.annotateLogs({
                   event: "unsupported_currency",
                   golemAccountId: accountId,
-                  checkoutId: session.id,
-                  currency: session.currency
+                  checkoutId: started.unsupported.id,
+                  currency: started.unsupported.currency
                 })
               )
               return errorPage
             }
+            const { session, reasons } = started
             if (reasons === "deleted" || !reasons.includes("openCheckout")) {
               yield* Effect.logWarning("Refused a checkout that no deletion hold covers").pipe(
                 Effect.annotateLogs({ golemAccountId: accountId, checkoutId: session.id, reasons: String(reasons) })

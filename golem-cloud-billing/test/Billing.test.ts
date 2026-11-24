@@ -1636,29 +1636,31 @@ describe("Polar billing", () => {
       expect(await response.text()).not.toContain(checkoutId)
     }
 
-    it("refuses a new checkout in a currency that the app has no prices for", async () => {
-      const { jar } = await signedIn()
+    it("refuses a new checkout in a currency that the app has no prices for, and neither records it nor holds the account", async () => {
+      const { jar, accountId } = await signedInToRegistryAccount()
       upstreams.checkoutCurrency = "cad"
 
       await expectErrorPage(await postCheckout(jar), "polar_c_1")
       expect(upstreams.polarRequests("/v1/checkouts/")).toHaveLength(1)
+      expect(upstreams.deletionHolds.has(accountId)).toBe(false)
+      const recorded = await pool.query("SELECT 1 FROM polar_checkouts WHERE account_id = $1", [accountId])
+      expect(recorded.rowCount).toBe(0)
     })
 
-    it("refuses the open checkout in such a currency that a later click reuses, until a new checkout replaces it", async () => {
-      const { jar } = await signedIn()
+    it("starts a new checkout at each click after a checkout in such a currency, and sends it once its currency has prices", async () => {
+      const { jar, accountId } = await signedIn()
       upstreams.checkoutCurrency = "cad"
-      await postCheckout(jar)
+      await expectErrorPage(await postCheckout(jar), "polar_c_1")
+      await expectErrorPage(await postCheckout(jar), "polar_c_2")
       // An operator removes the prices in CAD from the product.
       upstreams.checkoutCurrency = "usd"
 
-      await expectErrorPage(await postCheckout(jar), "polar_c_1")
-      expect(upstreams.polarRequests("/v1/checkouts/")).toHaveLength(1)
-      expect(upstreams.polarRequests("/v1/checkouts/polar_c_1")).toHaveLength(1)
-
-      await expireSoon("polar_c_1")
       const later = await postCheckout(jar)
+
       expect(later.status).toBe(303)
-      expect(later.headers.get("location")).toBe(upstreams.checkoutUrl("polar_c_2"))
+      expect(later.headers.get("location")).toBe(upstreams.checkoutUrl("polar_c_3"))
+      expect(upstreams.polarRequests("/v1/checkouts/")).toHaveLength(3)
+      expect(upstreams.deletionHolds.get(accountId)).toBe(openCheckoutHold(expiryOf("polar_c_3")))
     })
 
     it.each(["confirmed", "succeeded"] as const)(
