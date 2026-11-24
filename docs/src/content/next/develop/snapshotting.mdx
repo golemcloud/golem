@@ -776,7 +776,7 @@ These examples save a revision counter and an in-memory binary index. The loader
 - The SDK owns the principal envelope. On the wire, one `state` part contains UTF-8 JSON `{version:1, principal, state}`, user names become `part:<name>`, and managed SQLite images use `db:<name>`. Do not construct these prefixes or envelope metadata yourself.
 - The SDK validates framing, metadata, names, duplicate structural fields, and supported namespaces before invoking user restoration. Changing snapshot modes does not enable fallback parsing or historical-format migration.
 
-Snapshots are whole-buffer operations. Copies of state, part bytes, encoded payloads, and restored resources can amplify peak memory usage. The host's 64 KiB inline/blob-spill setting is a storage threshold, **not** a maximum snapshot size. Save and load hooks are unpersisted lifecycle operations and may be retried. Both run in read-only mode, so they cannot make external effects.
+Snapshots are whole-buffer operations. Copies of state, part bytes, encoded payloads, and restored resources can amplify peak memory usage. The host's 64 KiB inline/blob-spill setting is a storage threshold, **not** a maximum snapshot size. Save and load hooks are unpersisted lifecycle operations and may be retried. Both run in read-only mode, which rejects durable host calls classified as writes, and outgoing HTTP and agent RPC calls.
 
 ## How snapshot saving runs
 
