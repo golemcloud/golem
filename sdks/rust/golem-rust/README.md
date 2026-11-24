@@ -4,6 +4,24 @@ A library that help writing [Golem](https://golem.cloud) programs by providing h
 wrappers for Golem's runtime APIs, including functions for defining and performing operations
 transactionally.
 
+## Caller identity
+
+A constructor or method reads who is calling from an `InvocationContext` parameter. The SDK supplies it;
+it is not part of the input schema, and callers do not pass it.
+
+```rust
+use golem_rust::agentic::{InvocationContext, Principal};
+
+fn who_am_i(&self, ctx: InvocationContext) -> String {
+    match ctx.caller().original() {
+        Principal::User(user) => user.subject().to_string(),
+        other => other.kind().as_str().to_string(),
+    }
+}
+```
+
+`ctx.caller().original()` is the principal that started the call chain (for example the signed-in user), and `ctx.caller().immediate()` is the principal that made this call. A `Principal` or `Caller` is a live value: it cannot appear in a method, constructor or tool signature or inside a value type, and the build fails with a message that points to `ctx.caller()`. To keep an identity as data, store `ctx.caller().original().principal_ref()`, a `PrincipalRef`: an issuer and a subject that grant nothing by themselves. Compare it with `PrincipalRef::equals`. `PrincipalRef::parse` reads the text form `("<issuer>","<subject>")`.
+
 ## Saga transactions
 
 `fallible_transaction` returns after one attempt and compensation. Use

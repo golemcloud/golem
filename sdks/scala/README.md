@@ -256,6 +256,23 @@ trait MyAgent {
 }
 ```
 
+### Caller identity
+
+A constructor or method reads who is calling from a `golem.InvocationContext` parameter. The SDK supplies
+it; it is not part of the input schema, and callers do not pass it.
+
+```scala
+import golem.{InvocationContext, Principal}
+
+override def whoAmI(context: InvocationContext): Future[String] =
+  Future.successful(context.caller.original match {
+    case user: Principal.User => user.subject
+    case other                => other.kind.toString
+  })
+```
+
+`context.caller.original` is the principal that started the call chain (for example the signed-in user), and `context.caller.immediate` is the principal that made this call. A `Principal` or `Caller` is a live value: it cannot appear in a method, constructor or tool signature or inside a value type, and the build fails with a message that points to `ctx.caller`. To keep an identity as data, store `context.caller.original.ref` (an `Option[PrincipalRef]`), a `PrincipalRef`: an issuer and a subject that grant nothing by themselves. Compare it with `isSameAs`. `PrincipalRef.parse` reads the text form `("<issuer>","<subject>")`.
+
 ## Running on Golem
 
 The sbt/Mill plugins are **build adapters**: they generate the Scala.js bundle and write the default base guest runtime to `.generated/`. **`golem-cli` is the driver** for build/deploy/invoke/repl.

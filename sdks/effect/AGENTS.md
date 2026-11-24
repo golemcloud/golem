@@ -70,7 +70,8 @@ QuickJS-backed WASI Preview 3 components.
   and value-only binding in `DynamicClient`. Parse ID text through `AgentId.parse` once; pass the
   typed `AgentId` to typed, reflected, and dynamic binding. Narrow reflected `mode` before
   selecting a lifecycle factory; ephemeral clients expose their ID only in invocation metadata.
-- Snapshot envelopes hold only the principal and the state. Restoration reads the agent type from
+- Snapshot envelopes are `{ version: 2, state }`; a 1.6 envelope (`version: 1`) is still read, and its
+  principal is checked and dropped. Restoration reads the agent type from
   `GOLEM_AGENT_TYPE` and decodes the constructor input from the `constructor` parameter of
   `load-snapshot`, as `initialize` decodes its input.
 

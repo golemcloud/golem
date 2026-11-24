@@ -79,6 +79,20 @@ Self metadata contains the full stored environment and configuration. Those fiel
 are not filtered per key like WASI environment reads. Treat self-view as authority
 to read those complete fields, and do not log the metadata to diagnose a denial.
 
+## Caller identity
+
+A constructor or method reads who is calling from an `@agents.InvocationContext` parameter. The SDK
+supplies it; it is not part of the input schema, and callers do not pass it.
+
+```moonbit nocheck
+pub fn MyAgent::who_am_i(self : Self, ctx : @agents.InvocationContext) -> String {
+  // A signed-in user prints as `user ("<issuer>","<subject>")`, never with its claims.
+  ctx.caller().original.to_string()
+}
+```
+
+`ctx.caller().original` is the principal that started the call chain (for example the signed-in user), and `ctx.caller().immediate` is the principal that made this call. A `Principal` or `Caller` is a live value: it cannot appear in a method, constructor or tool signature or inside a value type, and the build fails with a message that points to `ctx.caller()`. To keep an identity as data, store `ctx.caller().original.principal_ref()`, a `PrincipalRef`: an issuer and a subject that grant nothing by themselves. Compare it with `equals_ref`. `PrincipalRef::parse` reads the text form `("<issuer>","<subject>")`.
+
 ## Quick Start
 
 Golem CLI 1.6.0 includes built-in MoonBit templates for ordinary agent components, pure tool
