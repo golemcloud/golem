@@ -59,7 +59,7 @@ use golem_common::schema::public_json::{
     decode_public_schema_value_with_charge, encode_public_schema_value_with_charge,
 };
 use golem_common::schema::stream::SchemaValueStream;
-use golem_common::schema::validation::validate_value;
+use golem_common::schema::validation::{ValueError, validate_value};
 use golem_common::schema::{
     BinaryValuePayload, SchemaGraph, SchemaType, SchemaValue, schema_value_to_proto_with_streams,
 };
@@ -1633,7 +1633,13 @@ async fn handle_client_messages<S>(
         let (request, admission, _frame_size) = match request {
             Ok(request) => request,
             Err(error) => {
-                let safe_message = safe_rejection_message(error.code);
+                let safe_message = match error.code {
+                    // Value diagnostics carry the path and the restriction, not the value.
+                    PublicErrorCode::ValidationError | PublicErrorCode::UnsupportedValue => {
+                        error.message.clone()
+                    }
+                    code => safe_rejection_message(code),
+                };
                 send_rejection(
                     &outbound,
                     Some(attempt_id),
@@ -2895,7 +2901,7 @@ fn end_input_at_invalid_item(
         .as_ref()
         .ok_or_else(|| AdapterError::protocol("input channel has no durable mapping"))?
         .durable_stream_id;
-    let message = format!("input item {sequence} {reason}");
+    let message = format!("input item {sequence} {reason}: {}", error.message);
     let outcome = StreamTerminal::Failed(StreamError::Interrupted(message.clone()))
         .try_into()
         .map_err(|_| AdapterError::protocol("invalid private stream terminal outcome"))?;
@@ -3275,8 +3281,16 @@ fn validate_direct_value(
     value: &SchemaValue,
     code: PublicErrorCode,
 ) -> Result<(), AdapterError> {
-    validate_value(graph, schema, value)
-        .map_err(|_| AdapterError::new(code, "binary item does not satisfy its element schema"))
+    validate_value(graph, schema, value).map_err(|errors| {
+        AdapterError::new(
+            code,
+            errors
+                .iter()
+                .map(ValueError::diagnostic)
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
+    })
 }
 
 fn validate_packed_u8(
@@ -3849,7 +3863,13 @@ mod tests {
         }
     }
 
-    fn assert_ends_input_at_invalid_item(translated: Option<TranslatedRequest>, sequence: u64) {
+    /// Asserts that `translated` ends the input at `sequence` with a terminal that carries
+    /// `diagnostic`, and returns the terminal message.
+    fn assert_ends_input_at_invalid_item(
+        translated: Option<TranslatedRequest>,
+        sequence: u64,
+        diagnostic: &str,
+    ) -> String {
         use golem_common::model::durable_stream::{StreamError, StreamTerminal};
         let translated =
             translated.expect("the invalid item was dropped instead of ending the input");
@@ -3861,10 +3881,14 @@ mod tests {
         assert_eq!(end.producer_sequence, sequence);
         assert_eq!(end.authored_by(), StreamTerminalAuthor::Protocol);
         let terminal = StreamTerminal::try_from(end.outcome.unwrap()).unwrap();
+        let StreamTerminal::Failed(StreamError::Interrupted(message)) = terminal else {
+            panic!("unexpected terminal {terminal:?}")
+        };
         assert!(
-            matches!(&terminal, StreamTerminal::Failed(StreamError::Interrupted(message)) if message.contains(&sequence.to_string())),
-            "unexpected terminal {terminal:?}"
+            message.starts_with(&format!("input item {sequence} ")) && message.contains(diagnostic),
+            "unexpected terminal message {message:?}"
         );
+        message
     }
 
     fn decode_frame(frame: &TranslatedFrame) -> PublicServerMessage {
@@ -3901,7 +3925,7 @@ mod tests {
         let translated = translate_client_text(input_item(1, 9), &state)
             .await
             .unwrap();
-        assert_ends_input_at_invalid_item(translated, 1);
+        assert_ends_input_at_invalid_item(translated, 1, "below minimum 10");
         admit_input(&state, true).await;
 
         // The client sent these frames before it saw the end of its input.
@@ -5032,12 +5056,21 @@ mod tests {
             max_bytes: Some(3),
         });
         let restricted_binary = active_input_state_with_schema(binary_schema.clone());
-        for (payload, mime_type) in [
-            (vec![1], Some("application/octet-stream".to_string())),
-            (vec![1, 2], Some("text/plain".to_string())),
+        for (payload, mime_type, diagnostic) in [
+            (
+                vec![1],
+                Some("application/octet-stream".to_string()),
+                "below min-bytes 2",
+            ),
+            (
+                vec![1, 2],
+                Some("text/plain".to_string()),
+                "mime-type not in the allow-list",
+            ),
             (
                 vec![1, 2, 3, 4],
                 Some("application/octet-stream".to_string()),
+                "above max-bytes 3",
             ),
         ] {
             let translated = translate_client_binary(
@@ -5057,7 +5090,8 @@ mod tests {
             )
             .await
             .unwrap();
-            assert_ends_input_at_invalid_item(translated, 0);
+            let message = assert_ends_input_at_invalid_item(translated, 0, diagnostic);
+            assert!(!message.contains("text/plain"), "{message}");
         }
 
         translate_client_binary(
@@ -5095,7 +5129,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_ends_input_at_invalid_item(translated, 0);
+        assert_ends_input_at_invalid_item(translated, 0, "below minimum 10");
 
         let maximum_binary = translate_client_binary(
             BinaryMessage {

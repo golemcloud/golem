@@ -214,6 +214,29 @@ use proptest::{prop_assert_eq, proptest};
 use std::collections::HashMap;
 use test_r::test;
 #[test]
+fn constructor_restrictions_are_checked_apart_from_parsing() {
+    let agent_type = make_agent_type(
+        "agent-9",
+        vec![(
+            "name",
+            SchemaType::text(TextRestrictions {
+                max_length: Some(3),
+                ..Default::default()
+            }),
+        )],
+    );
+    // An existing agent parses its key again, so parsing does not check restrictions.
+    let too_long = ParsedAgentKey::parse("agent-9(@t\"abcdef\")", &agent_type).unwrap();
+    let error = too_long.validate_restrictions().unwrap_err();
+    assert!(error.contains("above max-length 3"), "{error}");
+    assert!(!error.contains("abcdef"), "{error}");
+    ParsedAgentKey::parse("agent-9(@t\"abc\")", &agent_type)
+        .unwrap()
+        .validate_restrictions()
+        .unwrap();
+}
+
+#[test]
 fn agent_id_structural_normalization() {
     {
         let agent_id =

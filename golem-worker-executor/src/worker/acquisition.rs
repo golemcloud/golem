@@ -1540,6 +1540,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     &component.metadata,
                 )
                 .map_err(WorkerExecutorError::invalid_request)?;
+                if let Some(constructor) = owner_context.agent() {
+                    constructor
+                        .validate_restrictions()
+                        .map_err(WorkerExecutorError::invalid_request)?;
+                }
                 if component.environment_id != owned_agent_id.environment_id {
                     return Err(WorkerExecutorError::invalid_request(
                         "owner environment does not match the component environment",

@@ -17,7 +17,7 @@ use crate::model::invocation_session_public::{
 };
 use crate::schema::external::{decode_external_schema_value, encode_external_schema_value};
 use crate::schema::stream::SchemaValueStream;
-use crate::schema::validation::value::validate_value;
+use crate::schema::validation::value::{ValueError, validate_value};
 use crate::schema::{
     BinaryValuePayload, DurationValuePayload, ResultValuePayload, SchemaGraph, SchemaType,
     SchemaValue, UnionValuePayload, VariantValuePayload,
@@ -112,7 +112,7 @@ pub fn decode_public_schema_value_with_charge(
         PublicSchemaValueError::validation(
             errors
                 .iter()
-                .map(ToString::to_string)
+                .map(ValueError::diagnostic)
                 .collect::<Vec<_>>()
                 .join("; "),
         )
@@ -147,7 +147,7 @@ pub fn encode_public_schema_value_with_charge(
         PublicSchemaValueError::validation(
             errors
                 .iter()
-                .map(ToString::to_string)
+                .map(ValueError::diagnostic)
                 .collect::<Vec<_>>()
                 .join("; "),
         )
