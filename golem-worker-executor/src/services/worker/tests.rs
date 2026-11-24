@@ -997,6 +997,7 @@ fn sample_status() -> AgentStatusRecord {
                 golem_common::model::oplog::StartIdentityField::FunctionName,
                 golem_common::model::oplog::StartIdentityField::RequestPresence,
             ],
+            replay_start: None,
         })),
     });
     status.successful_updates.push(SuccessfulUpdateRecord {

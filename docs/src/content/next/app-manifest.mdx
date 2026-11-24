@@ -2335,6 +2335,8 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     since: Release.R_1_5_0
   }}>
     ***Optional map of quota resource defaults*** by **environment name**.
+    A deploy creates the resources that do not exist yet; it does not change an existing resource.
+    Use `golem resource update` to change one.
   </Field>
 
   <Field meta={{

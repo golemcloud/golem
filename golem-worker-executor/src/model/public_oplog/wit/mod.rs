@@ -85,7 +85,7 @@ use golem_common::model::oplog::{
     EphemeralFuelExhaustedError, EphemeralSleepTooLongError, FallibleResultParameters,
     JsonSnapshotData, MultipartPartData, MultipartSnapshotData, PublicOplogEntry,
     PublicSnapshotData, PublicUpdateDescription, RawSnapshotData, ReadOnlyViolationError,
-    ReplayDivergence, ReplayHostCall, ReplayStep, SaveSnapshotResultParameters,
+    ReplayDivergence, ReplayHostCall, ReplayStart, ReplayStep, SaveSnapshotResultParameters,
     SnapshotBasedUpdateParameters, StartIdentityField, UpdateFailureClass,
 };
 use golem_common::model::quota::ResourceName;
