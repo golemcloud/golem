@@ -51,8 +51,8 @@ use crate::model::oplog::types::{
     SerializableHttpErrorCode, SerializableInvokeResult, SerializableIpAddresses,
     SerializableP3HttpBodyChunk, SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
     SerializableP3HttpConsumeBodyResult, SerializableP3HttpRequestBodyFrame,
-    SerializableP3IpNameLookupError, SerializableP3TcpChunk, SerializableRdbmsError,
-    SerializableRdbmsRequest, SerializableRpcError, SerializableScheduleId,
+    SerializableP3HttpWriteOutcome, SerializableP3IpNameLookupError, SerializableP3TcpChunk,
+    SerializableRdbmsError, SerializableRdbmsRequest, SerializableRpcError, SerializableScheduleId,
     SerializableStreamError, SerializableToolInvocationResult, SerializableToolRpcError,
 };
 use crate::model::oplog::{CardInstallFailure, PayloadId};
@@ -355,6 +355,11 @@ oplog_payload! {
         },
         P3HttpClientSend {
             request: SerializableP3HttpClientSend
+        },
+        P3HttpRequestBodyWrite {
+            sequence: u64,
+            offered: u64,
+            outcome: SerializableP3HttpWriteOutcome,
         },
         /// Payload of a `HostStreamFrame` hint oplog entry recording one frame of a
         /// P3 HTTP outgoing request body. Not a host-call request: these frames are
@@ -776,6 +781,7 @@ oplog_payload! {
         P3HttpClientRequestBodyTransmission {
             result: Result<(), SerializableHttpErrorCode>
         },
+        P3HttpRequestBodyWrite {},
         SecretRevealed {
             secret_id: Uuid,
             pinned_revision: u64,
@@ -1166,6 +1172,8 @@ pub mod host_functions {
         (P3HttpClientConsumeBody => "http::types::response", "consume-body", NoInput, P3HttpClientConsumeBodyResult),
         (P3HttpClientConsumeBodyChunk => "http::types::response", "consume-body-chunk", NoInput, P3HttpClientConsumeBodyChunk),
         (P3HttpClientRequestBodyTransmission => "http::types::request", "body-transmission", NoInput, P3HttpClientRequestBodyTransmission),
+        (P3HttpRequestContentsWrite => "http::types::request", "contents-write", P3HttpRequestBodyWrite, P3HttpRequestBodyWrite),
+        (P3HttpRequestTrailersWrite => "http::types::request", "trailers-write", P3HttpRequestBodyWrite, P3HttpRequestBodyWrite),
         (GolemSecretsReveal => "golem::secrets::reveal", "reveal", SecretReveal, SecretRevealed),
         (GolemApiDeriveCard => "golem::api", "derive-card", GolemApiCard, GolemApiCard),
         (GolemApiInstallCard => "golem::api", "install-card", GolemApiCard, GolemApiInstallCard),

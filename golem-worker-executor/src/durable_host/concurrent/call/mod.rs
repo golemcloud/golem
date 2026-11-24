@@ -372,6 +372,8 @@ pub(crate) struct AccessClaimOptions {
     /// Ownership propagated from a resource created by an earlier observational call. When absent,
     /// initiation captures the current custom-invocation task context.
     pub(crate) observational_owner: Option<OplogIndex>,
+    /// A background observation whose Start is recorded only when its input is ready.
+    pub(crate) deferred_observation: bool,
     pub(crate) scope_replay_recovery: ScopeReplayRecovery,
     /// Set by a durable scope owner that re-executes its effect call-locally (see
     /// [`ScopeReplayRecovery::Reexecute`]) on the children it records inside that scope: a child

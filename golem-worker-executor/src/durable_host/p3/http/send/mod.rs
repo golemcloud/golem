@@ -125,6 +125,14 @@ where
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
         ctx.state.p3_http_transmissions.requests.remove(&req.rep())
     });
+    // Install contents then trailers before the first await and before the native send
+    // constructs GuestBody or pipes its trailers. Pending writes take their identity here;
+    // later writes take it at issue, before consumer polling can reorder them.
+    if let Some(pending) = &mut pending_transmission {
+        store
+            .with(|mut access| pending.install_write_interceptors(access.as_context_mut()))
+            .map_err(HttpError::trap)?;
+    }
 
     // The request head is serialized (and recorded) exactly as the guest built
     // it. The send's `outgoing-http-request` invocation-context span is

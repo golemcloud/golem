@@ -201,6 +201,36 @@ fn imports_without_a_durable_call_take_no_ordinal() {
 }
 
 #[test]
+fn builtin_writes_share_the_guest_import_order_without_reusing_an_import_identity() {
+    let ids = activities(3);
+    let numbering = GuestImportNumbering::default();
+    let root = ImportNumbering::Under {
+        root: ROOT,
+        anchor: ROOT,
+    };
+    import(&numbering, ids[0], root);
+    assert_eq!(
+        numbering.reserve_builtin_identity(ROOT),
+        DurableInvocationId::new(ROOT, 1)
+    );
+    import(&numbering, ids[1], root);
+    assert_eq!(
+        numbering.reserve_import_identity(Some(ids[1])).unwrap(),
+        id(ROOT, 2)
+    );
+    assert_eq!(
+        numbering.reserve_builtin_identity(ROOT),
+        DurableInvocationId::new(ROOT, 3)
+    );
+    plain_import(&numbering, ids[2], root);
+    assert_eq!(
+        numbering.reserve_builtin_identity(ROOT),
+        DurableInvocationId::new(ROOT, 4)
+    );
+    assert!(numbering.reserve_import_identity(Some(ids[2])).is_err());
+}
+
+#[test]
 fn an_import_cannot_reserve_after_a_later_import_started() {
     let ids = activities(2);
     let root = ImportNumbering::Under {

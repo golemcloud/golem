@@ -930,6 +930,41 @@ fn installed_child_persistence_has_a_distinct_host_function_name() {
 }
 
 #[test]
+fn http_request_write_acknowledgements_roundtrip() {
+    use super::types::SerializableP3HttpWriteOutcome;
+    use super::{HostRequestP3HttpRequestBodyWrite, HostResponseP3HttpRequestBodyWrite};
+
+    for outcome in [
+        SerializableP3HttpWriteOutcome::Completed(11),
+        SerializableP3HttpWriteOutcome::Cancelled(3),
+        SerializableP3HttpWriteOutcome::Dropped(0),
+    ] {
+        let request = HostRequestP3HttpRequestBodyWrite {
+            sequence: 7,
+            offered: 19,
+            outcome,
+        };
+        let response = HostResponseP3HttpRequestBodyWrite {};
+        assert_host_payload_pair_roundtrip::<host_functions::P3HttpRequestContentsWrite>(
+            request.clone(),
+            response.clone(),
+        );
+        assert_host_payload_pair_schema_roundtrip::<host_functions::P3HttpRequestContentsWrite>(
+            request.clone(),
+            response.clone(),
+        );
+        assert_host_payload_pair_roundtrip::<host_functions::P3HttpRequestTrailersWrite>(
+            request.clone(),
+            response.clone(),
+        );
+        assert_host_payload_pair_schema_roundtrip::<host_functions::P3HttpRequestTrailersWrite>(
+            request.clone(),
+            response,
+        );
+    }
+}
+
+#[test]
 fn websocket_reconstruction_policy_and_session_loss_roundtrip() {
     use super::types::{SerializableWebsocketError, SerializableWebsocketReconstructionPolicy};
     use super::{HostRequestWebsocketConnect, HostResponseWebsocketConnectResponse};

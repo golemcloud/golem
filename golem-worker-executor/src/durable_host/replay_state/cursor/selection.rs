@@ -555,9 +555,9 @@ impl CursorTx<'_> {
             .starts
             .retained_iter()
             .find_map(|(index, retained)| {
+                let recorded = RecordedStart::of(&retained.entry)?;
                 (start_invocation_id(&retained.entry) == Some(invocation_id))
-                    .then(|| RecordedStart::of(&retained.entry).map(|recorded| (*index, recorded)))
-                    .flatten()
+                    .then_some((*index, recorded))
             })
     }
 

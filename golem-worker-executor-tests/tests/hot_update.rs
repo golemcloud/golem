@@ -536,6 +536,135 @@ async fn auto_update_on_idle(
 
 #[test]
 #[timeout("120s")]
+async fn automatic_http_write_layout_updates_keep_indexed_divergence(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+
+    for scenario in [2u8, 0, 1] {
+        let uploads = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let received = uploads.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        let router = Router::new().route(
+            "/writes",
+            post(move |body: Bytes| {
+                received.lock().unwrap().push(body.to_vec());
+                async { "accepted" }
+            }),
+        );
+        let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        }));
+        let context = TestContext::new(last_unique_id);
+        let executor = start(deps, &context).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_update_v1)
+            .store()
+            .await?;
+        let agent = agent_key!("UpdateTest");
+        let worker = executor
+            .start_agent_with(
+                &component.id,
+                agent.clone(),
+                HashMap::from([("PORT".to_string(), port.to_string())]),
+                Vec::new(),
+            )
+            .await?;
+        let status = executor
+            .invoke_and_await_agent(&component, &agent, "http_write", data_value!(scenario))
+            .await?
+            .into_typed::<u16>()?;
+        assert_eq!(status, 200);
+        let body = if scenario == 1 {
+            b"".as_slice()
+        } else {
+            b"abcd"
+        };
+        assert_eq!(*uploads.lock().unwrap(), vec![body.to_vec()]);
+        let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        let recorded_function = if scenario == 1 {
+            "http::types::request::trailers-write"
+        } else {
+            "http::types::request::contents-write"
+        };
+        let recorded_index = history
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start) if start.function_name == recorded_function => {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .expect("the source must record its write");
+        let target = executor
+            .update_component(&component.id, "it_agent_update_v2_release")
+            .await?;
+        executor
+            .auto_update_worker(&worker, target.revision, false)
+            .await?;
+        let succeeds = scenario == 2;
+        let metadata = wait_for_update_counts(
+            &executor,
+            &worker,
+            if succeeds { (0, 1, 0) } else { (0, 0, 1) },
+        )
+        .await
+        .with_context(|| format!("HTTP write update scenario {scenario} must settle"))?;
+        assert_eq!(
+            metadata.component_revision,
+            if succeeds {
+                target.revision
+            } else {
+                component.revision
+            }
+        );
+        let failure = metadata.updates.iter().find_map(|record| match record {
+            UpdateRecord::FailedUpdate(update) => Some(update),
+            _ => None,
+        });
+        if let Some(failure) = failure {
+            assert_eq!(failure.failure_class, UpdateFailureClass::Divergence);
+            let divergence = failure.divergence.as_ref().expect("indexed divergence");
+            assert_eq!(divergence.oplog_index, recorded_index);
+            assert_ne!(divergence.expected, divergence.actual);
+            if scenario == 0 {
+                assert!(divergence.expected.to_string().contains("offered 4"));
+                assert!(divergence.actual.to_string().contains("offered 2"));
+            } else {
+                assert!(divergence.expected.to_string().contains("trailers-write"));
+                assert!(divergence.actual.to_string().contains("contents-write"));
+            }
+        }
+        assert_eq!(*uploads.lock().unwrap(), vec![body.to_vec()]);
+        drop(executor);
+        let executor = start(deps, &context).await?;
+        let recovered = executor.get_worker_metadata(&worker).await?;
+        assert_eq!(update_counts(&recovered), update_counts(&metadata));
+        assert_eq!(recovered.component_revision, metadata.component_revision);
+        let recovered_failure = recovered.updates.iter().find_map(|record| match record {
+            UpdateRecord::FailedUpdate(update) => Some(update),
+            _ => None,
+        });
+        assert_eq!(
+            recovered_failure.map(|failure| (&failure.failure_class, &failure.divergence)),
+            failure.map(|failure| (&failure.failure_class, &failure.divergence))
+        );
+        let status = executor
+            .invoke_and_await_agent(&component, &agent, "http_write", data_value!(scenario))
+            .await?
+            .into_typed::<u16>()?;
+        assert_eq!(status, 200);
+        assert_eq!(*uploads.lock().unwrap(), vec![body.to_vec(), body.to_vec()]);
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
 async fn incompatible_http_timeout_update_rejects_and_recovers_queued_work(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

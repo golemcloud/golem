@@ -26,6 +26,7 @@ pub(super) async fn claim_for_store(
     claim: StartClaim,
     store_continued_live: bool,
     required: bool,
+    deferred_observation: bool,
     on_claim: impl Fn(OplogIndex, &OplogEntry) + Clone + Send + Sync + 'static,
     admission: Option<(
         crate::durable_host::tool::operation::OwnerToolOperation,
@@ -33,11 +34,12 @@ pub(super) async fn claim_for_store(
     )>,
 ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
     let outcome = replay_state
-        .claim_start_for_store_with_admission(
+        .claim_start_for_store_with_observation(
             claim.clone(),
             store_continued_live && !required,
             on_claim,
             admission,
+            deferred_observation,
         )
         .await?;
     if !required {
@@ -242,6 +244,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
                 .map(|operation| (operation, Pair::FQFN.to_string()));
             let owned_claim = claim.clone();
             let store_continued_live = self.store_continued_live();
+            let deferred_observation = self.claim_options.deferred_observation;
             let recorded_start_required = self.claim_options.require_recorded_start
                 || (!self.store_replay_state.is_incomplete_entity()
                     && self.replay_to_live_role() != ReplayToLiveRole::PrimaryAgent);
@@ -252,6 +255,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
                     owned_claim,
                     store_continued_live,
                     recorded_start_required,
+                    deferred_observation,
                     move |index, entry| {
                         if let Some((observer, _activity)) = &observer {
                             observer.clone().started(index, entry, true);

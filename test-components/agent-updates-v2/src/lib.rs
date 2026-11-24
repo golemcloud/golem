@@ -81,6 +81,7 @@ impl NewCaller for NewCallerImpl {
 pub trait UpdateTest {
     fn new() -> Self;
     async fn f1(&mut self, speed_ms: u64) -> u64;
+    async fn http_write(&self, scenario: u8) -> u16;
     fn f2(&self) -> u64;
     fn f3(&self) -> u64;
     fn f4(&self) -> u64;
@@ -115,6 +116,19 @@ impl UpdateTest for UpdateTestImpl {
 
         self.last = current / 2;
         self.last
+    }
+
+    async fn http_write(&self, scenario: u8) -> u16 {
+        let port = std::env::var("PORT").unwrap();
+        let chunks = if scenario == 0 {
+            vec![b"ab".to_vec(), b"cd".to_vec()]
+        } else {
+            vec![b"abcd".to_vec()]
+        };
+        send_http_post(&port, "/writes", chunks)
+            .await
+            .unwrap()
+            .get_status_code()
     }
 
     fn f2(&self) -> u64 {
@@ -364,7 +378,7 @@ async fn report_f1(current: u64) {
 
     println!("Sending POST http://localhost:{port}/f1");
 
-    let response = send_http_post(&port, "/f1", current.to_string().into_bytes())
+    let response = send_http_post(&port, "/f1", vec![current.to_string().into_bytes()])
         .await
         .expect("Request failed");
 
@@ -378,7 +392,7 @@ async fn report_f1(current: u64) {
 async fn send_http_post(
     port: &str,
     path_with_query: &str,
-    body: Vec<u8>,
+    chunks: Vec<Vec<u8>>,
 ) -> Result<types::Response, types::ErrorCode> {
     let headers = types::Fields::new();
 
@@ -397,8 +411,10 @@ async fn send_http_post(
         async { client::send(request).await },
         async { transmit.await },
         async {
-            let remaining = body_tx.write_all(body).await;
-            assert!(remaining.is_empty());
+            for chunk in chunks {
+                let remaining = body_tx.write_all(chunk).await;
+                assert!(remaining.is_empty());
+            }
             let _ = trailers_tx.write(Ok(None)).await;
             drop(body_tx);
         }

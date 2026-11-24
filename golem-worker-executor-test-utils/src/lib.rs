@@ -2602,6 +2602,20 @@ impl TestWorkerExecutor {
             .signal_next_direct_replay_wait(*agent_id, name_suffix.to_string())
     }
 
+    /// Signals while the Store queues the next HTTP contents-write acknowledgement.
+    pub fn signal_next_http_contents_write_ready(
+        &self,
+        agent_id: &AgentId,
+    ) -> tokio::sync::oneshot::Receiver<()> {
+        let (send, receive) = tokio::sync::oneshot::channel();
+        self.additional_test_deps
+            .http_contents_write_ready_signals
+            .lock()
+            .unwrap()
+            .insert(*agent_id, send);
+        receive
+    }
+
     /// Whether the owner has published live admission after reconstruction settlement.
     pub async fn owner_replay_is_live(
         &self,
@@ -7198,6 +7212,8 @@ pub struct AdditionalTestDeps {
     replay_admission_gates: Arc<std::sync::Mutex<HashMap<AgentId, Vec<Arc<ReplayAdmissionGate>>>>>,
     direct_replay_wait_signals:
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<DirectReplayWaitSignal>>>>,
+    http_contents_write_ready_signals:
+        Arc<std::sync::Mutex<HashMap<AgentId, tokio::sync::oneshot::Sender<()>>>>,
     agent_invocation_success_gates:
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<AgentInvocationSuccessGate>>>>,
     worker_deletion_hook: Arc<Mutex<Option<Arc<dyn WorkerDeletionHook>>>>,
@@ -7273,6 +7289,7 @@ impl AdditionalTestDeps {
             invocation_started_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             replay_admission_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             direct_replay_wait_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            http_contents_write_ready_signals: Arc::default(),
             agent_invocation_success_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             worker_deletion_hook: Arc::new(Mutex::new(None)),
             active_agents: Arc::new(std::sync::OnceLock::new()),
@@ -7503,6 +7520,7 @@ impl AdditionalTestDeps {
             agent_id,
             gates: self.replay_admission_gates.clone(),
             signals: self.direct_replay_wait_signals.clone(),
+            http_contents_write_ready_signals: self.http_contents_write_ready_signals.clone(),
             card_audits: self.runtime_card_audit_gates.clone(),
         })
             as Arc<
@@ -8334,6 +8352,8 @@ struct TestReplayAdmissionHook {
     agent_id: AgentId,
     gates: Arc<std::sync::Mutex<HashMap<AgentId, Vec<Arc<ReplayAdmissionGate>>>>>,
     signals: Arc<std::sync::Mutex<HashMap<AgentId, Arc<DirectReplayWaitSignal>>>>,
+    http_contents_write_ready_signals:
+        Arc<std::sync::Mutex<HashMap<AgentId, tokio::sync::oneshot::Sender<()>>>>,
     card_audits: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), RuntimeCardAuditGate>>>,
 }
 
@@ -8406,6 +8426,18 @@ impl golem_worker_executor::workerctx::ReplayAdmissionHook for TestReplayAdmissi
 
     fn before_positional_replay_read(&self, expected: &str) {
         self.fire_direct_replay_wait(expected, OplogIndex::NONE);
+    }
+
+    fn http_request_write_ready(&self, function: &'static str) {
+        if function == "http::types::request::contents-write"
+            && let Some(send) = self
+                .http_contents_write_ready_signals
+                .lock()
+                .unwrap()
+                .remove(&self.agent_id)
+        {
+            let _ = send.send(());
+        }
     }
 }
 
@@ -8503,6 +8535,7 @@ mod replay_admission_gate_tests {
             agent_id,
             gates,
             signals,
+            http_contents_write_ready_signals: Default::default(),
             card_audits: Default::default(),
         };
 

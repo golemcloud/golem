@@ -492,6 +492,12 @@ fn pair_graphs(name: &HostFunctionName) -> Option<PairGraphs> {
         HostFunctionName::P3HttpClientRequestBodyTransmission => {
             pair::<host_functions::P3HttpClientRequestBodyTransmission>(Bare::Neither)
         }
+        HostFunctionName::P3HttpRequestContentsWrite => {
+            pair::<host_functions::P3HttpRequestContentsWrite>(Bare::Neither)
+        }
+        HostFunctionName::P3HttpRequestTrailersWrite => {
+            pair::<host_functions::P3HttpRequestTrailersWrite>(Bare::Neither)
+        }
         HostFunctionName::GolemSecretsReveal => {
             pair::<host_functions::GolemSecretsReveal>(Bare::Neither)
         }
