@@ -342,6 +342,28 @@ impl ForwardingOplogState {
             return;
         }
 
+        // A processor never receives a user's verified claims, nor the delivery state of a
+        // processor installation. The stored entries keep both. An entry that cannot be cleaned
+        // stops the batch, as an unreadable one does: its raw bytes are never sent.
+        let entries = match entries
+            .into_iter()
+            .map(OplogEntry::for_oplog_processor)
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(entries) => entries,
+            Err(error) => {
+                tracing::error!(
+                    grant_id = %grant_id,
+                    error = %error,
+                    "Oplog processor: failed to prepare the batch to deliver"
+                );
+                if let Some(s) = self.plugin_state.get_mut(&grant_id) {
+                    s.send_in_progress = false;
+                }
+                return;
+            }
+        };
+
         // Only these status fields reach the processor. Historical host indexes must not
         // be copied into every delivery checkpoint.
         let delivery_status = AgentStatusRecord {

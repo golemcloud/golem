@@ -1899,3 +1899,144 @@ async fn direct_checkpoint_commits_are_returned_even_after_cache_pruning() {
     );
     assert!(oplog.commit(CommitLevel::Always).await.unwrap().is_empty());
 }
+
+// --------------------------------------------------------------------------
+// A processor never receives a user's claims, nor another installation's delivery state
+// --------------------------------------------------------------------------
+
+#[test]
+async fn a_processor_batch_holds_no_user_claims_and_the_stored_oplog_keeps_them() {
+    use golem_common::model::caller::{Caller, Claims, Pair, Principal, UserPrincipal};
+    use golem_common::model::oplog::OplogPayload;
+
+    const EMAIL: &[u8] = b"bob@acme.example";
+    fn holds_claims(entry: &OplogEntry) -> bool {
+        golem_common::serialization::serialize(entry)
+            .unwrap()
+            .windows(EMAIL.len())
+            .any(|window| window == EMAIL)
+    }
+
+    let bob = Caller::entry(Principal::User(UserPrincipal {
+        pair: Pair::new("https://idp.acme.example/", "bob"),
+        claims: Claims::from_json(
+            r#"{"email":"bob@acme.example","groups":["finance"]}"#.to_string(),
+        )
+        .unwrap(),
+        authenticated_at: Timestamp::now_utc(),
+    }));
+    let report = OplogEntry::AgentInvocationStarted {
+        timestamp: Timestamp::now_utc(),
+        invocation_id: uuid::Uuid::from_u128(0x1).into(),
+        operation: Box::new(
+            golem_common::model::InvocationRequestOperation::AgentMethod {
+                method_name: "report".to_string(),
+            },
+        ),
+        payload: OplogPayload::Inline(Box::new(
+            golem_common::model::StoredAgentInvocationPayload::AgentMethod {
+                input: golem_common::schema::schema_value::SchemaValue::Record {
+                    fields: Vec::new(),
+                }
+                .try_into()
+                .unwrap(),
+                allow_streams: false,
+                caller: bob.clone(),
+                scope_card: None,
+            },
+        )),
+        trace_id: golem_common::model::invocation_context::TraceId::generate(),
+        trace_states: Vec::new(),
+        invocation_context: Vec::new(),
+        wallet_pin: Box::new(golem_common::model::card::InvocationWalletPin {
+            wallet_token: golem_common::model::card::WalletVersionToken {
+                wallet_id_hash: [0x42; 32],
+                generation: 1,
+            },
+            pinned_card_ids: Vec::new(),
+            scope_card_id: None,
+        }),
+    };
+    let update = OplogEntry::PendingUpdate {
+        timestamp: Timestamp::now_utc(),
+        description: golem_common::model::oplog::UpdateDescription::Automatic {
+            target_revision: ComponentRevision::new(2).unwrap(),
+        },
+        update_attempt_index: None,
+        requester: Box::new(bob.clone()),
+    };
+    // Another installation's checkpoint: its delivery state holds the agent's metadata, with the
+    // caller that created the agent.
+    let other_checkpoint = OplogEntry::OplogProcessorCheckpoint {
+        timestamp: Timestamp::now_utc(),
+        plugin_grant_id: EnvironmentPluginGrantId::new(),
+        source_component_revision: ComponentRevision::INITIAL,
+        target_agent_id: AgentId::from_parts(7, 9),
+        confirmed_up_to: OplogIndex::NONE,
+        sending_up_to: OplogIndex::NONE,
+        last_batch_start: OplogIndex::NONE,
+        delivery: Some(golem_common::serialization::serialize(&bob).unwrap()),
+    };
+    let stored = vec![report, update, other_checkpoint];
+    assert!(stored.iter().all(holds_claims));
+
+    let grant_id = EnvironmentPluginGrantId::new();
+    let (metadata, status_lock) = test_worker_metadata(HashSet::from([grant_id]));
+    let recording_plugin = Arc::new(RecordingOplogProcessorPlugin::new());
+    let components: Arc<dyn ComponentService> = Arc::new(
+        FakeComponentService::with_one_oplog_processor_plugin(grant_id),
+    );
+    let inner: Arc<dyn Oplog> = Arc::new(InMemoryOplog::new());
+    for entry in &stored {
+        inner.add(entry.clone()).await.unwrap();
+    }
+    let mut state = ForwardingOplogState {
+        forwarding_retired: CancellationToken::new(),
+        forwarding_activity: ActivityGate::new(),
+        pending_checkpoint_activity: None,
+        buffer: None,
+        buffer_start_idx: OplogIndex::from_u64(4),
+        commit_count: 0,
+        last_send: Instant::now(),
+        oplog_plugins: recording_plugin.clone(),
+        initial_worker_metadata: metadata,
+        last_known_status: status_lock,
+        last_oplog_idx: OplogIndex::from_u64(3),
+        last_committed_idx: OplogIndex::from_u64(3),
+        components,
+        inner: inner.clone(),
+        plugin_state: HashMap::from([(
+            grant_id,
+            LivePluginState {
+                target_agent_id: None,
+                confirmed_up_to: OplogIndex::NONE,
+                sending_up_to: OplogIndex::NONE,
+                send_in_progress: false,
+                last_batch_start: OplogIndex::NONE,
+                delivery: None,
+            },
+        )]),
+        pending_direct_commits: BTreeMap::new(),
+        worker_event_service: None,
+        monitor_tasks: Vec::new(),
+    };
+
+    state.try_flush().await;
+
+    let sends = recording_plugin.sends().await;
+    assert_eq!(sends.len(), 1);
+    assert_eq!(sends[0].entry_count, 3);
+    for entry in &sends[0].entries {
+        assert!(!holds_claims(entry), "the processor receives {entry:?}");
+    }
+    assert!(matches!(
+        &sends[0].entries[2],
+        OplogEntry::OplogProcessorCheckpoint { delivery: None, .. }
+    ));
+    let kept = inner.read_exact(OplogIndex::INITIAL, 3).await.unwrap();
+    assert_eq!(kept.len(), 3);
+    assert!(
+        kept.values().all(holds_claims),
+        "the stored oplog keeps the claims"
+    );
+}
