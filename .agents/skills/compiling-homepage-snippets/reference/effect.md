@@ -154,12 +154,12 @@ that stripped copy.
 | artifacts-routes | `fs`, `Name` (slug `Schema.isPattern(/^[a-z0-9-]{1,40}$/)`), `Row`, `querySales(region): Effect<Row[]>` (declared) |
 | artifacts-files | `SaleRow`, `querySales(team, quarter): Effect<SaleRow[]>`, `drawChart(rows): Uint8Array` (declared) |
 | agents-stream | `openai` client layer |
-| artifacts-login | imports; `Chart = { askedBy, png }`; `answerWithChart(question): Effect<Uint8Array>` (declared); `userKey(caller)` = JSON of OIDC `[issuer, sub]` (traps on a non-OIDC principal, like TS) |
+| artifacts-login | imports; `Png` (`Unstructured.UnstructuredBinary` for `image/png`, moved here from the display file, see Differences); `Chart = { askedBy: InvocationContext.PrincipalRef \| undefined, png }`; `answerWithChart(question): Effect<Uint8Array>` (declared) |
 | agents-readonly | imports only |
-| tools-middleware | `Refund` and the same `refund` tool definition as tools-secrets; `askFinance(approval, charge, amount)`, `approved(verdict)` (JSON `approved === true`), `checkRateLimit(principal)` (fails with `MiddlewareError`), `audit(charge, amount, refundId)`; labelled SHIM re-typing `Middleware.typed` (see Differences) |
+| tools-middleware | `Refund` and the same `refund` tool definition as tools-secrets (options `{ required: true }`); `askFinance(approval, charge, amount)`, `approved(verdict)`, `checkRateLimit(who: InvocationContext.Principal)` (fails with `MiddlewareError`), `audit(charge, amount, refundId)`; labelled SHIM re-typing `Agents.Promises` (see Differences) |
 | artifacts-peruser | imports; `dashboardFor(user, request): Effect<string>` (declared) |
 | artifacts-routers | `HttpServerResponse` import; the user's `AnalystAgent` spec (`id: { chat }`, `exportCsv({ id })` returning `WitTypes.AgentStream(WitTypes.Uint8ArraySchema)`, no implementation); `header(name, value): HttpRouter.HttpHeader` (byte value) |
-| artifacts-signin | `Invoice`; `invoicesOf(org, issuer, sub)`, `pageFor(question, invoices)` (declared Effects) |
+| artifacts-signin | `Invoice`; `invoicesOf(org, issuer, subject)`, `pageFor(question, invoices)` (declared Effects) |
 
 Prelude helpers return `Effect<_, never>` (failures become defects), matching the TypeScript
 helpers that throw.
@@ -175,12 +175,12 @@ Nothing was invented for Effect; every library is real.
   `Reflection.getAllAgentTypes` / `getAllToolTypes()`; `Tool.toolDefinition` with
   `requiresFilesystem`, `WitTypes.Secret`, `Secrets.reveal`, `Tool.ok/err`, `.client()`;
   `Permissions.deriveFromWallet/derive/install/revoke`, `Lifespan.fromIso8601`, `Holder.agent`;
-  `Principal.PrincipalSchema`; `Unstructured.UnstructuredBinary` + `Unstructured.Option` (an
+  `InvocationContext.InvocationContext` (the caller); `Unstructured.UnstructuredBinary` + `Unstructured.Option` (an
   optional unstructured result: `none` is a 404); `WitTypes.AgentStream`; `readOnly: true`;
   method `description` (`src/internal/method.ts:104`); generated MCP tool clients' `StartedToolInvocation.collect`;
   typed middleware `Middleware.typed({ name, presented, parameters: Middleware.NoParameters, handler })`
   from `@golemcloud/effect-golem/middleware` (`src/internal/tool/middleware.ts:263-332`; handler context
-  `principal`/`underlying` at `:111-122`; callable root `underlying(input)` at `:70-91`;
+  `caller`/`underlying` at `:111-122`; callable root `underlying(input)` at `:70-91`;
   `MiddlewareError` with a `constraint-violation` `ToolError` at `:30-36`, exported unchanged at `:925-939`);
   promises `Agents.Promises.create` / `Agents.Promises.await(id)` (`src/Agents.ts:563-596`,
   docs `develop/promises.mdx`, Effect tab); raw routers `HttpRouter.define(name, { mount }).implement(
@@ -248,7 +248,7 @@ and prints `NEG_OK`.
 | middleware-ts-create-promise | `Agents.Promises.create` → `Agents.Promises.createPromise` (TS SDK name) | TS2339 |
 | peruser-ts-returns | method `success:` → `returns:` (TS SDK name) | TS2769 |
 | routers-ts-implement-raw | `Exports.implement(` → `Exports.implementRaw(` (TS SDK name) | TS2551 |
-| signin-ts-flat-principal | `const { issuer, sub } = caller.val` → `= caller` (TS SDK shape) | TS2339 |
+| signin-sub | `const { issuer, subject } = user` → `{ issuer, sub }` (the 1.6 OIDC field) | TS2339 |
 | secrets-reveal-not-borrow | `config.stripeKey.borrow` → `.get` (a revealed `Redacted<string>`, not a handle) | TS2741 |
 
 `tools/requests` uses no Golem API itself; its control breaks the displayed function's contract
@@ -316,36 +316,35 @@ with the Golem refund tool spliced after it.
 - `artifacts/files`: `s.unstructuredBinary({ mimeTypes })` →
   `Unstructured.UnstructuredBinary({ restrictions: [{ mimeType }] })` (two lines); the inline value
   is `{ _tag: "inline", val, mimeType } as const`; `await querySales` → `yield* querySales`.
-- `artifacts/login`: `s.principal()` is `Principal.PrincipalSchema`, bound once to `const User`
-  (one extra display line) so both method specs fit in 68 columns; OIDC principals are
-  `{ tag: "oidc", val: { sub, issuer, ... } }`. `s.option(Png)` is `Unstructured.Option(Png)`;
-  `open` returns `Option.none()` (404) or `Option.some({ _tag: "inline", ... })`. To stay within
-  31 lines, `ask` is `Effect.map(answerWithChart(question), (png) => charts.push(...))`:
-  `Array.prototype.push` returns the new length, which is the chart number the TS returns as
-  `this.charts.length` on a separate line; the comment sits directly above `ask:` instead of
-  inside the body.
+- `artifacts/login`: both handlers read the caller with
+  `const { caller } = yield* InvocationContext.InvocationContext`; `ask` stores
+  `caller.original.ref` (a `PrincipalRef`) and `open` compares with `caller.original.equals(...)`.
+  `s.option(Png)` is `Unstructured.Option(Png)`; `open` returns `Option.none()` (404) or
+  `Option.some({ _tag: "inline", ... })`. The two context reads cost two lines, so the two-line
+  `Png` schema and its blank line moved into the prelude to stay within 31 lines. `ask` returns
+  `charts.push(...)`: `Array.prototype.push` returns the new length, which is the chart number.
 
 - `agents/overview`, `tools/publish`, `artifacts/overview`, `artifacts/routes`, `artifacts/login`:
   same edits as the TypeScript (comment wording, highlight moved; login's `auth` mount comment is
   gone and a comment sits above the owner check).
 - `tools/middleware`: `throw refuse(...)` becomes `yield* refuse(...)`, where `refuse` is
   `Effect.fail(new Middleware.MiddlewareError({ tag: "constraint-violation", val }))` (three lines);
-  the handler context is `ctx` (`ctx.principal`, `ctx.underlying(args)`) instead of a destructured
-  `{ underlying, principal }`, to fit 68 columns. `createPromise()` / `awaitPromise` are
+  the handler context is `ctx` (`ctx.caller.original`, `ctx.underlying(args)`) instead of a destructured
+  `{ underlying, caller }`, to fit 68 columns. `createPromise()` / `awaitPromise` are
   `yield* Agents.Promises.create` / `yield* Agents.Promises.await(approval)`; their host errors become
   defects with `Effect.catchTag("AgentsHostError", Effect.die)` (a TS throw), while the policy's own
   rejections stay typed `MiddlewareError`s. Middleware is passed `presented: refund` and
   `parameters: Middleware.NoParameters` (required by the Effect API).
   SDK GAP (SHIM in `prelude/tools-middleware.ts`): `Middleware.typed` infers `R = never` and runs the
-  handler with only its optional `layer` (`src/internal/tool/middleware.ts:263-288`, `:848-853`), but
-  `Agents.Promises.*` requires the `PromiseClient` host service (`src/Agents.ts:571,580`), whose live
-  layer is in `src/host/PromiseClient.ts:31`, blocked by the package exports (`"./host/*": null`).
-  Against the real declarations the snippet fails with TS2322 "Type 'PromiseClient' is not
-  assignable to type 'never'" (verified); no public layer exists to pass as `layer`. The shim
-  re-types `typed` so the handler may require that service (types only). Fix: have
-  `invokeToolMiddleware` build `HostLive` into the middleware context (as the agent dispatcher
-  does, `src/internal/agent.ts:107`) and widen the handler `R` of `typed`/`universal` to
-  `HostServices`, or export a public promise-host layer.
+  handler with only its optional `layer` (`src/internal/tool/middleware.ts`, `typed`), but
+  `Agents.Promises.*` requires the `PromiseClient` host service, whose live layer is in
+  `src/host/PromiseClient.ts`, blocked by the package exports (`"./host/*": null`). Against the real
+  declarations the snippet fails with TS2769 ("Type 'PromiseClient' is not assignable to type
+  'never'"). The shim re-types `Agents.Promises.create` / `await` without that service (types only;
+  their `AgentsHostError` stays), so `Middleware.typed` and the handler context stay fully checked.
+  Fix: have `invokeToolMiddleware` build `HostLive` into the middleware context (as the agent
+  dispatcher does) and widen the handler `R` of `typed`/`universal` to `HostServices`, or export a
+  public promise-host layer.
 - `artifacts/peruser`: `this.user` is `self.user` on the state object returned by `init`
   (`methods: (self) => ...`); `await dashboardFor(...)` is `yield* dashboardFor(...)`. The mount
   has `auth: true`. Each file is named `crypto.randomUUID()`, the same global as TS (Golem's
@@ -359,8 +358,9 @@ with the Golem refund tool spliced after it.
   with the same byte-valued `header` helper as TS (the body highlight sits on the `stream(csv, ...)`
   line). The agent call takes two lines (`yield* Analyst.client.upsert(...)`, then
   `yield* analyst.exportCsv(...)`); the first is highlighted.
-- `artifacts/signin`: `s.principal()` is `Principal.PrincipalSchema` on its own line (highlighted;
-  the `input:` line holds the comment); OIDC fields are `caller.val.issuer` / `caller.val.sub`.
+- `artifacts/signin`: the handler reads `const { caller } = yield* InvocationContext.InvocationContext`
+  (highlighted, under the comment that the TS puts above its `ctx.caller` line); the signed-in user
+  is `caller.original` with `kind === "user"`, and its fields are `issuer` / `subject`.
 
 ## Known limits (compiles, not proven at runtime)
 
@@ -369,7 +369,7 @@ with the Golem refund tool spliced after it.
   providers added to that app, and `golem build` (for `tools/publish`, an MCP import in the
   manifest and a reachable MCP server so the real client can be generated).
 - `tools/overview` compiles only with the `gen/sdk-fixed` SHIM until the SDK fix lands.
-- `tools/middleware` compiles only with the `Middleware.typed` SHIM; at runtime, today's SDK would
+- `tools/middleware` compiles only with the `Agents.Promises` SHIM; at runtime, today's SDK would
   fail the promise calls (missing `PromiseClient` service) until the middleware host-layer fix lands.
   Middleware attachment to a tool binding is not exercised.
 - Runtime-only validations are not exercised: `Http.mount` / endpoint path parsing fallbacks,
@@ -396,3 +396,12 @@ cd <repo>
 ## artifacts/overview: UUID file names (Oct 22 2026)
 
 The chart tool names the PNG and the HTML page with one fresh UUID, as artifacts/peruser does, and `pageFor(q, name)` points the page's `<img>` at `<name>.png`. `const name = crypto.randomUUID()`, the same global as TS. No comment explains the UUID (owner ruling). Re-verified: `check.sh` ALL_OK, `neg.sh` passing.
+
+## Caller identity 2.0 (Nov 24 2026)
+
+`artifacts/login`, `artifacts/signin` and `tools/middleware` read the caller from the invocation
+context: `InvocationContext.InvocationContext` in agent handlers, `ctx.caller` in typed middleware.
+The 1.6 `Principal.PrincipalSchema` input, `Principal.Principal` service and `ctx.principal` are gone.
+Re-verified on the three changed snippets with the harness rebuilt from this file: the style checks,
+`tsc` for each, and one negative control each (`caller.ref` for `caller.original.ref`, `sub` for
+`subject`, `ctx.principal` for `ctx.caller.original`), which all fail as they must.
