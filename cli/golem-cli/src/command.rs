@@ -1653,9 +1653,13 @@ pub mod component {
             #[command(flatten)]
             component_name: OptionalComponentNames,
             /// Also resolve static config using the local built component's schemas and code defaults.
-            /// Requires built component Wasm; does not build or inspect deployed state.
+            /// Requires built component Wasm; does not inspect deployed state.
             #[arg(long)]
             resolved: bool,
+            /// Build the selected components first, so that the trace includes the agent types of
+            /// every component. Up-to-date components are not rebuilt.
+            #[clap(long, default_value = "false")]
+            build: bool,
         },
     }
 }

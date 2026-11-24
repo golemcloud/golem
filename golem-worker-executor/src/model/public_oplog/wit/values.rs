@@ -249,6 +249,25 @@ pub(super) fn replay_divergence_to_wit(
             .into_iter()
             .map(start_identity_field_to_wit)
             .collect(),
+        replay_start: divergence.replay_start.map(|start| match start {
+            ReplayStart::Snapshot(start) => {
+                oplog::ReplayStart::Snapshot(oplog::ReplaySnapshotStart {
+                    snapshot_index: start.snapshot_index.into(),
+                    rejected_snapshots: start
+                        .rejected_snapshots
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
+                })
+            }
+            ReplayStart::FullReplay(start) => oplog::ReplayStart::FullReplay(
+                start
+                    .rejected_snapshots
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            ),
+        }),
     })
 }
 
@@ -264,6 +283,22 @@ pub(super) fn replay_divergence_from_wit(
             .into_iter()
             .map(start_identity_field_from_wit)
             .collect(),
+        replay_start: divergence.replay_start.map(|start| match start {
+            oplog::ReplayStart::Snapshot(start) => ReplayStart::snapshot(
+                golem_common::model::OplogIndex::from_u64(start.snapshot_index),
+                start
+                    .rejected_snapshots
+                    .into_iter()
+                    .map(golem_common::model::OplogIndex::from_u64)
+                    .collect(),
+            ),
+            oplog::ReplayStart::FullReplay(indexes) => ReplayStart::full_replay(
+                indexes
+                    .into_iter()
+                    .map(golem_common::model::OplogIndex::from_u64)
+                    .collect(),
+            ),
+        }),
     })
 }
 

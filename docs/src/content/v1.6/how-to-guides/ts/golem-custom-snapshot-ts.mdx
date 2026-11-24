@@ -197,6 +197,27 @@ Snapshot loading is a specially supported SDK lifecycle operation, not an agent 
 
 The SDK installs the returned state only after `load` succeeds. If it throws or rejects, partial state is discarded. A manual update remains on the previous component version. During automatic recovery, Golem recreates the component without the failed automatic snapshot. It then tries the previous usable automatic snapshot. After that, it uses the authoritative baseline of the last successful update or a full replay. During an automatic update, the update fails, and the agent stays on its source revision: with `UPDATE_SNAPSHOT_INCOMPATIBLE` when the update selected an automatic snapshot, else with `UPDATE_REPLAY_FAILED`. Without a pending update, when the snapshot of the last successful update does not load, the start of the agent fails.
 
+## A Restored Agent Must Behave Like the Live Agent
+
+After `load`, Golem replays the invocations recorded after the snapshot and compares every result with the oplog. The restored state must give exactly the results that the live state gave, for every later method result and host call. When a result differs, the replay diverges with `Unexpected oplog entry during replay: expected …, got …`, and the error names the oplog index of the snapshot that the failing replay started from, if any, and the oplog indexes of the snapshots that recovery rejected before it. After an automatic snapshot, Golem rejects the snapshot and tries an older restore point. But once the agent has run live from a faulty restore, for example after a restart right after a snapshot, no older restore point reproduces the results it recorded, and the agent fails with a `Recovery` error, possibly long after the snapshot was taken.
+
+So `load` must rebuild every value that a later result depends on in the same way as the live code keeps it. Common mistakes:
+
+- **Derived or cached values computed differently on load.** Live code keeps `approxBytes += JSON.stringify(row).length` for each write, but `load` sets `approxBytes = bytes.length`. Recompute the value from the restored data with the live formula, or save it.
+- **Fields that a custom `save` leaves out**, so that `load` resets them. Typed `state` snapshotting refuses undeclared fields; a custom `save`/`load` pair does not check this.
+- **Approximate counters or statistics** that `load` resets or estimates.
+- **Order-dependent results**: a `Map` or `Set` that `load` fills in another insertion order, or a sort without a total order.
+
+Test restoration by behavior. Keep `save` and `load` as plain functions over the state, apply the same operations to a live state and to `load(save(state))`, and compare the results of every method that reads state:
+
+```typescript
+const live = { items: ['a', 'bb'], approx: 3 };
+const restored = loadState(saveState(live));
+expect(add(restored, 'ccc')).toBe(add(live, 'ccc'));
+```
+
+Comparing `save(load(save(x)))` with `save(x)` is not enough: it does not find a value that `save` leaves out.
+
 ## Agent Files
 
 A snapshot holds only the agent's in-memory state: the typed `state` with the contents of in-memory databases, or the bytes that a custom `save` returns. It does not hold the files that the agent wrote.
@@ -212,7 +233,7 @@ Filesystem snapshots are off by default on standalone executors and on local ser
 1. **Prefer the typed `state` schema** unless you need a compact binary format or cross-version migration logic.
 2. **Keep snapshots small** — large snapshots impact recovery and update time.
 3. **Version your snapshot format** — include a version byte or marker so `load` can handle snapshots from older versions.
-4. **Test round-trips** — verify that `save` → `load` produces equivalent state without calling `init`.
+4. **Test round-trips by behavior** — verify that the state that `load` returns, without calling `init`, gives the same method results as the live state. See [A Restored Agent Must Behave Like the Live Agent](#a-restored-agent-must-behave-like-the-live-agent).
 5. **Handle migration** — when the state schema changes between versions, `load` in the new version should be able to parse snapshots from the old version.
 6. **Define both or neither** — always provide `save` and `load` together to keep serialization consistent.
 
