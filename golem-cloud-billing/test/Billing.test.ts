@@ -446,13 +446,33 @@ describe("Polar billing", () => {
         }
       }
 
-      const html = await page(jar)
+      const schema = config.db.schema
+      await pool.query(`ALTER TABLE "${schema}".polar_subscriptions RENAME TO polar_subscriptions_hidden`)
+      let html: string
+      try {
+        html = await page(jar)
+      } finally {
+        await pool.query(`ALTER TABLE "${schema}".polar_subscriptions_hidden RENAME TO polar_subscriptions`)
+      }
 
       expect(html).toContain("This page cannot read the subscription, so it does not show the overage prices.")
       expect(html).toContain("Polar bills the usage above the allowance at the overage prices of the subscription.")
       expect(html).toContain("+ 1.5M GCU of paid overage</dd>")
       expect(html).not.toContain("per million GCU")
       expect(html).not.toContain("Paid overage so far this month")
+      expect(html).toContain(`value="hardLimit"`)
+    })
+
+    it("says that Polar bills no overage on the paid plan without a subscription, and asks for no reload", async () => {
+      const { jar, accountId } = await paidAccount()
+      upstreams.usageModes.set(accountId, "allowOverage")
+
+      const html = await page(jar)
+
+      expect(html).toContain("The account has no Pro subscription in Polar, so Polar bills no overage.")
+      expect(html).toContain("Polar bills no usage above the allowance, because the account has no Pro subscription.")
+      expect(html).not.toContain("cannot read the subscription")
+      expect(html).not.toContain("per million GCU")
       expect(html).toContain(`value="hardLimit"`)
     })
 

@@ -221,9 +221,10 @@ export const routes = HttpRouter.use((router) =>
             )
           )
         )
-        const subscription: Subscription | undefined = yield* subscriptions
+        const read: { readonly subscription: Subscription | undefined } | undefined = yield* subscriptions
           .latest(user.golemAccountId, config.polar.productId)
           .pipe(
+            Effect.map((subscription) => ({ subscription })),
             Effect.catch((error) =>
               Effect.logWarning("Cannot read the subscription").pipe(
                 Effect.annotateLogs({ golemAccountId: user.golemAccountId, error: error.message }),
@@ -231,6 +232,7 @@ export const routes = HttpRouter.use((router) =>
               )
             )
           )
+        const subscription = read?.subscription
         const plan = planOf(account)
         const params = new URL(request.url, config.baseUrl).searchParams
         // Polar redirects here with the checkout ID after a payment; the webhook that changes the
@@ -272,6 +274,7 @@ export const routes = HttpRouter.use((router) =>
             account,
             plan,
             subscription,
+            subscriptionUnread: read === undefined,
             pastDueGraceEnd:
               plan === "paid" && subscription !== undefined
                 ? pastDueGraceEnd(subscription, config.pastDueGraceMs)

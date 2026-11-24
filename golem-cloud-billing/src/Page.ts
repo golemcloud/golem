@@ -193,6 +193,8 @@ export interface SignedInPageOptions {
   readonly plan: PlanState
   /** The subscription of the paid product that changed last, if the account had one. */
   readonly subscription: Subscription | undefined
+  /** The read of `subscription` failed, so the account can have a subscription that the page does not show. */
+  readonly subscriptionUnread: boolean
   /** When the past-due grace of the subscription ends, on the paid plan after a failed payment. */
   readonly pastDueGraceEnd: Date | undefined
   /** Polar has redirected back after a payment, and the plan has not changed yet. */
@@ -397,7 +399,7 @@ const monthlyPriceNote = (prices: PerCurrency<string>) => {
 
 /**
  * The overage prices that the page shows: the ones in the currency of the subscription. The page
- * shows no prices or costs when it cannot read the subscription.
+ * shows no prices or costs when it cannot read the subscription, or the account has none.
  */
 interface Pricing {
   readonly currency: Currency
@@ -539,6 +541,17 @@ const priceList = ({ currency, prices }: Pricing) => {
 }
 
 /**
+ * Who bills the usage above the allowance on the paid plan. Polar bills overage only to an account
+ * with a subscription; an administrator can give the paid plan without one.
+ */
+const overageCharge = (pricing: Pricing | undefined, subscriptionUnread: boolean): string =>
+  pricing !== undefined
+    ? "Polar bills the usage above the allowance at these prices."
+    : subscriptionUnread
+      ? "Polar bills the usage above the allowance at the overage prices of the subscription."
+      : "Polar bills no usage above the allowance, because the account has no Pro subscription."
+
+/**
  * The usage of the month against the allowance: on the free and the default plan without paid
  * overage, and on the paid plan with its paid-overage switch and the overage prices. Without the
  * card, only the notice of the last post of the overage form shows.
@@ -567,13 +580,15 @@ const usageCard = (options: SignedInPageOptions) => {
         ${overageNoticeHtml(options.overageNotice)}
         <p>${
           on
-            ? `On. When the account uses all of its monthly allowance, its agents continue to run. Polar bills the usage above the allowance at ${pricing === undefined ? "the overage prices of the subscription" : "these prices"}.`
+            ? `On. When the account uses all of its monthly allowance, its agents continue to run. ${overageCharge(pricing, options.subscriptionUnread)}`
             : "Off. When the account uses all of its monthly allowance, its agents stop until the next month."
         }</p>
         ${
-          pricing === undefined
-            ? html`<p class="muted">This page cannot read the subscription, so it does not show the overage prices. Reload the page.</p>`
-            : priceList(pricing)
+          pricing !== undefined
+            ? priceList(pricing)
+            : options.subscriptionUnread
+              ? html`<p class="muted">This page cannot read the subscription, so it does not show the overage prices. Reload the page.</p>`
+              : html`<p class="muted">The account has no Pro subscription in Polar, so Polar bills no overage.</p>`
         }
         <form method="post" action="/billing/overage" class="actions">
           <input type="hidden" name="mode" value="${on ? "hardLimit" : "allowOverage"}">

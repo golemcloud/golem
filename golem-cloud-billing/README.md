@@ -266,7 +266,9 @@ Polar product must have this tax behavior: the page says "plus tax" next to a US
 The page shows the overage prices and the amounts of an account in the currency of its
 subscription, with the prices of that currency in the configuration (see
 [Configuration](#configuration)). When the page cannot read the subscription, it shows the usage
-without prices or costs. Before a subscription, the page cannot know the currency: Polar selects it
+without prices or costs, and asks for a reload. An account on the paid plan without a subscription,
+for example from an administrator, sees the usage without prices or costs too, and that Polar bills
+no overage: the usage push holds its usage (see [Billable overage](#billable-overage)). Before a subscription, the page cannot know the currency: Polar selects it
 only when it creates the checkout, and has no API that selects a currency without a checkout. So
 next to the checkout the page shows the monthly price of the paid plan in each currency, and says
 that the checkout of Polar shows the price before the payment. On the free and the default plan,
