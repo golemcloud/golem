@@ -656,6 +656,7 @@ impl NativeToolTask {
             .map_err(wasmtime::Error::from_anyhow)?;
         let stdout_rep = stdout.as_ref().map(Resource::rep);
         let stderr_rep = stderr.as_ref().map(Resource::rep);
+        let parent_start_index = parent.start_index();
         let execute = async {
             let dispatch = dispatch_tool_attempt(
                 accessor,
@@ -674,7 +675,7 @@ impl NativeToolTask {
                 has_stderr,
                 EntityCallMode::Synchronous,
                 Some(activation),
-                Some(caller),
+                caller,
                 ToolAttachmentCounterparty::SessionJournal,
             )
             .await
@@ -744,6 +745,7 @@ impl NativeToolTask {
             accessor,
             response,
             crate::durable_host::concurrent::InvocationIdSource::HostTask,
+            Some(parent_start_index),
         )
         .await
         .map_err(wasmtime::Error::from_anyhow)?;

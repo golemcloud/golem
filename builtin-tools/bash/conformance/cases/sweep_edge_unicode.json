@@ -1,0 +1,4260 @@
+{
+  "tier": "sweep",
+  "description": "Edge inputs: Unicode text (multi-byte, combining, wide, RTL, ZWJ, BOM, no-break space) in data,\nfile names, IFS, patterns, case mapping and every text filter.\n\nGenerated from fixed tables with plain loops, so every Python 3 produces the same scripts.",
+  "cases": [
+    {
+      "name": "edge unicode: wc -c latin",
+      "script": "printf '%s\\n' 'héllo wörld' | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -c cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -c emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -c combining",
+      "script": "printf '%s\\n' 'été' | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -c hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -c zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -c bom",
+      "script": "printf '%s\\n' '﻿bom text' | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -c nbsp",
+      "script": "printf '%s\\n' 'a b c' | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -c greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -m latin",
+      "script": "printf '%s\\n' 'héllo wörld' | wc -m",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -m cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | wc -m",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -m emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | wc -m",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -m combining",
+      "script": "printf '%s\\n' 'été' | wc -m",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -m hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | wc -m",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -m zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | wc -m",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -m bom",
+      "script": "printf '%s\\n' '﻿bom text' | wc -m",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -m nbsp",
+      "script": "printf '%s\\n' 'a b c' | wc -m",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -m greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | wc -m",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -w latin",
+      "script": "printf '%s\\n' 'héllo wörld' | wc -w",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -w cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | wc -w",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -w emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | wc -w",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -w combining",
+      "script": "printf '%s\\n' 'été' | wc -w",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -w hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | wc -w",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -w zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | wc -w",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -w bom",
+      "script": "printf '%s\\n' '﻿bom text' | wc -w",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -w nbsp",
+      "script": "printf '%s\\n' 'a b c' | wc -w",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -w greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | wc -w",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -L latin",
+      "script": "printf '%s\\n' 'héllo wörld' | wc -L",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -L cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | wc -L",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -L emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | wc -L",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -L combining",
+      "script": "printf '%s\\n' 'été' | wc -L",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -L hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | wc -L",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -L zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | wc -L",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -L bom",
+      "script": "printf '%s\\n' '﻿bom text' | wc -L",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -L nbsp",
+      "script": "printf '%s\\n' 'a b c' | wc -L",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: wc -L greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | wc -L",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cut -c latin",
+      "script": "printf '%s\\n' 'héllo wörld' | cut -c1-3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cut -c cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | cut -c1-3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cut -c emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | cut -c1-3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cut -c combining",
+      "script": "printf '%s\\n' 'été' | cut -c1-3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cut -c hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | cut -c1-3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cut -c zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | cut -c1-3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cut -c bom",
+      "script": "printf '%s\\n' '﻿bom text' | cut -c1-3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cut -c nbsp",
+      "script": "printf '%s\\n' 'a b c' | cut -c1-3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cut -c greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | cut -c1-3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cut -b latin",
+      "script": "printf '%s\\n' 'héllo wörld' | cut -b1-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cut -b cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | cut -b1-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cut -b emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | cut -b1-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cut -b combining",
+      "script": "printf '%s\\n' 'été' | cut -b1-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cut -b hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | cut -b1-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cut -b zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | cut -b1-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cut -b bom",
+      "script": "printf '%s\\n' '﻿bom text' | cut -b1-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cut -b nbsp",
+      "script": "printf '%s\\n' 'a b c' | cut -b1-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cut -b greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | cut -b1-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: head -c latin",
+      "script": "printf '%s\\n' 'héllo wörld' | head -c 4 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: head -c cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | head -c 4 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: head -c emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | head -c 4 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: head -c combining",
+      "script": "printf '%s\\n' 'été' | head -c 4 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: head -c hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | head -c 4 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: head -c zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | head -c 4 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: head -c bom",
+      "script": "printf '%s\\n' '﻿bom text' | head -c 4 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: head -c nbsp",
+      "script": "printf '%s\\n' 'a b c' | head -c 4 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: head -c greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | head -c 4 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tail -c latin",
+      "script": "printf '%s\\n' 'héllo wörld' | tail -c 4 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tail -c cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | tail -c 4 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tail -c emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | tail -c 4 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tail -c combining",
+      "script": "printf '%s\\n' 'été' | tail -c 4 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tail -c hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | tail -c 4 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tail -c zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | tail -c 4 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tail -c bom",
+      "script": "printf '%s\\n' '﻿bom text' | tail -c 4 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tail -c nbsp",
+      "script": "printf '%s\\n' 'a b c' | tail -c 4 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tail -c greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | tail -c 4 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: rev latin",
+      "script": "printf '%s\\n' 'héllo wörld' | rev",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: rev cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | rev",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: rev emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | rev",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: rev combining",
+      "script": "printf '%s\\n' 'été' | rev",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: rev hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | rev",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: rev zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | rev",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: rev bom",
+      "script": "printf '%s\\n' '﻿bom text' | rev",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: rev nbsp",
+      "script": "printf '%s\\n' 'a b c' | rev",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: rev greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | rev",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: fold -w latin",
+      "script": "printf '%s\\n' 'héllo wörld' | fold -w 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: fold -w cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | fold -w 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: fold -w emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | fold -w 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: fold -w combining",
+      "script": "printf '%s\\n' 'été' | fold -w 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: fold -w hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | fold -w 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: fold -w zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | fold -w 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: fold -w bom",
+      "script": "printf '%s\\n' '﻿bom text' | fold -w 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: fold -w nbsp",
+      "script": "printf '%s\\n' 'a b c' | fold -w 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: fold -w greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | fold -w 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed any char latin",
+      "script": "printf '%s\\n' 'héllo wörld' | sed 's/./<&>/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed any char cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | sed 's/./<&>/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed any char emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | sed 's/./<&>/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed any char combining",
+      "script": "printf '%s\\n' 'été' | sed 's/./<&>/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed any char hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | sed 's/./<&>/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed any char zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | sed 's/./<&>/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed any char bom",
+      "script": "printf '%s\\n' '﻿bom text' | sed 's/./<&>/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed any char nbsp",
+      "script": "printf '%s\\n' 'a b c' | sed 's/./<&>/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed any char greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | sed 's/./<&>/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed swap first two latin",
+      "script": "printf '%s\\n' 'héllo wörld' | sed 's/^\\(.\\)\\(.\\)/\\2\\1/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed swap first two cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | sed 's/^\\(.\\)\\(.\\)/\\2\\1/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed swap first two emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | sed 's/^\\(.\\)\\(.\\)/\\2\\1/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed swap first two combining",
+      "script": "printf '%s\\n' 'été' | sed 's/^\\(.\\)\\(.\\)/\\2\\1/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed swap first two hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | sed 's/^\\(.\\)\\(.\\)/\\2\\1/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed swap first two zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | sed 's/^\\(.\\)\\(.\\)/\\2\\1/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed swap first two bom",
+      "script": "printf '%s\\n' '﻿bom text' | sed 's/^\\(.\\)\\(.\\)/\\2\\1/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed swap first two nbsp",
+      "script": "printf '%s\\n' 'a b c' | sed 's/^\\(.\\)\\(.\\)/\\2\\1/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed swap first two greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | sed 's/^\\(.\\)\\(.\\)/\\2\\1/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed -n l latin",
+      "script": "printf '%s\\n' 'héllo wörld' | sed -n l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed -n l cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | sed -n l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed -n l emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | sed -n l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed -n l combining",
+      "script": "printf '%s\\n' 'été' | sed -n l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed -n l hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | sed -n l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed -n l zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | sed -n l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed -n l bom",
+      "script": "printf '%s\\n' '﻿bom text' | sed -n l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed -n l nbsp",
+      "script": "printf '%s\\n' 'a b c' | sed -n l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed -n l greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | sed -n l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -o dot latin",
+      "script": "printf '%s\\n' 'héllo wörld' | grep -o . | head -n 5",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -o dot cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | grep -o . | head -n 5",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -o dot emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | grep -o . | head -n 5",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -o dot combining",
+      "script": "printf '%s\\n' 'été' | grep -o . | head -n 5",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -o dot hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | grep -o . | head -n 5",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -o dot zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | grep -o . | head -n 5",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -o dot bom",
+      "script": "printf '%s\\n' '﻿bom text' | grep -o . | head -n 5",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -o dot nbsp",
+      "script": "printf '%s\\n' 'a b c' | grep -o . | head -n 5",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -o dot greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | grep -o . | head -n 5",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -E interval latin",
+      "script": "printf '%s\\n' 'héllo wörld' | grep -E -o '^.{3}'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -E interval cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | grep -E -o '^.{3}'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -E interval emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | grep -E -o '^.{3}'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -E interval combining",
+      "script": "printf '%s\\n' 'été' | grep -E -o '^.{3}'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -E interval hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | grep -E -o '^.{3}'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -E interval zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | grep -E -o '^.{3}'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -E interval bom",
+      "script": "printf '%s\\n' '﻿bom text' | grep -E -o '^.{3}'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -E interval nbsp",
+      "script": "printf '%s\\n' 'a b c' | grep -E -o '^.{3}'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -E interval greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | grep -E -o '^.{3}'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep alpha class latin",
+      "script": "printf '%s\\n' 'héllo wörld' | grep -o '[[:alpha:]]*'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep alpha class cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | grep -o '[[:alpha:]]*'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep alpha class emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | grep -o '[[:alpha:]]*'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep alpha class combining",
+      "script": "printf '%s\\n' 'été' | grep -o '[[:alpha:]]*'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep alpha class hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | grep -o '[[:alpha:]]*'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep alpha class zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | grep -o '[[:alpha:]]*'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep alpha class bom",
+      "script": "printf '%s\\n' '﻿bom text' | grep -o '[[:alpha:]]*'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep alpha class nbsp",
+      "script": "printf '%s\\n' 'a b c' | grep -o '[[:alpha:]]*'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep alpha class greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | grep -o '[[:alpha:]]*'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep space class latin",
+      "script": "printf '%s\\n' 'héllo wörld' | grep -o '[[:space:]]' | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep space class cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | grep -o '[[:space:]]' | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep space class emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | grep -o '[[:space:]]' | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep space class combining",
+      "script": "printf '%s\\n' 'été' | grep -o '[[:space:]]' | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep space class hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | grep -o '[[:space:]]' | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep space class zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | grep -o '[[:space:]]' | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep space class bom",
+      "script": "printf '%s\\n' '﻿bom text' | grep -o '[[:space:]]' | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep space class nbsp",
+      "script": "printf '%s\\n' 'a b c' | grep -o '[[:space:]]' | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep space class greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | grep -o '[[:space:]]' | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed alpha class latin",
+      "script": "printf '%s\\n' 'héllo wörld' | sed 's/[[:alpha:]]/A/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed alpha class cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | sed 's/[[:alpha:]]/A/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed alpha class emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | sed 's/[[:alpha:]]/A/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed alpha class combining",
+      "script": "printf '%s\\n' 'été' | sed 's/[[:alpha:]]/A/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed alpha class hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | sed 's/[[:alpha:]]/A/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed alpha class zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | sed 's/[[:alpha:]]/A/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed alpha class bom",
+      "script": "printf '%s\\n' '﻿bom text' | sed 's/[[:alpha:]]/A/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed alpha class nbsp",
+      "script": "printf '%s\\n' 'a b c' | sed 's/[[:alpha:]]/A/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed alpha class greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | sed 's/[[:alpha:]]/A/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: od -c latin",
+      "script": "printf '%s\\n' 'héllo wörld' | od -An -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: od -c cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | od -An -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: od -c emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | od -An -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: od -c combining",
+      "script": "printf '%s\\n' 'été' | od -An -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: od -c hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | od -An -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: od -c zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | od -An -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: od -c bom",
+      "script": "printf '%s\\n' '﻿bom text' | od -An -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: od -c nbsp",
+      "script": "printf '%s\\n' 'a b c' | od -An -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: od -c greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | od -An -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cat -A latin",
+      "script": "printf '%s\\n' 'héllo wörld' | cat -A",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cat -A cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | cat -A",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cat -A emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | cat -A",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cat -A combining",
+      "script": "printf '%s\\n' 'été' | cat -A",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cat -A hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | cat -A",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cat -A zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | cat -A",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cat -A bom",
+      "script": "printf '%s\\n' '﻿bom text' | cat -A",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cat -A nbsp",
+      "script": "printf '%s\\n' 'a b c' | cat -A",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cat -A greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | cat -A",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr delete ascii latin",
+      "script": "printf '%s\\n' 'héllo wörld' | tr -d 'a-z'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr delete ascii cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | tr -d 'a-z'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr delete ascii emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | tr -d 'a-z'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr delete ascii combining",
+      "script": "printf '%s\\n' 'été' | tr -d 'a-z'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr delete ascii hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | tr -d 'a-z'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr delete ascii zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | tr -d 'a-z'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr delete ascii bom",
+      "script": "printf '%s\\n' '﻿bom text' | tr -d 'a-z'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr delete ascii nbsp",
+      "script": "printf '%s\\n' 'a b c' | tr -d 'a-z'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr delete ascii greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | tr -d 'a-z'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr upper classes latin",
+      "script": "printf '%s\\n' 'héllo wörld' | tr '[:lower:]' '[:upper:]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr upper classes cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | tr '[:lower:]' '[:upper:]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr upper classes emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | tr '[:lower:]' '[:upper:]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr upper classes combining",
+      "script": "printf '%s\\n' 'été' | tr '[:lower:]' '[:upper:]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr upper classes hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | tr '[:lower:]' '[:upper:]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr upper classes zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | tr '[:lower:]' '[:upper:]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr upper classes bom",
+      "script": "printf '%s\\n' '﻿bom text' | tr '[:lower:]' '[:upper:]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr upper classes nbsp",
+      "script": "printf '%s\\n' 'a b c' | tr '[:lower:]' '[:upper:]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr upper classes greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | tr '[:lower:]' '[:upper:]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr complement latin",
+      "script": "printf '%s\\n' 'héllo wörld' | tr -c 'a-z\\n' '_'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr complement cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | tr -c 'a-z\\n' '_'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr complement emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | tr -c 'a-z\\n' '_'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr complement combining",
+      "script": "printf '%s\\n' 'été' | tr -c 'a-z\\n' '_'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr complement hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | tr -c 'a-z\\n' '_'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr complement zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | tr -c 'a-z\\n' '_'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr complement bom",
+      "script": "printf '%s\\n' '﻿bom text' | tr -c 'a-z\\n' '_'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr complement nbsp",
+      "script": "printf '%s\\n' 'a b c' | tr -c 'a-z\\n' '_'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr complement greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | tr -c 'a-z\\n' '_'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: base64 latin",
+      "script": "printf '%s\\n' 'héllo wörld' | base64",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: base64 cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | base64",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: base64 emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | base64",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: base64 combining",
+      "script": "printf '%s\\n' 'été' | base64",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: base64 hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | base64",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: base64 zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | base64",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: base64 bom",
+      "script": "printf '%s\\n' '﻿bom text' | base64",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: base64 nbsp",
+      "script": "printf '%s\\n' 'a b c' | base64",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: base64 greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | base64",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sha256sum latin",
+      "script": "printf '%s\\n' 'héllo wörld' | sha256sum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sha256sum cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | sha256sum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sha256sum emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | sha256sum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sha256sum combining",
+      "script": "printf '%s\\n' 'été' | sha256sum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sha256sum hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | sha256sum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sha256sum zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | sha256sum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sha256sum bom",
+      "script": "printf '%s\\n' '﻿bom text' | sha256sum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sha256sum nbsp",
+      "script": "printf '%s\\n' 'a b c' | sha256sum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sha256sum greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | sha256sum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq length latin",
+      "script": "printf '%s\\n' 'héllo wörld' | jq -R 'length'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq length cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | jq -R 'length'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq length emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | jq -R 'length'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq length combining",
+      "script": "printf '%s\\n' 'été' | jq -R 'length'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq length hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | jq -R 'length'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq length zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | jq -R 'length'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq length bom",
+      "script": "printf '%s\\n' '﻿bom text' | jq -R 'length'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq length nbsp",
+      "script": "printf '%s\\n' 'a b c' | jq -R 'length'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq length greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | jq -R 'length'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq explode latin",
+      "script": "printf '%s\\n' 'héllo wörld' | jq -c -R 'explode'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq explode cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | jq -c -R 'explode'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq explode emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | jq -c -R 'explode'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq explode combining",
+      "script": "printf '%s\\n' 'été' | jq -c -R 'explode'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq explode hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | jq -c -R 'explode'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq explode zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | jq -c -R 'explode'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq explode bom",
+      "script": "printf '%s\\n' '﻿bom text' | jq -c -R 'explode'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq explode nbsp",
+      "script": "printf '%s\\n' 'a b c' | jq -c -R 'explode'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq explode greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | jq -c -R 'explode'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq ascii output latin",
+      "script": "printf '%s\\n' 'héllo wörld' | jq -a -R '.'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq ascii output cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | jq -a -R '.'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq ascii output emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | jq -a -R '.'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq ascii output combining",
+      "script": "printf '%s\\n' 'été' | jq -a -R '.'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq ascii output hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | jq -a -R '.'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq ascii output zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | jq -a -R '.'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq ascii output bom",
+      "script": "printf '%s\\n' '﻿bom text' | jq -a -R '.'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq ascii output nbsp",
+      "script": "printf '%s\\n' 'a b c' | jq -a -R '.'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq ascii output greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | jq -a -R '.'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq slice latin",
+      "script": "printf '%s\\n' 'héllo wörld' | jq -R '.[1:3]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq slice cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | jq -R '.[1:3]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq slice emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | jq -R '.[1:3]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq slice combining",
+      "script": "printf '%s\\n' 'été' | jq -R '.[1:3]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq slice hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | jq -R '.[1:3]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq slice zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | jq -R '.[1:3]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq slice bom",
+      "script": "printf '%s\\n' '﻿bom text' | jq -R '.[1:3]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq slice nbsp",
+      "script": "printf '%s\\n' 'a b c' | jq -R '.[1:3]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq slice greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | jq -R '.[1:3]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq utf8bytelength latin",
+      "script": "printf '%s\\n' 'héllo wörld' | jq -R 'utf8bytelength'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq utf8bytelength cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | jq -R 'utf8bytelength'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq utf8bytelength emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | jq -R 'utf8bytelength'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq utf8bytelength combining",
+      "script": "printf '%s\\n' 'été' | jq -R 'utf8bytelength'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq utf8bytelength hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | jq -R 'utf8bytelength'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq utf8bytelength zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | jq -R 'utf8bytelength'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq utf8bytelength bom",
+      "script": "printf '%s\\n' '﻿bom text' | jq -R 'utf8bytelength'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq utf8bytelength nbsp",
+      "script": "printf '%s\\n' 'a b c' | jq -R 'utf8bytelength'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq utf8bytelength greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | jq -R 'utf8bytelength'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq ascii_downcase latin",
+      "script": "printf '%s\\n' 'héllo wörld' | jq -R 'ascii_downcase'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq ascii_downcase cjk",
+      "script": "printf '%s\\n' '日本語 テキスト' | jq -R 'ascii_downcase'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq ascii_downcase emoji",
+      "script": "printf '%s\\n' 'a😀b👍🏽c' | jq -R 'ascii_downcase'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq ascii_downcase combining",
+      "script": "printf '%s\\n' 'été' | jq -R 'ascii_downcase'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq ascii_downcase hebrew",
+      "script": "printf '%s\\n' 'שלום עולם' | jq -R 'ascii_downcase'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq ascii_downcase zwj",
+      "script": "printf '%s\\n' '👨‍👩‍👧 fam' | jq -R 'ascii_downcase'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq ascii_downcase bom",
+      "script": "printf '%s\\n' '﻿bom text' | jq -R 'ascii_downcase'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq ascii_downcase nbsp",
+      "script": "printf '%s\\n' 'a b c' | jq -R 'ascii_downcase'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq ascii_downcase greek",
+      "script": "printf '%s\\n' 'Αλφα ΒΗΤΑ' | jq -R 'ascii_downcase'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expr length latin",
+      "script": "x='héllo wörld'; expr length \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expr length cjk",
+      "script": "x='日本語 テキスト'; expr length \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expr length emoji",
+      "script": "x='a😀b👍🏽c'; expr length \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expr length combining",
+      "script": "x='été'; expr length \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expr length hebrew",
+      "script": "x='שלום עולם'; expr length \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expr length zwj",
+      "script": "x='👨‍👩‍👧 fam'; expr length \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expr length bom",
+      "script": "x='﻿bom text'; expr length \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expr length nbsp",
+      "script": "x='a b c'; expr length \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expr length greek",
+      "script": "x='Αλφα ΒΗΤΑ'; expr length \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expr substr latin",
+      "script": "x='héllo wörld'; expr substr \"$x\" 2 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expr substr cjk",
+      "script": "x='日本語 テキスト'; expr substr \"$x\" 2 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expr substr emoji",
+      "script": "x='a😀b👍🏽c'; expr substr \"$x\" 2 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expr substr combining",
+      "script": "x='été'; expr substr \"$x\" 2 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expr substr hebrew",
+      "script": "x='שלום עולם'; expr substr \"$x\" 2 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expr substr zwj",
+      "script": "x='👨‍👩‍👧 fam'; expr substr \"$x\" 2 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expr substr bom",
+      "script": "x='﻿bom text'; expr substr \"$x\" 2 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expr substr nbsp",
+      "script": "x='a b c'; expr substr \"$x\" 2 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expr substr greek",
+      "script": "x='Αλφα ΒΗΤΑ'; expr substr \"$x\" 2 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: length latin",
+      "script": "x='héllo wörld'; echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: length cjk",
+      "script": "x='日本語 テキスト'; echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: length emoji",
+      "script": "x='a😀b👍🏽c'; echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: length combining",
+      "script": "x='été'; echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: length hebrew",
+      "script": "x='שלום עולם'; echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: length zwj",
+      "script": "x='👨‍👩‍👧 fam'; echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: length bom",
+      "script": "x='﻿bom text'; echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: length nbsp",
+      "script": "x='a b c'; echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: length greek",
+      "script": "x='Αλφα ΒΗΤΑ'; echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: substring latin",
+      "script": "x='héllo wörld'; echo \"${x:1:3}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: substring cjk",
+      "script": "x='日本語 テキスト'; echo \"${x:1:3}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: substring emoji",
+      "script": "x='a😀b👍🏽c'; echo \"${x:1:3}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: substring combining",
+      "script": "x='été'; echo \"${x:1:3}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: substring hebrew",
+      "script": "x='שלום עולם'; echo \"${x:1:3}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: substring zwj",
+      "script": "x='👨‍👩‍👧 fam'; echo \"${x:1:3}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: substring bom",
+      "script": "x='﻿bom text'; echo \"${x:1:3}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: substring nbsp",
+      "script": "x='a b c'; echo \"${x:1:3}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: substring greek",
+      "script": "x='Αλφα ΒΗΤΑ'; echo \"${x:1:3}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: negative substring latin",
+      "script": "x='héllo wörld'; echo \"${x: -2}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: negative substring cjk",
+      "script": "x='日本語 テキスト'; echo \"${x: -2}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: negative substring emoji",
+      "script": "x='a😀b👍🏽c'; echo \"${x: -2}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: negative substring combining",
+      "script": "x='été'; echo \"${x: -2}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: negative substring hebrew",
+      "script": "x='שלום עולם'; echo \"${x: -2}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: negative substring zwj",
+      "script": "x='👨‍👩‍👧 fam'; echo \"${x: -2}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: negative substring bom",
+      "script": "x='﻿bom text'; echo \"${x: -2}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: negative substring nbsp",
+      "script": "x='a b c'; echo \"${x: -2}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: negative substring greek",
+      "script": "x='Αλφα ΒΗΤΑ'; echo \"${x: -2}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper latin",
+      "script": "x='héllo wörld'; echo \"${x^^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper cjk",
+      "script": "x='日本語 テキスト'; echo \"${x^^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper emoji",
+      "script": "x='a😀b👍🏽c'; echo \"${x^^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper combining",
+      "script": "x='été'; echo \"${x^^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper hebrew",
+      "script": "x='שלום עולם'; echo \"${x^^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper zwj",
+      "script": "x='👨‍👩‍👧 fam'; echo \"${x^^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper bom",
+      "script": "x='﻿bom text'; echo \"${x^^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper nbsp",
+      "script": "x='a b c'; echo \"${x^^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper greek",
+      "script": "x='Αλφα ΒΗΤΑ'; echo \"${x^^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: lower latin",
+      "script": "x='héllo wörld'; echo \"${x,,}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: lower cjk",
+      "script": "x='日本語 テキスト'; echo \"${x,,}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: lower emoji",
+      "script": "x='a😀b👍🏽c'; echo \"${x,,}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: lower combining",
+      "script": "x='été'; echo \"${x,,}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: lower hebrew",
+      "script": "x='שלום עולם'; echo \"${x,,}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: lower zwj",
+      "script": "x='👨‍👩‍👧 fam'; echo \"${x,,}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: lower bom",
+      "script": "x='﻿bom text'; echo \"${x,,}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: lower nbsp",
+      "script": "x='a b c'; echo \"${x,,}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: lower greek",
+      "script": "x='Αλφα ΒΗΤΑ'; echo \"${x,,}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper first latin",
+      "script": "x='héllo wörld'; echo \"${x^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper first cjk",
+      "script": "x='日本語 テキスト'; echo \"${x^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper first emoji",
+      "script": "x='a😀b👍🏽c'; echo \"${x^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper first combining",
+      "script": "x='été'; echo \"${x^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper first hebrew",
+      "script": "x='שלום עולם'; echo \"${x^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper first zwj",
+      "script": "x='👨‍👩‍👧 fam'; echo \"${x^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper first bom",
+      "script": "x='﻿bom text'; echo \"${x^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper first nbsp",
+      "script": "x='a b c'; echo \"${x^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper first greek",
+      "script": "x='Αλφα ΒΗΤΑ'; echo \"${x^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: lower first latin",
+      "script": "x='héllo wörld'; echo \"${x,}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: lower first cjk",
+      "script": "x='日本語 テキスト'; echo \"${x,}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: lower first emoji",
+      "script": "x='a😀b👍🏽c'; echo \"${x,}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: lower first combining",
+      "script": "x='été'; echo \"${x,}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: lower first hebrew",
+      "script": "x='שלום עולם'; echo \"${x,}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: lower first zwj",
+      "script": "x='👨‍👩‍👧 fam'; echo \"${x,}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: lower first bom",
+      "script": "x='﻿bom text'; echo \"${x,}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: lower first nbsp",
+      "script": "x='a b c'; echo \"${x,}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: lower first greek",
+      "script": "x='Αλφα ΒΗΤΑ'; echo \"${x,}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: trim one char front latin",
+      "script": "x='héllo wörld'; echo \"${x#?}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: trim one char front cjk",
+      "script": "x='日本語 テキスト'; echo \"${x#?}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: trim one char front emoji",
+      "script": "x='a😀b👍🏽c'; echo \"${x#?}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: trim one char front combining",
+      "script": "x='été'; echo \"${x#?}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: trim one char front hebrew",
+      "script": "x='שלום עולם'; echo \"${x#?}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: trim one char front zwj",
+      "script": "x='👨‍👩‍👧 fam'; echo \"${x#?}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: trim one char front bom",
+      "script": "x='﻿bom text'; echo \"${x#?}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: trim one char front nbsp",
+      "script": "x='a b c'; echo \"${x#?}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: trim one char front greek",
+      "script": "x='Αλφα ΒΗΤΑ'; echo \"${x#?}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: trim one char back latin",
+      "script": "x='héllo wörld'; echo \"${x%?}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: trim one char back cjk",
+      "script": "x='日本語 テキスト'; echo \"${x%?}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: trim one char back emoji",
+      "script": "x='a😀b👍🏽c'; echo \"${x%?}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: trim one char back combining",
+      "script": "x='été'; echo \"${x%?}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: trim one char back hebrew",
+      "script": "x='שלום עולם'; echo \"${x%?}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: trim one char back zwj",
+      "script": "x='👨‍👩‍👧 fam'; echo \"${x%?}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: trim one char back bom",
+      "script": "x='﻿bom text'; echo \"${x%?}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: trim one char back nbsp",
+      "script": "x='a b c'; echo \"${x%?}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: trim one char back greek",
+      "script": "x='Αλφα ΒΗΤΑ'; echo \"${x%?}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: char loop latin",
+      "script": "x='héllo wörld'; n=0; while [ -n \"$x\" ]; do x=${x#?}; n=$((n+1)); done; echo $n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: char loop cjk",
+      "script": "x='日本語 テキスト'; n=0; while [ -n \"$x\" ]; do x=${x#?}; n=$((n+1)); done; echo $n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: char loop emoji",
+      "script": "x='a😀b👍🏽c'; n=0; while [ -n \"$x\" ]; do x=${x#?}; n=$((n+1)); done; echo $n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: char loop combining",
+      "script": "x='été'; n=0; while [ -n \"$x\" ]; do x=${x#?}; n=$((n+1)); done; echo $n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: char loop hebrew",
+      "script": "x='שלום עולם'; n=0; while [ -n \"$x\" ]; do x=${x#?}; n=$((n+1)); done; echo $n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: char loop zwj",
+      "script": "x='👨‍👩‍👧 fam'; n=0; while [ -n \"$x\" ]; do x=${x#?}; n=$((n+1)); done; echo $n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: char loop bom",
+      "script": "x='﻿bom text'; n=0; while [ -n \"$x\" ]; do x=${x#?}; n=$((n+1)); done; echo $n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: char loop nbsp",
+      "script": "x='a b c'; n=0; while [ -n \"$x\" ]; do x=${x#?}; n=$((n+1)); done; echo $n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: char loop greek",
+      "script": "x='Αλφα ΒΗΤΑ'; n=0; while [ -n \"$x\" ]; do x=${x#?}; n=$((n+1)); done; echo $n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: transform Q latin",
+      "script": "x='héllo wörld'; echo \"${x@Q}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: transform Q cjk",
+      "script": "x='日本語 テキスト'; echo \"${x@Q}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: transform Q emoji",
+      "script": "x='a😀b👍🏽c'; echo \"${x@Q}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: transform Q combining",
+      "script": "x='été'; echo \"${x@Q}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: transform Q hebrew",
+      "script": "x='שלום עולם'; echo \"${x@Q}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: transform Q zwj",
+      "script": "x='👨‍👩‍👧 fam'; echo \"${x@Q}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: transform Q bom",
+      "script": "x='﻿bom text'; echo \"${x@Q}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: transform Q nbsp",
+      "script": "x='a b c'; echo \"${x@Q}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: transform Q greek",
+      "script": "x='Αλφα ΒΗΤΑ'; echo \"${x@Q}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf q latin",
+      "script": "x='héllo wörld'; printf '%q\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf q cjk",
+      "script": "x='日本語 テキスト'; printf '%q\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf q emoji",
+      "script": "x='a😀b👍🏽c'; printf '%q\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf q combining",
+      "script": "x='été'; printf '%q\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf q hebrew",
+      "script": "x='שלום עולם'; printf '%q\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf q zwj",
+      "script": "x='👨‍👩‍👧 fam'; printf '%q\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf q bom",
+      "script": "x='﻿bom text'; printf '%q\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf q nbsp",
+      "script": "x='a b c'; printf '%q\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf q greek",
+      "script": "x='Αλφα ΒΗΤΑ'; printf '%q\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: declare -p latin",
+      "script": "x='héllo wörld'; declare -p x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: declare -p cjk",
+      "script": "x='日本語 テキスト'; declare -p x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: declare -p emoji",
+      "script": "x='a😀b👍🏽c'; declare -p x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: declare -p combining",
+      "script": "x='été'; declare -p x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: declare -p hebrew",
+      "script": "x='שלום עולם'; declare -p x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: declare -p zwj",
+      "script": "x='👨‍👩‍👧 fam'; declare -p x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: declare -p bom",
+      "script": "x='﻿bom text'; declare -p x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: declare -p nbsp",
+      "script": "x='a b c'; declare -p x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: declare -p greek",
+      "script": "x='Αλφα ΒΗΤΑ'; declare -p x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf width latin",
+      "script": "x='héllo wörld'; printf '[%12s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf width cjk",
+      "script": "x='日本語 テキスト'; printf '[%12s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf width emoji",
+      "script": "x='a😀b👍🏽c'; printf '[%12s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf width combining",
+      "script": "x='été'; printf '[%12s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf width hebrew",
+      "script": "x='שלום עולם'; printf '[%12s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf width zwj",
+      "script": "x='👨‍👩‍👧 fam'; printf '[%12s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf width bom",
+      "script": "x='﻿bom text'; printf '[%12s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf width nbsp",
+      "script": "x='a b c'; printf '[%12s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf width greek",
+      "script": "x='Αλφα ΒΗΤΑ'; printf '[%12s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf left width latin",
+      "script": "x='héllo wörld'; printf '[%-8s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf left width cjk",
+      "script": "x='日本語 テキスト'; printf '[%-8s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf left width emoji",
+      "script": "x='a😀b👍🏽c'; printf '[%-8s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf left width combining",
+      "script": "x='été'; printf '[%-8s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf left width hebrew",
+      "script": "x='שלום עולם'; printf '[%-8s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf left width zwj",
+      "script": "x='👨‍👩‍👧 fam'; printf '[%-8s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf left width bom",
+      "script": "x='﻿bom text'; printf '[%-8s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf left width nbsp",
+      "script": "x='a b c'; printf '[%-8s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf left width greek",
+      "script": "x='Αλφα ΒΗΤΑ'; printf '[%-8s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf precision latin",
+      "script": "x='héllo wörld'; printf '[%.3s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf precision cjk",
+      "script": "x='日本語 テキスト'; printf '[%.3s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf precision emoji",
+      "script": "x='a😀b👍🏽c'; printf '[%.3s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf precision combining",
+      "script": "x='été'; printf '[%.3s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf precision hebrew",
+      "script": "x='שלום עולם'; printf '[%.3s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf precision zwj",
+      "script": "x='👨‍👩‍👧 fam'; printf '[%.3s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf precision bom",
+      "script": "x='﻿bom text'; printf '[%.3s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf precision nbsp",
+      "script": "x='a b c'; printf '[%.3s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf precision greek",
+      "script": "x='Αλφα ΒΗΤΑ'; printf '[%.3s]\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: read -n latin",
+      "script": "x='héllo wörld'; IFS= read -r -n 3 y <<< \"$x\"; printf '%s\\n' \"$y\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: read -n cjk",
+      "script": "x='日本語 テキスト'; IFS= read -r -n 3 y <<< \"$x\"; printf '%s\\n' \"$y\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: read -n emoji",
+      "script": "x='a😀b👍🏽c'; IFS= read -r -n 3 y <<< \"$x\"; printf '%s\\n' \"$y\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: read -n combining",
+      "script": "x='été'; IFS= read -r -n 3 y <<< \"$x\"; printf '%s\\n' \"$y\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: read -n hebrew",
+      "script": "x='שלום עולם'; IFS= read -r -n 3 y <<< \"$x\"; printf '%s\\n' \"$y\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: read -n zwj",
+      "script": "x='👨‍👩‍👧 fam'; IFS= read -r -n 3 y <<< \"$x\"; printf '%s\\n' \"$y\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: read -n bom",
+      "script": "x='﻿bom text'; IFS= read -r -n 3 y <<< \"$x\"; printf '%s\\n' \"$y\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: read -n nbsp",
+      "script": "x='a b c'; IFS= read -r -n 3 y <<< \"$x\"; printf '%s\\n' \"$y\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: read -n greek",
+      "script": "x='Αλφα ΒΗΤΑ'; IFS= read -r -n 3 y <<< \"$x\"; printf '%s\\n' \"$y\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: read -N latin",
+      "script": "x='héllo wörld'; IFS= read -r -N 2 y <<< \"$x\"; printf '%s\\n' \"$y\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: read -N cjk",
+      "script": "x='日本語 テキスト'; IFS= read -r -N 2 y <<< \"$x\"; printf '%s\\n' \"$y\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: read -N emoji",
+      "script": "x='a😀b👍🏽c'; IFS= read -r -N 2 y <<< \"$x\"; printf '%s\\n' \"$y\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: read -N combining",
+      "script": "x='été'; IFS= read -r -N 2 y <<< \"$x\"; printf '%s\\n' \"$y\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: read -N hebrew",
+      "script": "x='שלום עולם'; IFS= read -r -N 2 y <<< \"$x\"; printf '%s\\n' \"$y\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: read -N zwj",
+      "script": "x='👨‍👩‍👧 fam'; IFS= read -r -N 2 y <<< \"$x\"; printf '%s\\n' \"$y\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: read -N bom",
+      "script": "x='﻿bom text'; IFS= read -r -N 2 y <<< \"$x\"; printf '%s\\n' \"$y\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: read -N nbsp",
+      "script": "x='a b c'; IFS= read -r -N 2 y <<< \"$x\"; printf '%s\\n' \"$y\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: read -N greek",
+      "script": "x='Αλφα ΒΗΤΑ'; IFS= read -r -N 2 y <<< \"$x\"; printf '%s\\n' \"$y\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: word split latin",
+      "script": "x='héllo wörld'; set -- $x; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: word split cjk",
+      "script": "x='日本語 テキスト'; set -- $x; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: word split emoji",
+      "script": "x='a😀b👍🏽c'; set -- $x; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: word split combining",
+      "script": "x='été'; set -- $x; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: word split hebrew",
+      "script": "x='שלום עולם'; set -- $x; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: word split zwj",
+      "script": "x='👨‍👩‍👧 fam'; set -- $x; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: word split bom",
+      "script": "x='﻿bom text'; set -- $x; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: word split nbsp",
+      "script": "x='a b c'; set -- $x; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: word split greek",
+      "script": "x='Αλφα ΒΗΤΑ'; set -- $x; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: regex groups latin",
+      "script": "x='héllo wörld'; [[ $x =~ ^(.)(.) ]] && echo \"${BASH_REMATCH[2]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: regex groups cjk",
+      "script": "x='日本語 テキスト'; [[ $x =~ ^(.)(.) ]] && echo \"${BASH_REMATCH[2]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: regex groups emoji",
+      "script": "x='a😀b👍🏽c'; [[ $x =~ ^(.)(.) ]] && echo \"${BASH_REMATCH[2]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: regex groups combining",
+      "script": "x='été'; [[ $x =~ ^(.)(.) ]] && echo \"${BASH_REMATCH[2]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: regex groups hebrew",
+      "script": "x='שלום עולם'; [[ $x =~ ^(.)(.) ]] && echo \"${BASH_REMATCH[2]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: regex groups zwj",
+      "script": "x='👨‍👩‍👧 fam'; [[ $x =~ ^(.)(.) ]] && echo \"${BASH_REMATCH[2]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: regex groups bom",
+      "script": "x='﻿bom text'; [[ $x =~ ^(.)(.) ]] && echo \"${BASH_REMATCH[2]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: regex groups nbsp",
+      "script": "x='a b c'; [[ $x =~ ^(.)(.) ]] && echo \"${BASH_REMATCH[2]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: regex groups greek",
+      "script": "x='Αλφα ΒΗΤΑ'; [[ $x =~ ^(.)(.) ]] && echo \"${BASH_REMATCH[2]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: case space class latin",
+      "script": "x='héllo wörld'; case $x in *[[:space:]]*) echo space;; *) echo none;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: case space class cjk",
+      "script": "x='日本語 テキスト'; case $x in *[[:space:]]*) echo space;; *) echo none;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: case space class emoji",
+      "script": "x='a😀b👍🏽c'; case $x in *[[:space:]]*) echo space;; *) echo none;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: case space class combining",
+      "script": "x='été'; case $x in *[[:space:]]*) echo space;; *) echo none;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: case space class hebrew",
+      "script": "x='שלום עולם'; case $x in *[[:space:]]*) echo space;; *) echo none;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: case space class zwj",
+      "script": "x='👨‍👩‍👧 fam'; case $x in *[[:space:]]*) echo space;; *) echo none;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: case space class bom",
+      "script": "x='﻿bom text'; case $x in *[[:space:]]*) echo space;; *) echo none;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: case space class nbsp",
+      "script": "x='a b c'; case $x in *[[:space:]]*) echo space;; *) echo none;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: case space class greek",
+      "script": "x='Αλφα ΒΗΤΑ'; case $x in *[[:space:]]*) echo space;; *) echo none;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: xtrace latin",
+      "script": "x='héllo wörld'; set -x; : \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: xtrace cjk",
+      "script": "x='日本語 テキスト'; set -x; : \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: xtrace emoji",
+      "script": "x='a😀b👍🏽c'; set -x; : \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: xtrace combining",
+      "script": "x='été'; set -x; : \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: xtrace hebrew",
+      "script": "x='שלום עולם'; set -x; : \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: xtrace zwj",
+      "script": "x='👨‍👩‍👧 fam'; set -x; : \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: xtrace bom",
+      "script": "x='﻿bom text'; set -x; : \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: xtrace nbsp",
+      "script": "x='a b c'; set -x; : \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: xtrace greek",
+      "script": "x='Αλφα ΒΗΤΑ'; set -x; : \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: ls",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; ls; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: ls -r",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; ls -r; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: ls -1 | wc -l",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; ls -1 | wc -l; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: ls -b",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; ls -b; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: ls quoting escape",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; ls --quoting-style=escape; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: ls quoting c",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; ls --quoting-style=c; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: ls quoting shell-escape",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; ls --quoting-style=shell-escape; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: ls -Q",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; ls -Q; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: ls -m",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; ls -m; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: ls -x",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; ls -x -w 40; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: ls -C",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; ls -C -w 30; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: echo glob",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; echo *; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: glob one char",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; printf '%s\\n' ?.txt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: glob two chars",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; printf '%s\\n' ??.txt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: glob bracket",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; printf '%s\\n' [日😀]*; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: glob alpha class",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; printf '%s\\n' [[:alpha:]]*; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: glob upper class",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; printf '%s\\n' [[:upper:]]*; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: glob range",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; printf '%s\\n' [Α-Ω]*; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: extglob",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; shopt -s extglob; printf '%s\\n' @(日本|abc).txt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: extglob negation",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; shopt -s extglob; printf '%s\\n' !(*[a-z]*).txt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: nocaseglob",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; shopt -s nocaseglob; printf '%s\\n' H*; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: nocaseglob greek",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; shopt -s nocaseglob; printf '%s\\n' δ*; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: find -name",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; find . -name '?.txt' | sort; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: find -name bracket",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; find . -name '[日ש]*' | sort; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: find -iname",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; find . -iname 'HÉ*' | sort; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: find -iname greek",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; find . -iname 'δ*' | sort; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: find -regex",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; find . -regex '.*/..txt' | sort; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: find -print0",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; find . -name '*.txt' -print0 | sort -z | tr '\\0' '\\n'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: name lengths",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; for f in *; do echo \"${#f} $f\"; done; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: basename suffix",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; basename /tmp/u/日本.txt .txt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: basename suffix option",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; basename -s .txt 日本.txt 😀.txt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: dirname",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; dirname /tmp/日/本.txt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: realpath",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; realpath 日本.txt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: readlink -f",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; readlink -f ./😀.txt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: stat -c %n",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; stat -c %n *.txt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: wc on names",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; printf 'x\\n' > 日本.txt; wc -l 日本.txt abc.txt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: grep -l",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; echo hit > 😀.txt; grep -l hit *; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: grep -H",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; echo hit > שלום.txt; grep -H hit שלום.txt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: cp and ls",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; cp 日本.txt 本.txt && ls 本.txt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: mv and ls",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; mv 😀.txt 😁.txt && ls; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: rm glob",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; rm -v *é*; ls; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: mkdir -v",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; mkdir -v дир; mkdir -pv дир/子/🌳; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: find -type d",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; mkdir -p д/子; find . -type d | sort; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: cd and pwd",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; mkdir дир && cd дир && pwd && echo \"$PWD\"; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: ls -R",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; mkdir 子 && touch 子/é; ls -R; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: ln relative",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; ln -s 日本.txt 链 && readlink 链; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: xargs names",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; printf '%s\\n' * | xargs -n 3 echo; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: xargs -I",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; ls | xargs -I{} echo '<{}>'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: tsort names",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; printf '日 本\\n本 語\\n' | tsort; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: split prefix",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; printf '1\\n2\\n3\\n' | split -l 1 - 分; ls 分*; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: diff names",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; echo a > 日本.txt; echo b > abc.txt; diff 日本.txt abc.txt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: cmp names",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; echo a > 日本.txt; echo b > abc.txt; cmp 日本.txt abc.txt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: file names",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; echo text > 日本.txt; file 日本.txt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: sha256sum names",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; sha256sum 日本.txt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: md5sum -c names",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; md5sum 日本.txt abc.txt > /tmp/sums; md5sum -c /tmp/sums; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: touch missing parent",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; touch 无/文件; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: cat missing name",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; cat 无文件.txt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: ls missing name",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; ls 无文件.txt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: cd missing name",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; cd 无文件; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode names: rmdir missing name",
+      "script": "mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; rmdir 无文件; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: case alpha class",
+      "script": "case é in [[:alpha:]]) echo alpha;; *) echo other;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: case upper class",
+      "script": "case É in [[:upper:]]) echo upper;; *) echo other;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: case range",
+      "script": "case β in [α-ω]) echo greek;; *) echo other;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: case digit class",
+      "script": "case ٣ in [[:digit:]]) echo digit;; *) echo other;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cond nocasematch",
+      "script": "shopt -s nocasematch; [[ ÉtÉ == été ]] && echo same || echo differ",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cond nocasematch greek",
+      "script": "shopt -s nocasematch; [[ ΑΒ == αβ ]] && echo same || echo differ",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cond less than",
+      "script": "[[ ö < z ]] && echo less || echo more",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cond sort order",
+      "script": "[[ é < ê ]] && echo less || echo more",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cond regex alpha",
+      "script": "[[ é =~ ^[[:alpha:]]$ ]] && echo one || echo no",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cond regex two chars",
+      "script": "[[ 日本 =~ ^..$ ]] && echo two || echo no",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cond regex range",
+      "script": "[[ γ =~ ^[α-ω]+$ ]] && echo yes || echo no",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cond glob question",
+      "script": "[[ 😀 == ? ]] && echo one || echo no",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cond glob combining",
+      "script": "[[ é == ? ]] && echo one || echo two",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: replace char",
+      "script": "x=αβγ; echo \"${x/β/b}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: replace range",
+      "script": "x=αβγa; echo \"${x//[α-γ]/x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: replace anchored",
+      "script": "x=été; echo \"${x/#é/E} ${x/%é/E}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: trim pattern",
+      "script": "x=日本語.txt; echo \"${x%.*} ${x##*本}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper sharp s",
+      "script": "x=straße; echo \"${x^^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: lower dotted I",
+      "script": "x=İ; echo \"${x,,}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper dotless i",
+      "script": "x=ı; echo \"${x^^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper final sigma",
+      "script": "x=ος; echo \"${x^^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: lower final sigma",
+      "script": "x=ΟΣ; echo \"${x,,}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper ligature",
+      "script": "x=ﬁ; echo \"${x^^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper digraph",
+      "script": "x=ǆ; echo \"${x^} ${x^^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: toggle case",
+      "script": "x=éÉ; echo \"${x~~}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: upper pattern",
+      "script": "x=été; echo \"${x^^é}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: declare -u",
+      "script": "declare -u x=été; echo \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: declare -l",
+      "script": "declare -l x=ÉTÉ; echo \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: IFS multibyte split",
+      "script": "IFS=é; x=aébéc; set -- $x; echo $#; echo \"$2\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: IFS multibyte read",
+      "script": "IFS=日 read -r a b c <<< '1日2日3'; echo \"$a|$b|$c\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: IFS multibyte join",
+      "script": "IFS=éx; set -- a b c; echo \"$*\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: IFS array join",
+      "script": "a=(1 2 3); IFS=→; echo \"${a[*]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: IFS space and multibyte",
+      "script": "IFS=' é'; x='a é b'; set -- $x; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: IFS nbsp",
+      "script": "IFS=$'\\u00a0'; x=$'a\\u00a0b'; set -- $x; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: read -a unicode",
+      "script": "read -r -a arr <<< 'α β γ'; echo \"${#arr[@]} ${arr[1]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: read -d multibyte",
+      "script": "IFS= read -r -d é x <<< 'abécd'; echo \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: mapfile -d multibyte",
+      "script": "mapfile -t -d é arr <<< 'aébéc'; echo \"${#arr[@]}\"; printf '[%s]' \"${arr[@]}\"; echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf char code",
+      "script": "printf '%d %d %d\\n' \"'é\" \"'日\" \"'😀\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf hex char code",
+      "script": "printf '%x\\n' \"'€\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf %c",
+      "script": "printf '%c|\\n' é 日",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf \\u",
+      "script": "printf '\\u20ac \\u00e9\\n'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf \\U",
+      "script": "printf '\\U0001F600\\n' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf %b \\u",
+      "script": "printf '%b\\n' '\\u20ac'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: echo -e \\u",
+      "script": "echo -e '\\u20ac\\U0001F600'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: ansi-c \\u",
+      "script": "x=$'\\u20ac\\U0001F600'; echo \"${#x} $x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: ansi-c \\u surrogate",
+      "script": "x=$'\\ud800'; printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: ansi-c \\U out of range",
+      "script": "x=$'\\U00110000'; printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf \\u zero",
+      "script": "printf 'a\\u0000b\\n' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf \\u short",
+      "script": "printf '\\u41\\n'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf \\u no digits",
+      "script": "printf '\\uXYZ\\n'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: echo -e \\x high",
+      "script": "echo -e '\\xc3\\xa9'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sort code points",
+      "script": "printf '%s\\n' é z e É 日 a | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sort -r",
+      "script": "printf '%s\\n' é z e É | sort -r",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sort -f",
+      "script": "printf '%s\\n' é É e E | sort -f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sort -d",
+      "script": "printf '%s\\n' 'éb' 'a-c' '!z' | sort -d",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sort -u",
+      "script": "printf '%s\\n' é é e | sort -u",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sort -k",
+      "script": "printf '%s\\n' 'x é' 'y a' 'z 日' | sort -k2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sort -t multibyte",
+      "script": "printf '%s\\n' 'aéb' | sort -t é -k2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: uniq -i",
+      "script": "printf '%s\\n' é É e | uniq -i",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: uniq -c",
+      "script": "printf '%s\\n' 日 日 本 | uniq -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: comm",
+      "script": "printf '%s\\n' a é > /tmp/a; printf '%s\\n' é 日 > /tmp/b; comm /tmp/a /tmp/b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: join",
+      "script": "printf '%s\\n' 'é 1' '日 2' > /tmp/a; printf '%s\\n' 'é x' '日 y' > /tmp/b; join /tmp/a /tmp/b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: join -t multibyte",
+      "script": "printf 'aéb\\n' > /tmp/a; join -t é /tmp/a /tmp/a",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cut -d multibyte",
+      "script": "printf 'aéb\\n' | cut -d é -f2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: paste -d multibyte",
+      "script": "printf '1\\n2\\n' > /tmp/a; paste -d é /tmp/a /tmp/a",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: paste -s -d multibyte",
+      "script": "printf '1\\n2\\n3\\n' | paste -s -d 'é日'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: nl -s multibyte",
+      "script": "printf 'a\\nb\\n' | nl -s '→ '",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: seq -s multibyte",
+      "script": "seq -s '→' 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expand after multibyte",
+      "script": "printf 'é\\tb\\n' | expand -t 4",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expand after wide",
+      "script": "printf '日\\tb\\n' | expand -t 4",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: unexpand multibyte",
+      "script": "printf 'é       b\\n' | unexpand -a",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: fmt multibyte",
+      "script": "printf 'été à la plage été\\n' | fmt -w 10",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: fold -s multibyte",
+      "script": "printf 'été à la plage\\n' | fold -s -w 6",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: fold -b",
+      "script": "printf 'été\\n' | fold -b -w 3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr multibyte sets",
+      "script": "printf 'ab\\n' | tr 'ab' 'αβ'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr multibyte source",
+      "script": "printf 'αβ\\n' | tr 'αβ' 'ab'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr -s multibyte",
+      "script": "printf 'ööö\\n' | tr -s 'ö'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: tr -d multibyte",
+      "script": "printf 'héllo\\n' | tr -d 'é'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed y multibyte",
+      "script": "printf 'αβ\\n' | sed 'y/αβ/ab/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed range class",
+      "script": "printf 'αβ x\\n' | sed -E 's/[α-ω]+/G/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed case conversion",
+      "script": "printf 'été\\n' | sed 's/.*/\\U&/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: sed I flag",
+      "script": "printf 'ÉTÉ\\n' | sed 's/été/ok/I'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -i",
+      "script": "printf 'ÉTÉ\\n' | grep -i 'été'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -i sharp s",
+      "script": "printf 'STRASSE\\nstraße\\n' | grep -i 'straße'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -w",
+      "script": "printf 'wörld\\nwörlds\\n' | grep -w 'wörld'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -b -o",
+      "script": "printf 'é 日 x\\n' | grep -b -o '[^ ]*'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -P word",
+      "script": "printf 'été abc\\n' | grep -P -o '\\w+'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -P digit",
+      "script": "printf '٣ 3\\n' | grep -P -o '\\d'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep digit class",
+      "script": "printf '٣ 3\\n' | grep -o '[[:digit:]]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep range",
+      "script": "printf 'αβγ abc\\n' | grep -E -o '[α-ω]+'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -c line",
+      "script": "printf 'é\\n日\\n\\n' | grep -c '^.$'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: grep -x",
+      "script": "printf '😀\\n' | grep -x '.'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq string length",
+      "script": "jq -n '\"é😀\" | length'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq implode",
+      "script": "jq -n '[233, 128512] | implode'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq surrogate pair",
+      "script": "jq -n '\"\\ud83d\\ude00\"' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq lone surrogate",
+      "script": "jq -n '\"\\ud800\"' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq ascii_upcase",
+      "script": "jq -n '\"école\" | ascii_upcase'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq @uri",
+      "script": "jq -rn '\"é 日\" | @uri'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq @base64",
+      "script": "jq -rn '\"é\" | @base64'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq @base64d",
+      "script": "jq -rn '\"w6k=\" | @base64d'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq @sh",
+      "script": "jq -rn '\"é x\" | @sh'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq @html",
+      "script": "jq -rn '\"<é>\" | @html'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq @json",
+      "script": "jq -rn '\"é\\u0001\" | @json'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq tojson",
+      "script": "jq -n '\" \" | tojson'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq split",
+      "script": "jq -c -n '\"日本語\" | split(\"本\")'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq split empty",
+      "script": "jq -c -n '\"é😀\" | split(\"\")'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq index",
+      "script": "jq -n '\"héllo\" | index(\"l\")'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq indices",
+      "script": "jq -c -n '\"éaéa\" | indices(\"a\")'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq ltrimstr",
+      "script": "jq -n '\"日本\" | ltrimstr(\"日\")'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq test regex",
+      "script": "jq -n '\"é\" | test(\"^.$\")'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq test ignore case",
+      "script": "jq -n '\"É\" | test(\"é\"; \"i\")'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq sort strings",
+      "script": "jq -c -n '[\"é\",\"e\",\"z\",\"É\"] | sort'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq keys order",
+      "script": "jq -c -n '{\"b\":1,\"é\":2,\"a\":3} | keys'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq sort_keys output",
+      "script": "jq -S -c -n '{\"日\":1,\"a\":2}'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq raw unicode output",
+      "script": "jq -r -n '\"\\u00e9\\u65e5\"'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq -a escapes",
+      "script": "jq -a -n '\"é😀\"'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq -j",
+      "script": "jq -j -n '\"é\", \"日\"'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq string compare",
+      "script": "jq -n '\"é\" < \"z\"'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq input unicode escapes",
+      "script": "printf '\"\\\\u00e9\"\\n' | jq .",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: jq raw input slurp",
+      "script": "printf 'é\\n日' | jq -Rs 'length'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expr index",
+      "script": "expr index 'été' 't'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expr match",
+      "script": "expr 'été' : '\\(..\\)'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: expr compare",
+      "script": "expr 'é' '<' 'z'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: diff -i",
+      "script": "printf 'É\\n' > /tmp/a; printf 'é\\n' > /tmp/b; diff -i /tmp/a /tmp/b; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: diff unified",
+      "script": "printf 'é\\n' > /tmp/a; printf '日\\n' > /tmp/b; diff -u /tmp/a /tmp/b | tail -n 2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: diff -y",
+      "script": "printf '日本\\n' > /tmp/a; printf 'ab\\n' > /tmp/b; diff -y -W 20 /tmp/a /tmp/b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cmp -l",
+      "script": "printf 'é' > /tmp/a; printf 'ê' > /tmp/b; cmp -l /tmp/a /tmp/b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cmp -b",
+      "script": "printf 'é' > /tmp/a; printf 'ê' > /tmp/b; cmp -b /tmp/a /tmp/b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: od -tc wide",
+      "script": "printf '日' | od -An -tc",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: cat -v",
+      "script": "printf 'é\\n' | cat -v",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: xargs -d multibyte",
+      "script": "printf 'aéb' | xargs -d é echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: xargs quoted unicode",
+      "script": "printf '\"é 日\" x\\n' | xargs -n 1 echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: basenc base16",
+      "script": "printf 'é' | basenc --base16",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: base32",
+      "script": "printf 'é\\n' | base32",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf %s width wide",
+      "script": "printf '[%4s]\\n' 日",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf %-s width emoji",
+      "script": "printf '[%-4s]\\n' 😀",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf %.2s cjk",
+      "script": "printf '[%.2s]\\n' 日本語",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: echo -n bytes",
+      "script": "echo -n é | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: heredoc unicode",
+      "script": "cat <<EOF\né 日 😀\nEOF",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: heredoc unicode expansion",
+      "script": "x=日; cat <<EOF\n${x}本 ${#x}\nEOF",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: herestring unicode",
+      "script": "wc -m <<< 'é日'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: brace unicode",
+      "script": "echo {α,β}{1,2}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: brace unicode range",
+      "script": "echo {α..γ}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: array unicode keys",
+      "script": "declare -A m=([é]=1 [日]=2); echo \"${m[é]} ${m[日]} ${#m[@]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: function unicode body",
+      "script": "f() { echo \"é$1\"; }; f 日",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: printf %s multiple",
+      "script": "printf '%s-' é 日 😀; echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: getopts unicode arg",
+      "script": "set -- -a é x; while getopts a: o; do echo \"$o $OPTARG\"; done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: test -n unicode",
+      "script": "[ -n é ] && [ é = é ] && [ é != e ] && echo ok",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: test string compare",
+      "script": "[ é \\< z ] && echo less || echo more",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: let unicode var error",
+      "script": "let 'é=1'; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: unicode variable name",
+      "script": "é=1; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: unicode function name",
+      "script": "é() { echo called; }; é",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: unicode alias",
+      "script": "shopt -s expand_aliases; alias é='echo aliased'\né",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge unicode: command not found unicode",
+      "script": "日本; echo $?",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}

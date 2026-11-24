@@ -21,7 +21,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
-use golem_common::model::{AgentId, AgentStatus, OwnedAgentId};
+use golem_common::model::{AgentId, AgentStatus, InvocationId, OwnedAgentId};
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
@@ -243,7 +243,7 @@ async fn invocation_context_answers_with_the_running_invocation_and_its_caller(
             .invoke_and_await_agent_as_caller(
                 &component,
                 &caller,
-                user,
+                user.clone(),
                 "report_of_peer",
                 data_value!(callee_name),
             )
@@ -257,18 +257,15 @@ async fn invocation_context_answers_with_the_running_invocation_and_its_caller(
         peer.triggered, callee_reports[1],
         "the caller's invocation metadata names the callee's invocation"
     );
-    // Until the original caller propagates through RPC, `original` falls back to the immediate
-    // caller: the calling agent, in both roles.
+    // The peer keeps the user as the original caller and sees the calling agent as the immediate
+    // caller, in its constructor (create on demand) and in its method.
     let agent_prefix = agent_text_prefix(&caller_id.agent_id);
-    for text in [
-        &peer_report.constructor.original,
-        &peer_report.constructor.immediate,
-        &peer_report.method.original,
-        &peer_report.method.immediate,
-    ] {
+    for observed in [&peer_report.constructor, &peer_report.method] {
+        assert_eq!(observed.original, user_text);
         assert!(
-            text.starts_with(&agent_prefix),
-            "{text} is not {agent_prefix}"
+            observed.immediate.starts_with(&agent_prefix),
+            "{} is not {agent_prefix}",
+            observed.immediate
         );
     }
     assert_eq!(peer_report.constructor.invocation_id, None);
@@ -279,11 +276,32 @@ async fn invocation_context_answers_with_the_running_invocation_and_its_caller(
     assert!(
         peer_report
             .method_caller
-            .starts_with(&format!("original={agent_prefix}"))
+            .starts_with(&format!("original={user_text} immediate={agent_prefix}"))
             && peer_report.method_caller.ends_with(" tokens=0"),
         "{}",
         peer_report.method_caller
     );
+
+    // The peer recorded the same caller for its creation, the awaited call and the triggered
+    // call: the user, and the calling agent as it is.
+    let calling_agent = callers::agent_in(
+        caller_id.agent_id,
+        caller.agent_type.clone(),
+        executor.get_worker_metadata(&caller_id).await?.fingerprint,
+        component.environment_id,
+    )
+    .immediate;
+    let expected = golem_common::model::caller::Caller {
+        immediate: calling_agent,
+        ..user
+    };
+    let recorded = executor.recorded_callers(&callee_id.agent_id).await;
+    let count = |wanted: &str| recorded.iter().filter(|(name, _)| name == wanted).count();
+    assert_eq!(count("create"), 1, "{recorded:?}");
+    assert_eq!(count("report"), 2, "{recorded:?}");
+    for (name, recorded) in recorded {
+        assert_eq!(recorded, expected, "{name}");
+    }
 
     drop(executor);
     Ok(())
@@ -507,13 +525,50 @@ fn idempotency_key_starts(
         .collect()
 }
 
-/// The index of the first `AgentInvocationFinished` after `start`.
-fn finished_after(oplog: &[PublicOplogEntryWithIndex], start: OplogIndex) -> Option<OplogIndex> {
+/// The invocation ID of the method invocation whose `AgentInvocationStarted` is at `start`.
+fn invocation_id_at(
+    oplog: &[PublicOplogEntryWithIndex],
+    start: OplogIndex,
+) -> Option<InvocationId> {
+    oplog.iter().find_map(|entry| match &entry.entry {
+        PublicOplogEntry::AgentInvocationStarted(params) if entry.oplog_index == start => {
+            match &params.invocation {
+                PublicAgentInvocation::AgentMethodInvocation(call) => Some(call.invocation_id),
+                _ => None,
+            }
+        }
+        _ => None,
+    })
+}
+
+/// The index of the `AgentInvocationFinished` of the method invocation whose
+/// `AgentInvocationStarted` is at `start`.
+fn finished_of(oplog: &[PublicOplogEntryWithIndex], start: OplogIndex) -> Option<OplogIndex> {
+    let invocation_id = invocation_id_at(oplog, start)?;
     oplog
         .iter()
         .find(|entry| {
-            entry.oplog_index > start
-                && matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationFinished(params)
+                    if params.invocation_id == invocation_id
+            )
+        })
+        .map(|entry| entry.oplog_index)
+}
+
+/// The index of the `AgentInvocationSettled` of the method invocation whose
+/// `AgentInvocationStarted` is at `start`.
+fn settled_of(oplog: &[PublicOplogEntryWithIndex], start: OplogIndex) -> Option<OplogIndex> {
+    let invocation_id = invocation_id_at(oplog, start)?;
+    oplog
+        .iter()
+        .find(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationSettled(params)
+                    if params.invocation_id == invocation_id
+            )
         })
         .map(|entry| entry.oplog_index)
 }
@@ -522,8 +577,10 @@ fn finished_after(oplog: &[PublicOplogEntryWithIndex], start: OplogIndex) -> Opt
 /// a guest future that makes a durable call and observes the invocation context; `reports`
 /// returns the observations, and so does `method` itself when `returns_observation` is set.
 /// Checks that each future reads the ID and the caller of the method it ran in, that its
-/// durable call is numbered under that invocation and recorded before the invocation finishes,
-/// and that a real restart replays the same observations and calls.
+/// durable call is numbered under that invocation and recorded before the background work of the
+/// invocation settles, and after the invocation's result when the future observes after the
+/// method returned (`returns_observation` unset), and that a real restart replays the same
+/// observations and calls.
 async fn check_spawned_futures_read_their_method_invocation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -584,12 +641,20 @@ async fn check_spawned_futures_read_their_method_invocation(
         "the durable calls of a spawned future are numbered under the method's invocation"
     );
     for ((start, _), (invocation, _)) in starts.iter().zip(&invocations) {
-        let finished = finished_after(&oplog, *invocation)
-            .expect("each invocation of the method should finish");
+        let settled = settled_of(&oplog, *invocation)
+            .expect("the background work of each invocation of the method should settle");
         assert!(
-            start < &finished,
-            "the durable call at {start} should be recorded before its invocation finishes at {finished}"
+            start < &settled,
+            "the durable call at {start} should be recorded before its invocation settles at {settled}"
         );
+        if !returns_observation {
+            let finished = finished_of(&oplog, *invocation)
+                .expect("each invocation of the method should record its result");
+            assert!(
+                start > &finished,
+                "the durable call at {start} should be recorded after the result at {finished}"
+            );
+        }
     }
     assert!(
         !oplog

@@ -103,9 +103,10 @@ async fn invocation_rejection_bypasses_saturated_input_and_output_byte_budgets()
         session_token: "invalid-session-token".to_string(),
         version: 1,
     };
-    let message =
-        reject_initial_with_saturated_data_budgets(Message::Text(encode_text(&resume).unwrap()))
-            .await;
+    let message = reject_initial_with_saturated_data_budgets(Message::Text(
+        encode_client_text(&resume).unwrap(),
+    ))
+    .await;
     let Message::Text(text) = message else {
         panic!("expected invocation rejection");
     };

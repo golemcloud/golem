@@ -314,6 +314,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             save_snapshot_invocation,
             &component_metadata,
             &self.parent.owner_context,
+            None,
         ) {
             Ok(lowered) => lowered,
             Err(err) => {
@@ -375,15 +376,27 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .get_public_state()
                     .event_service()
                     .get_last_invocation_errors();
+                // A refused memory growth can heal on a new instance with new memory permits, as
+                // after an out-of-memory invocation; on this instance the next save traps at once.
+                // Other failures of the save hook would repeat, so the instance stays.
+                let out_of_memory = error == AgentError::OutOfMemory;
                 let error = error.to_string(&stderr);
-                Err(self
-                    .fail_update(
-                        target_revision,
-                        update_attempt_index,
-                        format!("failed to get a snapshot for manual update: {error}"),
-                        UpdateFailureClass::Other,
-                    )
-                    .await)
+                Err(
+                    match self
+                        .fail_update(
+                            target_revision,
+                            update_attempt_index,
+                            format!("failed to get a snapshot for manual update: {error}"),
+                            UpdateFailureClass::Other,
+                        )
+                        .await
+                    {
+                        CommandOutcome::Continue if out_of_memory => {
+                            CommandOutcome::BreakInnerLoop(RetryDecision::ReacquirePermits)
+                        }
+                        outcome => outcome,
+                    },
+                )
             }
             Ok(InvokeResult::Exited { .. }) => Err(self
                 .fail_update(
@@ -486,7 +499,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .data_mut()
             .durable_ctx_mut()
             .begin_call_snapshotting_function();
-        let result = invoke_observed_and_traced(lowered, self.store, self.instance, None).await;
+        let result =
+            invoke_observed_and_traced(lowered, self.store, self.instance, None, None).await;
         self.store.data().set_suspended();
         self.store
             .data_mut()
@@ -523,6 +537,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             save_snapshot_invocation,
             &component_metadata,
             &self.parent.owner_context,
+            None,
         ) {
             Ok(lowered) => lowered,
             Err(err) => {

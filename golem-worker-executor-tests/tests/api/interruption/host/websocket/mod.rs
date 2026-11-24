@@ -25,7 +25,7 @@ use peer::Peer;
 
 macro_rules! pending_case {
     ($name:ident, Storage, $mode:ident) => {
-        pending_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
+        pending_case!(#[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
     };
     ($(#[$attr:meta])* $name:ident, $resource:ident, $mode:ident) => {
         $(#[$attr])*
@@ -61,16 +61,22 @@ pending_case!(
     Compute,
     Ephemeral
 );
-pending_case!(
-    durable_websocket_receive_managed_xfs_storage_quota,
-    Storage,
-    Durable
-);
-pending_case!(
-    ephemeral_websocket_receive_managed_xfs_storage_quota,
-    Storage,
-    Ephemeral
-);
+#[cfg(target_os = "linux")]
+mod storage {
+    use super::*;
+    use test_r::test;
+
+    pending_case!(
+        durable_websocket_receive_managed_xfs_storage_quota,
+        Storage,
+        Durable
+    );
+    pending_case!(
+        ephemeral_websocket_receive_managed_xfs_storage_quota,
+        Storage,
+        Ephemeral
+    );
+}
 
 const RECEIVE: &str = "golem:websocket/client::receive";
 const CONNECT: &str = "golem:websocket/client::connect";

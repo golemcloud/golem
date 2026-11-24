@@ -167,7 +167,8 @@ impl RawHandler {
             .worker_service
             .bound_invocation_target(
                 target.agent.component_id,
-                &constructor,
+                &target.agent.agent_type,
+                Some(&constructor),
                 AgentBinding::Constructor,
                 &request_key,
                 &handler.method_name,

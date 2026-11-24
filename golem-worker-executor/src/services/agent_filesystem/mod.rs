@@ -29,7 +29,6 @@ use crate::services::golem_config::{
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::shutdown::Shutdown;
 use crate::services::work_admission::WorkAdmission;
-#[cfg(unix)]
 pub(crate) use file_creation_mask::keep_owner_write_permission;
 use golem_common::model::OwnedAgentId;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
@@ -44,6 +43,9 @@ thread_local! {
 
 mod executor_directories;
 #[cfg(unix)]
+mod file_creation_mask;
+#[cfg(not(unix))]
+#[path = "file_creation_mask_other.rs"]
 mod file_creation_mask;
 mod lifecycle;
 mod setup_error;

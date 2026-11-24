@@ -1968,6 +1968,56 @@ fn p3_filesystem_host_payload_pairs_roundtrip() {
 }
 
 #[test]
+fn p2_tcp_socket_host_payload_pairs_roundtrip() {
+    use crate::model::oplog::types::SerializableSocketError;
+    use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode;
+    let local = SerializableP3IpSocketAddress {
+        address: SerializableIpAddress::IPv4 {
+            address: [127, 0, 0, 1],
+        },
+        port: 40123,
+        flow_info: None,
+        scope_id: None,
+    };
+    let remote = SerializableP3IpSocketAddress {
+        port: 5432,
+        ..local.clone()
+    };
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsTcpStartBind>(
+        super::HostRequestSocketsTcpBind {
+            local_address: local.clone(),
+        },
+        super::HostResponseSocketsTcpBind {
+            result: Ok(local.clone()),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsTcpStartConnect>(
+        super::HostRequestSocketsTcpConnect {
+            remote_address: remote.clone(),
+        },
+        super::HostResponseSocketsTcpStartConnect {
+            result: Err(SerializableSocketError::from_result(Ok(
+                ErrorCode::ConcurrencyConflict,
+            ))),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsTcpFinishConnect>(
+        HostRequestNoInput {},
+        super::HostResponseSocketsTcpFinishConnect {
+            result: Ok((local, remote)),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsTcpFinishConnect>(
+        HostRequestNoInput {},
+        super::HostResponseSocketsTcpFinishConnect {
+            result: Err(SerializableSocketError::from_result(Ok(
+                ErrorCode::WouldBlock,
+            ))),
+        },
+    );
+}
+
+#[test]
 fn p2_udp_socket_host_payload_pairs_roundtrip() {
     use crate::model::oplog::types::SerializableSocketError;
     use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode;
@@ -2181,7 +2231,6 @@ fn prepared_revert_payload_pair_roundtrips() {
             }),
             resolved_revert: Some(ResolvedRevert {
                 last_oplog_index: OplogIndex::from_u64(42),
-                observed_oplog_index: OplogIndex::from_u64(100),
             }),
         },
         HostResponseGolemApiUnit { result: Ok(()) },
@@ -3155,4 +3204,82 @@ proptest! {
         assert_eq!(decoded, attributes);
     }
 
+}
+
+#[test]
+fn p2_tcp_stream_error_keeps_its_errno_and_kind_through_the_oplog() {
+    use crate::model::oplog::types::SerializableTcpStreamError;
+
+    fn replayed(error: StreamError) -> std::io::Error {
+        let recorded = SerializableTcpStreamError::from_stream_error(error).unwrap();
+        let bytes = desert_rust::serialize_to_byte_vec(&recorded).unwrap();
+        let decoded: SerializableTcpStreamError = desert_rust::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, recorded);
+        match StreamError::from(decoded) {
+            StreamError::LastOperationFailed(error) => error.downcast::<std::io::Error>().unwrap(),
+            other => panic!("expected last-operation-failed, got {other:?}"),
+        }
+    }
+
+    let os = replayed(StreamError::LastOperationFailed(wasmtime::Error::from(
+        std::io::Error::from_raw_os_error(32),
+    )));
+    assert_eq!(os.raw_os_error(), Some(32));
+    assert_eq!(os.kind(), std::io::ErrorKind::BrokenPipe);
+
+    let kind = replayed(StreamError::LastOperationFailed(wasmtime::Error::from(
+        std::io::Error::from(std::io::ErrorKind::ConnectionReset),
+    )));
+    assert_eq!(kind.raw_os_error(), None);
+    assert_eq!(kind.kind(), std::io::ErrorKind::ConnectionReset);
+
+    // The native P2 TCP streams fail with a socket error code, not with an I/O error.
+    let native = wasmtime_wasi::p2::bindings::sockets::network::ErrorCode::ConnectionAborted;
+    let code = replayed(StreamError::LastOperationFailed(wasmtime::Error::from(
+        native,
+    )));
+    assert_eq!(code.raw_os_error(), None);
+    assert_eq!(code.kind(), std::io::ErrorKind::ConnectionAborted);
+    assert_eq!(code.to_string(), native.to_string(), "the message is kept");
+
+    // The reader fails with the Wasmtime sockets error code instead of the P2 one.
+    let read = replayed(StreamError::LastOperationFailed(wasmtime::Error::from(
+        wasmtime_wasi::sockets::ErrorCode::ConnectionReset,
+    )));
+    assert_eq!(
+        wasmtime_wasi::p2::bindings::sockets::network::ErrorCode::from(&read),
+        wasmtime_wasi::p2::bindings::sockets::network::ErrorCode::ConnectionReset
+    );
+
+    // Every code that a native stream can fail with comes back as the guest's
+    // `network-error-code`, which Wasmtime derives from the I/O error.
+    {
+        use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode;
+        for code in [
+            ErrorCode::AccessDenied,
+            ErrorCode::NotSupported,
+            ErrorCode::InvalidArgument,
+            ErrorCode::OutOfMemory,
+            ErrorCode::Timeout,
+            ErrorCode::ConcurrencyConflict,
+            ErrorCode::InvalidState,
+            ErrorCode::NewSocketLimit,
+            ErrorCode::AddressNotBindable,
+            ErrorCode::AddressInUse,
+            ErrorCode::RemoteUnreachable,
+            ErrorCode::ConnectionRefused,
+            ErrorCode::ConnectionReset,
+            ErrorCode::ConnectionAborted,
+            ErrorCode::DatagramTooLarge,
+        ] {
+            let error = replayed(StreamError::LastOperationFailed(wasmtime::Error::from(
+                code,
+            )));
+            assert_eq!(ErrorCode::from(&error), code, "{code:?} through the oplog");
+        }
+    }
+
+    let closed = SerializableTcpStreamError::from_stream_error(StreamError::Closed).unwrap();
+    assert!(matches!(StreamError::from(closed), StreamError::Closed));
+    assert!(SerializableTcpStreamError::from_stream_error(StreamError::trap("trap")).is_err());
 }

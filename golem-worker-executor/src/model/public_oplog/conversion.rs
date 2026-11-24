@@ -40,6 +40,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
         owner_kind: OwnerKind,
         agent_type_name: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
+        claims: ClaimVisibility,
     ) -> Result<Self, String> {
         let value = match value {
             golem_common::model::oplog::OplogEnrichmentEntry::CreateProjection {
@@ -121,6 +122,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 function_name,
                 invocation_id,
                 observational_owner,
+                driver,
                 request,
                 durable_function_type,
                 span_started,
@@ -145,6 +147,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     function_name: function_name.to_string(),
                     invocation_id,
                     observational_owner,
+                    driver,
                     request: request_value,
                     durable_function_type: durable_function_type.into(),
                     span_started: span_started.map(|span| public_span_started(*span)),
@@ -220,15 +223,17 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::AgentInvocationStarted {
                 timestamp,
                 invocation_id: idempotency_key,
+                operation,
                 payload,
                 trace_id,
                 trace_states,
                 invocation_context,
                 wallet_pin,
             } => {
-                let invocation_payload: AgentInvocationPayload = oplog_service
+                let invocation_payload = oplog_service
                     .download_payload(owned_agent_id, agent_mode, payload)
-                    .await?;
+                    .await?
+                    .with_operation(*operation)?;
 
                 let invocation_context_stack = InvocationContextStack::from_oplog_data(
                     trace_id,
@@ -246,6 +251,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     agent_type_name,
                     component_revision,
                     invocation,
+                    claims,
                 )
                 .await?;
 
@@ -267,6 +273,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 method_name,
                 consumed_fuel,
                 component_revision: entry_component_revision,
+                awaits_settlement: _,
             } => {
                 let invocation_result: AgentInvocationResult = oplog_service
                     .download_payload(owned_agent_id, agent_mode, result)
@@ -305,6 +312,17 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     invocation_id,
                     error: error.to_string(""),
                     start_index,
+                },
+            )),
+            OplogEntry::AgentInvocationSettled {
+                timestamp,
+                invocation_id,
+                consumed_fuel,
+            } => Ok(PublicOplogEntry::AgentInvocationSettled(
+                AgentInvocationSettledParams {
+                    timestamp,
+                    invocation_id,
+                    consumed_fuel,
                 },
             )),
             OplogEntry::Suspend { timestamp } => {
@@ -348,14 +366,16 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 not_before,
                 invocation_id: idempotency_key,
+                operation,
                 payload,
                 trace_id,
                 trace_states,
                 invocation_context,
             } => {
-                let invocation_payload: AgentInvocationPayload = oplog_service
+                let invocation_payload = oplog_service
                     .download_payload(owned_agent_id, agent_mode, payload)
-                    .await?;
+                    .await?
+                    .with_operation(*operation)?;
 
                 let invocation_context_stack = InvocationContextStack::from_oplog_data(
                     trace_id,
@@ -373,6 +393,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     agent_type_name,
                     component_revision,
                     invocation,
+                    claims,
                 )
                 .await?;
 
@@ -1028,6 +1049,17 @@ async fn public_host_request(
     match host_request {
         HostRequest::EntityInvocation(request) => Ok(request.input),
         HostRequest::McpToolCall(request) => Ok(request.input),
+        // The enrich request of an oplog processor holds the raw entries of its batch, with the
+        // claims of their callers. The public form keeps only the entry indexes, so no reader of
+        // the processor's oplog gets the claims.
+        HostRequest::GolemApiOplogEnrich(mut inner) => {
+            for (_, entry) in &mut inner.entries {
+                entry.clear();
+            }
+            HostRequest::GolemApiOplogEnrich(inner)
+                .into_typed_schema_value()
+                .map_err(|error| error.to_string())
+        }
         other => other
             .into_typed_schema_value()
             .map_err(|error| error.to_string()),

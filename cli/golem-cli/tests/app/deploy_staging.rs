@@ -20,6 +20,328 @@ use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(Tracing);
 
+#[cfg(not(windows))]
+mod platform {
+    pub(super) fn app_root(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+        std::fs::canonicalize(path)
+    }
+}
+
+#[cfg(windows)]
+mod platform {
+    pub(super) fn app_root(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+        Ok(path.to_path_buf())
+    }
+}
+
+#[test]
+#[timeout("15 minutes")]
+async fn installed_agent_calls_tools_as_the_installer() -> anyhow::Result<()> {
+    use super::remote_releases::{
+        create_app_and_environment, create_registry_user, registry_client,
+    };
+    use serde_json::Value;
+
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+    let url = format!("http://localhost:{}", ctx.router_port()).parse()?;
+    let admin = registry_client(&url, golem_client::LOCAL_WELL_KNOWN_TOKEN);
+    let publisher = create_registry_user(&admin, &url, "agent-publisher").await?;
+    let installer = create_registry_user(&admin, &url, "agent-installer").await?;
+    let (publisher_app, publisher_env) =
+        create_app_and_environment(&publisher, "publisher").await?;
+    let (installer_app, installer_env) =
+        create_app_and_environment(&installer, "installer").await?;
+    assert_ne!(publisher_env.id, installer_env.id);
+
+    let manifest = |app: &str, env: &str, token: &str, component_preset: &str| {
+        formatdoc! {r#"
+            manifestVersion: {version}
+            app: {app}
+            environments:
+              {env}:
+                server:
+                  url: {url}
+                  workerUrl: {url}
+                  allowInsecure: true
+                  auth:
+                    staticToken: {token:?}
+            {component_preset}    tools:
+                  defaults: []
+        "#, version = versions::sdk::MANIFEST}
+    };
+
+    assert!(
+        ctx.cli([
+            flag::YES,
+            cmd::NEW,
+            "agent-publisher",
+            flag::TEMPLATE,
+            "rust"
+        ])
+        .await
+        .success_or_dump()
+    );
+    ctx.cd("agent-publisher");
+    let source = format!(
+        "{}{}",
+        manifest(
+            &publisher_app.name.0,
+            &publisher_env.name.0,
+            publisher.token.secret(),
+            "    componentPresets: debug\n",
+        ),
+        indoc::indoc! {r#"
+        package:
+          name: installed-agent
+          version: 1.0.0
+          calls: [InstalledPrincipalAgent]
+        components:
+          agent-publisher:rust-main:
+            dir: .
+            templates: rust
+        agents:
+          InstalledPrincipalAgent:
+            files:
+              - sourcePath: ./instructions.txt
+                targetPath: /publisher.txt
+            env:
+              PACKAGE_MARKER: from-package
+              INSTALLER_MARKER: from-publisher
+        tools:
+          principal-probe: {}
+    "#}
+    );
+    fs::write_str(ctx.cwd_path_join("golem.yaml"), &source)?;
+    fs::write_str(ctx.cwd_path_join("instructions.txt"), "publisher bytes")?;
+    fs::write_str(
+        ctx.cwd_path_join("src/counter_agent.rs"),
+        indoc::indoc! {r#"
+        use golem_rust::{agent_definition, agent_implementation, tool_definition, tool_implementation};
+        use golem_rust::agentic::Principal;
+
+        #[agent_definition]
+        trait InstalledPrincipalAgent {
+            fn new(name: String) -> Self;
+            async fn inspect(&self) -> String;
+        }
+
+        struct InstalledPrincipalAgentImpl;
+
+        #[agent_implementation]
+        impl InstalledPrincipalAgent for InstalledPrincipalAgentImpl {
+            fn new(_name: String) -> Self { Self }
+
+            async fn inspect(&self) -> String {
+                assert_eq!(std::env::var("PACKAGE_MARKER").as_deref(), Ok("from-package"));
+                assert_eq!(std::env::var("INSTALLER_MARKER").as_deref(), Ok("from-installer"));
+                assert_eq!(std::fs::read("/publisher.txt").unwrap(), b"publisher bytes");
+                assert_eq!(std::fs::read("/installer.txt").unwrap(), b"installer bytes");
+                PrincipalProbeClient::new().whoami().await.unwrap()
+            }
+        }
+
+        #[tool_definition(version = "1.0.0")]
+        trait PrincipalProbe {
+            fn whoami(&self, ctx: golem_rust::tool::InvocationContext) -> String;
+        }
+
+        struct PrincipalProbeImpl;
+
+        #[tool_implementation]
+        impl PrincipalProbe for PrincipalProbeImpl {
+            fn whoami(&self, ctx: golem_rust::tool::InvocationContext) -> String {
+                let Principal::Agent(agent) = ctx.caller().immediate() else {
+                    panic!("the tool was not called by an agent");
+                };
+                format!("{}:{}", agent.environment_id().uuid, agent.agent_id().uuid)
+            }
+        }
+    "#},
+    )?;
+    assert!(ctx.cli([cmd::BUILD, flag::YES]).await.success_or_dump());
+    assert!(
+        ctx.cli(["package", "pack", "--output", "agent.tar"])
+            .await
+            .success_or_dump()
+    );
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        source.replace(
+            "  version: 1.0.0\n  calls: [InstalledPrincipalAgent]",
+            "  version: 1.0.1\n  calls: [InstalledPrincipalAgent, SupportCall, Escalation]",
+        ),
+    )?;
+    assert!(
+        ctx.cli(["package", "pack", "--output", "missing-calls.tar"])
+            .await
+            .success_or_dump()
+    );
+
+    ctx.cd("..");
+    fs::create_dir_all(ctx.cwd_path_join("installer"))?;
+    ctx.cd("installer");
+    fs::write_str(ctx.cwd_path_join("instructions.txt"), "installer bytes")?;
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        format!(
+            "{}{}",
+            manifest(
+                &installer_app.name.0,
+                &installer_env.name.0,
+                installer.token.secret(),
+                "",
+            ),
+            indoc::indoc! {r#"
+            agents:
+              InstalledPrincipalAgent:
+                package: installed-agent
+                files:
+                  - sourcePath: ./instructions.txt
+                    targetPath: /installer.txt
+                env:
+                  INSTALLER_MARKER: from-installer
+                tools:
+                  principal-probe: {}
+        "#},
+        ),
+    )?;
+    assert!(
+        ctx.cli(["install", "../agent-publisher/missing-calls.tar"])
+            .await
+            .success_or_dump()
+    );
+    assert!(ctx.cli([cmd::BUILD, flag::YES]).await.success_or_dump());
+    let rejected = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(!rejected.success());
+    let diagnostic = format!("{}\n{}", rejected.stdout_text(), rejected.stderr_text());
+    for expected in [
+        "Missing agent types required by installed packages",
+        "SupportCall",
+        "Escalation",
+    ] {
+        assert!(diagnostic.contains(expected), "{diagnostic}");
+    }
+
+    assert!(
+        ctx.cli(["install", "../agent-publisher/agent.tar"])
+            .await
+            .success_or_dump()
+    );
+    assert!(ctx.cli([cmd::BUILD, flag::YES]).await.success_or_dump());
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+    let key = r#"InstalledPrincipalAgent("example")"#;
+    let created = ctx
+        .cli([
+            flag::FORMAT,
+            "json",
+            cmd::AGENT,
+            cmd::CREATE,
+            key,
+            "--keyed",
+        ])
+        .await;
+    assert!(created.success_or_dump());
+    let agent_id = created
+        .stdout_json::<Value>()
+        .into_iter()
+        .find_map(|doc| doc["agentId"].as_str().map(str::to_owned))
+        .expect("agent create reports the installed agent ID");
+    let invoked = ctx.cli([cmd::AGENT, cmd::INVOKE, key, "inspect"]).await;
+    assert!(invoked.success_or_dump());
+    let result = invoked.stdout_text();
+    assert!(
+        result.contains(&format!("{}:{agent_id}", installer_env.id.0)),
+        "{result}"
+    );
+    assert!(
+        !result.contains(&publisher_env.id.0.to_string()),
+        "{result}"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("15 minutes")]
+async fn installed_package_has_no_http_route_until_declared() -> anyhow::Result<()> {
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+    assert!(
+        ctx.cli([flag::YES, cmd::NEW, "publisher", flag::TEMPLATE, "ts"])
+            .await
+            .success_or_dump()
+    );
+    ctx.cd("publisher");
+    let http_api = indoc::indoc! {r#"
+        httpApi:
+          deployments:
+            local:
+              - domain: localhost:9006
+                scheme: http
+                agents:
+                  CounterAgent: {}
+    "#};
+    let publisher = formatdoc! {r#"
+        manifestVersion: {}
+        app: publisher
+        package: {{ name: publisher, version: 1.0.0 }}
+        environments:
+          local:
+            server: local
+            componentPresets: quick
+        components:
+          publisher:main:
+            templates: ts
+        {http_api}
+    "#, versions::sdk::MANIFEST};
+    fs::write_str(ctx.cwd_path_join("golem.yaml"), publisher)?;
+    assert!(ctx.cli([cmd::BUILD, flag::YES]).await.success_or_dump());
+    let pack = ctx.cli(["package", "pack"]).await;
+    assert!(pack.success_or_dump());
+    assert!(pack.stderr_contains(format!(
+        "Omitted HTTP API export: localhost:{}",
+        ctx.custom_request_port()
+    )));
+    let archive = ctx.cwd_path_join("golem-package.tar");
+
+    ctx.cd("..");
+    fs::create_dir_all(ctx.cwd_path_join("installer"))?;
+    ctx.cd("installer");
+    std::fs::copy(archive, ctx.cwd_path_join("publisher.tar"))?;
+    let manifest = ctx.cwd_path_join("golem.yaml");
+    fs::write_str(
+        &manifest,
+        formatdoc! {r#"
+            manifestVersion: {}
+            app: installer
+            environments:
+              local:
+                server: local
+        "#, versions::sdk::MANIFEST},
+    )?;
+    assert!(
+        ctx.cli(["install", "./publisher.tar"])
+            .await
+            .success_or_dump()
+    );
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+
+    let route = format!(
+        "http://localhost:{}/counters/probe/value",
+        ctx.custom_request_port()
+    );
+    let client = reqwest::Client::new();
+    assert_eq!(client.get(&route).send().await?.status(), 404);
+
+    let installed = fs::read_to_string(&manifest)?;
+    fs::write_str(&manifest, format!("{installed}\n{http_api}"))?;
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+    let response = client.get(&route).send().await?;
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.json::<f64>().await?, 0.0);
+    Ok(())
+}
+
 #[test]
 #[timeout("15 minutes")]
 async fn installed_tool_deploy_uploads_the_original_package_layer() -> anyhow::Result<()> {
@@ -103,10 +425,7 @@ async fn installed_tool_deploy_uploads_the_original_package_layer() -> anyhow::R
         fs::create_dir_all(path.parent().unwrap())?;
         std::fs::copy(&archive, path)?;
     }
-    #[cfg(not(windows))]
-    let app_root = std::fs::canonicalize(ctx.cwd_path())?;
-    #[cfg(windows)]
-    let app_root = ctx.cwd_path();
+    let app_root = platform::app_root(ctx.cwd_path())?;
 
     let registry = RegistryServiceClientLive {
         context: Context {

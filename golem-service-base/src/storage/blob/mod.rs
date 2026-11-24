@@ -2387,27 +2387,32 @@ mod tests {
         );
     }
 
-    /// The guest gives its names as text, so only a path of another source can break this
-    /// rule. `normalized_blob_path` gives the error, so no `NormalizedBlobPath` holds such a
-    /// path and the functions that read the one form cannot get one.
     #[cfg(unix)]
-    #[test]
-    fn a_path_that_is_not_utf8_gives_the_utf8_rule() {
+    mod unix {
+        use super::*;
+        use pretty_assertions::assert_eq;
         use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt;
+        use test_r::test;
 
-        let path = Path::new(OsStr::from_bytes(b"a/\xff"));
-        let expected = BlobNameError::NotUtf8 {
-            path: path.to_path_buf(),
-        };
+        /// The guest gives its names as text, so only a path of another source can break this
+        /// rule. `normalized_blob_path` gives the error, so no `NormalizedBlobPath` holds such a
+        /// path and the functions that read the one form cannot get one.
+        #[test]
+        fn a_path_that_is_not_utf8_gives_the_utf8_rule() {
+            let path = Path::new(OsStr::from_bytes(b"a/\xff"));
+            let expected = BlobNameError::NotUtf8 {
+                path: path.to_path_buf(),
+            };
 
-        assert_eq!(
-            (
-                normalized_blob_path(path).map(|path| path.to_path_buf()),
-                blob_path_to_string(path),
-            ),
-            (Err(expected.clone()), Err(expected))
-        );
+            assert_eq!(
+                (
+                    normalized_blob_path(path).map(|path| path.to_path_buf()),
+                    blob_path_to_string(path),
+                ),
+                (Err(expected.clone()), Err(expected))
+            );
+        }
     }
 
     /// A guest picks the name of its container and the name of its object, so it can give two

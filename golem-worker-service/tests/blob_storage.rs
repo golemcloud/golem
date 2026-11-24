@@ -5433,12 +5433,23 @@ fn probed_paths() -> Vec<PathBuf> {
     ]
     .map(PathBuf::from)
     .to_vec();
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
+    platform::append_non_utf8_path(&mut paths);
+    paths
+}
+
+#[cfg(unix)]
+mod platform {
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::PathBuf;
+
+    pub(super) fn append_non_utf8_path(paths: &mut Vec<PathBuf>) {
         paths.push(PathBuf::from(std::ffi::OsStr::from_bytes(b"non\xFFutf8")));
     }
-    paths
+}
+
+#[cfg(not(unix))]
+mod platform {
+    pub(super) fn append_non_utf8_path(_paths: &mut Vec<std::path::PathBuf>) {}
 }
 
 /// Gives the text of an answer that is the same on two backends that agree: a value as its debug

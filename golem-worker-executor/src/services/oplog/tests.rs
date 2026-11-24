@@ -168,6 +168,7 @@ struct RecordingArchive {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl OplogArchiveService for RecordingArchiveService {
     async fn open(
         &self,
@@ -233,6 +234,7 @@ impl OplogArchiveService for RecordingArchiveService {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl OplogArchive for RecordingArchive {
     async fn read_source(
         &self,
@@ -363,6 +365,7 @@ impl Debug for BlockingArchiveService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogArchiveService for BlockingArchiveService {
     async fn open(
         &self,
@@ -484,6 +487,7 @@ impl Debug for BlockingArchive {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogArchive for BlockingArchive {
     async fn read_source(
         &self,
@@ -562,6 +566,7 @@ impl TransferTestArchive {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogArchive for TransferTestArchive {
     async fn read_source(
         &self,
@@ -857,6 +862,7 @@ impl ReadCountingIndexedStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl IndexedStorage for ReadCountingIndexedStorage {
     async fn set_key_epoch(
         &self,
@@ -1404,6 +1410,7 @@ impl<B> ReadCountingBlobStorage<B> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<B: BlobStorageBackend> BlobStorageBackend for ReadCountingBlobStorage<B> {
     async fn copy_between_at(
         &self,
@@ -5264,9 +5271,12 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
             AgentInvocation::AgentMethod {
                 idempotency_key: invocation_id,
                 method_name: "f2".to_string(),
+                allow_streams: false,
                 input: SchemaValue::Record {
                     fields: vec![SchemaValue::String("request".to_string())],
-                },
+                }
+                .try_into()
+                .unwrap(),
                 invocation_context: InvocationContextStack::fresh_rounded(),
                 caller: Caller::anonymous(),
                 scope_card: None,
@@ -5288,6 +5298,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
             Some("f2".to_string()),
             42,
             ComponentRevision::INITIAL,
+            false,
         )
         .await
         .unwrap();
@@ -5380,13 +5391,24 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         _ => panic!("unexpected entry"),
     };
     let p2 = match entry2 {
-        OplogEntry::AgentInvocationStarted { payload, .. } => {
-            let payload: AgentInvocationPayload = oplog_service
+        OplogEntry::AgentInvocationStarted {
+            operation, payload, ..
+        } => {
+            let payload = oplog_service
                 .download_payload(&owned_agent_id, AgentMode::Durable, payload)
                 .await
+                .unwrap()
+                .with_operation(*operation)
                 .unwrap();
             match payload {
-                AgentInvocationPayload::AgentMethod { input, .. } => match input {
+                AgentInvocationPayload::AgentMethod {
+                    method_name,
+                    input: golem_common::model::agent::AgentMethodInput::Native(input),
+                    ..
+                } if method_name == "f2" => match input
+                    .decode(|_, _| Err("unexpected stream".into()))
+                    .unwrap()
+                {
                     SchemaValue::Record { fields } => match fields.into_iter().next() {
                         Some(SchemaValue::String(value)) => value,
                         _ => panic!("unexpected element"),
@@ -5564,9 +5586,12 @@ async fn invocation_start_records_executing_context_for_processor_and_method(_tr
         AgentInvocation::AgentMethod {
             idempotency_key: InvocationId(Uuid::new_v4()),
             method_name: "run".to_string(),
+            allow_streams: false,
             input: SchemaValue::Tuple {
                 elements: Vec::new(),
-            },
+            }
+            .try_into()
+            .unwrap(),
             invocation_context: InvocationContextStack::fresh_rounded(),
             caller: Caller::anonymous(),
             scope_card: None,
@@ -5667,10 +5692,13 @@ async fn owned_invocation_payload_upload_failure_writes_no_entry(_tracing: &Trac
             AgentInvocation::AgentMethod {
                 idempotency_key: InvocationId(Uuid::new_v4()),
                 method_name: "large-input".to_string(),
+                allow_streams: false,
                 input: SchemaValue::Binary(BinaryValuePayload {
                     bytes: vec![1_u8; 1024],
                     mime_type: None,
-                }),
+                })
+                .try_into()
+                .unwrap(),
                 invocation_context: InvocationContextStack::fresh_rounded(),
                 caller: Caller::anonymous(),
                 scope_card: None,
@@ -5739,19 +5767,23 @@ async fn external_payload_indeterminate_append_survives_cold_takeover(_tracing: 
             .unwrap();
         let value = AgentInvocationPayload::AgentMethod {
             method_name: "cold-payload".to_string(),
+            allow_streams: false,
             input: SchemaValue::List {
                 elements: (0..513).map(|i| SchemaValue::U8((i % 251) as u8)).collect(),
-            },
+            }
+            .try_into()
+            .unwrap(),
             caller: Caller::anonymous(),
             scope_card: None,
         };
-        let payload = old.upload_payload_owned(value.clone()).await.unwrap();
+        let (operation, payload) = old.upload_request(value.clone()).await.unwrap();
         assert!(matches!(payload, OplogPayload::External { .. }));
         let context = InvocationContextStack::fresh_rounded();
         let spans = context.to_oplog_data();
         let pending = OplogEntry::pending_agent_invocation(
             None,
             test_invocation_id("cold-payload".to_string()),
+            Box::new(operation),
             payload,
             context.trace_id,
             context.trace_states,
@@ -5795,11 +5827,16 @@ async fn external_payload_indeterminate_append_survives_cold_takeover(_tracing: 
             expected
         );
         assert_eq!(cold.length().await.unwrap(), 3);
-        let OplogEntry::PendingAgentInvocation { payload, .. } = cold.read(second).await.unwrap()
+        let OplogEntry::PendingAgentInvocation {
+            operation, payload, ..
+        } = cold.read(second).await.unwrap()
         else {
             panic!("cold owner lost the payload entry");
         };
-        assert_eq!(cold.download_payload(payload).await.unwrap(), value);
+        assert_eq!(
+            cold.download_request(*operation, payload).await.unwrap(),
+            value
+        );
         assert_eq!(blobs.puts.load(Ordering::Relaxed), 1);
         old.add(OplogEntry::exited().rounded()).await.unwrap();
         assert!(matches!(
@@ -6106,14 +6143,12 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
         };
         let payload_value = AgentInvocationPayload::AgentMethod {
             method_name: "large-input".to_string(),
-            input,
+            allow_streams: false,
+            input: input.try_into().unwrap(),
             caller: Caller::anonymous(),
             scope_card: None,
         };
-        let payload = oplog
-            .upload_payload_owned(payload_value.clone())
-            .await
-            .unwrap();
+        let (operation, payload) = oplog.upload_request(payload_value.clone()).await.unwrap();
         let uploads = blob_storage.puts.load(Ordering::Relaxed);
         assert_eq!(uploads, usize::from(inline_limit == 1));
         let pending_context = InvocationContextStack::fresh_rounded();
@@ -6122,6 +6157,7 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
             .add(OplogEntry::pending_agent_invocation(
                 None,
                 key,
+                Box::new(operation.clone()),
                 payload,
                 pending_context.trace_id,
                 pending_context.trace_states,
@@ -6132,7 +6168,11 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
         oplog.commit(CommitLevel::Always).await.unwrap();
 
         // Read persisted entries, not the resident oplog buffer or typed payload cache.
-        let OplogEntry::PendingAgentInvocation { payload, .. } = service
+        let OplogEntry::PendingAgentInvocation {
+            operation: pending_operation,
+            payload,
+            ..
+        } = service
             .read_exact(&owned, AgentMode::Durable, pending, 1)
             .await
             .unwrap()
@@ -6141,8 +6181,12 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
         else {
             panic!("missing committed Pending")
         };
+        assert_eq!(*pending_operation, operation);
         assert_eq!(
-            oplog.download_payload(payload.clone()).await.unwrap(),
+            oplog
+                .download_request(operation.clone(), payload.clone())
+                .await
+                .unwrap(),
             payload_value
         );
         let executing_context = InvocationContextStack::fresh_rounded();
@@ -6150,6 +6194,7 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
         let started = oplog
             .add_agent_invocation_started_from_pending(
                 key,
+                operation.clone(),
                 payload.clone(),
                 executing_context.clone(),
                 pin.clone(),
@@ -6163,6 +6208,7 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
 
         let OplogEntry::AgentInvocationStarted {
             invocation_id: idempotency_key,
+            operation: recorded_operation,
             payload: recorded,
             trace_id,
             wallet_pin,
@@ -6177,16 +6223,21 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
             panic!("missing committed Started")
         };
         assert_eq!(recorded, payload);
+        assert_eq!(*recorded_operation, operation);
         assert_eq!(idempotency_key, key);
         assert_eq!(trace_id, executing_context.trace_id);
         assert_eq!(*wallet_pin, pin);
         assert_eq!(
-            oplog.download_payload(recorded.clone()).await.unwrap(),
+            oplog
+                .download_request(operation.clone(), recorded.clone())
+                .await
+                .unwrap(),
             payload_value
         );
         oplog
             .add_agent_invocation_started_from_pending(
                 key,
+                operation.clone(),
                 recorded.clone(),
                 executing_context,
                 invocation_wallet_pin(),
@@ -6207,7 +6258,7 @@ async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing)
         );
         assert_eq!(blob_storage.puts.load(Ordering::Relaxed), uploads);
         assert_eq!(
-            oplog.download_payload(recorded).await.unwrap(),
+            oplog.download_request(operation, recorded).await.unwrap(),
             payload_value
         );
     }
@@ -6270,12 +6321,15 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
             AgentInvocation::AgentMethod {
                 idempotency_key: invocation_id,
                 method_name: "f2".to_string(),
+                allow_streams: false,
                 input: SchemaValue::Record {
                     fields: vec![SchemaValue::Binary(BinaryValuePayload {
                         bytes: large_payload2.clone(),
                         mime_type: None,
                     })],
-                },
+                }
+                .try_into()
+                .unwrap(),
                 invocation_context: InvocationContextStack::fresh_rounded(),
                 caller: Caller::anonymous(),
                 scope_card: None,
@@ -6300,6 +6354,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
             Some("f2".to_string()),
             42,
             ComponentRevision::INITIAL,
+            false,
         )
         .await
         .unwrap();
@@ -6392,13 +6447,24 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         _ => panic!("unexpected entry"),
     };
     let p2 = match entry2 {
-        OplogEntry::AgentInvocationStarted { payload, .. } => {
-            let payload: AgentInvocationPayload = oplog_service
+        OplogEntry::AgentInvocationStarted {
+            operation, payload, ..
+        } => {
+            let payload = oplog_service
                 .download_payload(&owned_agent_id, AgentMode::Durable, payload)
                 .await
+                .unwrap()
+                .with_operation(*operation)
                 .unwrap();
             match payload {
-                AgentInvocationPayload::AgentMethod { input, .. } => match input {
+                AgentInvocationPayload::AgentMethod {
+                    method_name,
+                    input: golem_common::model::agent::AgentMethodInput::Native(input),
+                    ..
+                } if method_name == "f2" => match input
+                    .decode(|_, _| Err("unexpected stream".into()))
+                    .unwrap()
+                {
                     SchemaValue::Record { fields } => match fields.into_iter().next() {
                         Some(SchemaValue::Binary(BinaryValuePayload { bytes, .. })) => bytes,
                         _ => panic!("unexpected element"),
@@ -6570,6 +6636,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
             function_name: HostFunctionName::Custom("test-function".to_string()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(request),
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
@@ -12374,6 +12441,7 @@ async fn reserved_large_request_is_durable_via_commit_barrier(_tracing: &Tracing
             function_name: HostFunctionName::Custom("f".to_string()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(request_payload),
             durable_function_type: DurableFunctionType::ReadRemote,
             span_started: None,
@@ -12462,6 +12530,7 @@ async fn reserved_small_request_stays_inline(_tracing: &Tracing) {
             function_name: HostFunctionName::Custom("f".to_string()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(request_payload),
             durable_function_type: DurableFunctionType::ReadRemote,
             span_started: None,
@@ -12516,6 +12585,7 @@ fn reserved_start_entry_builder(
         function_name,
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: Some(request_payload),
         durable_function_type: DurableFunctionType::ReadRemote,
         span_started: None,
@@ -12741,6 +12811,7 @@ async fn reserved_start_through_production_stack_smoke(_tracing: &Tracing) {
     struct NoPluginsOplogProcessorPlugin;
 
     #[async_trait::async_trait]
+    #[golem_async_trait::region_simple]
     impl OplogProcessorPlugin for NoPluginsOplogProcessorPlugin {
         async fn resolve_target(
             &self,
@@ -12793,6 +12864,7 @@ async fn reserved_start_through_production_stack_smoke(_tracing: &Tracing) {
     struct NoComponentsComponentService;
 
     #[async_trait::async_trait]
+    #[golem_async_trait::region_simple]
     impl ComponentService for NoComponentsComponentService {
         async fn get(
             &self,
@@ -12833,6 +12905,7 @@ async fn reserved_start_through_production_stack_smoke(_tracing: &Tracing) {
     struct UnlimitedResourceLimits;
 
     #[async_trait::async_trait]
+    #[golem_async_trait::region_simple]
     impl ResourceLimits for UnlimitedResourceLimits {
         async fn initialize_account(
             &self,

@@ -23,6 +23,14 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 use tracing::info;
 
+#[cfg(unix)]
+#[path = "server/unix.rs"]
+mod platform;
+#[cfg(not(unix))]
+#[path = "server/other.rs"]
+mod platform;
+use platform::termination_signal;
+
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
@@ -94,25 +102,4 @@ async fn async_main(
         .await;
     join_set.shutdown().await;
     Ok(())
-}
-
-/// Resolves on SIGTERM or SIGINT, which is how an orchestrator or a terminal
-/// stops this process. Other platforms get Ctrl-C.
-async fn termination_signal() {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{SignalKind, signal};
-        let mut terminate =
-            signal(SignalKind::terminate()).expect("failed to install the SIGTERM handler");
-        let mut interrupt =
-            signal(SignalKind::interrupt()).expect("failed to install the SIGINT handler");
-        tokio::select! {
-            _ = terminate.recv() => {}
-            _ = interrupt.recv() => {}
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
-    }
 }

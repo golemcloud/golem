@@ -75,6 +75,16 @@ const codec = Effect.runSync(toWitCodec(Uint8ArraySchema)).codec
 describe("real Effect HTTP application adapter", () => {
   beforeEach(() => __resetAgents())
 
+  it("rejects agent ID bindings and create routes on router mounts", () => {
+    for (const mount of [
+      Http.mount("/web", { agentIdBinding: Http.agentId.query("id") }),
+      Http.mount("/web", { agentIdBinding: Http.agentId.query("id"), createRoute: "/create" }),
+      { ...Http.mount("/web"), createRoute: [] },
+    ]) {
+      expect(() => GolemRouter.define("InvalidIdRouter", { mount })).toThrow("router-mount")
+    }
+  })
+
   it.each(["fail", "die"])("preserves a Respondable %s response", async (kind) => {
     const error = {
       [HttpServerRespondable.symbol]: () =>

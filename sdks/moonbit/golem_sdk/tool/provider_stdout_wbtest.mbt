@@ -96,9 +96,13 @@ test "provider stdout batches bytes in bounded 64 KiB writes" {
   run_provider_async(() => {
     for use_bytes in [false, true] {
       let lengths : Array[Int32] = []
+      let written : Array[Byte] = []
       let stdout = provider_output_from_callbacks(
         bytes => {
           lengths.push(bytes.length())
+          for byte in bytes {
+            written.push(byte)
+          }
           Ok(())
         },
         () => Ok(()),
@@ -106,17 +110,55 @@ test "provider stdout batches bytes in bounded 64 KiB writes" {
         () => (),
       )
       for size in [0, 1, 63, 64, 65, 4096, 65535, 65536, 65537] {
-        let data = Array::makei(size, i => (i % 251).to_byte())
+        let data = Array::makei(size + 6, i => (i % 251).to_byte())
         if use_bytes {
-          assert_true(stdout.write_all_bytes(Bytes::from_array(data)))
+          let bytes = Bytes::from_array(data)
+          assert_true(stdout.write_all_bytes(bytes[3:size + 3]))
         } else {
-          assert_true(stdout.write_all(data))
+          assert_true(stdout.write_all(data[3:size + 3]))
         }
+        assert_eq(written.length(), size)
+        for i in 0..<size {
+          assert_eq(written[i], ((i + 3) % 251).to_byte())
+        }
+        written.clear()
       }
       assert_eq(lengths, [1, 63, 64, 65, 4096, 65535, 65536, 65536, 1])
       stdout.finish()
       stdout.drop()
     }
+  })
+}
+
+///|
+test "provider stdout snapshots a bounded view before a suspended write" {
+  run_provider_async(() => {
+    let (started, start) = @async-core.Future::new()
+    let (release, unblock) = @async-core.Future::new()
+    let written : Array[FixedArray[Byte]] = []
+    let stdout = provider_output_from_callbacks(
+      bytes => {
+        ignore(start.complete(()))
+        release.get()
+        written.push(bytes)
+        Ok(())
+      },
+      () => Ok(()),
+      _ => Ok(()),
+      () => (),
+    )
+    let data : FixedArray[Byte] = [99, 1, 2, 3, 88]
+    @async-core.with_task_group(group => {
+      let write = group.spawn(() => stdout.write(data[1:4]))
+      started.get()
+      data[2] = 42
+      ignore(unblock.complete(()))
+      assert_eq(write.wait(), 3)
+    })
+    data[1] = 43
+    assert_eq(written, [[1, 2, 3]])
+    stdout.finish()
+    stdout.drop()
   })
 }
 

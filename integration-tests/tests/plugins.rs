@@ -61,7 +61,7 @@ struct BatchCallback {
     #[allow(dead_code)]
     account_id: String,
     #[allow(dead_code)]
-    component_id: String,
+    agent_type: Option<String>,
     first_entry_index: u64,
     entry_count: u64,
     invocations: Vec<InvocationRecord>,
@@ -75,6 +75,19 @@ struct BatchCallback {
 struct InvocationRecord {
     oplog_index: u64,
     fn_name: String,
+    /// The principal that started the chain, when the start was in the same batch
+    #[serde(default)]
+    original_caller: Option<CallerRoleRecord>,
+    /// The principal that made the call, when the start was in the same batch
+    #[serde(default)]
+    immediate_caller: Option<CallerRoleRecord>,
+}
+
+/// One role of an invocation's caller, as the oplog processor saw it.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+struct CallerRoleRecord {
+    kind: String,
+    subject: Option<String>,
 }
 
 /// Post-enrichment evidence of a durable host-call entry, as observed by the
@@ -490,6 +503,25 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
     assert_function_names(&batches, &["agent-initialization", "add", "add", "add"]);
     assert_unique_oplog_indices(&batches);
 
+    // The processor sees the calling account in both roles of the REST invocations.
+    let account = CallerRoleRecord {
+        kind: "account".to_string(),
+        subject: Some(format!("account:{}", user.account_id)),
+    };
+    let adds = batches
+        .iter()
+        .flat_map(|batch| batch.invocations.iter())
+        .filter(|invocation| invocation.fn_name == "add" && invocation.original_caller.is_some())
+        .collect::<Vec<_>>();
+    assert!(
+        !adds.is_empty(),
+        "no invocation with a caller in {batches:?}"
+    );
+    for invocation in adds {
+        assert_eq!(invocation.original_caller.as_ref(), Some(&account));
+        assert_eq!(invocation.immediate_caller.as_ref(), Some(&account));
+    }
+
     // E2: Verify oplog entries exist for the worker
     let oplog = user.get_oplog(&worker_id, OplogIndex::from_u64(0)).await?;
     assert!(!oplog.is_empty(), "Worker oplog should not be empty");
@@ -796,12 +828,12 @@ async fn oplog_processor_p3_entries(deps: &EnvBasedTestDependencies) -> anyhow::
     let all_batches = wait_for_invocations(&received_batches, 5, Duration::from_secs(300)).await;
     let batches: Vec<BatchCallback> = all_batches
         .iter()
-        .filter(|b| b.source_worker_id.contains("HttpClient2"))
+        .filter(|b| b.source_worker_id == worker_id.agent_id.to_string())
         .cloned()
         .collect();
     let cancel_batches: Vec<BatchCallback> = all_batches
         .iter()
-        .filter(|b| b.source_worker_id.contains("HttpClient4"))
+        .filter(|b| b.source_worker_id == cancel_worker_id.agent_id.to_string())
         .cloned()
         .collect();
 

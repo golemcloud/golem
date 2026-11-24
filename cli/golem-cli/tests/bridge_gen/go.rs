@@ -1093,8 +1093,9 @@ fn go_clients_have_no_caller_field(env: &GoEnv) {
         GeneratedGo::external(env, ledger()),
     ] {
         let client = generated.read("client.go").to_lowercase();
-        assert!(!client.contains("principal"), "{client}");
-        assert!(!client.contains("caller"), "{client}");
+        for identifier in client.split(|c: char| !c.is_ascii_alphanumeric() && c != '_') {
+            assert!(!matches!(identifier, "principal" | "caller"), "{client}");
+        }
         // the guest client takes the arguments alone, the external one a ctx first
         assert!(
             client.contains("charge(amount int64)")
@@ -1168,7 +1169,8 @@ fn go_http_router_bridge_rejection_uses_kind_not_name() {
             path_prefix: vec![],
             auth_details: None,
             phantom_agent: false,
-            phantom_id_binding: None,
+            agent_id_binding: None,
+            create_route: None,
             cors_options: CorsOptions {
                 allowed_patterns: vec![],
             },

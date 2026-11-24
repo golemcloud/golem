@@ -33,7 +33,12 @@ fn guest_block(runtime: &Arc<RuntimeStore>, run: RuntimeRunId) {
         runtime.observe(RuntimeObservation::DriverBlocked { run, generation });
         Poll::<wasmtime::Result<()>>::Pending
     });
-    assert!(runtime.drive(block, None, None).now_or_never().is_none());
+    assert!(
+        runtime
+            .drive(block, None, None, false)
+            .now_or_never()
+            .is_none()
+    );
 }
 
 #[test]
@@ -72,6 +77,138 @@ async fn consumed_guest_block_cannot_release_a_later_delivery() {
     assert!(later.as_mut().now_or_never().is_none());
     guest_block(&runtime, run);
     assert!(later.as_mut().now_or_never().is_some());
+}
+
+/// Drives a run that blocks at every poll, with deadlock detection, after `kinds` started.
+fn drive_blocked_with(kinds: &[RuntimeActivityKind]) -> Option<wasmtime::Result<()>> {
+    drive_blocked(&RuntimeStore::new(OwnerSuspension::new()), kinds)
+}
+
+fn drive_blocked(
+    runtime: &Arc<RuntimeStore>,
+    kinds: &[RuntimeActivityKind],
+) -> Option<wasmtime::Result<()>> {
+    let run = runtime_run_ids(1)[0];
+    for (activity, kind) in runtime_ids(kinds.len()).into_iter().zip(kinds) {
+        runtime.observe(RuntimeObservation::ActivityStarted {
+            activity,
+            kind: *kind,
+        });
+    }
+    let block = std::future::poll_fn(|_| {
+        let generation = {
+            let state = runtime.owner.state.lock().unwrap();
+            state.stores[&runtime.store_id].driver.generation as usize
+        };
+        runtime.observe(RuntimeObservation::DriverInvalidated {
+            run,
+            generation,
+            reason: RuntimeInvalidation::Poll,
+        });
+        runtime.observe(RuntimeObservation::DriverBlocked { run, generation });
+        Poll::<wasmtime::Result<()>>::Pending
+    });
+    runtime.drive(block, None, None, true).now_or_never()
+}
+
+#[test]
+fn a_blocked_run_with_only_its_root_open_is_a_deadlock() {
+    let result = drive_blocked_with(&[RuntimeActivityKind::Root])
+        .expect("a blocked run with only its root open does not wait");
+    let error = result.expect_err("a blocked run with only its root open fails");
+    assert_eq!(
+        error.downcast_ref::<wasmtime::Trap>(),
+        Some(&wasmtime::Trap::AsyncDeadlock)
+    );
+}
+
+#[test]
+fn a_blocked_run_with_an_open_import_is_not_a_deadlock() {
+    assert!(
+        drive_blocked_with(&[RuntimeActivityKind::Root, RuntimeActivityKind::Import]).is_none(),
+        "the open import can still wake the root"
+    );
+}
+
+#[test]
+fn the_end_of_another_stores_last_activity_wakes_a_root_only_run_into_a_deadlock() {
+    struct CountingWaker(std::sync::atomic::AtomicUsize);
+    impl std::task::Wake for CountingWaker {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    let owner = OwnerSuspension::new();
+    let runtime = RuntimeStore::new(owner.clone());
+    let other = RuntimeStore::new(owner);
+    let other_import = runtime_ids(1)[0];
+    other.observe(RuntimeObservation::ActivityStarted {
+        activity: other_import,
+        kind: RuntimeActivityKind::Import,
+    });
+
+    let run = runtime_run_ids(1)[0];
+    runtime.observe(RuntimeObservation::ActivityStarted {
+        activity: runtime_ids(1)[0],
+        kind: RuntimeActivityKind::Root,
+    });
+    let block = std::future::poll_fn(|_| {
+        let generation = {
+            let state = runtime.owner.state.lock().unwrap();
+            state.stores[&runtime.store_id].driver.generation as usize
+        };
+        runtime.observe(RuntimeObservation::DriverInvalidated {
+            run,
+            generation,
+            reason: RuntimeInvalidation::Poll,
+        });
+        runtime.observe(RuntimeObservation::DriverBlocked { run, generation });
+        Poll::<wasmtime::Result<()>>::Pending
+    });
+    let mut driven = Box::pin(runtime.drive(block, None, None, true));
+    let wakes = Arc::new(CountingWaker(std::sync::atomic::AtomicUsize::new(0)));
+    let waker = std::task::Waker::from(wakes.clone());
+    let mut cx = std::task::Context::from_waker(&waker);
+
+    assert!(
+        driven.as_mut().poll(&mut cx).is_pending(),
+        "the other Store's open import can still wake the root"
+    );
+    other.observe(RuntimeObservation::ActivityFinished {
+        activity: other_import,
+    });
+    assert_eq!(
+        wakes.0.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the end of the other Store's import wakes the run"
+    );
+    let Poll::Ready(result) = driven.as_mut().poll(&mut cx) else {
+        panic!("the woken run with only its root open does not wait");
+    };
+    assert_eq!(
+        result
+            .expect_err("the woken run fails")
+            .downcast_ref::<wasmtime::Trap>(),
+        Some(&wasmtime::Trap::AsyncDeadlock)
+    );
+}
+
+#[test]
+fn a_blocked_run_whose_root_waits_outside_the_store_is_not_a_deadlock() {
+    let runtime = RuntimeStore::new(OwnerSuspension::new());
+    let outside = runtime.root_waits_outside();
+    assert!(
+        drive_blocked(&runtime, &[RuntimeActivityKind::Root]).is_none(),
+        "the work outside the Store can still wake the root"
+    );
+    let parked = outside.parked();
+    assert!(
+        drive_blocked(&runtime, &[RuntimeActivityKind::Root]).is_some(),
+        "a root parked on the owner's runtime with nothing else open is a deadlock"
+    );
+    drop(parked);
+    drop(outside);
 }
 
 struct PendingTask;
@@ -144,7 +281,11 @@ fn runtime_run_ids(count: usize) -> Vec<RuntimeRunId> {
 fn guest_imports_reserve_in_the_order_they_start() {
     let ids = runtime_ids(5);
     let guest_imports = Arc::new(GuestImportNumbering::default());
-    let store = RuntimeStore::with_guest_imports(OwnerSuspension::new(), guest_imports.clone());
+    let store = RuntimeStore::with_guest_imports(
+        OwnerSuspension::new(),
+        guest_imports.clone(),
+        Default::default(),
+    );
     let root = OplogIndex::from_u64(5);
     let import = |activity| {
         guest_imports.number_next_import(ImportNumbering::Under { root, anchor: root });
@@ -608,7 +749,7 @@ fn delegated_driver_wake_return_and_drop_revoke_suspension() {
             })
             .await
         });
-        let mut driver = Box::pin(runtime.drive(future, Some(&invocation), None));
+        let mut driver = Box::pin(runtime.drive(future, Some(&invocation), None, false));
         let parent = Arc::new(ParentWake {
             owner: owner.clone(),
             called: AtomicBool::new(false),
@@ -712,7 +853,7 @@ async fn parked_borrowed_fiber_drop_releases_observer_lock() {
     let run = instance
         .get_typed_func::<(), ()>(&mut store, "run")
         .unwrap();
-    let mut driver = Box::pin(runtime.drive(run.call_async(&mut store, ()), None, None));
+    let mut driver = Box::pin(runtime.drive(run.call_async(&mut store, ()), None, None, false));
     assert!(poll_once(driver.as_mut()).is_pending());
     assert!(entered.load(Ordering::SeqCst));
     assert!(!dropped.load(Ordering::SeqCst));
@@ -771,8 +912,8 @@ fn neutral_caller_cannot_hide_body_wake_or_cleanup() {
         let _neutral = observed.neutral_entity(id, &awaited_invocation).unwrap();
         pending::<wasmtime::Result<()>>().await
     });
-    let mut child = Box::pin(child_runtime.drive(child, Some(&invocation), None));
-    let mut parent = Box::pin(parent_runtime.drive(parent, None, None));
+    let mut child = Box::pin(child_runtime.drive(child, Some(&invocation), None, false));
+    let mut parent = Box::pin(parent_runtime.drive(parent, None, None, false));
     assert!(poll_once(child.as_mut()).is_pending());
     assert!(poll_once(parent.as_mut()).is_pending());
     let attempt = owner
@@ -1420,4 +1561,65 @@ async fn committed_suspend_wins_over_ready_timer_without_interrupt() {
     assert!(
         matches!(result, Err(InterruptKind::Suspend(timestamp)) if timestamp == attempt.suspend_at)
     );
+}
+
+/// `RuntimeStore::drive` documents that a blocked root-only run is not a deadlock while "a
+/// delegated activity of the owner is open". An entity invocation delegated to another Store,
+/// whose last runtime activity just ended while its drive still holds the delegation, is such an
+/// open activity: the entity is still registered and goes back to the external activities when
+/// that drive returns.
+#[test]
+fn an_entity_delegated_to_another_store_keeps_a_root_only_run_from_a_deadlock() {
+    let owner = OwnerSuspension::new();
+    let runtime = RuntimeStore::new(owner.clone());
+    let other = RuntimeStore::new(owner.clone());
+    let invocation = entity(1);
+    let _entity = owner.register_entity(invocation.clone());
+
+    let other_root = runtime_ids(1)[0];
+    other.observe(RuntimeObservation::ActivityStarted {
+        activity: other_root,
+        kind: RuntimeActivityKind::Root,
+    });
+    let delegation = other
+        .delegate(&invocation)
+        .expect("the registered entity is delegated to the other Store's drive");
+
+    let run = runtime_run_ids(1)[0];
+    runtime.observe(RuntimeObservation::ActivityStarted {
+        activity: runtime_ids(1)[0],
+        kind: RuntimeActivityKind::Root,
+    });
+    let block = std::future::poll_fn(|_| {
+        let generation = {
+            let state = runtime.owner.state.lock().unwrap();
+            state.stores[&runtime.store_id].driver.generation as usize
+        };
+        runtime.observe(RuntimeObservation::DriverInvalidated {
+            run,
+            generation,
+            reason: RuntimeInvalidation::Poll,
+        });
+        runtime.observe(RuntimeObservation::DriverBlocked { run, generation });
+        Poll::<wasmtime::Result<()>>::Pending
+    });
+    let mut driven = Box::pin(runtime.drive(block, None, None, true));
+    assert!(
+        poll_once(driven.as_mut()).is_pending(),
+        "the other Store's open root can still wake the root"
+    );
+
+    // The other Store's run ends its root; its drive has not returned yet, so it still holds the
+    // delegated entity activity.
+    other.observe(RuntimeObservation::ActivityFinished {
+        activity: other_root,
+    });
+    let poll = poll_once(driven.as_mut());
+    assert!(
+        poll.is_pending(),
+        "the entity delegated to the other Store is still open, so the root-only run is not a \
+         deadlock; got {:?}",
+        poll.map(|result| result.map_err(|error| error.to_string()))
+    );
+    drop(delegation);
 }

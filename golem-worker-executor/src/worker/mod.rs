@@ -23,6 +23,7 @@ mod runtime;
 mod startup;
 mod streaming;
 
+use acquisition::ConstructionError;
 #[cfg(test)]
 use acquisition::snapshot_policy_of_mode;
 #[cfg(test)]
@@ -71,6 +72,7 @@ pub mod instance;
 mod interrupt;
 pub mod invocation;
 mod invocation_loop;
+pub mod invocations;
 mod lifecycle;
 #[cfg(test)]
 mod lifecycle_tests;
@@ -91,6 +93,7 @@ pub(crate) mod tasks;
 
 #[cfg(test)]
 pub(crate) use invocation_loop::{MonthlyResourceAdmission, monthly_resource_admission};
+pub use lifecycle::CancelInvocationOutcome;
 pub use lifecycle::UpdateMode as WorkerUpdateMode;
 
 use self::agent_config::{
@@ -165,8 +168,8 @@ use crate::worker::lifecycle::state::{
 use crate::worker::snapshot_selection::{SnapshotExclusions, StartDecision, StartSelection};
 use crate::worker::status::update_queue::is_unselected_automatic;
 use crate::worker::status::{
-    InvocationRequests, calculate_last_known_status_with_checkpoint,
-    fold_invocation_result_entries, revert_validation_regions, update_status_with_new_entries,
+    calculate_last_known_status_with_checkpoint, revert_validation_regions,
+    update_status_with_new_entries,
 };
 use crate::workerctx::{WorkerCtx, WorkerCtxExecutable, WorkerFilesystemContext};
 use futures::{
@@ -189,6 +192,7 @@ use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId
 use golem_common::base_model::oplog::QueuedCardEvent;
 use golem_common::cache::PendingOrFinal;
 use golem_common::model::AgentStatus;
+use golem_common::model::InvocationEnd;
 use golem_common::model::RetryConfig;
 use golem_common::model::agent::{AgentConfigEntryDto, TypedAgentConfigEntry};
 use golem_common::model::agent::{
@@ -214,9 +218,10 @@ use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
-    AgentInvocationResult, AgentMetadata, AgentStatusRecord, InvocationResultPosition,
-    OwnedAgentId, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RetryPolicyState,
-    ShardAssignment, ShardEpoch, ShardId, Timestamp,
+    AgentInvocationResult, AgentMetadata, AgentStatusRecord, InvocationRequestOperation,
+    InvocationResultPosition, OwnedAgentId, PendingInvocationRef, PendingUpdateKind,
+    PendingUpdateRef, RetryPolicyState, ShardAssignment, ShardEpoch, ShardId,
+    StoredAgentInvocationPayload, Timestamp,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -333,6 +338,7 @@ pub enum CreateIntent {
     Invocation {
         owner: NewOwner,
         idempotency_key: Option<IdempotencyKey>,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
     },
     /// An explicit create request.
     Create {
@@ -360,6 +366,7 @@ impl CreateIntent {
             Self::Invocation {
                 owner,
                 idempotency_key,
+                ..
             } if !owner.keyed => (CreateRequestKind::Unkeyed, idempotency_key.clone()),
             Self::Invocation { .. } => (CreateRequestKind::GetOrCreate, None),
             Self::Create {
@@ -648,6 +655,9 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     #[allow(dead_code)]
     metrics_status: Arc<WorkerStatusMetric>,
     last_known_status_detached: Arc<AtomicBool>,
+    /// Set while an `AgentInvocationSettled` that the invocation loop appended waits for the
+    /// commit of the next `AgentInvocationStarted` (see [`Worker::defer_settlement_commit`]).
+    settlement_commit_deferred: AtomicBool,
     status_flusher: Arc<status_flusher::AgentStatusFlusher>,
     status_checkpointer: status_checkpointer::StatusCheckpointer,
     // Note: std lock for wasmtime reasons
@@ -825,7 +835,8 @@ impl<Ctx: WorkerCtx> UsesAllDeps for Worker<Ctx> {
 /// unchanged for Started; lowering may transform only a separate invocation clone.
 pub struct HydratedInvocation {
     pub(crate) invocation: AgentInvocation,
-    pub(crate) payload: OplogPayload<AgentInvocationPayload>,
+    pub(crate) operation: InvocationRequestOperation,
+    pub(crate) payload: OplogPayload<StoredAgentInvocationPayload>,
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
@@ -946,7 +957,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         Principal::Agent(AgentPrincipal::of_agent(
             issuer.to_string(),
-            self.owned_agent_id.agent_id.clone(),
+            self.owned_agent_id.agent_id,
             metadata.fingerprint,
             agent_type,
             self.owned_agent_id.environment_id,
@@ -1009,7 +1020,7 @@ impl Drop for WorkerStatusMetric {
 #[derive(Debug)]
 enum WorkerInstance {
     Unresolved,
-    Initializing(Shared<BoxFuture<'static, Result<bool, WorkerExecutorError>>>),
+    Initializing(Shared<BoxFuture<'static, Result<bool, ConstructionError>>>),
     /// No invocation loop runs. `startup_failure` is the failed last start of a durable agent:
     /// admission returns it until the next start, which runs the agent again.
     Unloaded {
@@ -1290,6 +1301,8 @@ enum InvocationResult {
     Cancelled,
     Lazy {
         oplog_idx: OplogIndex,
+        /// The give-up entry of a background failure after the result at `oplog_idx`.
+        background_failure: Option<OplogIndex>,
     },
 }
 
@@ -1332,6 +1345,8 @@ pub(crate) enum MethodFailureSettlementError {
 pub enum InvocationFailureDecision {
     /// Retry the invocation, or stop, as the retry decision says.
     Retry(RetryDecision),
+    /// The cancellation and typed rejection were committed. The rejected key must not run again.
+    Rejected,
     /// The oplog refused the record of the failure. A `RecoveryRequired` error, a storage that did
     /// not answer, sends the agent to infrastructure recovery, and the invocation stays pending, so
     /// it continues when the storage answers again. An `OplogFailed` error stops the agent, and the
@@ -1483,14 +1498,15 @@ enum StopResult {
 mod resource_release_tests;
 
 pub use acquisition::merge_agent_env_with_default_env;
-pub(crate) use ingress::{await_scalar_invocation, require_expected_tool_deployment_revision};
-use ingress::{
-    inactive_ephemeral_agent_error, replace_invocation_input, validate_resolved_invocation_identity,
+pub(crate) use ingress::{
+    await_scalar_invocation, require_canonical_command_path,
+    require_expected_tool_deployment_revision,
 };
+use ingress::{inactive_ephemeral_agent_error, validate_resolved_invocation_identity};
 use interrupt::register_interrupt_request;
 use lifecycle::retirement::owned_shard_epoch;
 pub(crate) use lifecycle::retirement::retired_by_assignment;
-use lifecycle::stop::invocation_keys_to_fail;
+use lifecycle::stop::{invocation_keys_failed_on_giving_up, invocation_keys_to_fail};
 use read_only_cache::{build_read_only_cache_entry, is_no_cache, populate_read_only_cache};
 use runtime::shared_linear_memory_error;
 use streaming::sessions::{
@@ -1499,6 +1515,6 @@ use streaming::sessions::{
     validate_stream_session_record,
 };
 pub(crate) use streaming::sessions::{
-    same_origin_stream_invocation, stream_session_record_key, stream_session_record_keys,
-    stream_session_record_reference,
+    same_origin_queued_request, same_origin_stream_invocation, stream_session_record_key,
+    stream_session_record_keys, stream_session_record_reference,
 };

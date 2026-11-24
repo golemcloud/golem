@@ -54,6 +54,7 @@ impl<Repo: PluginRepo> LoggedPluginRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: PluginRepo> PluginRepo for LoggedPluginRepo<Repo> {
     async fn create(&self, plugin: PluginRecord) -> RepoResult<Option<PluginRecord>> {
         let span = Self::span_id(plugin.plugin_id);
@@ -123,6 +124,7 @@ impl<DBP: Pool> DbPluginRepo<DBP> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl PluginRepo for DbPluginRepo<PostgresPool> {
     async fn create(&self, plugin: PluginRecord) -> RepoResult<Option<PluginRecord>> {
         self.with_rw("create").fetch_one_as(

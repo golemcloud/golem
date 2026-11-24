@@ -34,6 +34,7 @@ import "golem/worker/worker_metadata.proto";
 import "golem/worker/worker_status.proto";
 import "golem/schema/schema.proto";
 import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
 
 service WorkerExecutor {
   rpc CreateWorker(CreateWorkerRequest) returns (CreateWorkerResponse);
@@ -61,6 +62,9 @@ service WorkerExecutor {
   rpc ResolveRevertLastInvocations(ResolveRevertLastInvocationsRequest) returns (ResolveRevertLastInvocationsResponse);
   rpc RevertWorker(RevertWorkerRequest) returns (RevertWorkerResponse);
   rpc CancelInvocation(CancelInvocationRequest) returns (CancelInvocationResponse);
+  rpc GetInvocation(GetInvocationRequest) returns (GetInvocationResponse);
+  rpc ListInvocations(ListInvocationsRequest) returns (ListInvocationsResponse);
+  rpc LookupInvocations(LookupInvocationsRequest) returns (LookupInvocationsResponse);
 
   rpc GetFileSystemNode(GetFileSystemNodeRequest) returns (GetFileSystemNodeResponse);
   rpc GetAgentWallet(GetAgentWalletRequest) returns (GetAgentWalletResponse);
@@ -168,6 +172,9 @@ message CreateWorkerRequest {
   // checked against it.
   optional golem.worker.IdempotencyKey idempotency_key = 10;
   golem.worker.InvocationFreshnessDisposition freshness_disposition = 11;
+  // For invocation-driven creation, validate this request against the creation component before
+  // writing Create. Existing owners still validate when execution selects their component.
+  optional golem.worker.InvocationStart invocation = 15;
 }
 
 message CreateWorkerSuccessResponse {
@@ -366,6 +373,13 @@ message UpdateWorkerResponse {
   }
 }
 
+// Whether the public oplog of a read holds the users' verified claims. The worker service asks
+// for SHOWN only for a reader that asked for the claims and passed the oplog read check.
+enum ClaimVisibility {
+  CLAIM_VISIBILITY_HIDDEN = 0;
+  CLAIM_VISIBILITY_SHOWN = 1;
+}
+
 message GetOplogRequest {
   golem.worker.AgentId agent_id = 1;
   uint64 from_oplog_index = 3;
@@ -379,6 +393,8 @@ message GetOplogRequest {
   // The scan allowance that a range read may still spend. Without it, the read gets the
   // configured allowance of the executor. The executor clamps it to its configured allowance.
   optional golem.worker.OplogScanAllowance scan_allowance = 9;
+  // Whether the callers in the entries hold the users' verified claims.
+  ClaimVisibility claims = 10;
 }
 
 message GetOplogResponse {
@@ -408,6 +424,8 @@ message GetOplogEntryRequest {
   // The component revision to decode the entry with. Without it, the executor scans the oplog
   // up to the entry to find it.
   optional uint64 component_revision = 5;
+  // Whether the callers in the entries hold the users' verified claims.
+  ClaimVisibility claims = 6;
 }
 
 message GetOplogEntryResponse {
@@ -424,6 +442,8 @@ message SearchOplogRequest {
   uint64 count = 4;
   golem.common.EnvironmentId environment_id = 5;
   golem.auth.AuthCtx auth_ctx = 6;
+  // Whether the callers in the entries hold the users' verified claims.
+  ClaimVisibility claims = 7;
 }
 
 message SearchOplogResponse {
@@ -605,6 +625,111 @@ message CancelInvocationResponse {
   }
 }
 
+enum InvocationLifecycleState {
+  INVOCATION_LIFECYCLE_STATE_UNSPECIFIED = 0;
+  INVOCATION_LIFECYCLE_STATE_PENDING = 1;
+  INVOCATION_LIFECYCLE_STATE_SCHEDULED = 2;
+  INVOCATION_LIFECYCLE_STATE_RUNNING = 3;
+  INVOCATION_LIFECYCLE_STATE_WAITING = 4;
+  INVOCATION_LIFECYCLE_STATE_RETRYING = 5;
+  INVOCATION_LIFECYCLE_STATE_INTERRUPTED = 6;
+  INVOCATION_LIFECYCLE_STATE_COMPLETED = 7;
+  INVOCATION_LIFECYCLE_STATE_FAILED = 8;
+  INVOCATION_LIFECYCLE_STATE_CANCELLED = 9;
+  // The invocation recorded its result, then the agent gave up during its background work.
+  INVOCATION_LIFECYCLE_STATE_BACKGROUND_FAILED = 10;
+}
+
+enum InvocationKind {
+  INVOCATION_KIND_UNSPECIFIED = 0;
+  INVOCATION_KIND_METHOD = 1;
+  INVOCATION_KIND_CONSTRUCTOR = 2;
+  INVOCATION_KIND_TOOL = 3;
+}
+
+// One invocation of an agent. `kind` is unspecified, and `operation` absent, when the
+// invocation's request is not known.
+message InvocationSummary {
+  golem.common.UUID invocation_id = 1;
+  InvocationLifecycleState state = 2;
+  InvocationKind kind = 3;
+  // The method name, or `tool:<tool>/<command path>`. Absent for the constructor run.
+  optional string operation = 4;
+  optional google.protobuf.Timestamp accepted_at = 5;
+  google.protobuf.Timestamp changed_at = 6;
+}
+
+message GetInvocationRequest {
+  golem.worker.AgentId agent_id = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
+  golem.common.UUID invocation_id = 4;
+}
+
+// No `invocation` when the agent has no invocation with this ID.
+message GetInvocationSuccess {
+  optional InvocationSummary invocation = 1;
+}
+
+message GetInvocationResponse {
+  oneof result {
+    GetInvocationSuccess success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message ListInvocationsRequest {
+  golem.worker.AgentId agent_id = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
+  optional string operation = 4;
+  // Any of these states; all states when empty.
+  repeated InvocationLifecycleState states = 5;
+  optional InvocationKind kind = 6;
+  // Inclusive bounds on the last change of the invocation.
+  optional google.protobuf.Timestamp since = 7;
+  optional google.protobuf.Timestamp until = 8;
+  // 0 gives the default page size; larger values are capped.
+  uint32 page_size = 9;
+  // The opaque cursor of the previous page.
+  optional golem.worker.Cursor cursor = 10;
+}
+
+message ListInvocationsSuccess {
+  repeated InvocationSummary invocations = 1;
+  // Present when more invocations may follow.
+  optional golem.worker.Cursor next_cursor = 2;
+}
+
+message ListInvocationsResponse {
+  oneof result {
+    ListInvocationsSuccess success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+// Finds the invocations of an agent that the caller started with an idempotency key, in the
+// caller's idempotency scope. A caller without a scope finds none.
+message LookupInvocationsRequest {
+  golem.worker.AgentId agent_id = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
+  golem.worker.IdempotencyKey idempotency_key = 4;
+  // Only the invocation of this operation.
+  optional string operation = 5;
+}
+
+message LookupInvocationsSuccess {
+  repeated InvocationSummary invocations = 1;
+}
+
+message LookupInvocationsResponse {
+  oneof result {
+    LookupInvocationsSuccess success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
 message DurableStreamAttachmentControlRequest {
   golem.worker.AgentId producer_agent_id = 1;
   golem.common.EnvironmentId producer_environment_id = 2;
@@ -684,7 +809,7 @@ message CreateStreamSessionRequest {
 message CreateStreamSessionSuccess {
   string session = 1;
   bool replayed = 2;
-  uint64 component_revision = 3;
+  optional uint64 component_revision = 3;
   golem.common.UUID invocation_key = 4;
   StreamSessionExpiryPolicy expiry_policy = 5;
   optional uint64 expiry_deadline_millis = 6;
@@ -723,6 +848,7 @@ enum StreamSlotReadAdmission {
   STREAM_SLOT_READ_ADMISSION_TOUCHING_ORIGIN_GET = 1;
   STREAM_SLOT_READ_ADMISSION_HEAD = 2;
   STREAM_SLOT_READ_ADMISSION_CONTINUATION = 3;
+  STREAM_SLOT_READ_ADMISSION_WAIT_READY = 4;
 }
 
 message StreamSlotItem {
@@ -758,6 +884,7 @@ message ReadStreamSlotSuccess {
   golem.common.UUID invocation_key = 14;
   StreamSessionExpiryPolicy expiry_policy = 15;
   optional uint64 expiry_deadline_millis = 16;
+  bool queued = 17;
 }
 
 message ReadStreamSlotResponse {

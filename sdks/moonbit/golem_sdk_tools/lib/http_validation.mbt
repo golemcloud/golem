@@ -28,6 +28,7 @@ fn collect_path_variable_names(
 /// type constraints. Should be called after all agents have been parsed.
 pub fn validate_http_routes(
   agents : Array[AgentInfo],
+  value_types~ : Map[String, ValueTypeInfo] = Map([]),
 ) -> Unit raise AgentParseError {
   for agent in agents {
     let mount_segments = match agent.http_mount {
@@ -50,30 +51,52 @@ pub fn validate_http_routes(
           }
         }
         let mount_var_names = collect_path_variable_names(segments)
-        match mount.phantom_id_binding {
+        match mount.agent_id_binding {
           Some(binding) => {
-            if agent.mode != Durable ||
-              mount.router ||
-              !mount.filesystem_bindings.is_empty() {
+            if agent.mode != Durable || mount.router || mount.phantom {
               http_fail(
-                "phantom selectors require a regular durable mount without filesystem exposure",
+                "agent ID bindings require a regular durable mount without phantomAgent",
               )
             }
             match binding {
-              Path(name, _) =>
-                if mount_var_names.filter(v => v == name).length() != 1 ||
-                  agent.constructor_params.any(p => p.0 == name) {
+              Path(name) =>
+                if mount_var_names != [name] {
                   http_fail(
-                    "phantom path selector must name exactly one mount capture, not a constructor parameter",
+                    "agent ID path binding requires exactly its one mount capture",
                   )
                 }
-              Query(_, _) => ()
+              Query(_) =>
+                if !mount_var_names.is_empty() {
+                  http_fail("agent ID query binding forbids mount captures")
+                }
             }
           }
           None => ()
         }
+        if mount.create_route is Some(path) {
+          if mount.agent_id_binding is None {
+            http_fail("mount_create requires an agent ID binding")
+          }
+          if !path.has_prefix("/") {
+            http_fail("mount_create requires a full absolute path")
+          }
+          let create_segments = parse_path_only(path) catch {
+            HttpPathParseError(msg) => raise AgentParseError(msg)
+          }
+          if create_segments.any(s => {
+              match s.kind {
+                Literal(_) | SystemVariable(_) => false
+                _ => true
+              }
+            }) {
+            http_fail("mount_create requires a full literal/system path")
+          }
+        }
         // Rule 8: InvocationContext params cannot be mount path variables
         for v in mount_var_names {
+          if mount.agent_id_binding is Some(_) {
+            continue
+          }
           let param = agent.constructor_params
             .iter()
             .find_first(fn(p) { p.0 == v })
@@ -89,7 +112,7 @@ pub fn validate_http_routes(
         }
         // Rule 3: All mount path variables must exist in constructor params
         for v in mount_var_names {
-          if mount.phantom_id_binding is Some(Path(name, _)) && name == v {
+          if mount.agent_id_binding is Some(_) {
             continue
           }
           let exists = agent.constructor_params
@@ -106,7 +129,7 @@ pub fn validate_http_routes(
         for p in vis_params {
           let (pname, _) = p
           let bound = mount_var_names.iter().find_first(fn(v) { v == pname })
-          if bound is None {
+          if bound is None && mount.agent_id_binding is None {
             raise AgentParseError(
               "Constructor param '\{pname}' of agent '\{agent.name}' is not bound by any mount path variable",
             )
@@ -149,23 +172,30 @@ pub fn validate_http_routes(
             all_var_names.push(qv.variable_name)
           }
           match agent.http_mount {
-            Some({ phantom_id_binding: Some(Path(name, _)), .. }) =>
+            Some({ agent_id_binding: Some(Path(name)), .. }) =>
               if path_segs.any(s => {
                   match s.kind {
                     PathVariable(n) | RemainingPathVariable(n) => n == name
                     _ => false
                   }
                 }) {
-                http_fail("phantom selector conflicts with an endpoint binding")
+                http_fail("agent ID conflicts with an endpoint binding")
               }
-            Some({ phantom_id_binding: Some(Query(name, _)), .. }) =>
+            Some({ agent_id_binding: Some(Query(name)), .. }) =>
               if query_vars.any(q => q.query_param_name == name) ||
                 (
-                  endpoint.durable_streams is Some(_) &&
+                  endpoint.mode.unwrap_or_else(fn() {
+                    if method_contains_agent_stream(meth, value_types) {
+                      "durableStreams"
+                    } else {
+                      "plain"
+                    }
+                  }) ==
+                  "durableStreams" &&
                   ["offset", "cursor", "live"].contains(name)
                 ) {
                 http_fail(
-                  "phantom selector conflicts with an endpoint binding or durable-stream control",
+                  "agent ID conflicts with an endpoint input or durable-stream control",
                 )
               }
             _ => ()
@@ -174,6 +204,18 @@ pub fn validate_http_routes(
           for header in endpoint.headers {
             let (_, var_name) = header
             all_var_names.push(var_name)
+          }
+          if agent.http_mount
+            is Some({ agent_id_binding: Some(Query(name)), .. }) &&
+            endpoint.http_method is Concrete("get" | "head" | "delete") &&
+            visible_params(meth.params).any(p => {
+              p.0 == name &&
+              !(p.1 is Parameterized("AgentStream" | "@schema.AgentStream", _))
+            }) &&
+            !all_var_names.contains(name) {
+            http_fail(
+              "agent ID query name conflicts with an implicit method input",
+            )
           }
           // Rule 10: Duplicate header names (case-insensitive)
           let seen_headers : Array[String] = []

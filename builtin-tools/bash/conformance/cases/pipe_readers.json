@@ -1,0 +1,33 @@
+{
+  "tier": "pr",
+  "description": "Pipelines whose reader exits early. A short writer finishes before the reader exits, as bash's\nusually does into a pipe with room for its output, so `set -o pipefail` sees no SIGPIPE; a writer\nthat fills the pipe gets SIGPIPE, as in bash.\n\nEach case name starts with `pipe readers: `.",
+  "cases": [
+    {
+      "name": "pipe readers: pipefail and errexit with head after a short loop",
+      "script": "set -euo pipefail; for i in 1 2 3; do echo $i; done | head -n 1; echo reached",
+      "tags": [],
+      "options": {},
+      "oracleRace": "a writer still writing when `head` exits gets SIGPIPE (141) in bash"
+    },
+    {
+      "name": "pipe readers: short writers are not cut off",
+      "script": "set -o pipefail\nfor i in 1 2 3; do echo $i; done | head -n 1; echo \"loop $? ${PIPESTATUS[*]}\"\nprintf '%s\\n' a b c | head -1; echo \"printf $?\"\nseq 3 | head -1; echo \"seq $?\"\n{ echo a; echo b; echo c; } | head -n 1; echo \"group $?\"\nf() { echo a; echo b; }; f | head -1; echo \"function $?\"\nx=$(for i in 1 2 3; do echo $i; done | head -1); echo \"substitution $? $x\"",
+      "tags": [],
+      "options": {},
+      "oracleRace": "a writer still writing when `head` exits gets SIGPIPE (141) in bash"
+    },
+    {
+      "name": "pipe readers: writers that fill the pipe get SIGPIPE",
+      "script": "set -o pipefail\nseq 100000 | head -1; echo \"seq $?\"\nyes | head -1; echo \"yes $?\"\nfor i in $(seq 20000); do echo $i; done | head -1; echo \"loop $? ${PIPESTATUS[*]}\"\nwhile :; do echo y; done | head -2; echo \"while $?\"\nset -e; seq 100000 | head -1; echo not-reached",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "pipe readers: a short writer is not cut off after other commands",
+      "script": "set -o pipefail\nr=; for k in $(seq 70); do for i in 1 2 3; do echo $i; done | head -n 1 >/dev/null; r=$r$?; :; done; echo \"$r\"",
+      "tags": [],
+      "options": {},
+      "oracleRace": "a writer still writing when `head` exits gets SIGPIPE (141) in bash"
+    }
+  ]
+}

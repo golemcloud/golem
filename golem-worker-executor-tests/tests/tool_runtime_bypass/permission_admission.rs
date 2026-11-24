@@ -1316,12 +1316,18 @@ impl SchedulerStorage for LostInvocationWake {
         id: &ScheduleId,
         owner: Uuid,
         until: DateTime<Utc>,
+        now: DateTime<Utc>,
     ) -> Result<bool, SchedulerStorageError> {
-        self.inner.extend_lease(id, owner, until).await
+        self.inner.extend_lease(id, owner, until, now).await
     }
 
-    async fn ack(&self, id: &ScheduleId, owner: Uuid) -> Result<bool, SchedulerStorageError> {
-        self.inner.ack(id, owner).await
+    async fn ack(
+        &self,
+        id: &ScheduleId,
+        owner: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<bool, SchedulerStorageError> {
+        self.inner.ack(id, owner, now).await
     }
 }
 
@@ -1590,6 +1596,8 @@ async fn invoke_owner_method_with_scope(
             constructor: None,
             component_id: Some(fixture.owner_component.id.into()),
             method_name: Some(method.to_string()),
+            allow_streams: false,
+            captured_method_input: None,
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             mode: AgentInvocationMode::Await as i32,
             schedule_at: None,

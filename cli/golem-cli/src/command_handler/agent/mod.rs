@@ -27,7 +27,7 @@ use crate::command::shared_args::{OplogExportArgs, OplogViewerArgs};
 use crate::command::worker::{AgentSubcommand, InvocationStdinFormat, InvocationStdoutFormat};
 use crate::command_handler::Handlers;
 use crate::command_handler::agent::oplog_serve::{
-    OplogViewerServer, open_in_browser, oplog_page_entry_view, serve_oplog_viewer,
+    OplogViewerServer, open_in_browser, oplog_include, oplog_page_entry_view, serve_oplog_viewer,
 };
 use crate::command_handler::agent::stream::{AgentConnection, LiveOutput};
 use crate::context::Context;
@@ -41,8 +41,8 @@ use crate::log::{
     log_failed_to, log_warn, log_warn_action, logln, message_for_output, try_print_bytes,
 };
 use crate::model::agent::action_result::{
-    AgentCancelInvocationResult, AgentDeleteView, AgentFileContentsResult, AgentInterruptResult,
-    AgentPluginToggleResult, AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
+    AgentDeleteView, AgentFileContentsResult, AgentInterruptResult, AgentPluginToggleResult,
+    AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
 };
 use crate::model::agent::files::{AgentFilesView, FileNodeView};
 use crate::model::agent::oplog::{AgentOplogEntryView, AgentOplogPageView};
@@ -273,17 +273,33 @@ impl AgentCommandHandler {
                     from,
                     query,
                     omit_payloads,
+                    show_claims,
                     page,
                     cursor,
                     viewer,
                     export,
                 } => {
                     if page {
-                        self.cmd_oplog_page(agent_id, from, cursor, query, omit_payloads)
-                            .await
+                        self.cmd_oplog_page(
+                            agent_id,
+                            from,
+                            cursor,
+                            query,
+                            omit_payloads,
+                            show_claims,
+                        )
+                        .await
                     } else {
-                        self.cmd_oplog(agent_id, from, query, omit_payloads, viewer, export)
-                            .await
+                        self.cmd_oplog(
+                            agent_id,
+                            from,
+                            query,
+                            omit_payloads,
+                            show_claims,
+                            viewer,
+                            export,
+                        )
+                        .await
                     }
                 }
                 AgentSubcommand::Revert {
@@ -294,10 +310,6 @@ impl AgentCommandHandler {
                     self.cmd_revert(agent_id, last_oplog_index, number_of_invocations)
                         .await
                 }
-                AgentSubcommand::CancelInvocation {
-                    agent_id,
-                    idempotency_key,
-                } => self.cmd_cancel_invocation(agent_id, idempotency_key).await,
                 AgentSubcommand::Files { agent_id, path } => self.cmd_files(agent_id, path).await,
                 AgentSubcommand::FileContents {
                     agent_id,
@@ -632,7 +644,7 @@ impl AgentCommandHandler {
         let selected_agent_name = agent_id_match.display_name();
         let environment = &agent_id_match.environment;
         let wait_for_invocation = !trigger && stdout_format == InvocationStdoutFormat::Value;
-        let live_output = (!no_stream).then(|| {
+        let live_output = (!no_stream && stdout_format != InvocationStdoutFormat::Raw).then(|| {
             Arc::new(LiveOutput::new(
                 self.ctx.clone(),
                 environment.environment_id,
@@ -660,17 +672,26 @@ impl AgentCommandHandler {
             live_output.open(agent_id, &selected_agent_name).await?;
         }
 
-        // The invocation session addresses an agent by its key, without a fingerprint check.
+        // Scalar session calls without an expected fingerprint can keep resolving the key.
         let session_key = match &agent_id_match.address {
             AgentAddress::Key(key) if expected_fingerprint.is_none() => Some((**key).clone()),
             _ => None,
         };
 
         if method_uses_streams {
-            let Some(key) = session_key else {
-                bail!(
-                    "Streaming agent methods are invoked by an agent key, without an expected fingerprint"
-                );
+            use golem_common::model::invocation_session_public::PublicAgentTarget;
+            let target = match &agent_id_match.address {
+                AgentAddress::Id(agent_id) => PublicAgentTarget::Id {
+                    agent_id: *agent_id,
+                    expected_fingerprint,
+                },
+                AgentAddress::Key(key) if expected_fingerprint.is_none() => {
+                    invocation_session::key_target(key)?
+                }
+                AgentAddress::Key(_) => PublicAgentTarget::Id {
+                    agent_id: self.agent_id_of(&agent_id_match).await?,
+                    expected_fingerprint,
+                },
             };
             let result = invocation_session::invoke(
                 self.ctx.clone(),
@@ -679,7 +700,7 @@ impl AgentCommandHandler {
                     application_name: environment.application_name.to_string(),
                     environment_name: environment.environment_name.to_string(),
                     agent_type,
-                    parsed_agent_id: key,
+                    target,
                     method_name,
                     arguments,
                     config: Vec::new(),
@@ -805,18 +826,15 @@ impl AgentCommandHandler {
                 .log_handler()
                 .log_output(InvokeResultView::new_trigger(accepted_key))?;
         } else {
+            let background_failure = result.background_failure.map(|failure| failure.error);
             let result = result
                 .result
                 .map(golem_common::schema::TypedSchemaValue::from);
             logln("");
-            self.ctx
-                .log_handler()
-                .log_output(InvokeResultView::new_agent_invoke(
-                    accepted_key,
-                    result,
-                    &agent_type,
-                    &method_name,
-                ))?;
+            self.ctx.log_handler().log_output(
+                InvokeResultView::new_agent_invoke(accepted_key, result, &agent_type, &method_name)
+                    .with_background_failure(background_failure),
+            )?;
         }
 
         Ok(())
@@ -936,6 +954,7 @@ impl AgentCommandHandler {
         from: Option<u64>,
         query: Option<String>,
         omit_payloads: bool,
+        show_claims: bool,
         viewer: OplogViewerArgs,
         export: OplogExportArgs,
     ) -> anyhow::Result<()> {
@@ -1009,6 +1028,7 @@ impl AgentCommandHandler {
                     page,
                     page_size: batch_size,
                     omit_payloads,
+                    show_claims,
                     export: None,
                 },
                 viewer.port,
@@ -1036,6 +1056,7 @@ impl AgentCommandHandler {
                         batch_size,
                         cursor.as_ref(),
                         query.as_deref(),
+                        oplog_include(show_claims).as_ref(),
                         None,
                         None,
                         None,
@@ -1057,6 +1078,7 @@ impl AgentCommandHandler {
                         &agent_id,
                         entry,
                         omit_payloads,
+                        show_claims,
                     )
                     .await?;
                     if html.is_some() {
@@ -1124,6 +1146,7 @@ impl AgentCommandHandler {
         cursor: Option<OplogCursor>,
         query: Option<String>,
         omit_payloads: bool,
+        show_claims: bool,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
@@ -1142,6 +1165,7 @@ impl AgentCommandHandler {
                 self.ctx.http_batch_size(),
                 cursor.as_ref(),
                 query.as_deref(),
+                oplog_include(show_claims).as_ref(),
                 None,
                 None,
                 None,
@@ -1153,8 +1177,15 @@ impl AgentCommandHandler {
         let mut entries = Vec::with_capacity(page.entries.len());
         for entry in page.entries {
             entries.push(
-                oplog_page_entry_view(&self.ctx, &environment_id, &agent_id, entry, omit_payloads)
-                    .await?,
+                oplog_page_entry_view(
+                    &self.ctx,
+                    &environment_id,
+                    &agent_id,
+                    entry,
+                    omit_payloads,
+                    show_claims,
+                )
+                .await?,
             );
         }
         self.ctx.log_handler().log_output(AgentOplogPageView {
@@ -1236,55 +1267,6 @@ impl AgentCommandHandler {
             last_oplog_index,
             number_of_invocations,
         })?;
-
-        Ok(())
-    }
-
-    async fn cmd_cancel_invocation(
-        &self,
-        agent_id: AgentIdArgs,
-        idempotency_key: IdempotencyKey,
-    ) -> anyhow::Result<()> {
-        self.ctx.silence_app_context_init().await;
-        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
-        let agent_id = self.agent_id_of(&agent_id_match).await?;
-
-        log_warn_action(
-            "Canceling invocation",
-            format!(
-                "for agent {} using idempotency key: {}",
-                format_agent_id_match(&agent_id_match),
-                idempotency_key.value.log_color_highlight()
-            ),
-        );
-
-        let clients = self.ctx.golem_clients().await?;
-
-        let canceled = clients
-            .worker
-            .cancel_invocation(
-                &agent_id_match.environment.environment_id.0,
-                &agent_id.0,
-                &idempotency_key.value,
-                None,
-            )
-            .await
-            .map(|result| result.canceled)
-            .map_service_error()?;
-
-        if canceled {
-            log_action("Canceled", "");
-        } else {
-            log_warn_action("Failed", "to cancel, invocation already started");
-        }
-
-        self.ctx
-            .log_handler()
-            .log_output(AgentCancelInvocationResult {
-                canceled,
-                agent_id,
-                idempotency_key: idempotency_key.value,
-            })?;
 
         Ok(())
     }

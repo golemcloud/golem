@@ -26,7 +26,7 @@ use super::{
     EnvVarBuilder, wait_for_startup_grpc, wait_for_startup_http, wait_for_startup_http_any_response,
 };
 use async_trait::async_trait;
-use golem_client::api::{AgentClientLive, WorkerClientLive};
+use golem_client::api::{AgentClientLive, InvocationClientLive, WorkerClientLive};
 use golem_client::{Context, Security};
 use golem_common::model::auth::TokenSecret;
 use std::collections::HashMap;
@@ -72,6 +72,13 @@ pub trait WorkerService: Send + Sync {
                 base_url: Url::parse(&url).expect("Failed to parse url"),
                 security_token: Security::Bearer(token.secret().to_string()),
             },
+        }
+    }
+
+    async fn invocation_http_client(&self, token: &TokenSecret) -> InvocationClientLive {
+        let worker = self.worker_http_client(token).await;
+        InvocationClientLive {
+            context: worker.context,
         }
     }
 }

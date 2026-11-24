@@ -16,6 +16,7 @@ mod deployment;
 mod endpoint;
 mod invoke;
 mod mcp_capabilities_lookup;
+mod revision;
 mod schema;
 pub mod serving;
 pub mod session;

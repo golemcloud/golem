@@ -9,20 +9,16 @@
 #   bash scripts/regen-bindings.sh
 #
 # Steps:
-#   1. Generate the default agent/tool/middleware world.
+#   1. Generate the default agent/tool/middleware world for both backends.
 #   2. Preserve hand-maintained stubs and package descriptors.
-#   3. Split the oversized generated middleware argument lift whose unsplit
-#      shape currently triggers a MoonBit compiler ICE.
-#   4. Stabilize generated FFI helper and export-wrapper ordering, which the
-#      pinned generator currently emits from unordered collections.
-#   5. Fix the s8/s16 lifting bug: the generated code reads signed
+#   3. Fix the s8/s16 lifting bug: the generated code reads signed
 #      bytes/shorts with `mbt_ffi_load8`/`mbt_ffi_load16` (i32.load8_s/load16_s)
 #      AND then subtracts 0x100/0x10000 — a double sign-extension that corrupts
 #      every s8/s16 value lifted from the component ABI. We strip the spurious
 #      subtraction (the signed load alone already yields the correct value).
-#   6. Remove an emitted `moon.pkg.json` only where a sibling hand-maintained
+#   4. Remove an emitted `moon.pkg.json` only where a sibling hand-maintained
 #      `moon.pkg` owns package metadata (the export stubs and gen link package).
-#   7. Regenerate package interfaces and assert normalization and the s8/s16 fix.
+#   5. Regenerate package interfaces and assert the s8/s16 fix.
 #
 set -euo pipefail
 
@@ -74,39 +70,27 @@ generate_world() {
   local gen_dir="$3"
   local output_dir="$tmp_root/$output_name"
 
-  echo "==> Generating $world_name"
+  shift 3
+  echo "==> Generating $world_name ($output_name)"
   wit-bindgen moonbit "$PWD/wit" \
     --world "$world_name" \
     --gen-dir "$gen_dir" \
     --derive-debug --derive-eq --derive-error \
+    "$@" \
     --project-name golemcloud/golem_sdk \
     --out-dir "$output_dir"
 }
 
-generate_world default agent-guest gen
+generate_world wasm agent-guest gen
+generate_world wasm-gc agent-guest gen --wasm-gc
 
 echo "==> Assembling generated roots"
 rm -rf "${GENERATED_ROOTS[@]}" gen-tool-middleware gen-agent-tool-middleware \
   world/tool-middleware-guest world/agent-tool-middleware-guest
-cp -R "$tmp_root/default/interface" interface
-cp -R "$tmp_root/default/async-core" async-core
-mkdir -p world
-cp -R "$tmp_root/default/world/agent-guest" world/
-cp -R "$tmp_root/default/gen" gen
-
-if [[ -d "$preserved_root" ]]; then
-  find "$preserved_root" -type f -print0 |
-    while IFS= read -r -d '' file; do
-      relative="${file#"$preserved_root/"}"
-      mkdir -p "$(dirname "$relative")"
-      cp "$file" "$relative"
-    done
-fi
+python3 scripts/merge-backend-bindings.py \
+  "$tmp_root/wasm" "$tmp_root/wasm-gc" "$preserved_root" "$PWD"
 
 rm -rf world/tool-middleware-guest world/agent-tool-middleware-guest
-
-echo "==> Stabilizing generated FFI declaration order"
-python3 scripts/normalize-generated-ffi.py "${GENERATED_ROOTS[@]}"
 
 echo "==> Fixing s8/s16 double sign-extension"
 # Only strip the subtraction where it follows the matching SIGNED load, so the
@@ -135,10 +119,8 @@ done < <(
   find "${GENERATED_ROOTS[@]}" -type f \
     \( -name 'moon.pkg' -o -name 'moon.pkg.json' \) -print0
 )
+moon info --target wasm-gc "${generated_packages[@]}"
 moon info --target wasm "${generated_packages[@]}"
-
-echo "==> Verifying generated FFI declaration order"
-python3 scripts/normalize-generated-ffi.py --check "${GENERATED_ROOTS[@]}"
 
 echo "==> Verifying s8/s16 fix"
 if rg -n -g '*.mbt' -e ' - 0x100\b' -e ' - 0x10000\b' \

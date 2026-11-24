@@ -1,0 +1,466 @@
+{
+  "tier": "pr",
+  "description": "sed conformance: GNU sed 4.9 in the oracle is the reference for status, stdout and stderr.",
+  "cases": [
+    {
+      "name": "sed: substitute first",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed 's/a/A/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: substitute global",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed 's/a/A/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: substitute nth",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed 's/a/A/2'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: substitute nth and after",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed 's/a/A/2g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: substitute ignore case",
+      "script": "printf 'Foo foo FOO\\n' | sed 's/foo/x/Ig'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: ampersand and escapes",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed 's/[a-z]*/<&>/; s/ /\\t/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: basic groups",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed 's/\\([a-z]*\\) \\([a-z]*\\)/\\2 \\1/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: basic alternation and intervals",
+      "script": "printf 'aaa b ab\\n' | sed 's/a\\{2\\}\\|b/X/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: basic literal plus",
+      "script": "printf 'a+b aab\\n' | sed 's/a+b/X/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: basic escaped plus",
+      "script": "printf 'a+b aab\\n' | sed 's/a\\+b/X/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: extended groups",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed -E 's/([a-z]+) ([a-z]+)/\\2-\\1/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: extended r flag",
+      "script": "printf 'aab\\n' | sed -r 's/(a+)b/[\\1]/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: backreference in pattern",
+      "script": "printf 'abab cdce\\n' | sed -E 's/(ab)\\1/X/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: character classes",
+      "script": "printf 'a1 b22 c333\\n' | sed 's/[[:digit:]]\\+/#/g; s/[[:space:]]/_/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: case conversion",
+      "script": "printf 'hello world\\n' | sed -E 's/(\\w+) (\\w+)/\\u\\1 \\U\\2\\E!/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: newline in replacement",
+      "script": "printf 'a,b,c\\n' | sed 's/,/\\n/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: custom delimiter",
+      "script": "printf '/usr/local/bin\\n' | sed 's|/usr/local|/opt|'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: empty regex reuses last",
+      "script": "printf 'foo bar foo\\n' | sed '/foo/s//X/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: print flag with n",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed -n 's/beta/BETA/p'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: delete lines",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed '2d;4d'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: delete regex",
+      "script": "printf 'int main() {\\n  // comment\\n  return 0; // done\\n}\\n' | sed '/^ *\\/\\//d'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: strip comments",
+      "script": "printf 'int main() {\\n  // comment\\n  return 0; // done\\n}\\n' | sed 's|[[:space:]]*//.*||'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: line ranges",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed -n '2,4p'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: regex ranges",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed -n '/beta/,/delta/p'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: relative range",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed -n '/beta/,+1p'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: step addresses",
+      "script": "printf '1\\n2\\n3\\n4\\n5\\n6\\n7\\n8\\n9\\n10\\n' | sed -n '0~3p'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: first step",
+      "script": "printf '1\\n2\\n3\\n4\\n5\\n6\\n' | sed -n '1~2p'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: zero address range",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed '0,/a/s//A/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: negation",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed -n '/a/!p'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: last line",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed -n '$p'; printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed '$d'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: last line unterminated",
+      "script": "printf 'a\\nb' | sed 's/b/B/'; echo; printf 'a\\nb' | sed -n '$p'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: blocks",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed -n '/a/{s/a/A/g;p;}'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: append insert change",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed '2a\\\nafter two' | sed '1i\\\nfirst' | sed '/gamma/c\\\nchanged'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: gnu one-line text commands",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed -e '1i header' -e '$a footer' -e '3c three'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: transliterate",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed 'y/abcdefghijklmnopqrstuvwxyz/ABCDEFGHIJKLMNOPQRSTUVWXYZ/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: quit",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed '2q'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: quit with status",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed '3q7'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: quit silently",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed '3Q'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: line numbers",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed -n '/e/='",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: count lines",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed -n '$='",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: list",
+      "script": "printf 'a\\tb\\\\c\\001\\n' | sed -n 'l'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: hold space reverse",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed -n '1!G;h;$p'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: hold and exchange",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed -n 'x;$p'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: join lines",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed ':a;N;$!ba;s/\\n/,/g'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: join pairs",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed 'N;s/\\n/ + /'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: next line",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed 'n;d'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: next line quiet",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed -n 'n;p'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: multiline delete",
+      "script": "printf 'a\\n\\n\\nb\\n\\nc\\n' | sed '/^$/N;/\\n$/D'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: print first line of pattern",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed -n 'N;P'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: branch on substitution",
+      "script": "printf 'a.b.c\\n' | sed ':x;s/\\./-/;tx'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: branch if not substituted",
+      "script": "printf 'yes\\nno\\n' | sed 's/yes/Y/;T;s/$/!/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: comments and newlines",
+      "script": "printf 'a\\nb\\n' | sed '# leading comment\ns/a/A/\n# another\ns/b/B/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: multiple expressions",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed -e 's/a/A/' -e 's/e/E/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: script file",
+      "script": "printf 's/one/1/\\ns/two/2/\\n' > /tmp/s.sed; printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed -f /tmp/s.sed",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: file operands",
+      "script": "printf 'x\\n' > /tmp/a; printf 'y\\n' > /tmp/b; sed -n '$p;1p' /tmp/a /tmp/b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: separate files",
+      "script": "printf 'x1\\nx2\\n' > /tmp/a; printf 'y1\\ny2\\n' > /tmp/b; sed -s -n '$p' /tmp/a /tmp/b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: missing file",
+      "script": "printf 'x\\n' > /tmp/a; sed p /tmp/nope /tmp/a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: in place",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' > /tmp/f; sed -i 's/beta/BETA/' /tmp/f; cat /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: in place with suffix",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' > /tmp/f; sed -i.bak '1d' /tmp/f; cat /tmp/f; head -n 1 /tmp/f.bak",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: in place clustered",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' > /tmp/f; sed -ni '2p' /tmp/f; cat /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: write file",
+      "script": "printf 'alpha one\\nbeta two\\ngamma three\\ndelta four\\nepsilon five\\n' | sed -n '/a/w /tmp/w'; cat /tmp/w",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: read file",
+      "script": "printf 'INSERT\\n' > /tmp/r; printf 'a\\nb\\n' | sed '1r /tmp/r'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: null data",
+      "script": "printf 'a\\0b\\0' | sed -z 's/^/>/' | tr '\\0' '\\n'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: filename and stdin dash",
+      "script": "printf 'x\\n' > /tmp/a; printf 'y\\n' | sed 's/^/:/' /tmp/a -",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: unicode",
+      "script": "printf 'héllo wörld\\n' | sed 's/ö/o/; s/h./H/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: crlf",
+      "script": "printf 'a\\r\\nb\\r\\n' | sed 's/\\r$//' | cat -v",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: unterminated s",
+      "script": "printf 'a\\n' | sed 's/a/b'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: unknown command",
+      "script": "printf 'a\\n' | sed 'k'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: missing script",
+      "script": "sed; echo status=$?",
+      "tags": [],
+      "options": {},
+      "expectedStderr": {
+        "value": {
+          "text": "sed: missing script\n"
+        },
+        "reason": "uutils sed words its diagnostics differently from GNU sed"
+      }
+    },
+    {
+      "name": "sed: exec refused",
+      "script": "printf 'a\\n' | sed 's/a/echo hi/e'; echo status=$?",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=2\n"
+        },
+        "stderr": {
+          "text": "sed: the 'e' command and substitute flag are unsupported in bash-tool: no shell to run\n"
+        },
+        "reason": "bash-tool refuses sed's `e` at compile time: there is no shell to run it"
+      }
+    },
+    {
+      "name": "sed: endless quit",
+      "script": "while :; do echo x; done | sed 2q | cat",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: endless address quit",
+      "script": "i=0; while :; do i=$((i+1)); echo $i; done | sed -n '3{p;q}'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: endless last line lookahead",
+      "script": "while :; do echo x; done | sed '$d' | head -n 2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sed: v is a no-op",
+      "script": "echo before; echo a | sed v; echo a | sed -n 'v 4.2;p'; echo a | sed -n 'v 3.99;p'; echo after",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}

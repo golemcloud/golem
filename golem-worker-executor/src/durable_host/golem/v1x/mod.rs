@@ -27,6 +27,7 @@ use crate::preview2::golem_api_1_x::host::ForkResult;
 use crate::preview2::golem_api_1_x::host::Host;
 use crate::services::HasWorker;
 use crate::services::oplog::CommitLevel;
+use crate::services::worker_fork::ForkCallOwner;
 use crate::services::worker_proxy::WorkerProxyError;
 use crate::worker::Worker;
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
@@ -39,7 +40,6 @@ use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::PromiseId;
 use golem_common::model::RetryContext;
-use golem_common::model::caller::Caller;
 use golem_common::model::card::AgentResourcePattern;
 use golem_common::model::card::AgentVerb;
 use golem_common::model::card::owner::AgentOwnerLeafPattern;
@@ -61,6 +61,7 @@ use golem_common::model::oplog::HostResponseGolemApiIdempotencyKey;
 use golem_common::model::oplog::HostResponseGolemApiPromiseCompletion;
 use golem_common::model::oplog::HostResponseGolemApiSelfAgentMetadata;
 use golem_common::model::oplog::HostResponseGolemApiUnit;
+use golem_common::model::oplog::OplogEntry;
 use golem_common::model::oplog::host_functions::GolemApiCompletePromise;
 use golem_common::model::oplog::host_functions::GolemApiFork;
 use golem_common::model::oplog::host_functions::GolemApiForkWorker;
@@ -704,6 +705,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
             let owned_source_agent_id = OwnedAgentId::new(environment_id, &source_agent_id);
             let retry_properties = RetryContext::golem_api("fork-agent");
+            let caller = self.outgoing_caller();
             let result = loop {
                 let result = self
                     .state
@@ -712,7 +714,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         &owned_source_agent_id,
                         &target_agent_id,
                         &oplog_index_cut_off,
-                        Caller::entry(self.self_principal()),
+                        caller.clone(),
                         handle.agent_auth_ctx(),
                     )
                     .await;
@@ -1003,7 +1005,26 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             // The forked worker must inherit the source state from the source-side fork call's
             // durable replay point. The source call completes with `ForkResult::Original`.
             // Force a commit so the eager `Start` is durable for the source's crash recovery.
-            let copied_scope_start = None;
+            let owner = match self.state.oplog.read(handle.start_index()).await? {
+                OplogEntry::Start {
+                    parent_start_index,
+                    invocation_id,
+                    observational_owner,
+                    driver,
+                    ..
+                } => ForkCallOwner {
+                    parent_start_index,
+                    invocation_id,
+                    observational_owner,
+                    driver,
+                },
+                other => {
+                    return Err(handle.trap(anyhow!(
+                        "the fork call's Start at {} is {other:?}",
+                        handle.start_index()
+                    )));
+                }
+            };
             let oplog_index_cut_off = handle.start_index().previous();
             self.public_state
                 .worker()
@@ -1014,7 +1035,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let fork_request = CreateRequest::new(
                 CreateRequestKind::Fork,
                 None,
-                Caller::entry(self.self_principal()),
+                self.outgoing_caller(),
                 &self.clone_as_inherited_stack(&self.state.invocation_state().current_span_id),
             );
             let fork_result = loop {
@@ -1026,8 +1047,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         &self.owned_agent_id,
                         &target_agent_id,
                         oplog_index_cut_off,
-                        copied_scope_start,
-                        handle.invocation_id(),
+                        owner,
                         handle.agent_auth_ctx(),
                         fork_request.clone(),
                     )

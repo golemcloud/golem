@@ -13,13 +13,14 @@
 // limitations under the License.
 
 use super::{
-    AdmissionRefusalState, Arc, AtomicU64, AtomicUsize, AttachmentController, EntityInvocationId,
-    FutureExt, HashMap, InterruptKind, Mutex, Notify, OperationLease, OperationState, Ordering,
-    OwnerFailureCleanupOwner, OwnerFailureCleanupToken, OwnerFailureWinner, OwnerInvocationId,
-    OwnerPhase, OwnerToolOperation, OwnerToolOperationContext, OwnerToolOperations,
-    OwnerToolOperationsState, ProvisionalOwnerToolOperation, RegisteredOperation,
-    ToolLiveAdmissionState, ToolOperationMetadata, ToolOperationSetMetadata, ToolOperationWinner,
-    WorkerExecutorError, drain_lane_ownerships, watch,
+    AdmissionRefusalState, Arc, AtomicU64, AtomicUsize, AttachmentController,
+    DeferredAdmissionTable, EntityInvocationId, FutureExt, HashMap, InterruptKind, Mutex, Notify,
+    OperationLease, OperationState, Ordering, OwnerFailureCleanupOwner, OwnerFailureCleanupToken,
+    OwnerFailureWinner, OwnerInvocationId, OwnerPhase, OwnerToolOperation,
+    OwnerToolOperationContext, OwnerToolOperations, OwnerToolOperationsState,
+    ProvisionalOwnerToolOperation, RegisteredOperation, ToolLiveAdmissionState,
+    ToolOperationMetadata, ToolOperationSetMetadata, ToolOperationWinner, WorkerExecutorError,
+    drain_lane_ownerships, watch,
 };
 
 impl OwnerToolOperations {
@@ -451,6 +452,48 @@ impl OwnerToolOperations {
         };
         for child in children {
             child.cancel_body();
+        }
+    }
+
+    /// Waits until every tool operation of `parent` settled, except the capable operations whose
+    /// body waits in `deferred` for a release that nothing requested yet. Those keep waiting for
+    /// a result await of the parent or for the end of the parent.
+    pub(crate) async fn wait_parent_admitted_settled(
+        &self,
+        parent: &OwnerInvocationId,
+        deferred: &DeferredAdmissionTable,
+    ) {
+        loop {
+            let changed = self.changed.notified();
+            let deferred_changed = deferred.changed.notified();
+            tokio::pin!(changed, deferred_changed);
+            changed.as_mut().enable();
+            deferred_changed.as_mut().enable();
+            let starts = self
+                .state
+                .lock()
+                .unwrap()
+                .operations
+                .values()
+                .filter(|operation| &operation.context.parent == parent)
+                .map(|operation| {
+                    operation
+                        .invocation_id
+                        .as_ref()
+                        .map(EntityInvocationId::start_index)
+                })
+                .collect::<Option<Vec<_>>>();
+            if starts.is_some_and(|starts| {
+                starts
+                    .into_iter()
+                    .all(|start| deferred.waits_for_unrequested_release(parent, start))
+            }) {
+                return;
+            }
+            tokio::select! {
+                _ = changed => {}
+                _ = deferred_changed => {}
+            }
         }
     }
 

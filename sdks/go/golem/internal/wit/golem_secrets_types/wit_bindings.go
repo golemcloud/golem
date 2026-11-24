@@ -145,7 +145,7 @@ func Id(s *golem_core_types.Secret) SecretId {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (2 * 4), 4))
 	wasm_import_id((s).Handle(), returnArea)
-	result := wasm_lift_1_t956(unsafe.Add(unsafe.Pointer(returnArea), 0))
+	result := wasm_lift_1_t973(unsafe.Add(unsafe.Pointer(returnArea), 0))
 	result0 := result
 	return result0
 
@@ -160,21 +160,21 @@ func Metadata(s *golem_core_types.Secret) SecretMetadata {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (24 + 8*4), 8))
 	wasm_import_metadata((s).Handle(), returnArea)
-	result := wasm_lift_1_t962(unsafe.Add(unsafe.Pointer(returnArea), 0))
+	result := wasm_lift_1_t979(unsafe.Add(unsafe.Pointer(returnArea), 0))
 	result0 := result
 	return result0
 
 }
 
 //go:noinline
-func wasm_lift_1_t956(src unsafe.Pointer) SecretId {
+func wasm_lift_1_t973(src unsafe.Pointer) SecretId {
 	value0 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 
 	return SecretId{Bytes: value0}
 }
 
 //go:noinline
-func wasm_lift_1_t962(src unsafe.Pointer) SecretMetadata {
+func wasm_lift_1_t979(src unsafe.Pointer) SecretMetadata {
 	var option witTypes.Option[[]string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -199,7 +199,7 @@ func wasm_lift_1_t962(src unsafe.Pointer) SecretMetadata {
 
 		option2 = witTypes.None[SecretVersion]()
 	case 1:
-		result1 := wasm_lift_1_t957(unsafe.Add(unsafe.Pointer(src), (4 * 4)))
+		result1 := wasm_lift_1_t974(unsafe.Add(unsafe.Pointer(src), (4 * 4)))
 
 		option2 = witTypes.Some[SecretVersion](result1)
 	default:
@@ -223,7 +223,7 @@ func wasm_lift_1_t962(src unsafe.Pointer) SecretMetadata {
 }
 
 //go:noinline
-func wasm_lift_1_t957(src unsafe.Pointer) SecretVersion {
+func wasm_lift_1_t974(src unsafe.Pointer) SecretVersion {
 	value0 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 
 	return SecretVersion{Bytes: value0}

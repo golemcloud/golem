@@ -49,7 +49,7 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::agent::AgentUpdateMode;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::agent::{AgentMetadataDto, ResolvedRevert, RevertWorkerTarget};
-use golem_common::model::caller::Caller;
+use golem_common::model::caller::{Caller, ClaimVisibility};
 use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
@@ -68,7 +68,9 @@ use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, AgentStatus, FilterComparator, IdempotencyKey,
     InvocationRequestKey, PromiseId, ScanCursor,
 };
-use golem_common::model::{AgentInvocationOutput, AgentInvocationResult, InvocationStatus};
+use golem_common::model::{
+    AgentInvocationOutput, AgentInvocationResult, BackgroundFailure, InvocationStatus,
+};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use golem_service_base::model::auth::AuthCtx;
@@ -362,6 +364,14 @@ fn decode_invocation_result(
             }
         }
     };
+    let background_failure = wire
+        .background_failure
+        .map(|failure| {
+            let error = WorkerExecutorError::try_from(failure)?;
+            BackgroundFailure::try_from(error)
+                .map_err(|error| format!("unexpected background failure: {error}"))
+        })
+        .transpose()?;
     let invocation_status = wire.status.and_then(|status| {
         golem_api_grpc::proto::golem::worker::InvocationStatus::try_from(status)
             .ok()
@@ -382,6 +392,7 @@ fn decode_invocation_result(
         agent_fingerprint: wire
             .agent_fingerprint
             .map(|uuid| AgentFingerprint(uuid.into())),
+        background_failure,
     })
 }
 
@@ -423,7 +434,8 @@ where
             return Ok(protocol_failure(details));
         }
         match response.response {
-            Some(invocation_response::Response::Accepted(_)) => {}
+            Some(invocation_response::Response::Accepted(_))
+            | Some(invocation_response::Response::Ready(_)) => {}
             Some(invocation_response::Response::Rejected(rejected)) => {
                 terminal_outcome = Some(Ok(OneShotInvocationSessionResult::Rejected(rejected)));
             }
@@ -513,6 +525,7 @@ pub trait WorkerClient: Send + Sync {
         caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)>;
 
     async fn create(
@@ -527,6 +540,7 @@ pub trait WorkerClient: Send + Sync {
         invocation_context: Option<InvocationContext>,
         caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)>;
 
     async fn connect(
@@ -601,7 +615,9 @@ pub trait WorkerClient: Send + Sync {
     ) -> WorkerResult<OplogIndex>;
 
     /// Reads an oplog page. With `range`, the read is a range read: it reads no entry after
-    /// `range.to`, and the response accounts its scan.
+    /// `range.to`, and the response accounts its scan. With `ClaimVisibility::Shown`, the callers
+    /// in the entries hold the users' verified claims; the caller asks for it only after its
+    /// oplog read check.
     #[allow(clippy::too_many_arguments)]
     async fn get_oplog(
         &self,
@@ -610,27 +626,32 @@ pub trait WorkerClient: Send + Sync {
         cursor: Option<OplogCursor>,
         count: u64,
         range: Option<OplogRangeRead>,
+        claims: ClaimVisibility,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
 
+    /// Searches the oplog. `claims` is as for [`WorkerClient::get_oplog`].
     async fn search_oplog(
         &self,
         agent_id: &AgentId,
         cursor: Option<OplogCursor>,
         count: u64,
         query: String,
+        claims: ClaimVisibility,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
 
     /// Reads one oplog entry in full. The executor streams the entry in chunks, so the entry
-    /// can be larger than the gRPC message size limit.
+    /// can be larger than the gRPC message size limit. `claims` is as for
+    /// [`WorkerClient::get_oplog`].
     async fn get_oplog_entry(
         &self,
         agent_id: &AgentId,
         oplog_index: OplogIndex,
         component_revision: Option<ComponentRevision>,
+        claims: ClaimVisibility,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> Result<PublicOplogEntryWithIndex, WorkerServiceError>;
@@ -721,11 +742,38 @@ pub trait WorkerClient: Send + Sync {
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> WorkerResult<bool>;
 
+    /// `None` when the agent has no invocation with this ID.
+    async fn get_invocation(
+        &self,
+        agent_id: &AgentId,
+        invocation_id: &golem_common::model::InvocationId,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<Option<workerexecutor::v1::InvocationSummary>>;
+
+    /// Lists one page. The agent, environment and caller of `request` are filled in here.
+    async fn list_invocations(
+        &self,
+        agent_id: &AgentId,
+        request: workerexecutor::v1::ListInvocationsRequest,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<workerexecutor::v1::ListInvocationsSuccess>;
+
+    async fn lookup_invocations(
+        &self,
+        agent_id: &AgentId,
+        idempotency_key: &IdempotencyKey,
+        operation: Option<String>,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<Vec<workerexecutor::v1::InvocationSummary>>;
+
     async fn invoke_agent(
         &self,
         target: &RoutedTarget,
         method_name: Option<String>,
-        method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
+        method_parameters: Option<golem_common::model::agent::AgentMethodInput>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         request_key: InvocationRequestKey,
@@ -1030,6 +1078,7 @@ impl HasWorkerExecutorClients for WorkerExecutorWorkerClient {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl WorkerClient for WorkerExecutorWorkerClient {
     async fn prepare(
         &self,
@@ -1044,6 +1093,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
         let agent_id = target.agent_id;
         let (constructor, unkeyed_id, component_id) = target.create_fields()?;
@@ -1068,6 +1118,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         caller: Some(caller.clone()),
                         invocation_context: invocation_context.clone(),
                         idempotency_key: idempotency_key.clone().map(Into::into),
+                        invocation: invocation.clone(),
                         freshness_disposition: match freshness_disposition {
                             InvocationFreshnessDisposition::KnownFresh => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh as i32,
                             InvocationFreshnessDisposition::MayExist => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
@@ -1102,6 +1153,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         invocation_context: Option<InvocationContext>,
         caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
         let agent_id = target.agent_id;
         let (constructor, unkeyed_id, component_id) = target.create_fields()?;
@@ -1133,6 +1185,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             invocation_context: invocation_context.clone(),
                             idempotency_key: Some(idempotency_key.clone().into()),
                             freshness_disposition: 0,
+                            invocation: invocation.clone(),
                         }),
                     )
                 },
@@ -1523,6 +1576,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         cursor: Option<OplogCursor>,
         count: u64,
         range: Option<OplogRangeRead>,
+        claims: ClaimVisibility,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
@@ -1546,6 +1600,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     auth_ctx: Some(auth_ctx.clone().into()),
                     to_oplog_index: range.map(|range| range.to.into()),
                     scan_allowance: range.and_then(|range| range.allowance).map(Into::into),
+                    claims: claims.to_protobuf(),
                 };
                 Box::pin(worker_executor_client.get_oplog(request))
             },
@@ -1604,6 +1659,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         agent_id: &AgentId,
         oplog_index: OplogIndex,
         component_revision: Option<ComponentRevision>,
+        claims: ClaimVisibility,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> Result<PublicOplogEntryWithIndex, WorkerServiceError> {
@@ -1623,6 +1679,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     auth_ctx: Some(auth_ctx.clone().into()),
                     oplog_index: oplog_index.into(),
                     component_revision: component_revision.map(Into::into),
+                    claims: claims.to_protobuf(),
                 };
                 Box::pin(async move {
                     use workerexecutor::v1::get_oplog_entry_response::Result as Frame;
@@ -1668,6 +1725,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         cursor: Option<OplogCursor>,
         count: u64,
         query: String,
+        claims: ClaimVisibility,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
@@ -1685,7 +1743,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         cursor: cursor.clone().map(|c| c.into()),
                         count,
                         environment_id: Some(environment_id.into()),
-                        auth_ctx: Some(auth_ctx.clone().into())
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        claims: claims.to_protobuf(),
                     }),
                 )
             },
@@ -2053,7 +2112,6 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     resolved_revert: resolved_revert.map(|resolved| {
                         golem_api_grpc::proto::golem::common::ResolvedRevert {
                             last_oplog_index: resolved.last_oplog_index.as_u64(),
-                            observed_oplog_index: resolved.observed_oplog_index.as_u64(),
                         }
                     }),
                 }))
@@ -2105,7 +2163,6 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         ),
                 } => Ok(ResolvedRevert {
                     last_oplog_index: OplogIndex::from_u64(resolved.last_oplog_index),
-                    observed_oplog_index: OplogIndex::from_u64(resolved.observed_oplog_index),
                 }),
                 workerexecutor::v1::ResolveRevertLastInvocationsResponse {
                     result:
@@ -2147,7 +2204,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     expected_fingerprint: expected_fingerprint.map(|fingerprint| fingerprint.0.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     caller: Some(Caller::anonymous().into()),
-                    scheduled,
+                    scheduled: scheduled.clone(),
                 }))
             },
             |response| match response.into_inner() {
@@ -2163,6 +2220,110 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         )
             .await?;
         Ok(canceled)
+    }
+
+    async fn get_invocation(
+        &self,
+        agent_id: &AgentId,
+        invocation_id: &golem_common::model::InvocationId,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<Option<workerexecutor::v1::InvocationSummary>> {
+        let agent_id = *agent_id;
+        let invocation_id = *invocation_id;
+        self.call_worker_executor(
+            agent_id,
+            "get_invocation",
+            move |worker_executor_client| {
+                Box::pin(worker_executor_client.get_invocation(
+                    workerexecutor::v1::GetInvocationRequest {
+                        agent_id: Some(agent_id.into()),
+                        environment_id: Some(environment_id.into()),
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        invocation_id: Some(invocation_id.0.into()),
+                    },
+                ))
+            },
+            |response| match response.into_inner().result {
+                Some(workerexecutor::v1::get_invocation_response::Result::Success(success)) => {
+                    Ok(success.invocation)
+                }
+                Some(workerexecutor::v1::get_invocation_response::Result::Failure(err)) => {
+                    Err(err.into())
+                }
+                None => Err("Empty response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
+    async fn list_invocations(
+        &self,
+        agent_id: &AgentId,
+        request: workerexecutor::v1::ListInvocationsRequest,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<workerexecutor::v1::ListInvocationsSuccess> {
+        let request = workerexecutor::v1::ListInvocationsRequest {
+            agent_id: Some((*agent_id).into()),
+            environment_id: Some(environment_id.into()),
+            auth_ctx: Some(auth_ctx.into()),
+            ..request
+        };
+        self.call_worker_executor(
+            *agent_id,
+            "list_invocations",
+            move |worker_executor_client| {
+                Box::pin(worker_executor_client.list_invocations(request.clone()))
+            },
+            |response| match response.into_inner().result {
+                Some(workerexecutor::v1::list_invocations_response::Result::Success(success)) => {
+                    Ok(success)
+                }
+                Some(workerexecutor::v1::list_invocations_response::Result::Failure(err)) => {
+                    Err(err.into())
+                }
+                None => Err("Empty response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
+    async fn lookup_invocations(
+        &self,
+        agent_id: &AgentId,
+        idempotency_key: &IdempotencyKey,
+        operation: Option<String>,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<Vec<workerexecutor::v1::InvocationSummary>> {
+        let request = workerexecutor::v1::LookupInvocationsRequest {
+            agent_id: Some((*agent_id).into()),
+            environment_id: Some(environment_id.into()),
+            auth_ctx: Some(auth_ctx.into()),
+            idempotency_key: Some(idempotency_key.clone().into()),
+            operation,
+        };
+        self.call_worker_executor(
+            *agent_id,
+            "lookup_invocations",
+            move |worker_executor_client| {
+                Box::pin(worker_executor_client.lookup_invocations(request.clone()))
+            },
+            |response| match response.into_inner().result {
+                Some(workerexecutor::v1::lookup_invocations_response::Result::Success(success)) => {
+                    Ok(success.invocations)
+                }
+                Some(workerexecutor::v1::lookup_invocations_response::Result::Failure(err)) => {
+                    Err(err.into())
+                }
+                None => Err("Empty response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
     }
 
     async fn create_stream_session(
@@ -2329,7 +2490,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         &self,
         target: &RoutedTarget,
         method_name: Option<String>,
-        method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
+        method_parameters: Option<golem_common::model::agent::AgentMethodInput>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         request_key: InvocationRequestKey,
@@ -2347,6 +2508,11 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         let target = target.clone();
         let first_dispatch = Arc::new(AtomicBool::new(true));
         let attempt_id = uuid::Uuid::new_v4();
+        let captured_method_input = method_parameters
+            .as_ref()
+            .map(golem_common::serialization::serialize)
+            .transpose()
+            .map_err(WorkerServiceError::Internal)?;
         let idempotency_key = match &request_key {
             InvocationRequestKey::External { key, .. }
             | InvocationRequestKey::Internal(key)
@@ -2366,7 +2532,9 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         constructor: None,
                         component_id: None,
                         method_name: method_name.clone(),
-                        input: method_parameters.clone(),
+                        captured_method_input: captured_method_input.clone(),
+                        allow_streams: false,
+                        input: None,
                         idempotency_key: idempotency_key.clone().map(Into::into),
                         request_key: Some(request_key.clone().into()),
                         context: invocation_context.clone(),
@@ -3338,6 +3506,13 @@ mod one_shot_session_tests {
                     oplog_index: Some(29),
                     agent_fingerprint: Some(uuid::Uuid::nil().into()),
                     new_stream_mappings: Vec::new(),
+                    background_failure: Some(
+                        WorkerExecutorError::PreviousInvocationFailed {
+                            error: AgentError::Unknown("background work trapped".to_string()),
+                            stderr: "guest stderr".to_string(),
+                        }
+                        .into(),
+                    ),
                 },
             )),
             frame(finished(invocation_session_completion::Outcome::Success(
@@ -3369,6 +3544,13 @@ mod one_shot_session_tests {
         assert_eq!(
             output.agent_fingerprint,
             Some(AgentFingerprint(uuid::Uuid::nil()))
+        );
+        assert_eq!(
+            output.background_failure,
+            Some(golem_common::model::BackgroundFailure::Trapped {
+                error: AgentError::Unknown("background work trapped".to_string()),
+                stderr: "guest stderr".to_string(),
+            })
         );
     }
 
@@ -3518,6 +3700,7 @@ mod rejection_mapping_tests {
     use golem_common::model::account::AccountId;
     use golem_common::model::agent::InvocationFreshnessDisposition;
     use golem_common::model::caller::Caller;
+    use golem_common::model::caller::ClaimVisibility;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::AgentError as OplogAgentError;
     use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
@@ -3639,6 +3822,7 @@ mod rejection_mapping_tests {
     struct StaticShardManager(RoutingTable);
 
     #[async_trait::async_trait]
+    #[golem_async_trait::region_simple]
     impl ShardManager for StaticShardManager {
         async fn get_routing_table(&self) -> Result<RoutingTable, ShardManagerError> {
             Ok(self.0.clone())
@@ -3758,6 +3942,7 @@ mod rejection_mapping_tests {
     }
 
     #[tonic::async_trait]
+    #[golem_async_trait::region_simple]
     impl WorkerExecutor for RejectingExecutor {
         type ConnectWorkerStream = Pin<
             Box<
@@ -3903,6 +4088,21 @@ mod rejection_mapping_tests {
                 result: Some(cancel_invocation_response::Result::Success(true)),
             }))
         }
+        unimplemented_unary!(
+            get_invocation,
+            golem_api_grpc::proto::golem::workerexecutor::v1::GetInvocationRequest,
+            golem_api_grpc::proto::golem::workerexecutor::v1::GetInvocationResponse
+        );
+        unimplemented_unary!(
+            list_invocations,
+            golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsRequest,
+            golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsResponse
+        );
+        unimplemented_unary!(
+            lookup_invocations,
+            golem_api_grpc::proto::golem::workerexecutor::v1::LookupInvocationsRequest,
+            golem_api_grpc::proto::golem::workerexecutor::v1::LookupInvocationsResponse
+        );
         unimplemented_unary!(
             control_durable_stream_attachment,
             DurableStreamAttachmentControlRequest,
@@ -4199,9 +4399,16 @@ mod rejection_mapping_tests {
             .invoke_agent(
                 &RoutedTarget::existing(agent_id, None),
                 Some("run".to_string()),
-                Some(SchemaValue {
-                    value: Some(schema_value::Value::TupleValue(Default::default())),
-                }),
+                Some(golem_common::model::agent::AgentMethodInput::Native(
+                    golem_common::model::agent::NativeMethodInput::capture(
+                        SchemaValue {
+                            value: Some(schema_value::Value::TupleValue(Default::default())),
+                        },
+                        Vec::new(),
+                    )
+                    .unwrap()
+                    .0,
+                )),
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 None,
                 golem_common::model::InvocationRequestKey::external(None, None),
@@ -4326,6 +4533,7 @@ mod rejection_mapping_tests {
                     None,
                     Caller::anonymous().into(),
                     None,
+                    None,
                 )
             };
 
@@ -4400,6 +4608,7 @@ mod rejection_mapping_tests {
                         &agent_id,
                         OplogIndex::from_u64(oplog_index),
                         None,
+                        ClaimVisibility::Hidden,
                         EnvironmentId::new(),
                         AuthCtx::System,
                     )

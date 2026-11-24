@@ -1,0 +1,428 @@
+{
+  "tier": "pr",
+  "description": "find conformance: GNU findutils 4.10 in the oracle is the reference for status, stdout and stderr.\n\n`-newerXt` dates go through uutils' `parse_datetime`, so GNU's grammar (relative dates, month\nnames, compact dates, offsets, `@EPOCH`) is compared here too.\n\nGNU walks directories in readdir order, so every case listing more than one sibling sorts its output.",
+  "cases": [
+    {
+      "name": "find: whole tree",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: name glob",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -name '*.txt' | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: iname",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -iname '*.txt' | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: name bracket and escape",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -name '[!a-m]*.rs' | sort; find . -name '\\*' | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: type f and d",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -type d | sort; find . -type f | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: type list",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find src -type d,f | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: depth limits",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -mindepth 1 -maxdepth 1 | sort; find . -mindepth 3 | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: maxdepth zero with several starts",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . src docs/ -maxdepth 0",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: default start",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find -maxdepth 1 -name src",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: trailing slash start",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find /tmp/f/src/ -maxdepth 1 -name '*.rs'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: path glob",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -path './src/*' -name '*.rs' | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: ipath and wholename",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -ipath '*DOCS*' | sort; find . -wholename './docs/notes.txt'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: or with parentheses",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . \\( -name '*.md' -o -name '*.rs' \\) -type f | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: negation",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -type f ! -name '*.rs' | sort; find src -not -type d | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: and binds tighter than or",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -name '*.md' -o -name '*.rs' -print | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: explicit and",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -type f -a -name 'm*' -and -path '*src*' | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: comma operator",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -maxdepth 1 -name src -printf 'A %p\\n' , -name docs -printf 'B %p\\n' | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: true and false",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -maxdepth 0 -false -o -true; find . -maxdepth 0 -false",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: prune",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -name src -prune -o -type f -print | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: prune is ignored with depth",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -depth -name lib -prune | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: preorder",
+      "script": "mkdir -p /tmp/d/a/b/c && : > /tmp/d/a/b/c/leaf; find /tmp/d",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: depth order",
+      "script": "mkdir -p /tmp/d/a/b/c && : > /tmp/d/a/b/c/leaf; find /tmp/d -depth; find /tmp/d -d -mindepth 2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: quit",
+      "script": "mkdir -p /tmp/d/a/b/c && : > /tmp/d/a/b/c/leaf; find /tmp/d -name b -print -quit; find /tmp/d -quit; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: empty",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -empty | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: size units round up",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -type f -size +1k; find . -type f -size 2k; find . -type f -size 3; find . -type f -size 1500c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: size below one unit",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -type f -size -1M | sort; find . -type f -size -2 | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: newer",
+      "script": "mkdir -p /tmp/age && cd /tmp/age && touch -d '2020-01-01 00:00:00' old && touch -d '2021-06-01 12:00:00' mid && touch -d '5 minutes ago' new; find . -type f -newer mid | sort; find . -type f -newer old | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: mtime and mmin",
+      "script": "mkdir -p /tmp/age && cd /tmp/age && touch -d '2020-01-01 00:00:00' old && touch -d '2021-06-01 12:00:00' mid && touch -d '5 minutes ago' new; find . -type f -mtime +30 | sort; find . -type f -mtime -1; find . -type f -mmin -60; find . -type f -mtime 0",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: newermt",
+      "script": "mkdir -p /tmp/age && cd /tmp/age && touch -d '2020-01-01 00:00:00' old && touch -d '2021-06-01 12:00:00' mid && touch -d '5 minutes ago' new; find . -type f -newermt '2020-06-01' | sort; find . -type f ! -newermt '2021-06-01 12:00:01' | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: newermt relative dates",
+      "script": "mkdir -p /tmp/age && cd /tmp/age && touch -d '2020-01-01 00:00:00' old && touch -d '2021-06-01 12:00:00' mid && touch -d '5 minutes ago' new; find . -type f -newermt yesterday; find . -type f -newermt '1 year ago'; find . -type f -newermt now; find . -type f -newermt 'next monday'; echo end",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: newermt other date forms",
+      "script": "mkdir -p /tmp/age && cd /tmp/age && touch -d '2020-01-01 00:00:00' old && touch -d '2021-06-01 12:00:00' mid && touch -d '5 minutes ago' new; find . -type f -newermt 'Jun 1 2020' | sort; find . -type f -newermt 20200601 | sort; find . -type f -newermt '2020-06-01 12:00:00 +0200' | sort; find . -type f -newermt @1590969600 | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: newermt unreadable date",
+      "script": "find . -newermt xyz; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: regex default dialect",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -regex '.*/[a-z]+\\.rs' | sort; find . -regex '.*\\.\\(md\\|txt\\)' | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: regex literal operators",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -regex './src' ; find . -regex 'src'; find . -regex '.*a{2}'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: regextype posix-extended",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -regextype posix-extended -regex '.*\\.(md|txt)' | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: iregex",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -iregex '.*readme.*'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: print0",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -name '*.rs' -print0 | sort -z | tr '\\0' '\\n'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: printf path directives",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -maxdepth 1 -printf '%p|%f|%h|%P|%H|%d|%y\\n' | sort; find src/ -maxdepth 0 -printf '%p|%f|%P\\n'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: printf widths",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -type f -printf '[%5s] [%-10f] [%.3f]\\n' | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: printf time",
+      "script": "mkdir -p /tmp/s && touch -d '2020-03-04 05:06:07' /tmp/s/stamp; find /tmp/s/stamp -printf '%t|%TY-%Tm-%Td %TH:%TM:%TS|%T@|%Tc|%TD|%Tj|%Ta %Tb %Te|%Ts|%T+\\n'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: printf escapes",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -maxdepth 0 -printf 'a\\tb\\\\\\101\\n'; find . -maxdepth 0 -printf 'x\\cy\\n'; echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: printf unknown directive warns",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -maxdepth 0 -printf '%z|\\q\\n'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: printf percent at end",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -maxdepth 0 -printf 'x%'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: fprint",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -name '*.rs' -fprint /tmp/out.txt; sort /tmp/out.txt; find . -maxdepth 0 -fprint /dev/stdout",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: exec per file",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -name '*.rs' -exec echo found {} \\; | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: exec batch",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find src -name '*.rs' -exec echo {} + | tr ' ' '\\n' | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: exec status is the test",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -type f -exec grep -q main {} \\; -print",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: exec substitutes inside words",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -name main.rs -exec echo {}.bak \\;",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: exec awkward names",
+      "script": "mkdir -p /tmp/q && : > '/tmp/q/a b' && : > \"/tmp/q/it's\" && : > '/tmp/q/$x'; find /tmp/q -type f -exec echo {} \\; | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: execdir",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -name '*.rs' -execdir echo {} \\; | sort; find src -name '*.rs' -execdir echo {} + | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: exec command not found",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -maxdepth 0 -exec nosuchcmd {} \\;; echo status=$?; find . -maxdepth 0 -exec nosuchcmd {} +; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: exec failure in batch",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -maxdepth 0 -exec false {} +; echo status=$?; find . -maxdepth 0 -exec false {} \\; ; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: delete",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -name '*.txt' -delete; find . -type f | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: delete nonempty directory",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -name docs -delete; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: missing start point",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find /tmp/nope . -maxdepth 0; echo status=$?; find ''; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: unknown predicate",
+      "script": "find . -foo; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: paths must precede expression",
+      "script": "find -type f /tmp; echo status=$?; find -print /tmp; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: missing argument",
+      "script": "find . -name; echo status=$?; find . -exec echo; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: operator errors",
+      "script": "find . -o; echo $?; find . -name x -o; echo $?; find . !; echo $?; find . \\( \\); echo $?; find . -name x \\); echo $?; find . \\( -name x; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: type errors",
+      "script": "find . -type x; echo $?; find . -type ff; echo $?; find . -type f,; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: numeric argument errors",
+      "script": "find . -size 1q; echo $?; find . -mtime x; echo $?; find . -maxdepth -1; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: regex errors",
+      "script": "find . -regex 'a\\(b'; echo $?; find . -regextype nope -regex x; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: exec plus errors",
+      "script": "find . -exec echo {} {} +; echo $?; find . -exec echo {}x +; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: delete with prune",
+      "script": "find . -name x -prune -o -delete; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: head of a large tree",
+      "script": "mkdir -p /tmp/big && for i in {1..300}; do : > /tmp/big/f$i; done; find /tmp/big -type f | head -n 1 | wc -l; find /tmp/big | head -n 3 | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: refuses perm",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -perm 644; echo status=$?",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=2\n"
+        },
+        "stderr": {
+          "text": "find: -perm is unsupported in bash-tool\n"
+        },
+        "reason": "WASI has no permission bits or owners, so these predicates are refused"
+      }
+    },
+    {
+      "name": "find: refuses owner printf",
+      "script": "mkdir -p /tmp/f/src/lib /tmp/f/docs /tmp/f/empty && cd /tmp/f && printf 'fn main() {}\\n' > src/main.rs && printf 'pub fn x() {}\\n' > src/lib/mod.rs && : > src/blank.txt && printf '# Title\\n' > docs/README.md && printf 'notes\\n' > docs/notes.txt && printf '%1500s' x > big.bin && printf 'upper\\n' > Upper.TXT; find . -printf '%u\\n'; echo status=$?",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=2\n"
+        },
+        "stderr": {
+          "text": "find: -printf %u is unsupported in bash-tool\n"
+        },
+        "reason": "WASI has no permission bits or owners, so these predicates are refused"
+      }
+    }
+  ]
+}

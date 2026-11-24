@@ -636,6 +636,7 @@ impl wasmtime_wasi::p2::InputStream for AgentFileInputStream {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl wasmtime_wasi::p2::Pollable for AgentFileInputStream {
     async fn ready(&mut self) {
         if !self.buffered.is_empty() || self.eof || self.error.is_some() {
@@ -769,6 +770,7 @@ impl wasmtime_wasi::p2::OutputStream for AgentFileOutputStream {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl wasmtime_wasi::p2::Pollable for AgentFileOutputStream {
     async fn ready(&mut self) {
         let AgentFileOutputState::Waiting(operation) = &mut self.state else {
@@ -1775,8 +1777,15 @@ mod tests {
             ))),
             ErrorCode::NotPermitted
         );
-        #[cfg(target_os = "linux")]
-        {
+    }
+
+    #[cfg(target_os = "linux")]
+    mod linux {
+        use super::*;
+        use test_r::test;
+
+        #[test]
+        fn p2_link_maps_native_cross_device_without_trapping() {
             let sandbox = FilesystemStorageError::io(
                 "hard link",
                 None,

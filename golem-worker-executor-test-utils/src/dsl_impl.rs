@@ -47,7 +47,7 @@ use golem_common::model::agent::{
 };
 use golem_common::model::agent::{AgentFileContentHash, AgentMode, AgentTypeName};
 use golem_common::model::agent::{AgentKey, OwnedAgentId};
-use golem_common::model::caller::Caller;
+use golem_common::model::caller::{Caller, ClaimVisibility};
 use golem_common::model::component::{
     AgentFilePath, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
     ArchiveFilePath, ComponentDto, ComponentId, ComponentName, ComponentRevision, InitialAgentFile,
@@ -141,6 +141,7 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
         environment_id: EnvironmentId,
         page_entries: Vec<golem_api_grpc::proto::golem::worker::OplogPageEntry>,
+        claims: ClaimVisibility,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
         let mut result = Vec::with_capacity(page_entries.len());
         for page_entry in page_entries {
@@ -149,17 +150,122 @@ impl TestWorkerExecutor {
             match page_entry {
                 PublicOplogPageEntry::Included(entry) => result.push(entry),
                 PublicOplogPageEntry::Omitted(omitted) => result.push(
-                    self.get_oplog_entry(
+                    self.read_oplog_entry(
                         agent_id,
                         environment_id,
                         omitted.oplog_index,
                         Some(omitted.component_revision),
+                        claims,
                     )
                     .await?,
                 ),
             }
         }
         Ok(result)
+    }
+
+    /// The executor's `GetInvocation` answer for the invocation of an agent.
+    pub async fn get_invocation(
+        &self,
+        agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        invocation_id: golem_common::model::InvocationId,
+    ) -> anyhow::Result<
+        Result<
+            Option<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>,
+            golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError,
+        >,
+    > {
+        use golem_api_grpc::proto::golem::workerexecutor::v1::{
+            GetInvocationRequest, get_invocation_response,
+        };
+        let response = self
+            .client
+            .clone()
+            .get_invocation(GetInvocationRequest {
+                agent_id: Some((*agent_id).into()),
+                environment_id: Some(environment_id.into()),
+                auth_ctx: Some(self.auth_ctx().into()),
+                invocation_id: Some(invocation_id.into()),
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(get_invocation_response::Result::Success(success)) => Ok(Ok(success.invocation)),
+            Some(get_invocation_response::Result::Failure(error)) => Ok(Err(error)),
+            None => Err(anyhow!("Empty get invocation response")),
+        }
+    }
+
+    /// The executor's `ListInvocations` answer. `request` names the filters, page size and
+    /// cursor; the agent, environment and caller are filled in.
+    pub async fn list_invocations(
+        &self,
+        agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        request: golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsRequest,
+    ) -> anyhow::Result<
+        Result<
+            golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsSuccess,
+            golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError,
+        >,
+    > {
+        use golem_api_grpc::proto::golem::workerexecutor::v1::{
+            ListInvocationsRequest, list_invocations_response,
+        };
+        let response = self
+            .client
+            .clone()
+            .list_invocations(ListInvocationsRequest {
+                agent_id: Some((*agent_id).into()),
+                environment_id: Some(environment_id.into()),
+                auth_ctx: Some(self.auth_ctx().into()),
+                ..request
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(list_invocations_response::Result::Success(success)) => Ok(Ok(success)),
+            Some(list_invocations_response::Result::Failure(error)) => Ok(Err(error)),
+            None => Err(anyhow!("Empty list invocations response")),
+        }
+    }
+
+    /// The executor's `LookupInvocations` answer for the caller's idempotency key.
+    pub async fn lookup_invocations(
+        &self,
+        agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        idempotency_key: &IdempotencyKey,
+        operation: Option<&str>,
+    ) -> anyhow::Result<
+        Result<
+            Vec<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>,
+            golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError,
+        >,
+    > {
+        use golem_api_grpc::proto::golem::workerexecutor::v1::{
+            LookupInvocationsRequest, lookup_invocations_response,
+        };
+        let response = self
+            .client
+            .clone()
+            .lookup_invocations(LookupInvocationsRequest {
+                agent_id: Some((*agent_id).into()),
+                environment_id: Some(environment_id.into()),
+                auth_ctx: Some(self.auth_ctx().into()),
+                idempotency_key: Some(idempotency_key.clone().into()),
+                operation: operation.map(str::to_string),
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(lookup_invocations_response::Result::Success(success)) => {
+                Ok(Ok(success.invocations))
+            }
+            Some(lookup_invocations_response::Result::Failure(error)) => Ok(Err(error)),
+            None => Err(anyhow!("Empty lookup invocations response")),
+        }
     }
 
     /// Reads one oplog entry in full through the streaming `GetOplogEntry` call.
@@ -170,6 +276,24 @@ impl TestWorkerExecutor {
         oplog_index: OplogIndex,
         component_revision: Option<ComponentRevision>,
     ) -> anyhow::Result<PublicOplogEntryWithIndex> {
+        self.read_oplog_entry(
+            agent_id,
+            environment_id,
+            oplog_index,
+            component_revision,
+            ClaimVisibility::Hidden,
+        )
+        .await
+    }
+
+    async fn read_oplog_entry(
+        &self,
+        agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        oplog_index: OplogIndex,
+        component_revision: Option<ComponentRevision>,
+        claims: ClaimVisibility,
+    ) -> anyhow::Result<PublicOplogEntryWithIndex> {
         let mut stream = self
             .client
             .clone()
@@ -179,6 +303,7 @@ impl TestWorkerExecutor {
                 auth_ctx: Some(self.auth_ctx().into()),
                 oplog_index: oplog_index.into(),
                 component_revision: component_revision.map(Into::into),
+                claims: claims.to_protobuf(),
             })
             .await?
             .into_inner();
@@ -231,7 +356,10 @@ impl TestWorkerExecutor {
                 .validate_response(&response)
                 .map_err(anyhow::Error::msg)?;
             match response.response {
-                Some(invocation_response::Response::Accepted(_)) => {}
+                Some(
+                    invocation_response::Response::Accepted(_)
+                    | invocation_response::Response::Ready(_),
+                ) => {}
                 Some(invocation_response::Response::Rejected(rejected)) => {
                     // Kept alongside the message: a rejection is refused before acceptance, and
                     // the reason says as what.
@@ -241,10 +369,13 @@ impl TestWorkerExecutor {
                         )
                         .map(|reason| reason.as_str_name())
                         .unwrap_or("UNKNOWN");
-                    terminal = Some(Err(anyhow!(
-                        "Agent invocation rejected ({reason}): {}",
-                        rejected.error
-                    )));
+                    terminal = Some(Err(match &rejected.worker_error {
+                        Some(worker_error) => anyhow!(
+                            "Agent invocation rejected ({reason}): {} ({worker_error:?})",
+                            rejected.error
+                        ),
+                        None => anyhow!("Agent invocation rejected ({reason}): {}", rejected.error),
+                    }));
                 }
                 Some(invocation_response::Response::Result(invocation_result)) => {
                     result = Some(invocation_result);
@@ -334,6 +465,8 @@ impl TestWorkerExecutor {
                 component_id: Some(component.id.into()),
                 method_name: Some(method_name.to_string()),
                 input: Some(proto_method_parameters),
+                captured_method_input: None,
+                allow_streams: false,
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 schedule_at: None,
                 idempotency_key: idempotency_key.cloned().map(Into::into),
@@ -370,7 +503,15 @@ impl TestWorkerExecutor {
                 return Err(anyhow!("agent invocation returned an external-tool result"));
             }
         };
-        Ok(AgentResult::new(value, worker_agent_id))
+        let background_failure = result
+            .background_failure
+            .map(|failure| {
+                WorkerExecutorError::try_from(failure)
+                    .map(|error| error.to_string())
+                    .map_err(|error| anyhow!("invalid background failure: {error}"))
+            })
+            .transpose()?;
+        Ok(AgentResult::new(value, worker_agent_id).with_background_failure(background_failure))
     }
 }
 
@@ -714,6 +855,7 @@ impl TestDsl for TestWorkerExecutor {
                 invocation_context: None,
                 idempotency_key: None,
                 freshness_disposition: 0,
+                invocation: None,
             })
             .await?;
 
@@ -757,6 +899,8 @@ impl TestDsl for TestWorkerExecutor {
             component_id: Some(component.id.into()),
             method_name: Some(method_name.to_string()),
             input: Some(proto_method_parameters),
+            captured_method_input: None,
+            allow_streams: false,
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
             schedule_at: None,
             idempotency_key: Some(idempotency_key.clone().into()),
@@ -870,52 +1014,18 @@ impl TestDsl for TestWorkerExecutor {
         agent_id: &OwnedAgentId,
         from: OplogIndex,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
-        let mut result = Vec::new();
-        let mut cursor = None;
+        self.read_full_oplog(agent_id, from, ClaimVisibility::Hidden)
+            .await
+    }
 
-        loop {
-            let chunk = self
-                .client
-                .clone()
-                .get_oplog(workerexecutor::v1::GetOplogRequest {
-                    agent_id: Some(agent_id.agent_id.into()),
-                    environment_id: Some(agent_id.environment_id.into()),
-                    from_oplog_index: from.into(),
-                    cursor,
-                    count: 100,
-                    auth_ctx: Some(self.auth_ctx().into()),
-                    to_oplog_index: None,
-                    scan_allowance: None,
-                })
-                .await?
-                .into_inner();
-
-            if let Some(chunk) = chunk.result {
-                match chunk {
-                    get_oplog_response::Result::Success(chunk) => {
-                        result.extend(
-                            self.full_oplog_entries(
-                                &agent_id.agent_id,
-                                agent_id.environment_id,
-                                chunk.entries,
-                            )
-                            .await?,
-                        );
-                        match chunk.next {
-                            Some(next) => cursor = Some(next),
-                            None => break,
-                        }
-                    }
-                    get_oplog_response::Result::Failure(error) => {
-                        return Err(anyhow!("Failed to get oplog: {error:?}"));
-                    }
-                }
-            } else {
-                break;
-            }
-        }
-
-        Ok(result)
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
+    async fn get_oplog_with_claims(
+        &self,
+        agent_id: &OwnedAgentId,
+        from: OplogIndex,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        self.read_full_oplog(agent_id, from, ClaimVisibility::Shown)
+            .await
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id, query))]
@@ -932,6 +1042,7 @@ impl TestDsl for TestWorkerExecutor {
                 auth_ctx: Some(self.auth_ctx().into()),
                 to_oplog_index: None,
                 scan_allowance: None,
+                claims: ClaimVisibility::Hidden.to_protobuf(),
             })
             .await?
             .into_inner();
@@ -964,6 +1075,7 @@ impl TestDsl for TestWorkerExecutor {
                     count: 100,
                     query: query.to_string(),
                     auth_ctx: Some(self.auth_ctx().into()),
+                    claims: ClaimVisibility::Hidden.to_protobuf(),
                 })
                 .await?
                 .into_inner();
@@ -976,6 +1088,7 @@ impl TestDsl for TestWorkerExecutor {
                                 &agent_id.agent_id,
                                 agent_id.environment_id,
                                 chunk.entries,
+                                ClaimVisibility::Hidden,
                             )
                             .await?,
                         );
@@ -1198,26 +1311,8 @@ impl TestDsl for TestWorkerExecutor {
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
     async fn delete_worker(&self, agent_id: &OwnedAgentId) -> anyhow::Result<()> {
         let fingerprint = self.get_worker_metadata(agent_id).await?.fingerprint;
-        let response = self
-            .client
-            .clone()
-            .delete_worker(DeleteWorkerRequest {
-                agent_id: Some(agent_id.agent_id.into()),
-                environment_id: Some(agent_id.environment_id.into()),
-                auth_ctx: Some(self.auth_ctx().into()),
-                caller: Some(Caller::anonymous().into()),
-                expected_fingerprint: Some(fingerprint.0.into()),
-            })
-            .await?
-            .into_inner();
-
-        match response.result {
-            Some(delete_worker_response::Result::Success(_)) => Ok(()),
-            Some(delete_worker_response::Result::Failure(error)) => {
-                Err(anyhow!("Failed to delete worker: {error:?}"))
-            }
-            _ => Err(anyhow!("Failed to delete worker: unknown error")),
-        }
+        self.delete_worker_with_fingerprint(agent_id, fingerprint)
+            .await
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
@@ -1477,6 +1572,35 @@ impl TestDsl for TestWorkerExecutor {
 }
 
 impl TestWorkerExecutor {
+    /// Deletes the recorded incarnation without looking up its metadata again. This also
+    /// permits joining or retrying deletion after its durable state has been removed.
+    pub async fn delete_worker_with_fingerprint(
+        &self,
+        agent_id: &OwnedAgentId,
+        fingerprint: golem_common::model::AgentFingerprint,
+    ) -> anyhow::Result<()> {
+        let response = self
+            .client
+            .clone()
+            .delete_worker(DeleteWorkerRequest {
+                agent_id: Some(agent_id.agent_id.into()),
+                environment_id: Some(agent_id.environment_id.into()),
+                auth_ctx: Some(self.auth_ctx().into()),
+                caller: Some(Caller::anonymous().into()),
+                expected_fingerprint: Some(fingerprint.0.into()),
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(delete_worker_response::Result::Success(_)) => Ok(()),
+            Some(delete_worker_response::Result::Failure(error)) => {
+                Err(anyhow!("Failed to delete worker: {error:?}"))
+            }
+            _ => Err(anyhow!("Failed to delete worker: unknown error")),
+        }
+    }
+
     /// The request that creates the keyed agent of `key`, which the component implements, in the
     /// test's default environment, and returns an existing one as it is. Tests that drive the
     /// creation RPCs directly change its fields.
@@ -1499,6 +1623,7 @@ impl TestWorkerExecutor {
             invocation_context: None,
             idempotency_key: None,
             freshness_disposition: 0,
+            invocation: None,
         })
     }
 
@@ -1537,6 +1662,7 @@ impl TestWorkerExecutor {
                 invocation_context: None,
                 idempotency_key: None,
                 freshness_disposition: 0,
+                invocation: None,
             })
             .await?
             .into_inner();
@@ -1683,4 +1809,63 @@ fn parse_provision_config_from_agent_type_schema(
             })
         })
         .collect()
+}
+
+impl TestWorkerExecutor {
+    /// Reads the whole oplog from `from` page by page, with each omitted entry read in full.
+    async fn read_full_oplog(
+        &self,
+        agent_id: &OwnedAgentId,
+        from: OplogIndex,
+        claims: ClaimVisibility,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        let mut result = Vec::new();
+        let mut cursor = None;
+
+        loop {
+            let chunk = self
+                .client
+                .clone()
+                .get_oplog(workerexecutor::v1::GetOplogRequest {
+                    agent_id: Some(agent_id.agent_id.into()),
+                    environment_id: Some(agent_id.environment_id.into()),
+                    from_oplog_index: from.into(),
+                    cursor,
+                    count: 100,
+                    auth_ctx: Some(self.auth_ctx().into()),
+                    to_oplog_index: None,
+                    scan_allowance: None,
+                    claims: claims.to_protobuf(),
+                })
+                .await?
+                .into_inner();
+
+            if let Some(chunk) = chunk.result {
+                match chunk {
+                    get_oplog_response::Result::Success(chunk) => {
+                        result.extend(
+                            self.full_oplog_entries(
+                                &agent_id.agent_id,
+                                agent_id.environment_id,
+                                chunk.entries,
+                                claims,
+                            )
+                            .await?,
+                        );
+                        match chunk.next {
+                            Some(next) => cursor = Some(next),
+                            None => break,
+                        }
+                    }
+                    get_oplog_response::Result::Failure(error) => {
+                        return Err(anyhow!("Failed to get oplog: {error:?}"));
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        Ok(result)
+    }
 }

@@ -25,7 +25,14 @@ golem publish --dry-run
 `golem package pack` writes an OCI image layout in a tar archive and prints its
 SHA-256 manifest digest. The default filename is `golem-package.tar`.
 `golem publish --dry-run` validates the same package and prints the same digest
-without writing an archive or contacting a server. Initial files must resolve
+without writing an archive or contacting a server.
+
+Neither command includes the publisher's HTTP API or MCP deployments in the
+package. Both report the omitted exports by kind and domain name across the
+manifest's environments. In JSON and YAML output, `omittedExports` contains
+entries with `kind` (`http-api` or `mcp`) and `name` (the resolved domain).
+
+Initial files must resolve
 inside the application root. Download any initial file with an HTTP or HTTPS
 source and declare it as a local file before packing. A typed `File` default is
 a path relative to the manifest that supplies it and must resolve inside the
@@ -57,5 +64,29 @@ cache miss. It unpacks under `golem-temp` and uses the publisher's metadata
 instead of running the installed components. Build and deploy do not change
 `golem.lock`. If a pin is missing or differs, run `golem install` with the
 intended archive to repair it.
+
+An installed agent keeps its published type name. To configure an installed
+agent, declare it under its published name with `package: <name>`:
+
+```yaml
+agents:
+  SupportCall:
+    package: my-package
+```
+
+After deployment, use `golem agent create` and `golem agent invoke` as for a
+local agent. A tool called by the agent sees the agent in the installer's
+environment, not a publisher principal. If two installed packages export the
+same agent type, remove one from the application before deploying.
+
+If your package calls other agent types, list their published names in
+`package.calls` in the publisher manifest (for example, `calls: [SupportCall]`).
+Packing records the list in the archive. Build can succeed without these types,
+but deploy rejects the application if any listed type is missing from the
+deployment. A local component or another installed package can supply the type.
+
+Deploying an installed package does not expose any of the publisher's HTTP
+routes or MCP endpoints by default. To expose an installed agent, declare the
+HTTP API or MCP deployment in your own `golem.yaml` and deploy the application.
 
 Registry publishing is not available through these commands.

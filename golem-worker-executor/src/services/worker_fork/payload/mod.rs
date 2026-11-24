@@ -68,6 +68,7 @@ where
         // Keep exhaustive so additions to the oplog require an ownership audit.
         OplogEntry::Create { .. }
         | OplogEntry::AgentInvocationFailed { .. }
+        | OplogEntry::AgentInvocationSettled { .. }
         | OplogEntry::Suspend { .. }
         | OplogEntry::Error { .. }
         | OplogEntry::RecoverySucceeded { .. }

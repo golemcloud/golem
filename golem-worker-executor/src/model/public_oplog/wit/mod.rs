@@ -46,6 +46,9 @@ use values::{
 mod tests;
 
 use crate::preview2::golem_api_1_x::oplog;
+use golem_common::base_model::caller::{
+    AccountAuthentication, Pair, PublicCaller, PublicPrincipal,
+};
 use golem_common::base_model::oplog::{
     CardInstallFailure, PublicQueuedCardEvent, QueuedCardEvent, QueuedCardEventCard,
 };
@@ -56,23 +59,23 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::payload::types::{SerializableToolError, SerializableToolRpcError};
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFailedParams, AgentInvocationFinishedParams,
-    AgentInvocationStartedParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams,
-    CardInstalledParams, CardRevokedParams, CommittedRemoteTransactionParams,
-    CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
-    DeactivatePluginParams, DropResourceParams, EndParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
-    LogParams, ManualUpdateParameters, MemorySizeReconciledParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PluginInstallationDescription,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, PublicAgentInvocation,
-    PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
-    PublicExternalToolResult, PublicSpanAttributes, PublicSpanData, PublicSpanFinished,
-    PublicSpanKind, PublicSpanOutcome, PublicSpanStarted, RecoverySucceededParams,
-    RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
-    SnapshotParams, SpanClosedParams, StartParams, StreamItemsParams, StreamRegisteredParams,
-    StreamSessionParams, StreamTerminalParams, StringAttributeValue, SuccessfulUpdateParams,
-    SuspendParams, ToolAttachmentControlParams, ToolAttachmentReadParams,
+    AgentInvocationSettledParams, AgentInvocationStartedParams, BeginRemoteTransactionParams,
+    CancelPendingInvocationParams, CancelledParams, CardEventQueuedParams, CardExpiredParams,
+    CardInstallFailedParams, CardInstalledParams, CardRevokedParams,
+    CommittedRemoteTransactionParams, CompletionDeliveredParams, CompletionDiscardedParams,
+    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndParams,
+    ErrorParams, ExitedParams, FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams,
+    InterruptedParams, JumpParams, LogParams, ManualUpdateParameters, MemorySizeReconciledParams,
+    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PluginInstallationDescription, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
+    PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicExternalToolResult,
+    PublicSpanAttributes, PublicSpanData, PublicSpanFinished, PublicSpanKind, PublicSpanOutcome,
+    PublicSpanStarted, RecoverySucceededParams, RemoveRetryPolicyParams, RestartParams,
+    ResumedParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
+    SnapshotConfirmedParams, SnapshotParams, SpanClosedParams, StartParams, StreamItemsParams,
+    StreamRegisteredParams, StreamSessionParams, StreamTerminalParams, StringAttributeValue,
+    SuccessfulUpdateParams, SuspendParams, ToolAttachmentControlParams, ToolAttachmentReadParams,
 };
 
 use golem_common::model::Timestamp;
@@ -201,6 +204,53 @@ fn durable_stream_summary_from_wit(
         },
         oplog::DurableStreamEventSummary::SessionCancellation => S::SessionCancellation,
         oplog::DurableStreamEventSummary::SessionExpired => S::SessionExpired,
+    }
+}
+
+impl From<golem_common::model::InvocationRequestOperation>
+    for oplog::RawInvocationRequestOperation
+{
+    fn from(value: golem_common::model::InvocationRequestOperation) -> Self {
+        use golem_common::model::InvocationRequestOperation as Op;
+        match value {
+            Op::ManualUpdate { target_revision } => Self::ManualUpdate(target_revision.get()),
+            Op::AgentInitialization => Self::AgentInitialization,
+            Op::AgentMethod { method_name } => Self::AgentMethod(method_name),
+            Op::ExternalTool {
+                tool_name,
+                command_path,
+            } => Self::ExternalTool(oplog::RawExternalToolOperation {
+                tool_name: tool_name.into_inner(),
+                command_path,
+            }),
+            Op::LoadSnapshot => Self::LoadSnapshot,
+            Op::SaveSnapshot => Self::SaveSnapshot,
+            Op::ProcessOplogEntries => Self::ProcessOplogEntries,
+        }
+    }
+}
+
+impl TryFrom<oplog::RawInvocationRequestOperation>
+    for golem_common::model::InvocationRequestOperation
+{
+    type Error = String;
+
+    fn try_from(value: oplog::RawInvocationRequestOperation) -> Result<Self, String> {
+        use oplog::RawInvocationRequestOperation as Raw;
+        Ok(match value {
+            Raw::ManualUpdate(target_revision) => Self::ManualUpdate {
+                target_revision: target_revision.try_into()?,
+            },
+            Raw::AgentInitialization => Self::AgentInitialization,
+            Raw::AgentMethod(method_name) => Self::AgentMethod { method_name },
+            Raw::ExternalTool(tool) => Self::ExternalTool {
+                tool_name: tool.tool_name.try_into()?,
+                command_path: tool.command_path,
+            },
+            Raw::LoadSnapshot => Self::LoadSnapshot,
+            Raw::SaveSnapshot => Self::SaveSnapshot,
+            Raw::ProcessOplogEntries => Self::ProcessOplogEntries,
+        })
     }
 }
 

@@ -293,10 +293,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         match recorded {
             Ok(_) => {
                 if matches!(pending.kind, InterruptKind::Interrupt(_))
-                    && let Some(key) = &status.current_idempotency_key
+                    && let Some(key) = status.current_idempotency_key()
                 {
                     self.store_invocation_failure(key, &TrapType::Interrupt(pending.kind))
                         .await;
+                } else if matches!(pending.kind, InterruptKind::Interrupt(_))
+                    && status.settling_invocation.is_some()
+                {
+                    self.store_queued_invocation_failures(
+                        status.settling_invocation.as_ref(),
+                        &TrapType::Interrupt(pending.kind),
+                    )
+                    .await;
                 }
                 Ok(())
             }

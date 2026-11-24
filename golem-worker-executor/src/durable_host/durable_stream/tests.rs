@@ -50,10 +50,12 @@ use golem_common::base_model::durable_stream::{
 };
 use golem_common::base_model::environment::EnvironmentId;
 use golem_common::base_model::{AgentFingerprint, AgentId, OplogIndex};
+use golem_common::model::InvocationRequestOperation;
+use golem_common::model::OwnedAgentId;
+use golem_common::model::StoredAgentInvocationPayload;
 use golem_common::model::invocation_context::TraceId;
 use golem_common::model::oplog::payload::OplogPayload;
 use golem_common::model::oplog::{OplogEntry, PayloadId, RawOplogPayload};
-use golem_common::model::{AgentInvocationPayload, OwnedAgentId};
 use golem_schema::schema::SchemaFingerprintV1;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
@@ -276,6 +278,29 @@ impl Debug for TestOplog {
 }
 
 impl TestOplog {
+    pub(crate) fn session_acceptance(
+        &self,
+        key: &golem_common::model::InvocationId,
+    ) -> golem_common::model::durable_stream::StreamSessionAcceptance {
+        self.entries()
+            .into_iter()
+            .rev()
+            .find_map(|entry| {
+                if let OplogEntry::StreamSession {
+                    record: OplogPayload::Inline(record),
+                    ..
+                } = entry
+                    && let StreamSessionRecord::Prepared(prepared) = *record
+                    && prepared.session_key == *key
+                {
+                    Some(prepared.acceptance())
+                } else {
+                    None
+                }
+            })
+            .expect("fixture must prepare its session before attaching")
+    }
+
     pub(crate) fn take_read_ranges(&self) -> Vec<(OplogIndex, u64)> {
         std::mem::take(&mut *self.read_ranges.lock().unwrap())
     }
@@ -320,6 +345,7 @@ impl TestOplog {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Oplog for TestOplog {
     async fn add(
         &self,
@@ -1960,6 +1986,7 @@ async fn consumer_source_unavailable_uses_the_warm_consumer_head_only() {
 struct FixedConsumerProbe(ConsumerAttachmentStatus);
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl StreamAttachmentConsumerProbe for FixedConsumerProbe {
     async fn status(
         &self,
@@ -1983,6 +2010,7 @@ fn cascade_reader_id() -> LocalStreamReaderId {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl StreamAttachmentConsumerProbe for CascadeConsumerProbe {
     async fn status(
         &self,
@@ -2044,6 +2072,7 @@ struct FailingConsumerProbe {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl StreamAttachmentConsumerProbe for FailingConsumerProbe {
     async fn status(
         &self,
@@ -2066,6 +2095,7 @@ struct AdvancingCascadeProbe {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl StreamAttachmentConsumerProbe for AdvancingCascadeProbe {
     async fn status(
         &self,
@@ -2109,6 +2139,7 @@ struct AmbiguousOverlayCommitProbe {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl StreamAttachmentConsumerProbe for AmbiguousOverlayCommitProbe {
     async fn status(
         &self,
@@ -4261,7 +4292,8 @@ async fn session_record_commit_folds_a_pending_invocation_added_immediately_befo
         .add(OplogEntry::pending_agent_invocation(
             None,
             uuid::Uuid::from_u128(107).into(),
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+            Box::new(InvocationRequestOperation::SaveSnapshot),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
                 caller: golem_common::model::caller::Caller::anonymous(),
             })),
             TraceId::generate(),
@@ -6299,7 +6331,8 @@ async fn prepared_input_registration_batch_recovers_without_duplicate_registrati
     let pending = OplogEntry::pending_agent_invocation(
         None,
         uuid::Uuid::from_u128(108).into(),
-        OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+        Box::new(InvocationRequestOperation::SaveSnapshot),
+        OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
             caller: golem_common::model::caller::Caller::anonymous(),
         })),
         TraceId::generate(),
@@ -6500,7 +6533,8 @@ async fn prepared_foreign_inputs_recover_the_winning_invocation_and_topology() {
     let pending = OplogEntry::pending_agent_invocation(
         None,
         identity.invocation.idempotency_key,
-        OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+        Box::new(InvocationRequestOperation::SaveSnapshot),
+        OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
             caller: golem_common::model::caller::Caller::anonymous(),
         })),
         TraceId::generate(),

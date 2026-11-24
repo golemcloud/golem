@@ -34,9 +34,17 @@ extern "wasm" fn set_tool_client_host_mode(mode : Int32) = "golem:test" "set-too
 extern "wasm" fn settle_tool_client_result() -> Int32 = "golem:test" "settle-tool-result"
 
 ///|
-#owned(bytes)
-extern "wasm" fn tool_client_bytes_pointer(bytes : Bytes) -> Int32 =
-  #|(func (param i32) (result i32) local.get 0)
+fn tool_client_bytes_pointer(bytes : Bytes) -> Int32 {
+  let ptr = @gen.mbt_ffi_cabi_realloc(0, 0, 1, bytes.length())
+  for i in 0..<bytes.length() {
+    tool_client_store8(ptr + i, bytes[i].to_int())
+  }
+  ptr
+}
+
+///|
+extern "wasm" fn tool_client_store8(ptr : Int32, value : Int32) =
+  #|(func (param i32 i32) local.get 0 local.get 1 i32.store8)
 
 ///|
 extern "wasm" fn set_tool_client_result_node(

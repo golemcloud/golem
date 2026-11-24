@@ -12,8 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::caller::Caller;
-use crate::base_model::caller::test_support::{original_claims_json, sample_caller};
+use crate::base_model::caller::test_support::{
+    every_principal, original_claims_json, sample_caller, user_principal,
+};
+use crate::base_model::caller::{
+    Caller, ClaimVisibility, Claims, Pair, Principal, PublicCaller, PublicClaims, PublicPrincipal,
+    PublicUserPrincipal, UserPrincipal,
+};
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::card::{
     AccountCardHolder, AgentCardHolder, ApplicationCardHolder, Card, CardHolder, CardId,
@@ -28,9 +33,9 @@ use crate::model::oplog::payload::types::{SecretRevealAudit, SerializableDateTim
 use crate::model::oplog::payload::{HostRequestSecretReveal, HostResponseSecretRevealed};
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFailedParams, AgentInvocationFinishedParams,
-    AgentInvocationStartedParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, CardDerivedParams, CardExpiredParams, CardInstalledParams,
-    CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
+    AgentInvocationSettledParams, AgentInvocationStartedParams, BeginRemoteTransactionParams,
+    CancelPendingInvocationParams, CancelledParams, CardDerivedParams, CardExpiredParams,
+    CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
     CardTransferStartedParams, CardTransferredParams, CommittedRemoteTransactionParams,
     CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndParams,
     ErrorParams, ExitedParams, FailedUpdateParams, GrowMemoryParams, InterruptedParams, JumpParams,
@@ -53,12 +58,13 @@ use crate::model::oplog::{
     PublicSnapshotData, PublicSpanAttributes, PublicSpanData, PublicSpanFinished, PublicSpanKind,
     PublicSpanLink, PublicSpanOutcome, PublicSpanStarted, PublicToolInvocationOperation,
     PublicTypedAgentConfigEntry, PublicUpdateDescription, QueuedCardEvent, RawSnapshotData,
-    SnapshotBasedUpdateParameters, StringAttributeValue, UpdateDescription, UpdateFailureClass,
+    SaveSnapshotParameters, SnapshotBasedUpdateParameters, StringAttributeValue, UpdateDescription,
+    UpdateFailureClass,
 };
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    AccountId, AgentId, AgentInvocationPayload, ComponentId, IdempotencyKey, OplogIndex, Timestamp,
-    TransactionId,
+    AccountId, AgentId, AgentInvocationPayload, ComponentId, IdempotencyKey, OplogIndex,
+    StoredAgentInvocationPayload, Timestamp, TransactionId,
 };
 use crate::schema::IntoTypedSchemaValue;
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
@@ -73,8 +79,8 @@ use uuid::Uuid;
 
 #[cfg(target_pointer_width = "64")]
 #[test]
-fn raw_oplog_entry_fits_in_176_bytes() {
-    assert!(std::mem::size_of::<OplogEntry>() <= 176);
+fn raw_oplog_entry_fits_in_192_bytes() {
+    assert!(std::mem::size_of::<OplogEntry>() <= 192);
 }
 
 #[test]
@@ -121,6 +127,7 @@ fn durable_function_type_contract() {
             function_name: HostFunctionName::Custom("operation".to_string()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: None,
             durable_function_type: function_type,
             span_started: None,
@@ -172,6 +179,7 @@ fn start_desert_roundtrip() {
         function_name: HostFunctionName::Custom("operation".to_string()),
         invocation_id: Some(DurableInvocationId::new(OplogIndex::from_u64(300_000), 129)),
         observational_owner: Some(OplogIndex::from_u64(6)),
+        driver: Some(OplogIndex::from_u64(5)),
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: Some(Box::new(SpanStarted {
@@ -632,6 +640,7 @@ fn observational_start_public_protobuf_roundtrip() {
         function_name: "wasi:http/outgoing-handler::handle".to_string(),
         invocation_id: None,
         observational_owner: Some(owner),
+        driver: None,
         request: None,
         durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
         span_started: None,
@@ -643,6 +652,32 @@ fn observational_start_public_protobuf_roundtrip() {
 }
 
 #[test]
+fn driven_start_public_protobuf_and_json_roundtrip() {
+    let entry = PublicOplogEntry::Start(StartParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        parent_start_index: Some(OplogIndex::from_u64(12)),
+        function_name: "wasi:http/types::incoming-body::read".to_string(),
+        invocation_id: Some(DurableInvocationId::new(OplogIndex::from_u64(10), 2)),
+        observational_owner: None,
+        driver: Some(OplogIndex::from_u64(21)),
+        request: None,
+        durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
+        span_started: None,
+        denial: None,
+    });
+
+    let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
+    assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), entry);
+
+    let json = serde_json::to_value(&entry).unwrap();
+    assert_eq!(json["driver"], serde_json::json!(21));
+    assert_eq!(
+        serde_json::from_value::<PublicOplogEntry>(json).unwrap(),
+        entry
+    );
+}
+
+#[test]
 fn denied_start_public_protobuf_roundtrip() {
     let entry = PublicOplogEntry::Start(StartParams {
         timestamp: Timestamp::now_utc().rounded(),
@@ -650,6 +685,7 @@ fn denied_start_public_protobuf_roundtrip() {
         function_name: "keyvalue::eventual::set".to_string(),
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: None,
         durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
         span_started: None,
@@ -1105,6 +1141,7 @@ fn start_serialization_poem_serde_equivalence() {
         function_name: "test".to_string(),
         invocation_id: None,
         observational_owner: Some(OplogIndex::from_u64(7)),
+        driver: None,
         request: Some(typed(
             SchemaType::string(),
             SchemaValue::String("test".to_string()),
@@ -1126,6 +1163,7 @@ fn start_with_span_serialization_poem_serde_equivalence() {
         function_name: "rpc".to_string(),
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: None,
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
         span_started: Some(PublicSpanStarted {
@@ -1191,6 +1229,7 @@ fn start_with_handle_serialization_poem_serde_equivalence() {
         function_name: "golem:rpc/wasm-rpc.{invoke-and-await}".to_string(),
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: Some(typed(
             SchemaType::record(vec![
                 nf("uri", SchemaType::string()),
@@ -1220,6 +1259,7 @@ fn start_with_complex_values_serialization_poem_serde_equivalence() {
         function_name: "wasi:keyvalue/store.{get}".to_string(),
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: Some(typed(
             SchemaType::record(vec![
                 nf("name", SchemaType::string()),
@@ -1302,6 +1342,7 @@ fn matcher_matches_payload_less_variant_case_name() {
         function_name: "test".to_string(),
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: Some(typed(
             SchemaType::variant(vec![vc("none", None), vc("some", Some(SchemaType::u32()))]),
             SchemaValue::Variant(VariantValuePayload {
@@ -1326,6 +1367,7 @@ fn matcher_matches_variant_payload_under_case_path() {
         function_name: "test".to_string(),
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: Some(typed(
             SchemaType::variant(vec![vc("none", None), vc("some", Some(SchemaType::u32()))]),
             SchemaValue::Variant(VariantValuePayload {
@@ -1358,6 +1400,7 @@ fn matcher_matches_secret_reveal_request_payload() {
         function_name: "golem::secrets::reveal".to_string(),
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: Some(request),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
         span_started: None,
@@ -1383,6 +1426,7 @@ fn matcher_matches_span_started_trace_context() {
         function_name: "rpc".into(),
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: None,
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
         span_started: Some(PublicSpanStarted {
@@ -1548,6 +1592,7 @@ fn agent_invocation_started_serialization_poem_serde_equivalence() {
                 }],
                 inherited: true,
             })]],
+            caller: public_sample_caller(),
         }),
         wallet_pin: PublicInvocationWalletPin {
             wallet_token: WalletVersionToken {
@@ -1560,6 +1605,38 @@ fn agent_invocation_started_serialization_poem_serde_equivalence() {
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
     assert_eq!(entry, deserialized);
+
+    // The caller of each principal kind, with and without claims, reads back the same through
+    // poem and serde, in both directions.
+    for caller in public_callers_of_every_kind() {
+        let mut entry = entry.clone();
+        let PublicOplogEntry::AgentInvocationStarted(params) = &mut entry else {
+            unreachable!()
+        };
+        let PublicAgentInvocation::AgentMethodInvocation(invocation) = &mut params.invocation
+        else {
+            unreachable!()
+        };
+        invocation.caller = caller;
+
+        // The poem form goes through `serde_json::Value`, which writes the claims again. The
+        // forms are equal as JSON values, but not as text.
+        let as_value = |entry: &PublicOplogEntry| serde_json::to_value(entry).unwrap();
+        let poem_json = entry.to_json_string();
+        let from_poem: PublicOplogEntry = serde_json::from_str(&poem_json).unwrap();
+        assert_eq!(as_value(&entry), as_value(&from_poem));
+
+        let serde_json = serde_json::to_string(&entry).unwrap();
+        let from_serde = <PublicOplogEntry as poem_openapi::types::ParseFromJSON>::parse_from_json(
+            Some(serde_json::from_str(&serde_json).unwrap()),
+        )
+        .unwrap();
+        assert_eq!(as_value(&entry), as_value(&from_serde));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&poem_json).unwrap(),
+            serde_json::from_str::<serde_json::Value>(&serde_json).unwrap()
+        );
+    }
 }
 
 #[test]
@@ -1656,6 +1733,7 @@ fn agent_invocation_failed_contract_roundtrips() {
         invocation_id,
         AgentError::InternalError("method gave up".to_string()),
         OplogIndex::from_u64(17),
+        true,
     )
     .rounded();
     assert!(!entry.is_hint());
@@ -1677,6 +1755,7 @@ fn agent_invocation_failed_contract_roundtrips() {
         panic!("expected an invocation-failed entry");
     };
     assert_eq!(parameters.start_index, 17);
+    assert!(parameters.awaits_settlement);
     assert_eq!(OplogEntry::try_from(proto).unwrap(), entry);
     let bytes = crate::serialization::serialize(&entry).unwrap();
     assert_eq!(
@@ -1701,6 +1780,53 @@ fn agent_invocation_failed_contract_roundtrips() {
     let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
         public.clone().try_into().unwrap();
     assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), public);
+}
+
+#[test]
+fn agent_invocation_settled_is_a_hint_and_roundtrips() {
+    use golem_api_grpc::proto::golem::worker::{RawOplogEntry, raw_oplog_entry::Entry};
+
+    let invocation_id = Uuid::from_u128(0x0123456789abcdef_fedcba9876543213).into();
+    let entry = OplogEntry::agent_invocation_settled(invocation_id, 4242).rounded();
+    assert!(entry.is_hint());
+    assert_eq!(entry.entity_parent_start_index(), None);
+
+    let bytes = crate::serialization::serialize(&entry).unwrap();
+    assert_eq!(
+        crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap(),
+        entry
+    );
+
+    let proto: RawOplogEntry = entry.clone().try_into().unwrap();
+    let Some(Entry::AgentInvocationSettled(parameters)) = &proto.entry else {
+        panic!("expected an invocation-settled entry");
+    };
+    assert_eq!(parameters.consumed_fuel, 4242);
+    assert_eq!(OplogEntry::try_from(proto).unwrap(), entry);
+
+    let public = PublicOplogEntry::AgentInvocationSettled(AgentInvocationSettledParams {
+        timestamp: entry.timestamp(),
+        invocation_id,
+        consumed_fuel: 4242,
+    });
+    assert_eq!(
+        serde_json::from_str::<PublicOplogEntry>(&public.to_json_string()).unwrap(),
+        public
+    );
+    assert_eq!(
+        public.to_json(),
+        Some(serde_json::to_value(&public).unwrap())
+    );
+    let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+        public.clone().try_into().unwrap();
+    assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), public);
+
+    let super::OplogEnrichmentEntry::Other(raw) =
+        super::OplogEnrichmentEntry::try_from(public).unwrap()
+    else {
+        panic!("expected non-Create projection");
+    };
+    assert_eq!(raw, entry);
 }
 
 #[test]
@@ -1759,6 +1885,7 @@ fn agent_invocation_started_with_initialization_serialization_poem_serde_equival
                 attributes: vec![],
                 inherited: false,
             })]],
+            caller: public_sample_caller(),
         }),
         wallet_pin: PublicInvocationWalletPin {
             wallet_token: WalletVersionToken {
@@ -1796,6 +1923,7 @@ fn pending_agent_invocation_with_initialization_serialization_poem_serde_equival
                 attributes: vec![],
                 inherited: false,
             })]],
+            caller: public_sample_caller(),
         }),
     });
     let serialized = entry.to_json_string();
@@ -1843,6 +1971,7 @@ fn pending_worker_invocation_serialization_poem_serde_equivalence() {
                 }],
                 inherited: true,
             })]],
+            caller: public_sample_caller(),
         }),
     });
     let serialized = entry.to_json_string();
@@ -2079,9 +2208,10 @@ fn pending_invocation_deadline_raw_and_public_roundtrips() {
             timestamp: Timestamp::from(1_000),
             not_before,
             invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543213).into(),
+            operation: Box::new(crate::model::InvocationRequestOperation::SaveSnapshot),
             payload: OplogPayload::SerializedInline {
                 bytes: crate::serialization::serialize(
-                    &crate::model::AgentInvocationPayload::SaveSnapshot {
+                    &crate::model::StoredAgentInvocationPayload::SaveSnapshot {
                         caller: Caller::anonymous(),
                     },
                 )
@@ -2112,7 +2242,9 @@ fn pending_invocation_deadline_raw_and_public_roundtrips() {
         let public = PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
             timestamp: raw.timestamp(),
             not_before,
-            invocation: PublicAgentInvocation::SaveSnapshot(Empty {}),
+            invocation: PublicAgentInvocation::SaveSnapshot(SaveSnapshotParameters {
+                caller: public_sample_caller(),
+            }),
         });
         let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
             public.clone().try_into().unwrap();
@@ -2121,6 +2253,97 @@ fn pending_invocation_deadline_raw_and_public_roundtrips() {
         let decoded: PublicOplogEntry = serde_json::from_str(&public.to_json_string()).unwrap();
         assert_eq!(public, decoded);
     }
+}
+
+#[test]
+fn request_entries_keep_their_operation_outside_the_payload() {
+    use crate::model::InvocationRequestOperation as Op;
+    use crate::model::oplog::RawSnapshotData;
+
+    let caller = Caller::anonymous();
+    let payloads = vec![
+        AgentInvocationPayload::ManualUpdate {
+            target_revision: ComponentRevision::new(7).unwrap(),
+        },
+        AgentInvocationPayload::AgentInitialization {
+            input: SchemaValue::Record { fields: vec![] },
+            caller: caller.clone(),
+        },
+        AgentInvocationPayload::AgentMethod {
+            method_name: "a-removed-method".to_string(),
+            input: SchemaValue::Record { fields: vec![] }.try_into().unwrap(),
+            allow_streams: false,
+            caller: caller.clone(),
+            scope_card: None,
+        },
+        AgentInvocationPayload::LoadSnapshot {
+            snapshot: RawSnapshotData {
+                data: vec![1, 2, 3],
+                mime_type: "application/octet-stream".to_string(),
+            },
+            caller: caller.clone(),
+        },
+        AgentInvocationPayload::SaveSnapshot {
+            caller: caller.clone(),
+        },
+    ];
+    let operations = payloads
+        .iter()
+        .map(AgentInvocationPayload::request_operation)
+        .collect::<Vec<_>>();
+    for (payload, operation) in payloads.into_iter().zip(&operations) {
+        let (split, stored) = payload.clone().into_stored();
+        assert_eq!(&split, operation);
+        let other = operations.iter().find(|other| *other != operation).unwrap();
+        assert!(stored.clone().with_operation(other.clone()).is_err());
+
+        let bytes = crate::serialization::serialize(&stored).unwrap();
+        let pending = OplogEntry::PendingAgentInvocation {
+            timestamp: Timestamp::from(1_000),
+            not_before: None,
+            invocation_id: Uuid::from_u128(0x11).into(),
+            operation: Box::new(split.clone()),
+            payload: OplogPayload::SerializedInline {
+                bytes: bytes.clone(),
+                cached: None,
+            },
+            trace_id: TraceId::generate(),
+            trace_states: vec![],
+            invocation_context: vec![],
+        };
+        let decoded: OplogEntry =
+            crate::serialization::deserialize(&crate::serialization::serialize(&pending).unwrap())
+                .unwrap();
+        assert_eq!(decoded, pending);
+        let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+            pending.clone().try_into().unwrap();
+        let decoded = OplogEntry::try_from(proto).unwrap();
+        assert_eq!(decoded, pending);
+        let OplogEntry::PendingAgentInvocation {
+            operation,
+            payload: OplogPayload::SerializedInline { bytes, .. },
+            ..
+        } = decoded
+        else {
+            panic!("expected an inline pending invocation");
+        };
+        let stored: StoredAgentInvocationPayload =
+            crate::serialization::deserialize(&bytes).unwrap();
+        assert_eq!(stored.with_operation(*operation).unwrap(), payload);
+    }
+
+    let tool = Op::ExternalTool {
+        tool_name: crate::model::tool::ToolName::try_from("weather").unwrap(),
+        command_path: vec!["forecast".to_string(), "daily".to_string()],
+    };
+    let proto =
+        golem_api_grpc::proto::golem::worker::RawInvocationRequestOperation::from(tool.clone());
+    assert_eq!(Op::try_from(proto).unwrap(), tool);
+    assert_eq!(
+        crate::serialization::deserialize::<Op>(&crate::serialization::serialize(&tool).unwrap())
+            .unwrap(),
+        tool
+    );
 }
 
 #[test]
@@ -2140,6 +2363,7 @@ fn invocation_terminals_carry_their_invocation_id_through_raw_roundtrips() {
         method_name: None,
         consumed_fuel: 7,
         component_revision: ComponentRevision::INITIAL,
+        awaits_settlement: true,
     };
     let invocation_error = OplogEntry::Error {
         timestamp: Timestamp::from(2_000),
@@ -2874,9 +3098,14 @@ fn invocation_wallet_pin_protobuf_roundtrip_and_required_validation() {
     let raw_entry = OplogEntry::AgentInvocationStarted {
         timestamp: Timestamp::now_utc().rounded(),
         invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543216).into(),
-        payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+        operation: Box::new(crate::model::InvocationRequestOperation::AgentMethod {
             method_name: "test".to_string(),
-            input: SchemaValue::Record { fields: Vec::new() },
+        }),
+        payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
+            input: SchemaValue::Record { fields: Vec::new() }
+                .try_into()
+                .unwrap(),
+            allow_streams: false,
             caller: caller.clone(),
             scope_card: None,
         })),
@@ -2895,23 +3124,28 @@ fn invocation_wallet_pin_protobuf_roundtrip_and_required_validation() {
     match OplogEntry::try_from(raw_proto.clone()).unwrap() {
         OplogEntry::AgentInvocationStarted {
             wallet_pin,
+            operation,
             payload,
             ..
         } => {
             let payload = match payload {
                 OplogPayload::Inline(payload) => *payload,
                 OplogPayload::SerializedInline { bytes, .. } => {
-                    crate::serialization::deserialize::<AgentInvocationPayload>(&bytes).unwrap()
+                    crate::serialization::deserialize::<StoredAgentInvocationPayload>(&bytes)
+                        .unwrap()
                 }
                 other => panic!("expected an inline payload, got {other:?}"),
             };
             let AgentInvocationPayload::AgentMethod {
-                caller: decoded, ..
-            } = payload
+                method_name,
+                caller: decoded,
+                ..
+            } = payload.with_operation(*operation).unwrap()
             else {
                 panic!("expected a method payload");
             };
             assert_eq!(decoded, caller);
+            assert_eq!(method_name, "test");
             assert_eq!(
                 original_claims_json(&decoded),
                 original_claims_json(&caller)
@@ -2941,7 +3175,9 @@ fn invocation_wallet_pin_protobuf_roundtrip_and_required_validation() {
 
     let public_entry = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
         timestamp: Timestamp::now_utc().rounded(),
-        invocation: PublicAgentInvocation::SaveSnapshot(Empty {}),
+        invocation: PublicAgentInvocation::SaveSnapshot(SaveSnapshotParameters {
+            caller: public_sample_caller(),
+        }),
         wallet_pin: PublicInvocationWalletPin {
             wallet_token,
             scope_card_id: Some(scope_card_id),
@@ -3341,6 +3577,7 @@ mod scope_projection {
             function_name: HostFunctionName::Custom("test".to_string()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: None,
             durable_function_type,
             span_started: None,
@@ -3742,4 +3979,411 @@ fn a_cloned_filesystem_snapshot_name_shares_its_text() {
         name.as_str().as_ptr(),
         clone.as_str().as_ptr()
     ));
+}
+
+/// The public form of the sample caller (a user at the root, an agent as the immediate caller,
+/// and two tokens), without claims.
+fn public_sample_caller() -> PublicCaller {
+    PublicCaller::new(&sample_caller(), ClaimVisibility::Hidden)
+}
+
+/// Public callers with each principal kind in each role, with and without claims.
+fn public_callers_of_every_kind() -> Vec<PublicCaller> {
+    let mut callers = Vec::new();
+    for principal in every_principal() {
+        for claims in [ClaimVisibility::Hidden, ClaimVisibility::Shown] {
+            callers.push(PublicCaller::new(&Caller::entry(principal.clone()), claims));
+            callers.push(PublicCaller::new(
+                &Caller {
+                    original: user_principal(),
+                    immediate: principal.clone(),
+                    tokens: sample_caller().tokens,
+                },
+                claims,
+            ));
+        }
+    }
+    callers
+}
+
+/// One public invocation of each kind that has a caller.
+fn public_invocations_with_caller(caller: PublicCaller) -> Vec<PublicAgentInvocation> {
+    vec![
+        PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
+            invocation_id: Uuid::from_u128(0x1).into(),
+            constructor_parameters: typed(
+                SchemaType::tuple(vec![SchemaType::string()]),
+                SchemaValue::Tuple {
+                    elements: vec![SchemaValue::String("init".to_string())],
+                },
+            ),
+            trace_id: TraceId::generate(),
+            trace_states: vec![],
+            invocation_context: vec![vec![]],
+            caller: caller.clone(),
+        }),
+        PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
+            invocation_id: Uuid::from_u128(0x2).into(),
+            method_name: "method".to_string(),
+            function_input: typed(
+                SchemaType::tuple(vec![SchemaType::string()]),
+                SchemaValue::Tuple {
+                    elements: vec![SchemaValue::String("input".to_string())],
+                },
+            ),
+            trace_id: TraceId::generate(),
+            trace_states: vec![],
+            invocation_context: vec![vec![]],
+            caller: caller.clone(),
+        }),
+        PublicAgentInvocation::ExternalTool(
+            crate::model::oplog::ExternalToolInvocationParameters {
+                invocation_id: Uuid::from_u128(0x3).into(),
+                tool_name: "grep".to_string(),
+                command_path: vec!["search".to_string()],
+                input: typed(
+                    SchemaType::tuple(vec![SchemaType::string()]),
+                    SchemaValue::Tuple {
+                        elements: vec![SchemaValue::String("pattern".to_string())],
+                    },
+                ),
+                trace_id: TraceId::generate(),
+                trace_states: vec![],
+                invocation_context: vec![vec![]],
+                caller: caller.clone(),
+            },
+        ),
+        PublicAgentInvocation::SaveSnapshot(SaveSnapshotParameters {
+            caller: caller.clone(),
+        }),
+        PublicAgentInvocation::LoadSnapshot(crate::model::oplog::LoadSnapshotParameters {
+            snapshot: PublicSnapshotData::Raw(RawSnapshotData {
+                data: vec![1, 2, 3],
+                mime_type: "application/octet-stream".to_string(),
+            }),
+            caller: caller.clone(),
+        }),
+        PublicAgentInvocation::ProcessOplogEntries(
+            crate::model::oplog::ProcessOplogEntriesParameters {
+                invocation_id: Uuid::from_u128(0x4).into(),
+                caller,
+            },
+        ),
+    ]
+}
+
+#[test]
+fn public_invocation_caller_round_trips_protobuf() {
+    for caller in public_callers_of_every_kind() {
+        for invocation in public_invocations_with_caller(caller.clone()) {
+            assert_eq!(invocation.caller(), Some(&caller));
+            let proto: golem_api_grpc::proto::golem::worker::PublicAgentInvocation =
+                invocation.clone().try_into().unwrap();
+            let decoded = PublicAgentInvocation::try_from(proto).unwrap();
+            assert_eq!(decoded, invocation);
+        }
+    }
+
+    // A caller without an original principal, or an invocation without a caller, does not decode.
+    let invocation = public_invocations_with_caller(public_sample_caller())
+        .into_iter()
+        .nth(1)
+        .unwrap();
+    let proto: golem_api_grpc::proto::golem::worker::PublicAgentInvocation =
+        invocation.try_into().unwrap();
+    let mut without_original = proto.clone();
+    let mut without_caller = proto;
+    match (
+        without_original.invocation.as_mut().unwrap(),
+        without_caller.invocation.as_mut().unwrap(),
+    ) {
+        (
+            golem_api_grpc::proto::golem::worker::public_agent_invocation::Invocation::AgentMethod(
+                with_caller,
+            ),
+            golem_api_grpc::proto::golem::worker::public_agent_invocation::Invocation::AgentMethod(
+                without,
+            ),
+        ) => {
+            with_caller.caller.as_mut().unwrap().original = None;
+            without.caller = None;
+        }
+        other => panic!("unexpected protobuf invocation: {other:?}"),
+    }
+    assert!(PublicAgentInvocation::try_from(without_original).is_err());
+    assert!(PublicAgentInvocation::try_from(without_caller).is_err());
+}
+
+/// The claim sets that a `serde_json::Value` cannot keep: a number beyond `f64`, a nesting depth
+/// beyond the limit of 128, and an integer that an `f64` rounds.
+fn claim_sets_beyond_serde_json_value() -> Vec<String> {
+    vec![
+        r#"{"sub":"bob","n":1e400}"#.to_string(),
+        format!(
+            r#"{{"sub":"bob","deep":{}1{}}}"#,
+            "[".repeat(130),
+            "]".repeat(130)
+        ),
+        r#"{"sub":"bob","n":18446744073709551617}"#.to_string(),
+        r#"{"sub":"bob","org_id":123456789012345678901234567890,"score":0.12345678901234567890123}"#
+            .to_string(),
+        r#"{"zeta":1,"alpha":2,"sub":"bob"}"#.to_string(),
+    ]
+}
+
+fn started_entry_with_caller(caller: PublicCaller) -> PublicOplogEntry {
+    PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+        timestamp: Timestamp::from(2_000),
+        invocation: public_invocations_with_caller(caller)
+            .into_iter()
+            .nth(1)
+            .unwrap(),
+        wallet_pin: PublicInvocationWalletPin {
+            wallet_token: WalletVersionToken {
+                wallet_id_hash: [0; 32],
+                generation: 0,
+            },
+            scope_card_id: None,
+        },
+    })
+}
+
+/// The public form shows the claims exactly as Golem received them, as a JSON object. It does so
+/// in the public model, in the JSON text of the REST response, and across protobuf.
+#[test]
+fn public_entry_shows_the_original_claims_text_everywhere() {
+    for claims_text in claim_sets_beyond_serde_json_value() {
+        let user = Principal::User(UserPrincipal {
+            pair: Pair::new("https://idp.example/", "user-1"),
+            claims: Claims::from_json(claims_text.clone()).unwrap(),
+            authenticated_at: Timestamp::from(1_000),
+        });
+        let caller = PublicCaller::new(&Caller::entry(user), ClaimVisibility::Shown);
+
+        // The public model.
+        let PublicPrincipal::User(public_user) = &caller.original else {
+            panic!("expected a user");
+        };
+        assert_eq!(
+            public_user.claims.as_ref().map(PublicClaims::as_json),
+            Some(claims_text.as_str())
+        );
+
+        // The JSON text of the REST response.
+        let entry = started_entry_with_caller(caller);
+        let json = serde_json::to_string(&entry).unwrap();
+        let expected = format!(r#""claims":{claims_text}"#);
+        assert!(
+            json.contains(&expected),
+            "the JSON must hold {expected}, but it is {json}"
+        );
+
+        // Protobuf, with a real encode and decode in between.
+        let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+            entry.clone().try_into().unwrap();
+        let bytes = prost::Message::encode_to_vec(&proto);
+        let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+            prost::Message::decode(bytes.as_slice()).unwrap();
+        let back = PublicOplogEntry::try_from(proto).unwrap();
+        assert_eq!(back, entry);
+        assert!(
+            serde_json::to_string(&back).unwrap().contains(&expected),
+            "the claims text changed in protobuf"
+        );
+    }
+}
+
+/// A reader decodes an entry from its JSON text, through the internally tagged enums that hold
+/// the claims.
+#[test]
+fn public_entry_with_claims_decodes_from_json_text() {
+    let user = Principal::User(UserPrincipal {
+        pair: Pair::new("https://idp.example/", "user-1"),
+        claims: Claims::from_json(r#"{"groups":["a"],"sub":"bob"}"#.to_string()).unwrap(),
+        authenticated_at: Timestamp::from(1_000),
+    });
+    let caller = PublicCaller::new(&Caller::entry(user), ClaimVisibility::Shown);
+    let entry = started_entry_with_caller(caller);
+    let json = serde_json::to_string(&entry).unwrap();
+    let decoded: PublicOplogEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded, entry);
+}
+
+/// The protobuf decoder refuses claims text that is not one valid JSON object.
+#[test]
+fn protobuf_refuses_claims_text_that_is_not_a_json_object() {
+    let user = Principal::User(UserPrincipal {
+        pair: Pair::new("https://idp.example/", "user-1"),
+        claims: Claims::from_json(r#"{"sub":"bob"}"#.to_string()).unwrap(),
+        authenticated_at: Timestamp::from(1_000),
+    });
+    let caller = PublicCaller::new(&Caller::entry(user), ClaimVisibility::Shown);
+    let PublicPrincipal::User(public_user) = caller.original else {
+        panic!("expected a user");
+    };
+    let valid = golem_api_grpc::proto::golem::component::PublicUserPrincipal::from(public_user);
+    assert!(PublicUserPrincipal::try_from(valid.clone()).is_ok());
+    for text in [
+        "\"{}\"",
+        "\"x\"",
+        "[1]",
+        "1",
+        "null",
+        "{",
+        "",
+        r#"{"a":1,"a":2}"#,
+    ] {
+        let mut bad = valid.clone();
+        bad.claims = Some(text.to_string());
+        assert!(PublicUserPrincipal::try_from(bad).is_err(), "{text}");
+    }
+}
+
+/// A container that holds the value in a buffer before it reads it, as a derived tagged or
+/// untagged enum does, reads the claims as a JSON object.
+#[test]
+fn public_claims_are_read_through_a_buffer() {
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(untagged)]
+    enum Buffered {
+        User { claims: PublicClaims },
+    }
+
+    let Buffered::User { claims } =
+        serde_json::from_str(r#"{"claims":{"sub":"bob","groups":["a","b"],"level":3}}"#).unwrap();
+    assert_eq!(
+        claims.to_value().unwrap(),
+        serde_json::json!({"sub": "bob", "groups": ["a", "b"], "level": 3})
+    );
+}
+
+/// Two claim sets are equal when they are the same JSON object: the order of the members and the
+/// spelling of a number do not count. So an entry is equal to its own JSON round trip, also when
+/// the reader writes the claims in another spelling.
+#[test]
+fn public_claims_are_equal_as_json_objects() {
+    let claims = |text: &str| PublicClaims::from_json(text.to_string()).unwrap();
+    let recorded = claims(r#"{"sub":"bob","n":1e3,"nested":{"list":[1,2.50],"flag":true}}"#);
+    assert_eq!(
+        recorded,
+        claims(r#"{"nested":{"flag":true,"list":[1,2.5]},"n":1000.0,"sub":"bob"}"#)
+    );
+    assert_ne!(
+        recorded,
+        claims(r#"{"sub":"bob","n":1e3,"nested":{"list":[1,2.51],"flag":true}}"#)
+    );
+    assert_ne!(recorded, claims(r#"{"sub":"bob"}"#));
+    // The order of the items of an array counts.
+    assert_ne!(claims(r#"{"list":[1,2]}"#), claims(r#"{"list":[2,1]}"#));
+
+    // A claim set that a JSON value cannot hold is equal only to the same text.
+    let beyond = claims(r#"{"sub":"bob","n":1e400}"#);
+    assert_eq!(beyond, claims(r#"{"sub":"bob","n":1e400}"#));
+    assert_ne!(beyond, claims(r#"{"n":1e400,"sub":"bob"}"#));
+
+    // An entry is equal to what a reader gets from its JSON text.
+    let user = Principal::User(UserPrincipal {
+        pair: Pair::new("https://idp.example/", "user-1"),
+        claims: Claims::from_json(r#"{"sub":"bob","n":1e3,"list":[1,2.50]}"#.to_string()).unwrap(),
+        authenticated_at: Timestamp::from(1_000),
+    });
+    let entry = started_entry_with_caller(PublicCaller::new(
+        &Caller::entry(user),
+        ClaimVisibility::Shown,
+    ));
+    let read: PublicOplogEntry =
+        serde_json::from_str(&serde_json::to_string(&entry).unwrap()).unwrap();
+    assert_eq!(read, entry);
+}
+
+/// Claims on the wire must be one JSON object.
+#[test]
+fn public_claims_refuse_anything_but_a_json_object() {
+    for text in ["[1]", "\"x\"", "1", "null", "{", ""] {
+        assert!(PublicClaims::from_json(text.to_string()).is_err(), "{text}");
+    }
+    assert!(serde_json::from_str::<PublicClaims>("[1]").is_err());
+    assert!(serde_json::from_str::<PublicClaims>("\"{}\"").is_err());
+}
+
+#[test]
+fn oplog_search_matches_the_caller_pair_but_never_claims() {
+    let bob = Principal::User(UserPrincipal {
+        pair: Pair::new("http://test-idp.com", "bob"),
+        claims: Claims::from_json(
+            r#"{"sub":"bob","email":"secretmarker@mail.example","groups":["auditors"]}"#
+                .to_string(),
+        )
+        .unwrap(),
+        authenticated_at: Timestamp::from(1_000),
+    });
+    for claims in [ClaimVisibility::Hidden, ClaimVisibility::Shown] {
+        let caller = PublicCaller::new(&Caller::entry(bob.clone()), claims);
+        let started = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+            timestamp: Timestamp::from(2_000),
+            invocation: public_invocations_with_caller(caller.clone())
+                .into_iter()
+                .nth(1)
+                .unwrap(),
+            wallet_pin: PublicInvocationWalletPin {
+                wallet_token: WalletVersionToken {
+                    wallet_id_hash: [0; 32],
+                    generation: 0,
+                },
+                scope_card_id: None,
+            },
+        });
+        let pending = PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
+            timestamp: Timestamp::from(2_000),
+            not_before: None,
+            invocation: public_invocations_with_caller(caller)
+                .into_iter()
+                .nth(2)
+                .unwrap(),
+        });
+        for entry in [&started, &pending] {
+            for query in [
+                "bob",
+                "idp",
+                "user",
+                "caller:bob",
+                "original:bob",
+                "immediate:user",
+                "caller.original:bob",
+                "caller.immediate:idp",
+            ] {
+                assert!(
+                    entry.matches(&Query::parse(query).unwrap()),
+                    "{query} must match {entry:?}"
+                );
+            }
+            for query in [
+                "secretmarker",
+                "auditors",
+                "caller:secretmarker",
+                "claims:auditors",
+                "caller:alice",
+                "caller:account",
+            ] {
+                assert!(
+                    !entry.matches(&Query::parse(query).unwrap()),
+                    "{query} must not match {entry:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn oplog_include_claims_reads_and_writes_as_claims() {
+    use crate::model::oplog::OplogInclude;
+    assert_eq!(OplogInclude::Claims.to_string(), "claims");
+    assert_eq!(
+        serde_json::to_string(&OplogInclude::Claims).unwrap(),
+        "\"claims\""
+    );
+    assert_eq!(
+        serde_json::from_str::<OplogInclude>("\"claims\"").unwrap(),
+        OplogInclude::Claims
+    );
 }

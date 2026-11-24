@@ -155,6 +155,7 @@ impl FrameTestOplog {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Oplog for FrameTestOplog {
     async fn add(
         &self,

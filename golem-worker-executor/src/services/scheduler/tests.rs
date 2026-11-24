@@ -24,6 +24,7 @@ use crate::services::shard::{ShardService, ShardServiceDefault};
 use crate::services::worker_activator::ExactExistingDelivery;
 use crate::span_test_support::{Tracing, get_tracing_dependency as test_r_get_dep_tracing};
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
+use crate::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
 use crate::storage::scheduler::memory::InMemorySchedulerStorage;
 use crate::storage::scheduler::sqlite::SqliteSchedulerStorage;
 use crate::storage::scheduler::{ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError};
@@ -67,6 +68,7 @@ struct ExpiryWorkerAccessMock {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for ExpiryWorkerAccessMock {
     async fn active_worker_fingerprint(
         &self,
@@ -124,6 +126,7 @@ impl SchedulerWorkerAccess for ExpiryWorkerAccessMock {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for SchedulerWorkerAccessMock {
     async fn expire_durable_stream_session(
         &self,
@@ -191,9 +194,28 @@ struct ActiveWorkerAccessMock {
 struct RecordingActiveWorkerAccess {
     fingerprint: AgentFingerprint,
     executions: Arc<Mutex<Vec<String>>>,
+    complete_not_before: Option<DateTime<Utc>>,
+    started: CancellationToken,
+}
+
+impl RecordingActiveWorkerAccess {
+    async fn wait_until_completion(&self) {
+        self.started.cancel();
+        if let Some(deadline) = self.complete_not_before {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while Utc::now().timestamp_millis() < deadline.timestamp_millis() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("wall clock must reach the delivery completion deadline");
+            assert!(Utc::now().timestamp_millis() >= deadline.timestamp_millis());
+        }
+    }
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for RecordingActiveWorkerAccess {
     async fn expire_durable_stream_session(
         &self,
@@ -230,7 +252,9 @@ impl SchedulerWorkerAccess for RecordingActiveWorkerAccess {
         _last_oplog_index: OplogIndex,
         _wait: ArchiveWait,
     ) -> Result<Option<bool>, WorkerExecutorError> {
-        unimplemented!()
+        self.wait_until_completion().await;
+        self.executions.lock().unwrap().push("archive".to_string());
+        Ok(Some(true))
     }
 
     async fn enqueue_exact_existing(
@@ -245,6 +269,7 @@ impl SchedulerWorkerAccess for RecordingActiveWorkerAccess {
         let ExactExistingDelivery::WakeInvocation(idempotency_key) = delivery else {
             unreachable!()
         };
+        self.wait_until_completion().await;
         self.executions
             .lock()
             .unwrap()
@@ -262,6 +287,7 @@ struct FailingWakeWorkerAccess {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for FailingWakeWorkerAccess {
     async fn expire_durable_stream_session(
         &self,
@@ -323,6 +349,7 @@ impl SchedulerWorkerAccess for FailingWakeWorkerAccess {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for ActiveWorkerAccessMock {
     async fn expire_durable_stream_session(
         &self,
@@ -403,6 +430,7 @@ struct FailingActivationWorkerAccess {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for FailingActivationWorkerAccess {
     async fn expire_durable_stream_session(
         &self,
@@ -466,6 +494,7 @@ struct DelayedActiveWorkerAccessMock {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for DelayedActiveWorkerAccessMock {
     async fn expire_durable_stream_session(
         &self,
@@ -623,6 +652,7 @@ struct FlakyInsertSchedulerStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerStorage for FlakyInsertSchedulerStorage {
     async fn insert(
         &self,
@@ -675,9 +705,10 @@ impl SchedulerStorage for FlakyInsertSchedulerStorage {
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
         lease_until: DateTime<Utc>,
+        now: DateTime<Utc>,
     ) -> Result<bool, SchedulerStorageError> {
         self.inner
-            .extend_lease(schedule_id, lease_owner, lease_until)
+            .extend_lease(schedule_id, lease_owner, lease_until, now)
             .await
     }
 
@@ -685,27 +716,47 @@ impl SchedulerStorage for FlakyInsertSchedulerStorage {
         &self,
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
+        now: DateTime<Utc>,
     ) -> Result<bool, SchedulerStorageError> {
-        self.inner.ack(schedule_id, lease_owner).await
+        self.inner.ack(schedule_id, lease_owner, now).await
     }
 }
 
-/// Claims everything due at `now`, which for an action left unacknowledged by a previous tick
-/// means its lease has expired and it is offered again.
-async fn claim_all(
-    storage: &Arc<InMemorySchedulerStorage>,
-    now: &str,
-) -> Vec<ClaimedScheduledAction> {
+/// Probe after both the service's 30-second lease and the retry tests' as-of claims,
+/// so an empty result proves deletion rather than an action that is still leased.
+async fn claim_all(storage: &Arc<InMemorySchedulerStorage>) -> Vec<ClaimedScheduledAction> {
     let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
     storage
         .claim_due(
-            DateTime::from_str(now).unwrap(),
+            Utc::now() + chrono::Duration::seconds(120),
             &assignment,
             10,
             Duration::from_secs(30),
         )
         .await
         .unwrap()
+}
+
+// Retry-focused tests advance only the storage claim clock. The action and acknowledgement
+// still run through the service, without waiting for a real 30-second lease to expire.
+async fn process_retry(svc: &SchedulerServiceDefault, storage: &InMemorySchedulerStorage) {
+    let claimed = storage
+        .claim_due(
+            Utc::now() + chrono::Duration::seconds(60),
+            &ShardAssignment::unexpiring(1, [ShardId::new(0)]),
+            10,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        claimed.len(),
+        1,
+        "failed action must be available for retry"
+    );
+    svc.process_claimed_actions(claimed, Utc::now())
+        .await
+        .unwrap();
 }
 
 fn promise(agent_id: AgentId, idx: u64) -> PromiseId {
@@ -716,17 +767,23 @@ fn promise(agent_id: AgentId, idx: u64) -> PromiseId {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct RecordingSchedulerStorage {
     inner: Arc<InMemorySchedulerStorage>,
     failed_ack_ids: Arc<Mutex<HashSet<Uuid>>>,
     failed_acknowledgements: Arc<Mutex<HashSet<Uuid>>>,
     claimed_batches: Arc<Mutex<Vec<Vec<ClaimedScheduledAction>>>>,
+    claim_times: Mutex<Vec<DateTime<Utc>>>,
+    insert_after_first_claim: Mutex<Option<(ScheduleId, ScheduledAction)>>,
     ack_failures: AtomicUsize,
     claims_after_ack_failure: AtomicUsize,
+    expire_renewal: AtomicUsize,
+    renewal_refused: CancellationToken,
+    hold_ack_until_renewal_refused: bool,
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerStorage for RecordingSchedulerStorage {
     async fn insert(
         &self,
@@ -759,6 +816,32 @@ impl SchedulerStorage for RecordingSchedulerStorage {
             .claim_due(now, assignment, limit, lease_ttl)
             .await?;
         self.claimed_batches.lock().unwrap().push(claimed.clone());
+        self.claim_times.lock().unwrap().push(now);
+        let insert = self.insert_after_first_claim.lock().unwrap().take();
+        if let Some((schedule_id, action)) = insert {
+            // Make the new action strictly later than the first claim even after storage
+            // truncates timestamps to milliseconds. A reused claim time cannot see it.
+            let due_at = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let current = Utc::now();
+                    if current.timestamp_millis() > now.timestamp_millis() {
+                        break current;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("wall clock must advance beyond the first claim");
+            assert!(due_at.timestamp_millis() > now.timestamp_millis());
+            self.inner
+                .insert(
+                    schedule_id,
+                    due_at,
+                    ShardId::new(0),
+                    &serialize(&action).unwrap(),
+                )
+                .await?;
+        }
         Ok(claimed)
     }
 
@@ -775,9 +858,33 @@ impl SchedulerStorage for RecordingSchedulerStorage {
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
         lease_until: DateTime<Utc>,
+        now: DateTime<Utc>,
     ) -> Result<bool, SchedulerStorageError> {
+        if self
+            .expire_renewal
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                remaining.checked_sub(1)
+            })
+            == Ok(1)
+        {
+            // Simulate a renewal delayed past expiry, without reclaiming the action.
+            // Its requested deadline is at least as late as the previous lease deadline.
+            while Utc::now().timestamp_millis() < lease_until.timestamp_millis() {
+                tokio::task::yield_now().await;
+            }
+            let renewed = self
+                .inner
+                .extend_lease(schedule_id, lease_owner, lease_until, Utc::now())
+                .await?;
+            assert!(
+                !renewed,
+                "delayed renewal must not revive the expired lease"
+            );
+            self.renewal_refused.cancel();
+            return Ok(renewed);
+        }
         self.inner
-            .extend_lease(schedule_id, lease_owner, lease_until)
+            .extend_lease(schedule_id, lease_owner, lease_until, now)
             .await
     }
 
@@ -785,7 +892,11 @@ impl SchedulerStorage for RecordingSchedulerStorage {
         &self,
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
+        now: DateTime<Utc>,
     ) -> Result<bool, SchedulerStorageError> {
+        if self.hold_ack_until_renewal_refused {
+            self.renewal_refused.cancelled().await;
+        }
         if self.failed_ack_ids.lock().unwrap().remove(&schedule_id.id) {
             self.ack_failures.fetch_add(1, Ordering::SeqCst);
             self.failed_acknowledgements
@@ -796,7 +907,7 @@ impl SchedulerStorage for RecordingSchedulerStorage {
                 "simulated transient acknowledgement failure".to_string(),
             ));
         }
-        self.inner.ack(schedule_id, lease_owner).await
+        self.inner.ack(schedule_id, lease_owner, now).await
     }
 }
 
@@ -816,7 +927,7 @@ async fn schedule_retries_transient_storage_errors() {
     let action = complete_promise_action(promise(agent("inst1"), 101));
     let expected_action = serialize(&action).unwrap();
     let schedule_id = ScheduleId::fresh();
-    let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+    let due_at = Utc::now() - chrono::Duration::minutes(1);
 
     // Two transient failures are retried; the third attempt succeeds without panicking.
     assert_eq!(
@@ -828,12 +939,7 @@ async fn schedule_retries_transient_storage_errors() {
 
     let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
     let claimed = storage
-        .claim_due(
-            DateTime::from_str("2023-07-17T10:06:00Z").unwrap(),
-            &assignment,
-            10,
-            Duration::from_secs(30),
-        )
+        .claim_due(Utc::now(), &assignment, 10, Duration::from_secs(30))
         .await
         .unwrap();
     assert_eq!(claimed.len(), 1);
@@ -855,7 +961,7 @@ async fn schedule_size_is_observed_once_for_duplicates_and_terminal_failures() {
     let histogram =
         crate::metrics::scheduler::SCHEDULED_ACTION_SIZE_BYTES.with_label_values(&labels);
     let before = histogram.get_sample_count();
-    let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+    let due_at = Utc::now();
 
     let storage = Arc::new(InMemorySchedulerStorage::new());
     let svc = create_scheduler(storage, create_promise_service_mock()).await;
@@ -996,6 +1102,461 @@ async fn process_records_one_closed_span_per_tick(tracing: &Tracing) {
 }
 
 #[test]
+async fn acknowledgement_uses_completion_time_not_original_tick() {
+    for expire_before_completion in [false, true] {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let fingerprint = AgentFingerprint::new();
+        let executions = Arc::new(Mutex::new(Vec::new()));
+        let oplog_service = create_oplog_service_mock().await;
+        let tick = Utc::now();
+        let lease_ttl = if expire_before_completion {
+            Duration::from_millis(20)
+        } else {
+            Duration::from_secs(30)
+        };
+        let lease_until = tick + chrono::Duration::from_std(lease_ttl).unwrap();
+        let svc = SchedulerServiceDefault::new(
+            storage.clone(),
+            create_shard_service_mock(),
+            Arc::new(RecordingActiveWorkerAccess {
+                fingerprint,
+                executions: executions.clone(),
+                complete_not_before: expire_before_completion.then_some(lease_until),
+                started: CancellationToken::new(),
+            }),
+            oplog_service,
+            Duration::from_secs(1000),
+            1,
+            lease_ttl,
+            1,
+            RetryConfig::max_attempts_3(),
+            1,
+            CancellationToken::new(),
+        );
+        let invocation_id = InvocationId(Uuid::new_v4());
+        let schedule_id = svc
+            .schedule(
+                tick,
+                ScheduledAction::WakeInvocation {
+                    owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("ack-clock")),
+                    idempotency_key: invocation_id,
+                    target_worker_fingerprint: fingerprint,
+                },
+            )
+            .await;
+        let claimed = storage
+            .claim_due(
+                tick,
+                &ShardAssignment::unexpiring(1, [ShardId::new(0)]),
+                1,
+                lease_ttl,
+            )
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert!(tick.timestamp_millis() < lease_until.timestamp_millis());
+
+        // Exercise acknowledgement independently of batch renewal: the tick precedes
+        // expiry, but a delivery completing after expiry must not delete the action.
+        svc.process_and_ack_claimed_action(
+            claimed.into_iter().next().unwrap(),
+            tick,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(*executions.lock().unwrap(), vec![invocation_id.to_string()]);
+        if expire_before_completion {
+            assert!(Utc::now().timestamp_millis() >= lease_until.timestamp_millis());
+            let remaining = claim_all(&storage).await;
+            assert_eq!(remaining.len(), 1);
+            assert_eq!(remaining[0].schedule_id, schedule_id);
+            assert_eq!(remaining[0].attempt_count, 2);
+        } else {
+            assert!(claim_all(&storage).await.is_empty());
+        }
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn batch_lease_renewal_covers_running_and_queued_actions() {
+    for scenario in ["same-agent", "distinct-agents", "archive"] {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent(scenario));
+        let fingerprint = AgentFingerprint::new();
+        let executions = Arc::new(Mutex::new(Vec::new()));
+        let oplog_service = create_oplog_service_with_presence(&owned_agent_id).await;
+        let tick = Utc::now();
+        let lease_ttl = Duration::from_millis(300);
+        let complete_not_before = tick + chrono::Duration::milliseconds(900);
+        let svc = SchedulerServiceDefault::new(
+            storage.clone(),
+            create_shard_service_mock(),
+            Arc::new(RecordingActiveWorkerAccess {
+                fingerprint,
+                executions: executions.clone(),
+                complete_not_before: Some(complete_not_before),
+                started: CancellationToken::new(),
+            }),
+            oplog_service,
+            Duration::from_secs(1000),
+            3,
+            lease_ttl,
+            2,
+            RetryConfig::max_attempts_3(),
+            1,
+            CancellationToken::new(),
+        );
+        let mut expected = Vec::new();
+        if scenario == "archive" {
+            svc.schedule(
+                tick - chrono::Duration::seconds(10),
+                ScheduledAction::ArchiveOplog {
+                    account_id: AccountId::new(),
+                    owned_agent_id,
+                    agent_mode: AgentMode::Durable,
+                    last_oplog_index: OplogIndex::from_u64(1),
+                    next_after: Duration::from_secs(3600),
+                },
+            )
+            .await;
+            expected.push("archive".to_string());
+        } else {
+            for index in 0..3 {
+                let invocation_id = InvocationId(Uuid::new_v4());
+                expected.push(invocation_id.to_string());
+                svc.schedule(
+                    tick - chrono::Duration::seconds(10) + chrono::Duration::milliseconds(index),
+                    ScheduledAction::WakeInvocation {
+                        owned_agent_id: if scenario == "same-agent" {
+                            owned_agent_id.clone()
+                        } else {
+                            OwnedAgentId::new(
+                                owned_agent_id.environment_id,
+                                &agent(&format!("agent-{index}")),
+                            )
+                        },
+                        idempotency_key: invocation_id,
+                        target_worker_fingerprint: fingerprint,
+                    },
+                )
+                .await;
+            }
+        }
+
+        let (processed, ()) = tokio::join!(svc.process(tick), async {
+            // Probe after the original lease has expired, while the first action is
+            // still running. Both serial and concurrency-limited queues must stay leased.
+            let probe_at = tick + chrono::Duration::milliseconds(600);
+            while Utc::now().timestamp_millis() < probe_at.timestamp_millis() {
+                tokio::task::yield_now().await;
+            }
+            assert!(Utc::now() < complete_not_before);
+            assert!(
+                storage
+                    .claim_due(
+                        Utc::now(),
+                        &ShardAssignment::unexpiring(1, [ShardId::new(0)]),
+                        10,
+                        lease_ttl,
+                    )
+                    .await
+                    .unwrap()
+                    .is_empty(),
+                "{scenario}: another executor reclaimed queued or running work"
+            );
+        });
+        processed.unwrap();
+        svc.process(Utc::now()).await.unwrap();
+        let mut actual = executions.lock().unwrap().clone();
+        if scenario == "distinct-agents" {
+            actual.sort();
+            expected.sort();
+        }
+        assert_eq!(
+            actual, expected,
+            "{scenario}: actions must run once, in agent order"
+        );
+        assert!(
+            claim_all(&storage).await.is_empty(),
+            "{scenario}: action was not acknowledged"
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn lease_renewal_refuses_expired_work_and_cancels_in_flight_archival() {
+    for expire_before_start in [false, true] {
+        let storage = Arc::new(RecordingSchedulerStorage {
+            // Accept preflight, then let the first heartbeat reach storage after expiry.
+            expire_renewal: AtomicUsize::new(if expire_before_start { 0 } else { 2 }),
+            ..Default::default()
+        });
+        let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("lost-lease"));
+        let executions = Arc::new(Mutex::new(Vec::new()));
+        let started = CancellationToken::new();
+        let svc = SchedulerServiceDefault::new(
+            storage.clone(),
+            create_shard_service_mock(),
+            Arc::new(RecordingActiveWorkerAccess {
+                fingerprint: AgentFingerprint::new(),
+                executions: executions.clone(),
+                // Cancellation must drop this future, not wait for completion.
+                complete_not_before: Some(Utc::now() + chrono::Duration::days(1)),
+                started: started.clone(),
+            }),
+            create_oplog_service_with_presence(&owned_agent_id).await,
+            Duration::from_secs(1000),
+            1,
+            Duration::from_millis(300),
+            1,
+            RetryConfig::max_attempts_3(),
+            1,
+            CancellationToken::new(),
+        );
+        let tick = Utc::now();
+        let id = svc
+            .schedule(
+                tick - chrono::Duration::seconds(10),
+                ScheduledAction::ArchiveOplog {
+                    account_id: AccountId::new(),
+                    owned_agent_id,
+                    agent_mode: AgentMode::Durable,
+                    last_oplog_index: OplogIndex::from_u64(1),
+                    next_after: Duration::from_secs(3600),
+                },
+            )
+            .await;
+        let claim_time = if expire_before_start {
+            tick - chrono::Duration::seconds(1)
+        } else {
+            tick
+        };
+        let claimed = storage
+            .inner
+            .claim_due(
+                claim_time,
+                &ShardAssignment::unexpiring(1, [ShardId::new(0)]),
+                1,
+                svc.lease_ttl,
+            )
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            svc.process_claimed_actions(claimed, tick),
+        )
+        .await
+        .expect("lost lease must stop the batch without waiting for archival")
+        .unwrap();
+        assert_eq!(started.is_cancelled(), !expire_before_start);
+        assert!(
+            executions.lock().unwrap().is_empty(),
+            "lost lease must prevent completion"
+        );
+        let remaining = claim_all(&storage.inner).await;
+        assert_eq!(
+            remaining.len(),
+            1,
+            "lost lease must leave the action unacknowledged"
+        );
+        assert_eq!(remaining[0].schedule_id, id);
+        assert_eq!(remaining[0].attempt_count, 2);
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn acknowledgement_error_is_not_discarded_when_renewal_fails_during_ack() {
+    let id = ScheduleId::fresh();
+    let storage = Arc::new(RecordingSchedulerStorage {
+        failed_ack_ids: Arc::new(Mutex::new(HashSet::from([id.id]))),
+        expire_renewal: AtomicUsize::new(2),
+        hold_ack_until_renewal_refused: true,
+        ..Default::default()
+    });
+    let fingerprint = AgentFingerprint::new();
+    let executions = Arc::new(Mutex::new(Vec::new()));
+    let svc = SchedulerServiceDefault::new(
+        storage.clone(),
+        create_shard_service_mock(),
+        Arc::new(RecordingActiveWorkerAccess {
+            fingerprint,
+            executions: executions.clone(),
+            complete_not_before: None,
+            started: CancellationToken::new(),
+        }),
+        create_oplog_service_mock().await,
+        Duration::from_secs(1000),
+        1,
+        Duration::from_millis(300),
+        1,
+        RetryConfig::max_attempts_3(),
+        1,
+        CancellationToken::new(),
+    );
+    let invocation_id = InvocationId(Uuid::new_v4());
+    svc.schedule_with_id(
+        id,
+        Utc::now() - chrono::Duration::seconds(10),
+        ScheduledAction::WakeInvocation {
+            owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("ack-lease-loss")),
+            idempotency_key: invocation_id,
+            target_worker_fingerprint: fingerprint,
+        },
+    )
+    .await;
+
+    let result = tokio::time::timeout(Duration::from_secs(3), svc.process(Utc::now()))
+        .await
+        .expect("renewal must continue while acknowledgement is pending");
+    assert!(storage.renewal_refused.is_cancelled());
+    assert!(
+        result.is_err(),
+        "lease loss must not hide an acknowledgement error"
+    );
+    assert_eq!(*executions.lock().unwrap(), vec![invocation_id.to_string()]);
+    assert_eq!(storage.ack_failures.load(Ordering::SeqCst), 1);
+    let remaining = claim_all(&storage.inner).await;
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].schedule_id, id);
+}
+
+async fn create_oplog_service_with_presence(
+    owned_agent_id: &OwnedAgentId,
+) -> Arc<dyn OplogService> {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    // Only existence is needed; the recording worker mock performs the archive operation.
+    indexed_storage
+        .append(
+            "test",
+            "seed_archive_presence",
+            "oplog",
+            IndexedStorageNamespace::OpLog {
+                owned_agent_id: owned_agent_id.clone(),
+                agent_mode: AgentMode::Durable,
+            },
+            &owned_agent_id.storage_key(),
+            1,
+            vec![],
+            None,
+        )
+        .await
+        .unwrap();
+    Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage,
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            1024,
+            32,
+            RetryConfig::default(),
+        )
+        .await,
+    )
+}
+
+#[test]
+async fn each_batch_claims_with_fresh_time_but_archive_followup_uses_original_tick() {
+    let storage = Arc::new(RecordingSchedulerStorage::default());
+    let fingerprint = AgentFingerprint::new();
+    let executions = Arc::new(Mutex::new(Vec::new()));
+    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("batch-clock"));
+    let oplog_service = create_oplog_service_with_presence(&owned_agent_id).await;
+    let svc = SchedulerServiceDefault::new(
+        storage.clone(),
+        create_shard_service_mock(),
+        Arc::new(RecordingActiveWorkerAccess {
+            fingerprint,
+            executions: executions.clone(),
+            complete_not_before: None,
+            started: CancellationToken::new(),
+        }),
+        oplog_service,
+        Duration::from_secs(1000),
+        1,
+        Duration::from_secs(30),
+        2,
+        RetryConfig::max_attempts_3(),
+        1,
+        CancellationToken::new(),
+    );
+    let tick = Utc::now() - chrono::Duration::hours(1);
+    let next_after = Duration::from_secs(7200);
+    let archive_action = ScheduledAction::ArchiveOplog {
+        account_id: AccountId::new(),
+        owned_agent_id: owned_agent_id.clone(),
+        agent_mode: AgentMode::Durable,
+        last_oplog_index: OplogIndex::from_u64(42),
+        next_after,
+    };
+    let second_id = ScheduleId::fresh();
+    *storage.insert_after_first_claim.lock().unwrap() = Some((second_id, archive_action.clone()));
+    let invocation_id = InvocationId(Uuid::new_v4());
+    let first_id = svc
+        .schedule(
+            tick,
+            ScheduledAction::WakeInvocation {
+                owned_agent_id,
+                idempotency_key: invocation_id,
+                target_worker_fingerprint: fingerprint,
+            },
+        )
+        .await;
+
+    svc.process(tick).await.unwrap();
+
+    let batches = storage.claimed_batches.lock().unwrap().clone();
+    let claim_times = storage.claim_times.lock().unwrap().clone();
+    assert_eq!(batches.len(), 2);
+    assert_eq!(batches[0].len(), 1);
+    assert_eq!(batches[1].len(), 1);
+    assert_eq!(batches[0][0].schedule_id, first_id);
+    assert_eq!(batches[1][0].schedule_id, second_id);
+    assert!(claim_times[0] > tick);
+    assert!(batches[1][0].due_at.timestamp_millis() > claim_times[0].timestamp_millis());
+    assert!(claim_times[1].timestamp_millis() >= batches[1][0].due_at.timestamp_millis());
+    assert_eq!(
+        *executions.lock().unwrap(),
+        vec![invocation_id.to_string(), "archive".to_string()]
+    );
+
+    let followup_due = tick + chrono::Duration::from_std(next_after).unwrap();
+    let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
+    // This probe is also well beyond both initial leases: neither original may remain.
+    assert!(
+        storage
+            .inner
+            .claim_due(
+                followup_due - chrono::Duration::milliseconds(1),
+                &assignment,
+                10,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let followup = storage
+        .inner
+        .claim_due(followup_due, &assignment, 10, Duration::from_secs(30))
+        .await
+        .unwrap();
+    assert_eq!(followup.len(), 1);
+    assert_eq!(
+        followup[0].due_at.timestamp_millis(),
+        followup_due.timestamp_millis()
+    );
+    assert_eq!(followup[0].action, archive_action);
+    assert_ne!(followup[0].schedule_id, first_id);
+    assert_ne!(followup[0].schedule_id, second_id);
+}
+
+#[test]
 async fn schedule_returns_uuid_backed_id_and_cancel_removes_entry() {
     let storage = Arc::new(InMemorySchedulerStorage::new());
     let promise_service = create_promise_service_mock();
@@ -1003,19 +1564,14 @@ async fn schedule_returns_uuid_backed_id_and_cancel_removes_entry() {
 
     let action = complete_promise_action(promise(agent("inst1"), 101));
     let schedule_id = svc
-        .schedule(DateTime::from_str("2023-07-17T10:05:00Z").unwrap(), action)
+        .schedule(Utc::now() - chrono::Duration::minutes(1), action)
         .await;
 
     svc.cancel(schedule_id).await;
 
     let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
     let claimed = storage
-        .claim_due(
-            DateTime::from_str("2023-07-17T10:06:00Z").unwrap(),
-            &assignment,
-            10,
-            Duration::from_secs(30),
-        )
+        .claim_due(Utc::now(), &assignment, 10, Duration::from_secs(30))
         .await
         .unwrap();
 
@@ -1030,7 +1586,7 @@ async fn schedule_with_id_is_idempotent() {
 
     let action = complete_promise_action(promise(agent("inst1"), 101));
     let schedule_id = ScheduleId::fresh();
-    let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+    let due_at = Utc::now() - chrono::Duration::minutes(1);
 
     assert_eq!(
         svc.schedule_with_id(schedule_id, due_at, action.clone())
@@ -1045,12 +1601,7 @@ async fn schedule_with_id_is_idempotent() {
 
     let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
     let claimed = storage
-        .claim_due(
-            DateTime::from_str("2023-07-17T10:06:00Z").unwrap(),
-            &assignment,
-            10,
-            Duration::from_secs(30),
-        )
+        .claim_due(Utc::now(), &assignment, 10, Duration::from_secs(30))
         .await
         .unwrap();
 
@@ -1066,14 +1617,12 @@ async fn process_completes_entries_older_than_previous_hour() {
 
     let promise_id = promise(agent("inst1"), 101);
     svc.schedule(
-        DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+        Utc::now() - chrono::Duration::hours(3),
         complete_promise_action(promise_id.clone()),
     )
     .await;
 
-    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
-        .await
-        .unwrap();
+    svc.process(Utc::now()).await.unwrap();
 
     let completed_promises = promise_service.all_completed().await;
     assert!(completed_promises.contains(&promise_id));
@@ -1112,7 +1661,7 @@ async fn scheduled_invoke_uses_active_worker_fingerprint_before_worker_service_l
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("inst1"));
     for target_worker_fingerprint in [fingerprint, AgentFingerprint::new()] {
         svc.schedule(
-            DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+            Utc::now() - chrono::Duration::hours(3),
             ScheduledAction::WakeInvocation {
                 owned_agent_id: owned_agent_id.clone(),
                 idempotency_key: InvocationId(Uuid::new_v4()),
@@ -1122,12 +1671,10 @@ async fn scheduled_invoke_uses_active_worker_fingerprint_before_worker_service_l
         .await;
     }
 
-    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
-        .await
-        .unwrap();
+    svc.process(Utc::now()).await.unwrap();
 
     assert_eq!(enqueue_count.load(Ordering::SeqCst), 1);
-    assert!(claim_all(&storage, "2023-07-17T10:16:00Z").await.is_empty());
+    assert!(claim_all(&storage).await.is_empty());
 }
 
 #[test]
@@ -1151,7 +1698,7 @@ async fn scheduled_invoke_delivery_failure_is_not_acknowledged() {
         CancellationToken::new(),
     );
     svc.schedule(
-        DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+        Utc::now() - chrono::Duration::hours(3),
         ScheduledAction::WakeInvocation {
             owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("delivery-failure")),
             idempotency_key: InvocationId(Uuid::new_v4()),
@@ -1160,12 +1707,10 @@ async fn scheduled_invoke_delivery_failure_is_not_acknowledged() {
     )
     .await;
 
-    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
-        .await
-        .unwrap();
+    svc.process(Utc::now()).await.unwrap();
 
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
-    assert_eq!(claim_all(&storage, "2023-07-17T10:16:00Z").await.len(), 1);
+    assert_eq!(claim_all(&storage).await.len(), 1);
 }
 
 #[test]
@@ -1193,7 +1738,7 @@ async fn scheduled_stream_expiry_preserves_all_fences() {
     let fingerprint = AgentFingerprint::new();
     let session_key = test_invocation_id("internal-key".into());
     svc.schedule(
-        DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+        Utc::now() - chrono::Duration::hours(3),
         ScheduledAction::ExpireDurableStreamSession {
             owned_agent_id: owned_agent_id.clone(),
             target_agent_fingerprint: fingerprint,
@@ -1204,9 +1749,7 @@ async fn scheduled_stream_expiry_preserves_all_fences() {
     )
     .await;
 
-    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
-        .await
-        .unwrap();
+    svc.process(Utc::now()).await.unwrap();
 
     assert_eq!(
         deliveries.lock().unwrap().as_slice(),
@@ -1236,7 +1779,7 @@ async fn failed_resume_is_not_acknowledged() {
 
     let schedule_id = svc
         .schedule(
-            DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+            Utc::now() - chrono::Duration::hours(3),
             ScheduledAction::Resume {
                 agent_created_by: AccountId::new(),
                 owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("inst1")),
@@ -1245,12 +1788,10 @@ async fn failed_resume_is_not_acknowledged() {
         )
         .await;
 
-    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
-        .await
-        .unwrap();
+    svc.process(Utc::now()).await.unwrap();
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
 
-    let claimed = claim_all(&storage, "2023-07-17T10:16:00Z").await;
+    let claimed = claim_all(&storage).await;
     assert_eq!(claimed.len(), 1);
     assert_eq!(claimed[0].schedule_id, schedule_id);
 }
@@ -1283,7 +1824,7 @@ async fn failed_archive_existence_check_is_not_acknowledged() {
 
     let schedule_id = svc
         .schedule(
-            DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+            Utc::now() - chrono::Duration::hours(3),
             ScheduledAction::ArchiveOplog {
                 account_id: AccountId::new(),
                 owned_agent_id,
@@ -1294,11 +1835,9 @@ async fn failed_archive_existence_check_is_not_acknowledged() {
         )
         .await;
 
-    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
-        .await
-        .unwrap();
+    svc.process(Utc::now()).await.unwrap();
 
-    let claimed = claim_all(&storage, "2023-07-17T10:16:00Z").await;
+    let claimed = claim_all(&storage).await;
     assert_eq!(claimed.len(), 1);
     assert_eq!(claimed[0].schedule_id, schedule_id);
 }
@@ -1312,7 +1851,7 @@ async fn successful_resume_is_acknowledged() {
         create_scheduler_with_worker_access(storage.clone(), create_worker_access_mock()).await;
 
     svc.schedule(
-        DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+        Utc::now() - chrono::Duration::hours(3),
         ScheduledAction::Resume {
             agent_created_by: AccountId::new(),
             owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("inst1")),
@@ -1321,11 +1860,9 @@ async fn successful_resume_is_acknowledged() {
     )
     .await;
 
-    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
-        .await
-        .unwrap();
+    svc.process(Utc::now()).await.unwrap();
 
-    assert!(claim_all(&storage, "2023-07-17T10:16:00Z").await.is_empty());
+    assert!(claim_all(&storage).await.is_empty());
 }
 
 /// Completing the promise is only half of the action: an agent that was not woken is still
@@ -1345,18 +1882,16 @@ async fn failed_activation_after_promise_completion_is_not_acknowledged() {
 
     let promise_id = promise(agent("inst1"), 101);
     svc.schedule(
-        DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+        Utc::now() - chrono::Duration::hours(3),
         complete_promise_action(promise_id.clone()),
     )
     .await;
 
-    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
-        .await
-        .unwrap();
+    svc.process(Utc::now()).await.unwrap();
 
     assert!(promise_service.all_completed().await.contains(&promise_id));
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
-    assert_eq!(claim_all(&storage, "2023-07-17T10:16:00Z").await.len(), 1);
+    assert_eq!(claim_all(&storage).await.len(), 1);
 }
 
 #[test]
@@ -1384,7 +1919,7 @@ async fn scheduled_actions_for_distinct_agents_are_processed_concurrently() {
         CancellationToken::new(),
     );
 
-    let due_at = DateTime::from_str("2023-07-17T07:05:00Z").unwrap();
+    let due_at = Utc::now() - chrono::Duration::hours(3);
     for name in ["agent-1", "agent-2"] {
         svc.schedule(
             due_at,
@@ -1397,9 +1932,7 @@ async fn scheduled_actions_for_distinct_agents_are_processed_concurrently() {
         .await;
     }
 
-    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
-        .await
-        .unwrap();
+    svc.process(Utc::now()).await.unwrap();
 
     assert_eq!(max_in_flight.load(Ordering::SeqCst), 2);
 }
@@ -1430,7 +1963,7 @@ async fn scheduled_actions_for_the_same_agent_are_processed_serially() {
     );
 
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("agent-1"));
-    let due_at = DateTime::from_str("2023-07-17T07:05:00Z").unwrap();
+    let due_at = Utc::now() - chrono::Duration::hours(3);
     for _ in 0..2 {
         svc.schedule(
             due_at,
@@ -1443,9 +1976,7 @@ async fn scheduled_actions_for_the_same_agent_are_processed_serially() {
         .await;
     }
 
-    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
-        .await
-        .unwrap();
+    svc.process(Utc::now()).await.unwrap();
 
     assert_eq!(max_in_flight.load(Ordering::SeqCst), 1);
 }
@@ -1476,6 +2007,7 @@ proptest! {
                 claimed_batches: claimed_batches.clone(),
                 ack_failures: AtomicUsize::new(0),
                 claims_after_ack_failure: AtomicUsize::new(0),
+                ..Default::default()
             });
             let executions = Arc::new(Mutex::new(Vec::new()));
             let fingerprint = AgentFingerprint::new();
@@ -1483,6 +2015,8 @@ proptest! {
                 Arc::new(RecordingActiveWorkerAccess {
                     fingerprint,
                     executions: executions.clone(),
+                    complete_not_before: None,
+                    started: CancellationToken::new(),
                 });
             let svc = SchedulerServiceDefault::new(
                 storage.clone(),
@@ -1498,7 +2032,7 @@ proptest! {
                 CancellationToken::new(),
             );
 
-            let due_at = DateTime::from_str("2023-07-17T07:05:00Z").unwrap();
+            let due_at = Utc::now() - chrono::Duration::hours(3);
             let mut scheduled = HashMap::new();
             let mut schedule_ids = Vec::new();
             for (agent_index, action_count) in actions_per_agent.iter().enumerate() {
@@ -1534,7 +2068,7 @@ proptest! {
             }
 
             let result = svc
-                .process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+                .process(Utc::now())
                 .await;
             let ack_failures = storage.ack_failures.load(Ordering::SeqCst);
             prop_assert_eq!(result.is_err(), ack_failures > 0);
@@ -1639,7 +2173,7 @@ async fn terminal_scheduled_ephemeral_failure_is_acknowledged_without_redelivery
             attempts: enqueue_count.clone(),
         });
     let svc = SchedulerServiceDefault::new(
-        storage,
+        storage.clone(),
         create_shard_service_mock(),
         worker_access,
         create_oplog_service_mock().await,
@@ -1653,7 +2187,7 @@ async fn terminal_scheduled_ephemeral_failure_is_acknowledged_without_redelivery
     );
 
     svc.schedule(
-        DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+        Utc::now() - chrono::Duration::hours(3),
         ScheduledAction::WakeInvocation {
             owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("ephemeral")),
             idempotency_key: InvocationId(Uuid::new_v4()),
@@ -1662,12 +2196,9 @@ async fn terminal_scheduled_ephemeral_failure_is_acknowledged_without_redelivery
     )
     .await;
 
-    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
-        .await
-        .unwrap();
-    svc.process(DateTime::from_str("2023-07-17T10:16:00Z").unwrap())
-        .await
-        .unwrap();
+    svc.process(Utc::now()).await.unwrap();
+    assert!(claim_all(&storage).await.is_empty());
+    svc.process(Utc::now()).await.unwrap();
 
     assert_eq!(enqueue_count.load(Ordering::SeqCst), 1);
 }
@@ -1683,7 +2214,7 @@ async fn transient_invalid_request_does_not_drop_scheduled_ephemeral_invocation(
             attempts: enqueue_count.clone(),
         });
     let svc = SchedulerServiceDefault::new(
-        storage,
+        storage.clone(),
         create_shard_service_mock(),
         worker_access,
         create_oplog_service_mock().await,
@@ -1697,7 +2228,7 @@ async fn transient_invalid_request_does_not_drop_scheduled_ephemeral_invocation(
     );
 
     svc.schedule(
-        DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+        Utc::now() - chrono::Duration::hours(3),
         ScheduledAction::WakeInvocation {
             owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("ephemeral")),
             idempotency_key: InvocationId(Uuid::new_v4()),
@@ -1706,14 +2237,12 @@ async fn transient_invalid_request_does_not_drop_scheduled_ephemeral_invocation(
     )
     .await;
 
-    svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
-        .await
-        .unwrap();
-    svc.process(DateTime::from_str("2023-07-17T10:16:00Z").unwrap())
-        .await
-        .unwrap();
+    svc.process(Utc::now()).await.unwrap();
+    assert_eq!(enqueue_count.load(Ordering::SeqCst), 1);
+    process_retry(&svc, &storage).await;
 
     assert_eq!(enqueue_count.load(Ordering::SeqCst), 2);
+    assert!(claim_all(&storage).await.is_empty());
 }
 
 #[test]
@@ -1799,13 +2328,21 @@ async fn stale_ack_does_not_delete_reclaimed_entry() {
 
     assert!(
         !storage
-            .ack(&first.schedule_id, first.lease_owner)
+            .ack(
+                &first.schedule_id,
+                first.lease_owner,
+                DateTime::from_str("2023-07-17T10:06:31Z").unwrap()
+            )
             .await
             .unwrap()
     );
     assert!(
         storage
-            .ack(&second.schedule_id, second.lease_owner)
+            .ack(
+                &second.schedule_id,
+                second.lease_owner,
+                DateTime::from_str("2023-07-17T10:06:31Z").unwrap()
+            )
             .await
             .unwrap()
     );
@@ -1845,6 +2382,7 @@ async fn lease_extension_prevents_reclaim_until_extended_deadline() {
                 &claimed.schedule_id,
                 claimed.lease_owner,
                 DateTime::from_str("2023-07-17T10:07:00Z").unwrap(),
+                DateTime::from_str("2023-07-17T10:06:15Z").unwrap(),
             )
             .await
             .unwrap()
@@ -1940,7 +2478,7 @@ async fn due_backlog_includes_leased_actions_until_acknowledged() {
 
     assert!(
         storage
-            .ack(&schedule_id, claimed[0].lease_owner)
+            .ack(&schedule_id, claimed[0].lease_owner, now)
             .await
             .unwrap()
     );
@@ -2002,13 +2540,11 @@ async fn all_exact_deliveries_acknowledge_missing_stale_and_matching_targets() {
             AgentFingerprint::new()
         };
         for action in exact_actions(&owned_agent_id, expected) {
-            svc.schedule(DateTime::from_str("2023-07-17T07:05:00Z").unwrap(), action)
+            svc.schedule(Utc::now() - chrono::Duration::hours(3), action)
                 .await;
         }
-        svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
-            .await
-            .unwrap();
-        assert!(claim_all(&storage, "2023-07-17T10:16:00Z").await.is_empty());
+        svc.process(Utc::now()).await.unwrap();
+        assert!(claim_all(&storage).await.is_empty());
         if !missing && matches {
             assert_eq!(count.load(Ordering::SeqCst), 3);
             let mut delivered = deliveries.lock().unwrap().clone();
@@ -2052,7 +2588,7 @@ async fn all_exact_deliveries_retry_failures_and_acknowledge_successful_retry() 
                 deliveries: deliveries.clone(),
             });
             let svc = create_scheduler_with_worker_access(storage.clone(), worker_access).await;
-            let now = DateTime::from_str("2023-07-17T10:15:00Z").unwrap();
+            let now = Utc::now();
             let id = svc.schedule(now, action.clone()).await;
             svc.process(now).await.unwrap();
             assert_eq!(attempts.load(Ordering::SeqCst), 1);
@@ -2069,12 +2605,10 @@ async fn all_exact_deliveries_retry_failures_and_acknowledge_successful_retry() 
                     fail_before_completion
                 );
             }
-            svc.process(now + chrono::Duration::seconds(60))
-                .await
-                .unwrap();
+            process_retry(&svc, &storage).await;
             assert_eq!(attempts.load(Ordering::SeqCst), 2);
             assert!(
-                claim_all(&storage, "2023-07-17T10:17:00Z").await.is_empty(),
+                claim_all(&storage).await.is_empty(),
                 "retry not acknowledged for {id}"
             );
             assert_eq!(
@@ -2095,4 +2629,146 @@ async fn all_exact_deliveries_retry_failures_and_acknowledge_successful_retry() 
 
 fn test_invocation_id(value: String) -> InvocationId {
     InvocationId(Uuid::new_v5(&Uuid::NAMESPACE_OID, value.as_bytes()))
+}
+
+mod lease_renewal_isolation {
+    use super::*;
+    use test_r::test;
+
+    #[derive(Debug)]
+    struct SlowRenewalStorage {
+        inner: InMemorySchedulerStorage,
+        slow_id: ScheduleId,
+        slow_calls: AtomicUsize,
+        delay: Duration,
+    }
+
+    #[async_trait]
+    #[golem_async_trait::region_simple]
+    impl SchedulerStorage for SlowRenewalStorage {
+        async fn insert(
+            &self,
+            id: ScheduleId,
+            due: DateTime<Utc>,
+            shard: ShardId,
+            action: &[u8],
+        ) -> Result<(), SchedulerStorageError> {
+            self.inner.insert(id, due, shard, action).await
+        }
+
+        async fn cancel(&self, id: &ScheduleId) -> Result<(), SchedulerStorageError> {
+            self.inner.cancel(id).await
+        }
+
+        async fn claim_due(
+            &self,
+            now: DateTime<Utc>,
+            assignment: &ShardAssignment,
+            limit: u32,
+            ttl: Duration,
+        ) -> Result<Vec<ClaimedScheduledAction>, SchedulerStorageError> {
+            self.inner.claim_due(now, assignment, limit, ttl).await
+        }
+
+        async fn count_due(
+            &self,
+            now: DateTime<Utc>,
+            assignment: &ShardAssignment,
+        ) -> Result<u64, SchedulerStorageError> {
+            self.inner.count_due(now, assignment).await
+        }
+
+        async fn ack(
+            &self,
+            id: &ScheduleId,
+            owner: Uuid,
+            now: DateTime<Utc>,
+        ) -> Result<bool, SchedulerStorageError> {
+            self.inner.ack(id, owner, now).await
+        }
+
+        async fn extend_lease(
+            &self,
+            id: &ScheduleId,
+            owner: Uuid,
+            until: DateTime<Utc>,
+            now: DateTime<Utc>,
+        ) -> Result<bool, SchedulerStorageError> {
+            if *id == self.slow_id && self.slow_calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                // Only one action's first heartbeat waits. The wait is shorter than
+                // the 600ms lease, and every other storage operation is immediate.
+                tokio::time::sleep(self.delay).await;
+            }
+            self.inner.extend_lease(id, owner, until, now).await
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn one_slow_renewal_must_not_expire_healthy_sibling() {
+        assert_healthy_sibling_completes(Duration::from_millis(500)).await;
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn control_immediate_renewals_keep_healthy_sibling_alive() {
+        assert_healthy_sibling_completes(Duration::ZERO).await;
+    }
+
+    async fn assert_healthy_sibling_completes(delay: Duration) {
+        let slow_id = ScheduleId::fresh();
+        let storage = Arc::new(SlowRenewalStorage {
+            inner: InMemorySchedulerStorage::new(),
+            slow_id,
+            slow_calls: AtomicUsize::new(0),
+            delay,
+        });
+        let executions = Arc::new(Mutex::new(Vec::new()));
+        let now = Utc::now();
+        let fingerprint = AgentFingerprint::new();
+        let svc = SchedulerServiceDefault::new(
+            storage.clone(),
+            create_shard_service_mock(),
+            Arc::new(RecordingActiveWorkerAccess {
+                fingerprint,
+                executions: executions.clone(),
+                complete_not_before: Some(now + chrono::Duration::milliseconds(1500)),
+                started: CancellationToken::new(),
+            }),
+            create_oplog_service_mock().await,
+            Duration::from_secs(1000),
+            2,
+            Duration::from_millis(600),
+            1,
+            RetryConfig::max_attempts_3(),
+            2,
+            CancellationToken::new(),
+        );
+        let healthy_invocation = InvocationId(Uuid::new_v4());
+        for (id, name, invocation) in [
+            (slow_id, "slow-renewal", InvocationId(Uuid::new_v4())),
+            (ScheduleId::fresh(), "healthy-renewal", healthy_invocation),
+        ] {
+            svc.schedule_with_id(
+                id,
+                now - chrono::Duration::seconds(1),
+                ScheduledAction::WakeInvocation {
+                    owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent(name)),
+                    idempotency_key: invocation,
+                    target_worker_fingerprint: fingerprint,
+                },
+            )
+            .await;
+        }
+
+        svc.process(now).await.unwrap();
+
+        assert!(
+            executions
+                .lock()
+                .unwrap()
+                .contains(&healthy_invocation.to_string()),
+            "a sibling with immediate renewals lost its lease because another renewal waited less than one lease TTL"
+        );
+    }
 }

@@ -1464,6 +1464,7 @@ fn hydrated_invocation_result_cache_is_bounded() {
         first,
         InvocationResult::Lazy {
             oplog_idx: OplogIndex::from_u64(2),
+            background_failure: None,
         },
         0,
         OplogIndex::from_u64(2),
@@ -1473,6 +1474,7 @@ fn hydrated_invocation_result_cache_is_bounded() {
         second,
         InvocationResult::Lazy {
             oplog_idx: OplogIndex::from_u64(4),
+            background_failure: None,
         },
         0,
         OplogIndex::from_u64(4),
@@ -1504,6 +1506,7 @@ fn hydrated_invocation_results_share_payloads_but_reject_deleted_branches() {
             idempotency_key: Some(key),
             oplog_index: Some(index),
             agent_fingerprint: None,
+            background_failure: None,
         }),
     });
     let mut cache = HydratedInvocationResultCache::new(1);
@@ -1706,7 +1709,16 @@ fn start_attempt_exact_duplicate_matches_and_mismatch_does_not() {
 fn status_with_current_key(status: AgentStatus, key: &InvocationId) -> AgentStatusRecord {
     AgentStatusRecord {
         status,
-        current_idempotency_key: Some(*key),
+        running: Some(golem_common::model::RunningInvocation {
+            key: *key,
+            request: golem_common::model::InvocationRequestRef {
+                index: OplogIndex::INITIAL,
+                accepted_at: Timestamp::from(0),
+                operation: None,
+            },
+            last_change: OplogIndex::INITIAL,
+            last_change_at: Timestamp::from(0),
+        }),
         ..AgentStatusRecord::default()
     }
 }
@@ -1847,6 +1859,21 @@ fn reconstructed_permission_denial_keeps_its_executor_error_type() {
 }
 
 #[test]
+fn cancelled_result_is_a_typed_cancellation_and_not_an_invalid_request() {
+    let key = InvocationId(Uuid::new_v4());
+    let lookup = lookup_result_from_cached_result(
+        &AgentStatusRecord::default(),
+        &key,
+        InvocationResult::Cancelled,
+    );
+
+    assert!(matches!(
+        lookup,
+        LookupResult::Complete(Err(WorkerExecutorError::InvocationCancelled))
+    ));
+}
+
+#[test]
 fn invocation_rejection_fails_only_the_rejected_pending_key() {
     let rejected = InvocationId(Uuid::new_v4());
     let still_pending = InvocationId(Uuid::new_v4());
@@ -1857,6 +1884,7 @@ fn invocation_rejection_fails_only_the_rejected_pending_key() {
             oplog_index: OplogIndex::from_u64(2),
             idempotency_key: Some(still_pending),
             manual_update_target_revision: None,
+            operation: None,
         }],
         ..AgentStatusRecord::default()
     };
@@ -1868,6 +1896,34 @@ fn invocation_rejection_fails_only_the_rejected_pending_key() {
     assert_eq!(
         invocation_keys_to_fail(&status, None, true),
         vec![still_pending]
+    );
+}
+
+#[test]
+fn giving_up_after_a_recorded_result_fails_only_the_other_invocations() {
+    let current = InvocationId(Uuid::new_v4());
+    let queued = InvocationId(Uuid::new_v4());
+    let status = AgentStatusRecord {
+        pending_invocations: vec![PendingInvocationRef {
+            timestamp: Timestamp::now_utc(),
+            not_before: None,
+            oplog_index: OplogIndex::from_u64(2),
+            idempotency_key: Some(queued),
+            manual_update_target_revision: None,
+            operation: None,
+        }],
+        ..status_with_current_key(AgentStatus::Running, &current)
+    };
+
+    assert_eq!(
+        invocation_keys_failed_on_giving_up(&status, Some(&current), true),
+        vec![queued],
+        "the invocation that recorded its result keeps it"
+    );
+    assert_eq!(
+        invocation_keys_failed_on_giving_up(&status, Some(&current), false),
+        vec![current, queued],
+        "without a recorded result the current invocation fails first"
     );
 }
 
@@ -2350,6 +2406,7 @@ fn create_intent_records_the_kind_and_only_the_key_that_identifies_the_create() 
     let invocation = |owner: &NewOwner| CreateIntent::Invocation {
         owner: owner.clone(),
         idempotency_key: Some(key.clone()),
+        invocation: None,
     };
     let create = |owner: &NewOwner, exclusive| CreateIntent::Create {
         owner: owner.clone(),
@@ -2396,6 +2453,7 @@ fn pending(key: &InvocationId, not_before: Option<Timestamp>) -> PendingInvocati
         oplog_index: OplogIndex::from_u64(2),
         idempotency_key: Some(*key),
         manual_update_target_revision: None,
+        operation: None,
     }
 }
 
