@@ -13,10 +13,14 @@
 // limitations under the License.
 
 pub mod audit;
+mod compatibility;
+#[cfg(test)]
+mod compatibility_tests;
 pub mod surface;
-
 #[cfg(test)]
 mod tests;
+
+pub use compatibility::{CompatibilityAuthorizer, decide_with_todays_checks};
 
 use async_trait::async_trait;
 use axum::http::header;

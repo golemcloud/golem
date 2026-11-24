@@ -423,14 +423,16 @@ impl PermissionShareService {
             .collect()
     }
 
-    pub async fn target_account_email(
+    /// The account that a permission share targets: its ID and email.
+    pub async fn target_account(
         &self,
         permission_share_id: PermissionShareId,
-    ) -> Result<AccountEmail, PermissionShareError> {
-        Ok(self
-            .get_record_by_id(permission_share_id)
-            .await?
-            .target_account_email())
+    ) -> Result<(AccountId, AccountEmail), PermissionShareError> {
+        let record = self.get_record_by_id(permission_share_id).await?;
+        Ok((
+            AccountId(record.share.target_account_id),
+            record.target_account_email(),
+        ))
     }
 
     async fn get_account(

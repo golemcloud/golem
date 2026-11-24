@@ -22,7 +22,9 @@ use crate::repo::model::deployment::{
 };
 use crate::services::agent_secret::{AgentSecretError, AgentSecretService};
 use crate::services::component::{ComponentError, ComponentService};
+use crate::services::decision::{Decisions, environment_target};
 use crate::services::deployment::deploy_validation_error::format_validation_errors;
+use crate::services::deployment::environment_check;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use crate::services::environment_tool_grant::{
     EnvironmentToolGrantError, EnvironmentToolGrantService,
@@ -48,6 +50,7 @@ use futures::TryFutureExt;
 use golem_common::model::agent::schema_evolution::{
     SchemaEvolutionError, constructor_key_schema, validate_constructor_evolution,
 };
+use golem_common::model::authority::{CatalogOperation, Operation, Resource};
 use golem_common::model::card::EnvironmentVerb;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
 use golem_common::model::diff;
@@ -180,6 +183,7 @@ pub struct DeploymentWriteService {
     native_tool_catalog: Arc<NativeToolCatalog>,
     mcp_import_resolver: Arc<McpImportResolver>,
     stream_limits: crate::config::DurableStreamRouteLimits,
+    decisions: Decisions,
 }
 
 impl DeploymentWriteService {
@@ -201,6 +205,7 @@ impl DeploymentWriteService {
         native_tool_catalog: Arc<NativeToolCatalog>,
         mcp_import_resolver: Arc<McpImportResolver>,
         stream_limits: crate::config::DurableStreamRouteLimits,
+        decisions: Decisions,
     ) -> DeploymentWriteService {
         Self {
             environment_service,
@@ -220,6 +225,7 @@ impl DeploymentWriteService {
             native_tool_catalog,
             mcp_import_resolver,
             stream_limits,
+            decisions,
         }
     }
 
@@ -254,7 +260,21 @@ impl DeploymentWriteService {
             DeploymentWriteError::ParentEnvironmentNotFound(environment_id),
         )?;
 
-        authorize_environment_permission(auth, &environment, EnvironmentVerb::Deploy)?;
+        self.decisions
+            .decide(
+                auth,
+                Operation::single(
+                    CatalogOperation::DeployEnvironment,
+                    Resource::None,
+                    environment_target(
+                        environment.owner_account_id,
+                        environment.application_id,
+                        environment.id,
+                    ),
+                ),
+                environment_check(&environment, EnvironmentVerb::Deploy),
+            )
+            .await?;
 
         // The deploying account installs the plugins of each remote tool's and remote tool
         // middleware's provision, whatever installer the request names.

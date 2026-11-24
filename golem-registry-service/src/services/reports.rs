@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use crate::repo::report::ReportRepo;
+use crate::services::decision::{Decisions, account_target};
+use golem_common::model::authority::{CatalogOperation, Operation, Resource};
 use golem_common::model::card::owner::EmptyOwnerPattern;
 use golem_common::model::card::{
     ClassPermissionTarget, PermissionTarget, SystemResourcePattern, SystemVerb,
@@ -45,11 +47,33 @@ error_forwarding!(ReportsError, RepoError);
 
 pub struct ReportsService {
     reports_repo: Arc<dyn ReportRepo>,
+    decisions: Decisions,
 }
 
 impl ReportsService {
-    pub fn new(reports_repo: Arc<dyn ReportRepo>) -> Self {
-        Self { reports_repo }
+    pub fn new(reports_repo: Arc<dyn ReportRepo>, decisions: Decisions) -> Self {
+        Self {
+            reports_repo,
+            decisions,
+        }
+    }
+
+    /// Decides a report for the caller's own account, from today's system check.
+    async fn authorize_report(
+        &self,
+        auth: &AuthCtx,
+        operation: CatalogOperation,
+        verb: SystemVerb,
+    ) -> Result<(), AuthorizationError> {
+        let target = account_target(auth.account_id());
+        self.decisions
+            .decide(
+                auth,
+                Operation::single(operation, Resource::None, target),
+                system_permission_target(verb),
+            )
+            .await
+            .map(|_| ())
     }
 }
 
@@ -58,7 +82,12 @@ impl ReportsService {
         &self,
         auth: &AuthCtx,
     ) -> Result<Vec<AccountSummaryReport>, ReportsError> {
-        authorize_report_permission(auth, SystemVerb::ViewAccountSummariesReport)?;
+        self.authorize_report(
+            auth,
+            CatalogOperation::ViewAccountSummariesReport,
+            SystemVerb::ViewAccountSummariesReport,
+        )
+        .await?;
 
         let summaries = self
             .reports_repo
@@ -75,16 +104,17 @@ impl ReportsService {
         &self,
         auth: &AuthCtx,
     ) -> Result<AccountCountsReport, ReportsError> {
-        authorize_report_permission(auth, SystemVerb::ViewAccountCountsReport)?;
+        self.authorize_report(
+            auth,
+            CatalogOperation::ViewAccountCountsReport,
+            SystemVerb::ViewAccountCountsReport,
+        )
+        .await?;
 
         let account_counts = self.reports_repo.get_account_counts().await?.into();
 
         Ok(account_counts)
     }
-}
-
-fn authorize_report_permission(auth: &AuthCtx, verb: SystemVerb) -> Result<(), AuthorizationError> {
-    auth.authorize_permission(&system_permission_target(verb))
 }
 
 fn system_permission_target(verb: SystemVerb) -> PermissionTarget {

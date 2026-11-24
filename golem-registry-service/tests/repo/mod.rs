@@ -263,6 +263,9 @@ impl Deps {
             Arc::new(PlanService::new(Arc::new(DbPlanRepo::new(pool)))),
             golem_common::model::plan::PlanId(self.test_plan_id()),
             self.test_registry_change_notifier(),
+            golem_registry_service::services::decision::Decisions::new(
+                "https://golem.test".parse().unwrap(),
+            ),
         ))
     }
 

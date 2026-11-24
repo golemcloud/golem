@@ -235,6 +235,7 @@ impl Services {
             config.golem_issuer.clone(),
         )
         .await?;
+        let decisions = crate::services::decision::Decisions::new(golem_issuer.clone());
 
         let blob_storage = make_blob_storage(&config.blob_storage).await?;
 
@@ -273,6 +274,7 @@ impl Services {
             plan_service.clone(),
             default_plan_id,
             registry_change_notifier.clone(),
+            decisions.clone(),
         ));
         account_service
             .create_initial_accounts(&config.initial_accounts)
@@ -301,6 +303,7 @@ impl Services {
             repos.token_repo,
             account_service.clone(),
             registry_change_notifier.clone(),
+            decisions.clone(),
         ));
         {
             let initial_tokens = config
@@ -335,6 +338,7 @@ impl Services {
             account_service.clone(),
             account_usage_service.clone(),
             registry_change_notifier.clone(),
+            decisions.clone(),
         ));
 
         let environment_service = Arc::new(EnvironmentService::new(
@@ -344,6 +348,7 @@ impl Services {
             repos.plugin_repo.clone(),
             builtin_plugin_owner_account_id,
             registry_change_notifier.clone(),
+            decisions.clone(),
         ));
 
         let permission_share_service = Arc::new(PermissionShareService::new(
@@ -381,6 +386,7 @@ impl Services {
             component_service.clone(),
             environment_service.clone(),
             registry_change_notifier.clone(),
+            decisions.clone(),
         ));
 
         let plugin_registration_service = Arc::new(PluginRegistrationService::new(
@@ -444,7 +450,10 @@ impl Services {
             repos.oauth2_webflow_state_repo.clone(),
         )?;
 
-        let reports_service = Arc::new(ReportsService::new(repos.reports_repo.clone()));
+        let reports_service = Arc::new(ReportsService::new(
+            repos.reports_repo.clone(),
+            decisions.clone(),
+        ));
 
         let component_resolver_service = Arc::new(ComponentResolverService::new(
             account_service.clone(),
@@ -458,6 +467,7 @@ impl Services {
             environment_service.clone(),
             registry_change_notifier.clone(),
             config.domain_registration.clone(),
+            decisions.clone(),
         )?);
 
         let security_scheme_service = Arc::new(SecuritySchemeService::new(
@@ -508,6 +518,7 @@ impl Services {
             repos.agent_secret_repo.clone(),
             environment_service.clone(),
             registry_change_notifier.clone(),
+            decisions.clone(),
         ));
 
         let retry_policy_service = Arc::new(RetryPolicyService::new(
@@ -534,6 +545,7 @@ impl Services {
             native_tool_catalog.clone(),
             mcp_import_resolver.clone(),
             config.durable_stream_routes.clone(),
+            decisions.clone(),
         ));
 
         let deployed_routes_service =

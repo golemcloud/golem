@@ -21,6 +21,7 @@ use crate::repo::model::audit::ImmutableAuditFields;
 use crate::repo::model::domain_registration::{
     DomainRegistrationAuthRecord, DomainRegistrationRecord, DomainRegistrationRepoError,
 };
+use crate::services::decision::{Decisions, environment_target};
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
@@ -30,6 +31,7 @@ pub use config::{
 pub use errors::DomainRegistrationError;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::application::ApplicationName;
+use golem_common::model::authority::{CatalogOperation, Operation, Resource};
 use golem_common::model::card::owner::EnvironmentOwnerPattern;
 use golem_common::model::card::{
     ClassPermissionTarget, DomainLabel, DomainNamePattern,
@@ -51,6 +53,7 @@ pub struct DomainRegistrationService {
     registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     domain_matcher: DomainMatcher,
     reserved_domains: ReservedDomains,
+    decisions: Decisions,
 }
 
 impl DomainRegistrationService {
@@ -59,6 +62,7 @@ impl DomainRegistrationService {
         environment_service: Arc<EnvironmentService>,
         registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
         config: DomainRegistrationConfig,
+        decisions: Decisions,
     ) -> anyhow::Result<Self> {
         Ok(Self {
             domain_registration_repo,
@@ -66,6 +70,7 @@ impl DomainRegistrationService {
             registry_change_notifier,
             domain_matcher: DomainMatcher::new(&config.available_domains)?,
             reserved_domains: ReservedDomains::new(&config.reserved_domains)?,
+            decisions,
         })
     }
 
@@ -86,12 +91,25 @@ impl DomainRegistrationService {
                 other => other.into(),
             })?;
 
-        authorize_domain_registration_permission(
-            auth,
-            &environment,
-            Some(&data.domain),
-            EnvironmentDomainRegistrationVerb::Create,
-        )?;
+        self.decisions
+            .decide(
+                auth,
+                Operation::single(
+                    CatalogOperation::RegisterHost,
+                    Resource::Name(data.domain.0.clone()),
+                    environment_target(
+                        environment.owner_account_id,
+                        environment.application_id,
+                        environment.id,
+                    ),
+                ),
+                domain_registration_check(
+                    environment_owner(&environment),
+                    Some(&data.domain),
+                    EnvironmentDomainRegistrationVerb::Create,
+                ),
+            )
+            .await?;
 
         let canonical = data
             .domain
@@ -455,14 +473,18 @@ fn authorize_domain_registration_permission(
 ) -> Result<(), AuthorizationError> {
     authorize_domain_registration_permission_for_owner(
         auth,
-        EnvironmentOwnerPattern::Environment {
-            account: environment.owner_account_email.clone(),
-            application: environment.application_name.clone(),
-            environment: environment.name.clone(),
-        },
+        environment_owner(environment),
         domain,
         verb,
     )
+}
+
+fn environment_owner(environment: &Environment) -> EnvironmentOwnerPattern {
+    EnvironmentOwnerPattern::Environment {
+        account: environment.owner_account_email.clone(),
+        application: environment.application_name.clone(),
+        environment: environment.name.clone(),
+    }
 }
 
 fn authorize_domain_registration_permission_for_owner(
@@ -471,23 +493,30 @@ fn authorize_domain_registration_permission_for_owner(
     domain: Option<&Domain>,
     verb: EnvironmentDomainRegistrationVerb,
 ) -> Result<(), AuthorizationError> {
-    auth.authorize_permission(&PermissionTarget::EnvironmentDomainRegistration(
-        ClassPermissionTarget {
-            verb: Some(verb),
-            owner,
-            resource: domain
-                .map(|domain| {
-                    EnvironmentDomainRegistrationResourcePattern::Domain(DomainNamePattern {
-                        labels: domain
-                            .0
-                            .split('.')
-                            .map(|label| DomainLabel(label.to_string()))
-                            .collect(),
-                    })
+    auth.authorize_permission(&domain_registration_check(owner, domain, verb))
+}
+
+/// Today's card check of `verb` on the registration of `domain` in the environment of `owner`.
+fn domain_registration_check(
+    owner: EnvironmentOwnerPattern,
+    domain: Option<&Domain>,
+    verb: EnvironmentDomainRegistrationVerb,
+) -> PermissionTarget {
+    PermissionTarget::EnvironmentDomainRegistration(ClassPermissionTarget {
+        verb: Some(verb),
+        owner,
+        resource: domain
+            .map(|domain| {
+                EnvironmentDomainRegistrationResourcePattern::Domain(DomainNamePattern {
+                    labels: domain
+                        .0
+                        .split('.')
+                        .map(|label| DomainLabel(label.to_string()))
+                        .collect(),
                 })
-                .unwrap_or(EnvironmentDomainRegistrationResourcePattern::Any),
-        },
-    ))
+            })
+            .unwrap_or(EnvironmentDomainRegistrationResourcePattern::Any),
+    })
 }
 
 fn environment_owner_from_domain_registration(

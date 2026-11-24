@@ -20,8 +20,10 @@ use super::registry_change_notifier::{RegistryChangeNotifier, RequiresNotificati
 use crate::repo::card::CardRepo;
 use crate::repo::environment::EnvironmentDefaultCardRef;
 use crate::repo::model::card::{CardRecord, CardRepoError};
+use crate::services::decision::{Decisions, account_target};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
+use golem_common::model::authority::{CatalogOperation, Operation, Resource};
 use golem_common::model::card::owner::{
     AccountOwnerPattern, ComponentOwnerPattern, EnvironmentOwnerPattern,
 };
@@ -33,6 +35,7 @@ use golem_common::model::card::{
     PermissionTarget, PolymorphicCard, StoredCard,
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::permission_share::PermissionShareId;
 use golem_common::{IntoAnyhow, SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
@@ -147,6 +150,7 @@ pub struct CardService {
     component_service: Arc<ComponentService>,
     environment_service: Arc<EnvironmentService>,
     registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+    decisions: Decisions,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -174,6 +178,7 @@ impl CardService {
         component_service: Arc<ComponentService>,
         environment_service: Arc<EnvironmentService>,
         registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+        decisions: Decisions,
     ) -> Self {
         Self {
             card_repo,
@@ -182,6 +187,7 @@ impl CardService {
             component_service,
             environment_service,
             registry_change_notifier,
+            decisions,
         }
     }
 
@@ -320,10 +326,15 @@ impl CardService {
 
     pub async fn get_card(&self, card_id: CardId, auth: &AuthCtx) -> Result<StoredCard, CardError> {
         let card = self.materialized_card_unchecked(card_id).await?;
-        let owner_email = self
-            .card_owner_email(card_id, card.managed_by.as_ref())
-            .await?;
-        authorize_card_permission(auth, &owner_email, CardVerb::Inspect)?;
+        let owner = self.card_owner(card_id, card.managed_by.as_ref()).await?;
+        self.authorize_card(
+            auth,
+            CatalogOperation::InspectCard,
+            card_id,
+            &owner,
+            CardVerb::Inspect,
+        )
+        .await?;
         Ok(card.card)
     }
 
@@ -347,10 +358,15 @@ impl CardService {
         }
 
         if !matches!(auth, AuthCtx::System) {
-            let owner_email = self
-                .card_owner_email(card_id, card.managed_by.as_ref())
-                .await?;
-            authorize_card_permission(auth, &owner_email, CardVerb::Revoke)?;
+            let owner = self.card_owner(card_id, card.managed_by.as_ref()).await?;
+            self.authorize_card(
+                auth,
+                CatalogOperation::RevokeCard,
+                card_id,
+                &owner,
+                CardVerb::Revoke,
+            )
+            .await?;
         }
 
         let deleted = self
@@ -430,54 +446,96 @@ impl CardService {
         })
     }
 
-    async fn card_owner_email(
+    /// The account that holds the card: its ID and email.
+    async fn card_owner(
         &self,
         card_id: CardId,
         managed_by: Option<&CardManagedBy>,
-    ) -> Result<AccountEmail, CardError> {
+    ) -> Result<(AccountId, AccountEmail), CardError> {
         match managed_by {
-            Some(CardManagedBy::AccountRoot(managed_by)) => Ok(self
-                .account_service
-                .get(managed_by.account_id, &AuthCtx::System)
-                .await?
-                .email),
-            Some(CardManagedBy::EnvironmentDefault(managed_by)) => Ok(self
-                .environment_service
-                .default_card_ref_by_environment(managed_by.environment_id)
-                .await?
-                .ok_or(CardError::CardNotFound(card_id))?
-                .account_email),
+            Some(CardManagedBy::AccountRoot(managed_by)) => {
+                let account = self
+                    .account_service
+                    .get(managed_by.account_id, &AuthCtx::System)
+                    .await?;
+                Ok((account.id, account.email))
+            }
+            Some(CardManagedBy::EnvironmentDefault(managed_by)) => {
+                self.environment_card_owner(card_id, managed_by.environment_id)
+                    .await
+            }
+            Some(CardManagedBy::RuntimeDerived(managed_by)) => {
+                self.environment_card_owner(card_id, managed_by.environment_id)
+                    .await
+            }
             Some(CardManagedBy::PermissionShare(managed_by)) => self
                 .permission_share_service
-                .target_account_email(PermissionShareId(managed_by.permission_share_id))
+                .target_account(PermissionShareId(managed_by.permission_share_id))
                 .await
                 .map_err(Into::into),
-            Some(CardManagedBy::AgentInitial(managed_by)) => Ok(self
-                .component_service
-                .get_internal_component_revision(
-                    managed_by.component_id,
-                    managed_by.component_revision,
-                    &AuthCtx::System,
-                )
-                .await?
-                .account_email),
-            Some(CardManagedBy::ComponentInitial(managed_by)) => Ok(self
-                .component_service
-                .get_internal_component_revision(
-                    managed_by.component_id,
-                    managed_by.component_revision,
-                    &AuthCtx::System,
-                )
-                .await?
-                .account_email),
-            Some(CardManagedBy::RuntimeDerived(managed_by)) => Ok(self
-                .environment_service
-                .default_card_ref_by_environment(managed_by.environment_id)
-                .await?
-                .ok_or(CardError::CardNotFound(card_id))?
-                .account_email),
+            Some(CardManagedBy::AgentInitial(managed_by)) => {
+                let component = self
+                    .component_service
+                    .get_internal_component_revision(
+                        managed_by.component_id,
+                        managed_by.component_revision,
+                        &AuthCtx::System,
+                    )
+                    .await?;
+                Ok((component.account_id, component.account_email))
+            }
+            Some(CardManagedBy::ComponentInitial(managed_by)) => {
+                let component = self
+                    .component_service
+                    .get_internal_component_revision(
+                        managed_by.component_id,
+                        managed_by.component_revision,
+                        &AuthCtx::System,
+                    )
+                    .await?;
+                Ok((component.account_id, component.account_email))
+            }
             None => Err(CardError::CardOwnerNotFound(card_id)),
         }
+    }
+
+    /// The account that owns the environment of an environment card.
+    async fn environment_card_owner(
+        &self,
+        card_id: CardId,
+        environment_id: EnvironmentId,
+    ) -> Result<(AccountId, AccountEmail), CardError> {
+        let account_email = self
+            .environment_service
+            .default_card_ref_by_environment(environment_id)
+            .await?
+            .ok_or(CardError::CardNotFound(card_id))?
+            .account_email;
+        let account_id = self
+            .environment_service
+            .get_unchecked(environment_id)
+            .await?
+            .owner_account_id;
+        Ok((account_id, account_email))
+    }
+
+    /// Decides `operation` on the card `card_id` of `owner`, from today's account-wide check.
+    async fn authorize_card(
+        &self,
+        auth: &AuthCtx,
+        operation: CatalogOperation,
+        card_id: CardId,
+        owner: &(AccountId, AccountEmail),
+        verb: CardVerb,
+    ) -> Result<(), AuthorizationError> {
+        self.decisions
+            .decide(
+                auth,
+                Operation::single(operation, Resource::Card(card_id), account_target(owner.0)),
+                card_check(&owner.1, verb),
+            )
+            .await
+            .map(|_| ())
     }
 }
 
@@ -553,11 +611,16 @@ fn authorize_card_permission(
     account_email: &AccountEmail,
     verb: CardVerb,
 ) -> Result<(), AuthorizationError> {
-    auth.authorize_permission(&PermissionTarget::Card(ClassPermissionTarget {
+    auth.authorize_permission(&card_check(account_email, verb))
+}
+
+/// Today's account-wide card check of `verb`.
+fn card_check(account_email: &AccountEmail, verb: CardVerb) -> PermissionTarget {
+    PermissionTarget::Card(ClassPermissionTarget {
         verb: Some(verb),
         owner: AccountOwnerPattern::Account {
             account: account_email.clone(),
         },
         resource: CardResourcePattern::Any,
-    }))
+    })
 }

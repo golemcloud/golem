@@ -55,7 +55,15 @@ pub(crate) fn authorize_environment_permission(
     environment: &Environment,
     verb: EnvironmentVerb,
 ) -> Result<(), AuthorizationError> {
-    auth.authorize_permission(&PermissionTarget::Environment(ClassPermissionTarget {
+    auth.authorize_permission(&environment_check(environment, verb))
+}
+
+/// Today's card check of `verb` on `environment`.
+pub(crate) fn environment_check(
+    environment: &Environment,
+    verb: EnvironmentVerb,
+) -> PermissionTarget {
+    PermissionTarget::Environment(ClassPermissionTarget {
         verb: Some(verb),
         owner: EnvironmentOwnerPattern::Environment {
             account: environment.owner_account_email.clone(),
@@ -63,5 +71,5 @@ pub(crate) fn authorize_environment_permission(
             environment: environment.name.clone(),
         },
         resource: EnvironmentResourcePattern::Any,
-    }))
+    })
 }
