@@ -189,6 +189,7 @@ impl RawHandler {
         let mut start = InvocationStart {
             method_name: Some(handler.method_name.clone()),
             input: Some(input),
+            allow_streams: true,
             request_key: Some(request_key.into()),
             context: Some(context),
             auth_ctx: Some(AuthCtx::System.into()),

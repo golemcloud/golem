@@ -861,10 +861,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 return;
             }
         };
+        // Only an awaited method invocation queues its acceptance until readiness; lookup,
+        // trigger, schedule and tool sessions never receive a separate readiness frame.
         if accepted.component_revision.is_none()
+            && start.mode == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32
+            && start.external_tool.is_none()
             && let Some(revision) = output.component_revision
-        {
-            if responses.send(InvocationResponse {
+            && responses.send(InvocationResponse {
                 response: Some(invocation_response::Response::Ready(InvocationAccepted {
                     agent_id: Some(accepted.agent_id.into()),
                     idempotency_key: Some(accepted.idempotency_key.into()),
@@ -872,7 +875,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     method_name: start.method_name.clone(),
                     ..Default::default()
                 })),
-            }).await.is_err() { return; }
+            }).await.is_err()
+        {
+            return;
         }
         let (result, new_stream_mappings) = match output.result {
             AgentInvocationResult::ExternalTool { result } => {

@@ -8754,9 +8754,7 @@ async fn invoke_with_non_existing_function(
     );
     assert_eq!(
         worker.lookup_invocation_result(&cancelled_key).await,
-        LookupResult::Complete(Err(WorkerExecutorError::invalid_request(
-            "Invocation was cancelled before execution"
-        )))
+        LookupResult::Complete(Err(WorkerExecutorError::InvocationCancelled))
     );
     executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())

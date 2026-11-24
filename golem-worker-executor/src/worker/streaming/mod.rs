@@ -15,6 +15,26 @@
 use crate::worker::*;
 use golem_common::model::durable_stream::{AttachmentId, StreamInvocationId};
 
+/// Whether a request replays the retained stream attachment. A route session is created again
+/// with a fresh attempt and its current expiry and execution limits, so it matches by route,
+/// session and identity, as the request itself is compared separately. Any other session start
+/// must repeat the retained attempt exactly.
+fn retained_acceptance_matches(
+    retained: &StreamSessionAttachedRecord,
+    requested: &golem_common::model::durable_stream::StreamSessionAcceptance,
+    attempt_id: AttemptId,
+) -> bool {
+    match &requested.route_scope {
+        Some(_) => {
+            retained.acceptance.route_scope == requested.route_scope
+                && retained.acceptance.public_session_id == requested.public_session_id
+                && retained.acceptance.effective_identity == requested.effective_identity
+                && retained.acceptance.transport_stream_ids == requested.transport_stream_ids
+        }
+        None => retained.acceptance == *requested && retained.attempt_id == attempt_id,
+    }
+}
+
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(in crate::worker) async fn ensure_matching_stream_attachment(
         &self,
@@ -34,9 +54,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     None
                 }
             })
-            && (retained.acceptance != requested.acceptance
-                || (requested.acceptance.route_scope.is_none()
-                    && retained.attempt_id != requested.attempt_id))
+            && !retained_acceptance_matches(&retained, &requested.acceptance, requested.attempt_id)
         {
             return Err(WorkerExecutorError::invalid_request(
                 "AttemptConflict: stream acceptance differs from the retained request",
@@ -72,7 +90,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     Some(record)
                 } else { None });
             let (attached, replayed) = if let Some(attached) = existing {
-                if attached.acceptance != acceptance || (acceptance.route_scope.is_none() && attached.attempt_id != attempt_id) {
+                if !retained_acceptance_matches(&attached, &acceptance, attempt_id) {
                     return Err(WorkerExecutorError::invalid_request("AttemptConflict: stream acceptance does not match the retained request"));
                 }
                 (attached, true)
@@ -128,8 +146,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         } else {
             None
         };
+        let producer = self.durable_stream_producer().await?;
+        // A revert or a takeover can advance the attachment past the retained record, so the
+        // session reports the current epoch that a resume must name.
+        let epoch = self
+            .oplog
+            .raw_durable_stream_session_status(
+                &producer.qualify_session(&StreamRegistrationInvocation::Local(key)),
+            )
+            .await
+            .status
+            .map_err(WorkerExecutorError::runtime)?
+            .and_then(|status| status.attachment_epoch)
+            .unwrap_or(epoch);
         Ok(StreamSession::open(
-            self.durable_stream_producer().await?,
+            producer,
             self.oplog.clone(),
             StreamRegistrationInvocation::Local(key),
             std::iter::empty(),

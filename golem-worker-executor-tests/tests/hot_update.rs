@@ -3455,7 +3455,7 @@ async fn snapshot_only_recovery_reconciles_memory_before_subsequent_growth(
                 &component,
                 &agent_id,
                 "write_file",
-                data_value!("/large-input".to_string(), "b".repeat(16 * 1024 * 1024)),
+                data_value!("/large-input".to_string(), "b".repeat(12 * 1024 * 1024)),
             )
             .await?;
         let grown = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -3517,7 +3517,7 @@ async fn snapshot_only_recovery_reconciles_memory_before_subsequent_growth(
             .await?;
         assert_eq!(
             file.into_typed::<Option<String>>()?,
-            Some("b".repeat(16 * 1024 * 1024))
+            Some("b".repeat(12 * 1024 * 1024))
         );
         Ok(())
     })

@@ -369,7 +369,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     output.idempotency_key = Some(ik);
                     return Ok(output);
                 }
-                let mut invocation_output = if request.allow_streams {
+                let mut invocation_output = if request.allow_streams
+                    && worker.invocation_needs_stream_session(&invocation)
+                {
                     let attempt_id = golem_common::model::durable_stream::AttemptId(
                         request
                             .attempt_id
@@ -542,6 +544,70 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                     (None, _) => None,
                 };
+                // An existing agent's component comes from its Create entry and executes the
+                // revision of its latest pending update; the request's component and
+                // constructor are used only when it creates the agent.
+                let existing_metadata = if let Some((worker, _)) = &pinned {
+                    Some(
+                        worker
+                            .deleted_incarnation_as_not_found(
+                                expected_fingerprint,
+                                worker.try_get_latest_worker_metadata().await,
+                            )
+                            .await?,
+                    )
+                } else if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
+                    None
+                } else {
+                    Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await?
+                };
+                let component_revision = existing_metadata.as_ref().map(|metadata| {
+                    let status = &metadata.last_known_status;
+                    status
+                        .pending_invocations
+                        .iter()
+                        .rev()
+                        .find_map(|invocation| invocation.manual_update_target_revision)
+                        .or_else(|| {
+                            status
+                                .pending_updates
+                                .back()
+                                .map(|update| update.target_revision)
+                        })
+                        .unwrap_or(status.component_revision)
+                });
+                let new_owner = resolved.new_owner.as_ref();
+                let component_id = match (&existing_metadata, new_owner) {
+                    (Some(metadata), _) => metadata.component_id,
+                    (None, Some(owner)) => owner.component_id,
+                    (None, None) => {
+                        return Err(WorkerExecutorError::worker_not_found(
+                            owned_agent_id.agent_id(),
+                        ));
+                    }
+                };
+                let component = self
+                    .component_service()
+                    .get_metadata(component_id, component_revision)
+                    .await?;
+                let parsed_agent_id = match (&existing_metadata, new_owner) {
+                    (Some(metadata), _) => metadata
+                        .parse_agent_id(&component.metadata)
+                        .map_err(WorkerExecutorError::invalid_request)?,
+                    (None, Some(owner)) => owner.constructor.clone().ok_or_else(|| {
+                        WorkerExecutorError::invalid_request("the target has no agent type")
+                    })?,
+                    (None, None) => unreachable!("a missing agent without an owner is rejected"),
+                };
+                let input = super::capture_method_input(request)?;
+                crate::worker::invocation::validate_detached_invocation(
+                    &method_name,
+                    &input,
+                    &component.metadata,
+                    &golem_common::model::agent::ResolvedOwnerContext::Agent(Box::new(
+                        parsed_agent_id,
+                    )),
+                )?;
                 let (worker, _response_lease) = match pinned {
                     Some(pinned) => pinned,
                     None => {
@@ -569,7 +635,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     idempotency_key: ik,
                     method_name,
                     allow_streams: false,
-                    input: super::capture_method_input(request)?,
+                    input,
                     invocation_context,
                     caller,
                     scope_card,
@@ -586,7 +652,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             accepted,
                             &final_agent_id,
                             &ik,
-                            None,
+                            Some(component.revision),
                         )?;
                         Ok(AgentInvocationOutput {
                             result: AgentInvocationResult::AgentInitialization,
@@ -610,7 +676,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             accepted,
                             &final_agent_id,
                             &ik,
-                            None,
+                            Some(component.revision),
                         )?;
                         match result {
                             crate::worker::ResultOrSubscription::Finished(Err(err)) => {

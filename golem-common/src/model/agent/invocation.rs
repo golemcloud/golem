@@ -442,6 +442,18 @@ impl AgentInvocationPayload {
     /// Compares the caller's execution contract, not deployment-time tool resolution.
     /// Tracing and scheduling metadata are stored outside the payload.
     pub fn same_caller_request(&self, other: &Self) -> bool {
+        self.same_caller_request_decoding(other, |_| None)
+    }
+
+    /// Like [`Self::same_caller_request`], but compares method inputs captured in different
+    /// representations, such as native REST input and public session JSON, by the values
+    /// `decode` gives for them. The stream permission of a request belongs to its transport,
+    /// not to its identity, so a trigger and a later awaited call with one key match.
+    pub fn same_caller_request_decoding(
+        &self,
+        other: &Self,
+        decode: impl Fn(&AgentMethodInput) -> Option<SchemaValue>,
+    ) -> bool {
         match (self, other) {
             (
                 Self::AgentInitialization { input, caller },
@@ -454,23 +466,25 @@ impl AgentInvocationPayload {
                 Self::AgentMethod {
                     method_name,
                     input,
-                    allow_streams,
                     caller,
                     scope_card,
+                    ..
                 },
                 Self::AgentMethod {
                     method_name: other_method,
                     input: other_input,
-                    allow_streams: other_allow_streams,
                     caller: other_caller,
                     scope_card: other_card,
+                    ..
                 },
             ) => {
                 method_name == other_method
-                    && allow_streams == other_allow_streams
                     && caller == other_caller
                     && scope_card == other_card
-                    && input == other_input
+                    && (input == other_input
+                        || decode(input).zip(decode(other_input)).is_some_and(
+                            |(input, other_input)| schema_value_same_request(&input, &other_input),
+                        ))
             }
             (
                 Self::ExternalTool {

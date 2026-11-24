@@ -335,6 +335,7 @@ async fn stream_method_failure_settles_active_http_tail_before_publication_and_r
         component_id: Some(component.id.into()),
         method_name: Some("fail_stream_after_http".to_string()),
         input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+        allow_streams: true,
         mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
         idempotency_key: Some(key.clone().into()),
         component_owner_account_id: Some(component.account_id.into()),

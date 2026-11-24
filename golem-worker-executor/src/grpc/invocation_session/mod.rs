@@ -150,18 +150,21 @@ struct AcceptedInvocation {
     joined_origin_observer: bool,
     queued: Option<(
         golem_common::model::durable_stream::StreamSessionAttachedRecord,
-        futures::future::BoxFuture<
-            'static,
-            Result<
-                (
-                    golem_common::model::durable_stream::StreamSessionPreparedRecord,
-                    StreamSession,
-                ),
-                WorkerExecutorError,
-            >,
-        >,
+        QueuedReadiness,
     )>,
 }
+
+/// Resolves when a queued method session becomes ready to execute.
+type QueuedReadiness = futures::future::BoxFuture<
+    'static,
+    Result<
+        (
+            golem_common::model::durable_stream::StreamSessionPreparedRecord,
+            StreamSession,
+        ),
+        WorkerExecutorError,
+    >,
+>;
 
 pub(crate) struct TransportStreamId(pub(crate) u64);
 

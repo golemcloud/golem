@@ -3080,6 +3080,35 @@ pub(crate) fn validate_fresh_invocation(
     lower_invocation(invocation, component_metadata, owner_context, None).map(|_| ())
 }
 
+/// Validates a scheduled or triggered method invocation against the revision the target will
+/// execute. No session stays attached to such an invocation, so a method that uses streams is
+/// rejected before anything is created or enqueued.
+pub(crate) fn validate_detached_invocation(
+    method_name: &str,
+    input: &golem_common::model::agent::AgentMethodInput,
+    component_metadata: &ComponentMetadata,
+    owner_context: &ResolvedOwnerContext,
+) -> Result<(), WorkerExecutorError> {
+    let invocation = AgentInvocation::AgentMethod {
+        idempotency_key: golem_common::model::InvocationId(uuid::Uuid::nil()),
+        method_name: method_name.to_string(),
+        input: input.clone(),
+        allow_streams: true,
+        invocation_context: golem_common::model::invocation_context::InvocationContextStack::fresh(
+        ),
+        caller: golem_common::model::caller::Caller::anonymous(),
+        scope_card: None,
+    };
+    if invocation_uses_streams(&invocation, component_metadata, owner_context.agent()) {
+        // Lowering reports a missing method or schema before the stream classification.
+        lower_invocation(invocation, component_metadata, owner_context, None)?;
+        return Err(WorkerExecutorError::invalid_request(
+            "live streams require an attached Await invocation session",
+        ));
+    }
+    lower_invocation(invocation, component_metadata, owner_context, None).map(|_| ())
+}
+
 pub fn lower_invocation(
     invocation: AgentInvocation,
     component_metadata: &ComponentMetadata,

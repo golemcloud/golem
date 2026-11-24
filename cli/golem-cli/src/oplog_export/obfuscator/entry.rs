@@ -316,11 +316,66 @@ fn failed_snapshot_assisted(details: &PublicFailedSnapshotAssistedUpdateDetails)
         .build()
 }
 
+/// A schema-less value for raw public JSON method input: objects are records in key order,
+/// arrays are lists, and numbers keep their integer or float form.
+fn json_schema_value(json: serde_json::Value) -> SchemaValue {
+    match json {
+        serde_json::Value::Null => SchemaValue::Option { inner: None },
+        serde_json::Value::Bool(value) => SchemaValue::Bool(value),
+        serde_json::Value::Number(number) => number
+            .as_u64()
+            .map(SchemaValue::U64)
+            .or_else(|| number.as_i64().map(SchemaValue::S64))
+            .unwrap_or_else(|| SchemaValue::F64(number.as_f64().unwrap_or(f64::NAN))),
+        serde_json::Value::String(value) => SchemaValue::String(value),
+        serde_json::Value::Array(elements) => SchemaValue::List {
+            elements: elements.into_iter().map(json_schema_value).collect(),
+        },
+        serde_json::Value::Object(fields) => SchemaValue::Record {
+            fields: fields
+                .into_iter()
+                .map(|(_, value)| json_schema_value(value))
+                .collect(),
+        },
+    }
+}
+
 fn retry_state(state: &PublicRetryPolicyState) -> ReportNode {
     kept(state)
 }
 
 impl Walker<'_, '_> {
+    /// The original method input is a component-independent envelope. Its case names the
+    /// captured representation, which is not customer data, so it stays in clear and the
+    /// captured value inside it is obfuscated schema-less.
+    fn method_input(&mut self, input: &TypedSchemaValue) -> ReportNode {
+        use golem_common::model::agent::PublicMethodInput;
+        use golem_common::schema::FromSchema;
+        const TYPE_NAME: &str = "original-method-input";
+        let case = |name: &str, index: u32, payload: ReportNode| {
+            kept_case(
+                CaseKind::Variant,
+                Some(TYPE_NAME.to_string()),
+                name,
+                Some(index),
+                Some(payload),
+            )
+        };
+        match PublicMethodInput::from_value(input.value()) {
+            Ok(PublicMethodInput::Native { value, .. }) => {
+                case("Native", 0, self.schemaless(&value, Region::Customer))
+            }
+            Ok(PublicMethodInput::PublicJson(json)) => {
+                let payload = match serde_json::from_str::<serde_json::Value>(&json) {
+                    Ok(json) => self.schemaless(&json_schema_value(json), Region::Customer),
+                    Err(_) => self.str_leaf(&json, Region::Customer),
+                };
+                case("PublicJson", 1, payload)
+            }
+            Err(_) => self.customer(input),
+        }
+    }
+
     /// A token over the serialised form of a Golem value: over its text when it serialises
     /// to a string, otherwise over its JSON text.
     fn tok<T: Serialize>(&self, value: &T) -> ReportNode {
@@ -630,7 +685,7 @@ impl Walker<'_, '_> {
                     Fields::new()
                         .add("invocationId", self.tok(invocation_id))
                         .add("methodName", text(method_name.clone()))
-                        .add("functionInput", self.customer(function_input))
+                        .add("functionInput", self.method_input(function_input))
                         .add("traceId", self.tok(trace_id))
                         .add("traceStates", self.tok(trace_states))
                         .add("invocationContext", self.tok(invocation_context))

@@ -788,7 +788,17 @@ async fn oplog_export_hides_customer_data() {
         .iter()
         .find(|object| object.get("length") == Some(&Value::from(5)))
         .unwrap_or_else(|| panic!("{}", entry_at(&kept_shape, record_index)));
-    assert!(!bytes_node.contains_key("elements"), "{bytes_node:?}");
+    // Raw public JSON input has no byte type, so its elements can be shown with the shape;
+    // without --keep-scalars they stay tokens.
+    assert!(
+        bytes_node
+            .get("elements")
+            .and_then(Value::as_array)
+            .is_none_or(|elements| elements
+                .iter()
+                .all(|element| element.get("value").is_none())),
+        "{bytes_node:?}"
+    );
 
     // --keep-error-text. The guest panic writes its message to stderr `Log` entries, which stay
     // tokens; the `Error` entry holds the trap text, a token by default and in clear with the flag.
