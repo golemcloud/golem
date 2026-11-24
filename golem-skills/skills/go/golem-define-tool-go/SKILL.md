@@ -62,11 +62,12 @@ The wire name is the field name in kebab case (`Times` → `times`, `GitDir` →
 | `bool` | `Flag` | A switch; `.Negatable()` adds `--no-<name>`, `.Default(true)` |
 | `uint32` | `CountFlag` | `-vvv`; `.Max(3)` |
 | `io.Reader` | `Stdin` | The command's standard input; `.Optional()`, `.Mime(…)` |
-| `golem.Principal` | — | Filled by the host with who invoked the command |
+
+The handler reads who invoked the command with `ctx.Caller()`. A `golem.Principal` or `golem.Caller` field is a definition error.
 
 A tool that cannot work without a filesystem binding says so with `tool.Spec{RequiresFilesystem: true}`; that declares the need, it does not grant access.
 
-Every exported field must be bound, or be the principal; a mistake — an unbound field, a field bound twice, a pointer into another struct — is a definition error, reported by `golem.DefinitionErrors()` and at deploy.
+Every exported field must be bound; a mistake — an unbound field, a field bound twice, a pointer into another struct — is a definition error, reported by `golem.DefinitionErrors()` and at deploy.
 
 Other command settings: `s.Description`, `s.Example`, `s.Aliases`, `s.ResultDoc`, `s.Formatter("json", "summary")` / `s.Formatters(…)` / `s.DefaultFormatter`, and the annotations `s.ReadOnly()`, `s.Destructive()`, `s.Idempotent()`, `s.OpenWorld()`.
 

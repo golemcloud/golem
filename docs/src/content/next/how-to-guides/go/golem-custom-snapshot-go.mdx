@@ -108,7 +108,7 @@ A restore does **not** run the constructor passed to `Implement`: whatever it di
 ```go
 agent.OnRestore(func(ic *golem.InitContext[session.ID, state, golem.NoConfig], s *state) error {
     // rebuild runtime-only fields of s, e.g. from ic.ID().User;
-    // ic also has AgentID(), Principal() and Config()
+    // ic also has AgentID(), Caller() and Config()
     return nil
 })
 ```
@@ -216,7 +216,7 @@ func init() {
 - Implement `Save` and `Load` as a pair on the state (usually pointer receiver); the host calls `Save` to capture and `Load` to restore.
 - `Save`/`Load` return an `error`; a non-nil `Load` error fails restoration.
 - A restore never runs the constructor: the state starts from its zero value, `Load` (or the JSON default) fills it, and `OnRestore` rebuilds the rest. Do not rely on fields the constructor sets unless they are in the snapshot or rebuilt in `OnRestore`.
-- The SDK stores the agent's principal (`ctx.Principal()`) beside your payload and restores it for the agent; `Save`/`Load` see only your own bytes.
+- The snapshot holds only your payload; `Save`/`Load` see only your own bytes. To remember who created the agent, keep `ctx.Caller().Original.Ref()` (a `golem.PrincipalRef`) in the state you save.
 
 ### Related Guides
 | Guide | Description |

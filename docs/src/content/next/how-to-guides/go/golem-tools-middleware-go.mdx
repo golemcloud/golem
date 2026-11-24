@@ -32,7 +32,7 @@ var _ = Policy.Handle(inventory.Adjust, func(ctx *tool.MiddlewareContext[Params]
 - `Tool.Middleware` is **transparent**: it presents and wraps the same tool, and every command it does not `Handle` goes straight to the tool.
 - The handler has a tool handler's shape: it returns the command's result, a declared error with `ErrX.New(payload)`, or an SDK rejection with `tool.InvalidInput(...)` or `tool.ConstraintViolation(...)`. Malformed results and undeclared named errors fail as invalid results. An unclassified returned error or an ordinary panic traps the component. Returning an error from the layer beneath passes it on: the tool's own errors unchanged (so `ErrX.Match` still works for the caller), and a denied, cancelled or exhausted call as a constraint violation.
 - `Policy.Underlying(ctx, cmd)` reaches a command of the wrapped tool: `Forward(a)` sends complete arguments unchanged, and `Call(fill)` starts from the command's defaults. Passing a command of another tool is a compile error.
-- `ctx.Parameters()`, `ctx.Principal()`, `ctx.ToolName()` and `ctx.CommandPath()` describe the invocation. Standard input travels in the args struct, so forwarding `a` forwards it.
+- `ctx.Parameters()`, `ctx.Caller()`, `ctx.ToolName()` and `ctx.CommandPath()` describe the invocation. Standard input travels in the args struct, so forwarding `a` forwards it.
 
 Blank-import the package from `main.go`. Use `golem.Unit` as the parameter type for a middleware that takes none.
 
