@@ -2555,9 +2555,8 @@ async fn durable_stream_selector_keeps_named_forks_in_the_selected_root() {
     let source_fork =
         golem_common::model::invocation_session_public::new_durable_stream_session_id();
     let environment_id = EnvironmentId(uuid::Uuid::nil());
-    let named_fork = |root: AgentId, scope: &str, name: &str| {
-        AgentId::durable_stream_fork(environment_id, root, scope, name)
-    };
+    let named_fork =
+        |root: AgentId, name: &str| AgentId::durable_stream_fork(environment_id, root, name);
     for path_selector in [false, true] {
         for root in [p, q] {
             for nested in [false, true] {
@@ -2673,15 +2672,12 @@ async fn durable_stream_selector_keeps_named_forks_in_the_selected_root() {
                 assert_eq!(
                     source_agent_id,
                     if nested {
-                        named_fork(root_id, &forks[0].route_scope, &source_fork)
+                        named_fork(root_id, &source_fork)
                     } else {
                         root_id
                     }
                 );
-                assert_eq!(
-                    target_agent_id,
-                    named_fork(root_id, &forks[0].route_scope, &target_fork)
-                );
+                assert_eq!(target_agent_id, named_fork(root_id, &target_fork));
                 assert_eq!(target_agent_id.type_tag(), root_id.type_tag());
                 assert_eq!(forks[0].source_path, source);
             }

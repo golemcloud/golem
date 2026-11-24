@@ -305,7 +305,7 @@ golden tests pin each one.
 | `AgentId::idempotent_create` | environment, type ID, caller scope, idempotency key | external create without a key, from a caller with a scope |
 | `AgentId::random` | random | other external creates without a key; forks through the worker service |
 | `AgentId::allocated` | environment, type tag, caller ID and fingerprint, call key | create without a key or fork inside an agent; replay allocates the same ID |
-| `AgentId::durable_stream_fork` | environment, root ID, route scope, fork name (root's tag) | Durable Streams forks |
+| `AgentId::durable_stream_fork` | environment, root ID, fork name (root's tag) | Durable Streams forks |
 | `AgentId::imported_phantom` | environment, type ID, stored 1.6 name | reserved for the 1.6 import of agents without a key; no caller yet |
 | `AgentId::ephemeral_invocation` / `ephemeral_proxy` / `durable_stream_session` | owner key, constructor, route session | ephemeral instances and `phantomAgent` route sessions only |
 | `AgentId::external_tool_owner` / `random_reserved` | reserved tag | native tool owners on a component; oplog processors |

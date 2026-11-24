@@ -9,7 +9,7 @@ use golem_common::base_model::agent::AgentTypeName;
 use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_common::model::agent::OwnedAgentId;
 use golem_common::model::{AgentId, AgentStatus};
-use golem_service_base::custom_api::{CompiledRoutes, RouteBehaviour};
+use golem_service_base::custom_api::CompiledRoutes;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDsl;
 use integration_tests::agents::{agent_type_id, create_agent};
@@ -604,25 +604,8 @@ async fn selected_stream_roots_forks_receipts_and_links(
         .ok_or_else(|| anyhow::anyhow!("missing deployed routes"))?
         .try_into()
         .map_err(anyhow::Error::msg)?;
-    let family = routes
-        .routes
-        .iter()
-        .find_map(|route| match &route.behavior {
-            RouteBehaviour::CallAgent(call)
-                if call.agent_type.0 == "SelectedQueryAgent" && call.method_name == "echo" =>
-            {
-                call.durable_streams.as_ref().map(|policy| policy.family_id)
-            }
-            _ => None,
-        })
-        .ok_or_else(|| anyhow::anyhow!("missing selected-query echo route family"))?;
-    let scope = golem_common::model::durable_stream::durable_stream_route_scope(
-        &routes.environment_id.to_string(),
-        &routes.deployment_revision.to_string(),
-        &family.to_string(),
-    );
     let root = AgentId(p);
-    let known_fork = AgentId::durable_stream_fork(routes.environment_id, root, &scope, "branch").0;
+    let known_fork = AgentId::durable_stream_fork(routes.environment_id, root, "branch").0;
     read(
         &agent,
         &selected(&source, Some(known_fork)),
