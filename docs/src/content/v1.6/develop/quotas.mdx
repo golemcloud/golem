@@ -61,6 +61,14 @@ resourceDefaults:
       units: connections
 ```
 
+`resourceDefaults` only creates the resources that do not exist yet in the environment. A deploy with other values does not change an existing resource. To change the limit, enforcement action or units of an existing resource, use `golem resource update`:
+
+```shell
+golem resource update api-calls --limit '{"type":"Rate","value":200,"period":"minute","max":2000}'
+```
+
+The update replaces the whole limit, including `max` for a `Rate` limit. A limit cannot change its type. Usage already spent stays spent. For a `Rate` limit, a smaller `max` lowers the available burst to at most the new `max`, and a larger `max` grants no new burst: the budget refills at the new rate. For a `Capacity` limit, the available amount changes by the difference between the new and the old `value`.
+
 ### Using quotas from an agent
 
 Configuring a resource defines its limit; your agent must reserve units before doing the work that uses it. Acquire a token using the resource's name, reserve the amount you expect to use, then commit the actual usage. The token's expected-use argument helps the runtime allocate credits; it does not consume units by itself.

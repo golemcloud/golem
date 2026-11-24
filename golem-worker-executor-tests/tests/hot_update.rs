@@ -2108,6 +2108,8 @@ async fn assert_snapshot_assisted_suffix_failure(
         details.contains(expected_cause),
         "unexpected assisted failure: {details}"
     );
+    // The target code decides the divergence of an update replay, not the snapshot load.
+    assert!(!details.contains("replay started"), "{details}");
     assert_eq!(
         failed
             .snapshot_assisted_details
