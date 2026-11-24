@@ -1,0 +1,288 @@
+name: Bounded R3 Campaign
+on:
+  workflow_call:
+    inputs:
+      deadline:
+        required: true
+        type: string
+      isolated:
+        required: true
+        type: boolean
+permissions:
+  contents: read
+  actions: write
+jobs:
+  preflight:
+    runs-on: blacksmith-2vcpu-ubuntu-2204
+    timeout-minutes: 20
+    env:
+      DEADLINE: ${{ inputs.deadline }}
+      ISOLATED: ${{ inputs.isolated }}
+      CUTOFF_OFFSET: '1200'
+      HOST: preflight
+      RESULT: r3-input
+    steps:
+      - &deadline_guard
+        name: Bind the original campaign clock and start an owned cancellation guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$ISOLATED" == true && "$GITHUB_RUN_ATTEMPT" == 1 && "$DEADLINE" =~ ^[0-9]+$ ]]
+          timeout 20s gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$RUNNER_TEMP/campaign-origin.json"
+          jq -e --arg id "$GITHUB_RUN_ID" --arg sha "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" \
+            '(.id | tostring) == $id and .head_sha == $sha and .run_attempt == 1 and
+             .path == ".github/workflows/benchmark.yaml" and .repository.full_name == $repo' \
+            "$RUNNER_TEMP/campaign-origin.json"
+          created=$(date -d "$(jq -r .created_at "$RUNNER_TEMP/campaign-origin.json")" +%s)
+          now=$(date +%s)
+          (( DEADLINE > now + 120 && DEADLINE <= created + 36000 ))
+          cutoff=$((created + CUTOFF_OFFSET))
+          (( cutoff <= DEADLINE )) || cutoff=$DEADLINE
+          (( cutoff > now + 120 ))
+          export CUTOFF=$cutoff
+          cat > "$RUNNER_TEMP/r3-deadline.py" <<'PY'
+          import json, os, time, urllib.request
+          cutoff = int(os.environ['CUTOFF'])
+          run = os.environ['GITHUB_RUN_ID']
+          api = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{run}"
+          headers = {'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'}
+          with open(os.environ['RUNNER_TEMP'] + '/guard-receipt.json', 'w') as out:
+              json.dump({'run_id': run, 'pid': os.getpid(), 'cutoff': cutoff,
+                         'cancel_at': cutoff - 120, 'force_at': cutoff - 60}, out)
+          def cancel(suffix):
+              try:
+                  request = urllib.request.Request(api + suffix, headers=headers, method='POST')
+                  with urllib.request.urlopen(request, timeout=20) as response:
+                      print(suffix, response.status, time.time(), flush=True)
+              except Exception as error:
+                  print(suffix, type(error).__name__, time.time(), flush=True)
+          time.sleep(max(0, cutoff - 120 - time.time()))
+          cancel('/cancel')
+          time.sleep(max(0, cutoff - 60 - time.time()))
+          cancel('/force-cancel')
+          PY
+          RUNNER_TRACKING_ID='' python3 "$RUNNER_TEMP/r3-deadline.py" > "$RUNNER_TEMP/guard.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/guard.pid"
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Bind the exact successful canonical producer and artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          timeout 20s gh api "repos/$GITHUB_REPOSITORY/actions/runs/45359520345" > "$RUNNER_TEMP/producer-origin.json"
+          timeout 20s gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/14903778434" > "$RUNNER_TEMP/prepared-artifact.json"
+          jq -e --arg repo "$GITHUB_REPOSITORY" \
+            '.id == 45359520345 and .run_attempt == 1 and .status == "completed" and
+             .conclusion == "success" and .path == ".github/workflows/benchmark.yaml" and
+             .head_sha == "4db6100d250b7cbfd2993d630d4454e09167cdc7" and .repository.full_name == $repo' \
+            "$RUNNER_TEMP/producer-origin.json"
+          jq -e '.id == 14903778434 and .name == "selector-preparation-attempt1" and
+            .size_in_bytes == 357345303 and .expired == false and
+            .workflow_run.id == 45359520345 and
+            .workflow_run.head_sha == "4db6100d250b7cbfd2993d630d4454e09167cdc7"' \
+            "$RUNNER_TEMP/prepared-artifact.json"
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: 45359520345
+          artifact-ids: 14903778434
+          merge-multiple: true
+          path: ${{ runner.temp }}/original
+      - name: Rehearse direct Python tests without measurement or builds
+        run: python3 cli/golem-cli/test-data/benchmark-analysis/r3_metrics_test.py
+      - name: Freeze the prepared input and creation-relative allocation
+        run: |
+          python3 integration-tests/benchmark_suites/r3_campaign.py preflight \
+            --prepared "$RUNNER_TEMP/original" --origin "$RUNNER_TEMP/producer-origin.json" \
+            --campaign-origin "$RUNNER_TEMP/campaign-origin.json" \
+            --artifact "$RUNNER_TEMP/prepared-artifact.json" \
+            --output "$RUNNER_TEMP/r3-input" --deadline "$DEADLINE"
+      - &evidence_check
+        name: Check complete evidence size without truncating raw records
+        id: evidence
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          jq -n --arg status "$JOB_STATUS" --arg run "$GITHUB_RUN_ID" --arg host "$HOST" \
+            '{status: $status, campaign_run_id: $run, host: $host}' > "$RUNNER_TEMP/workflow-status.json"
+          bytes=0
+          if [[ -d "$RUNNER_TEMP/$RESULT" ]]; then
+            bytes=$(du -sb "$RUNNER_TEMP/$RESULT" | cut -f1)
+          fi
+          printf '%s\n' "$bytes" > "$RUNNER_TEMP/evidence-bytes.txt"
+          (( bytes <= 1073741824 ))
+      - name: Retain the immutable campaign input
+        if: success()
+        uses: actions/upload-artifact@v6
+        with:
+          name: r3-input-attempt1
+          path: ${{ runner.temp }}/r3-input
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain a complete failed preparation prefix separately
+        if: failure() && steps.evidence.outcome == 'success'
+        uses: actions/upload-artifact@v6
+        with:
+          name: r3-preflight-failure-attempt1
+          path: ${{ runner.temp }}/r3-input
+          if-no-files-found: warn
+          retention-days: 7
+      - &receipts_upload
+        name: Always retain small status, size and guard receipts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: r3-receipts-${{ env.HOST }}-attempt${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/${{ env.RESULT }}/status.json
+            ${{ runner.temp }}/campaign-origin.json
+            ${{ runner.temp }}/producer-origin.json
+            ${{ runner.temp }}/prepared-artifact.json
+            ${{ runner.temp }}/guard-receipt.json
+            ${{ runner.temp }}/guard.log
+            ${{ runner.temp }}/evidence-bytes.txt
+            ${{ runner.temp }}/workflow-status.json
+            ${{ runner.temp }}/missing-input.txt
+            ${{ runner.temp }}/jobs.json
+            ${{ runner.temp }}/artifacts.json
+          if-no-files-found: warn
+          retention-days: 7
+      - &stop_guard
+        name: Stop only the successful job's owned guard after all uploads
+        if: success()
+        run: |
+          if [[ -f "$RUNNER_TEMP/guard.pid" ]]; then
+            pid=$(cat "$RUNNER_TEMP/guard.pid")
+            if [[ -r "/proc/$pid/cmdline" ]] && tr '\0' '\n' < "/proc/$pid/cmdline" | grep -Fxq "$RUNNER_TEMP/r3-deadline.py"; then
+              kill "$pid"
+            fi
+          fi
+      - name: Release wave one only at its original start
+        if: success()
+        run: |
+          python3 - <<'PY'
+          import json, os, time
+          with open(os.environ['RUNNER_TEMP'] + '/r3-input/campaign.json') as source:
+              campaign = json.load(source)
+          release = int(campaign['created_epoch']) + 1200
+          if time.time() > release + 5:
+              raise SystemExit('Preflight missed the fixed wave-one release by more than five seconds')
+          time.sleep(max(0, release - time.time()))
+          if time.time() > release + 5:
+              raise SystemExit('Preflight woke after the fixed wave-one release tolerance')
+          PY
+
+  wave1:
+    needs: preflight
+    uses: ./.github/workflows/benchmark-r3-wave.yaml
+    with:
+      wave: 1
+      deadline: ${{ inputs.deadline }}
+      isolated: ${{ inputs.isolated }}
+  wave2:
+    needs: wave1
+    uses: ./.github/workflows/benchmark-r3-wave.yaml
+    with:
+      wave: 2
+      deadline: ${{ inputs.deadline }}
+      isolated: ${{ inputs.isolated }}
+  wave3:
+    needs: wave2
+    uses: ./.github/workflows/benchmark-r3-wave.yaml
+    with:
+      wave: 3
+      deadline: ${{ inputs.deadline }}
+      isolated: ${{ inputs.isolated }}
+  wave4:
+    needs: wave3
+    uses: ./.github/workflows/benchmark-r3-wave.yaml
+    with:
+      wave: 4
+      deadline: ${{ inputs.deadline }}
+      isolated: ${{ inputs.isolated }}
+  wave5:
+    needs: wave4
+    uses: ./.github/workflows/benchmark-r3-wave.yaml
+    with:
+      wave: 5
+      deadline: ${{ inputs.deadline }}
+      isolated: ${{ inputs.isolated }}
+
+  final:
+    needs: [preflight, wave1, wave2, wave3, wave4, wave5]
+    if: always() && !cancelled()
+    runs-on: blacksmith-2vcpu-ubuntu-2204
+    timeout-minutes: 20
+    env:
+      DEADLINE: ${{ inputs.deadline }}
+      ISOLATED: ${{ inputs.isolated }}
+      CUTOFF_OFFSET: '36000'
+      HOST: final
+      RESULT: r3-final
+    steps:
+      - *deadline_guard
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Download the immutable input if preflight produced it
+        id: input
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: r3-input-attempt1
+          path: ${{ runner.temp }}/prepared
+      - name: Refuse analysis without a frozen campaign input
+        if: steps.input.outcome != 'success'
+        run: |
+          echo 'No immutable input: final analysis did not start; no measurement was attempted.' > "$RUNNER_TEMP/missing-input.txt"
+          exit 1
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: r3-wave*-attempt1
+          path: ${{ runner.temp }}/evidence
+      - name: Download gate evidence
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: r3-gate*-attempt1
+          path: ${{ runner.temp }}/evidence
+      - name: Retain paginated current-run jobs and artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          timeout 60s gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/1/jobs?per_page=100" \
+            | jq '{jobs: [.[].jobs[]]}' > "$RUNNER_TEMP/jobs.json"
+          timeout 60s gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
+            | jq '{artifacts: [.[].artifacts[]]}' > "$RUNNER_TEMP/artifacts.json"
+      - name: Summarize all available evidence without measurement
+        run: |
+          python3 integration-tests/benchmark_suites/r3_campaign.py final \
+            --prepared "$RUNNER_TEMP/prepared" --evidence "$RUNNER_TEMP/evidence" \
+            --jobs "$RUNNER_TEMP/jobs.json" --artifacts "$RUNNER_TEMP/artifacts.json" \
+            --output "$RUNNER_TEMP/r3-final"
+      - *evidence_check
+      - name: Retain the complete final report including failure prefixes
+        if: always() && steps.evidence.outcome == 'success'
+        uses: actions/upload-artifact@v6
+        with:
+          name: r3-final-attempt1
+          path: ${{ runner.temp }}/r3-final
+          if-no-files-found: warn
+          retention-days: 7
+      - *receipts_upload
+      - *stop_guard

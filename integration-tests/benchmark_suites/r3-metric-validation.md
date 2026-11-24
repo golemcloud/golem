@@ -188,3 +188,58 @@ fails upload eligibility and retains rejection receipts rather than truncating r
 No retries, replacement hosts, build charges or paid runner add-ons are authorized by
 this path. Public tariff and resource caps bound the model, not the actual provider
 invoice. Reconcile observed usage before allocating any full-suite waves.
+
+## Full-suite campaign with the validated harness
+
+`r3_campaign.py` implements a separate, build-free campaign. `r3-full.yaml` freezes
+the 23 entries and 84 configurations at N=5; `r3-controls.yaml` contains the two
+pre/post anchors. Production `ci.yaml` remains at its provisional iteration count.
+The six throughput entries use workload version 2. The other entries use version 1.
+
+The campaign accepts only the prepared artifact from run 45359520345, attempt 1,
+artifact 14903778434. It verifies the original archive and the harness overlay.
+The harness source is `4db6100d250b7cbfd2993d630d4454e09167cdc7`; all runtime,
+fixture and built-in bytes remain from `eb46c797c329e1787fb9260cc57b132e0830489d`.
+The orchestration source is recorded separately. No fallback build is available.
+
+Five dependency-chained waves each allocate four fresh 32-vCPU hosts. The first
+wave starts 20 minutes after workflow creation; subsequent waves start at fixed
+110-minute intervals. Each host uses these wave-relative windows:
+
+| Offset in minutes | Work |
+| --- | --- |
+| 0–10 | Checkout, download, install and dependency checks |
+| 10–14 | Pre-control process, including cleanup |
+| 14–99 | Partition process, including cleanup |
+| 99–103 | Post-control process, including cleanup |
+| 103–105 | Evidence upload |
+| 105–107 | Cancellation reserve |
+| 107–110 | Offline gate and next-wave release |
+
+Each control starts within five seconds of its fixed barrier. Its four process
+intervals must overlap. This establishes concurrent-job controls, not simultaneous
+requests. Every mandatory anchor metric must satisfy max/min ≤1.20, with all-zero
+agreement allowed only for event counts. Pre/post phases remain separate. Each
+wave gate recomputes metric, selector, artifact, cleanup and timing checks from
+the raw evidence before it releases the next wave. Failure stops progression;
+there are no replacement hosts, retries or adaptive sample sizes. Final analysis
+requires five observations per possible cell and reports the sample CV against
+10%. The acceptance flags remain false pending review, even when all criteria pass.
+
+Dispatch `benchmark.yaml` with `r3_campaign=true`, `publish=false`, all other
+research flags false, and an immutable epoch deadline at most ten hours after
+creation. The isolated workflows have no build, publisher or schedule. Workers
+have 107-minute job caps; preflight, five gates and final analysis have 65 configured
+small-runner minutes in total. The allocation is $150 before tax: $138.24 modeled
+worker compute, $0.32 small-runner compute, $5 storage reserve and $6.44 contingency.
+This excludes prior experiments and agent charges; it is not a provider spending lock.
+Each worker output is capped at 500 MiB; input/reports/receipts together at 1 GiB,
+with seven-day retention. Oversize evidence is rejected, never truncated into a
+complete-looking result. Cancellation, runner loss and platform outages can prevent
+cleanup or artifact preservation despite the guards.
+
+The `preflight`, `run`, `gate` and `final` subcommands preserve their inputs and
+reports in separate new directories. `run` requires the original live Actions run
+and attempt. `final` can also reconcile downloaded evidence offline, using the
+frozen input, all wave artifacts and saved paginated jobs/artifact API responses.
+It does not start services, measure, publish or change schedules.

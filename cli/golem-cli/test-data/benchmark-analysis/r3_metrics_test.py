@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -20,6 +21,7 @@ r3 = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(r3)
 sys.path.insert(0, str(SCRIPT.parent))
 import r3_selector as selector
+import r3_campaign as campaign
 
 
 def configuration(name='throughput-cpu-intensive', cluster=5, size=1, length=100):
@@ -590,6 +592,229 @@ class SelectorValidationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'reserve'):
                 selector.checked(['must-not-run'], ROOT, 0)
             process.assert_not_called()
+
+
+def campaign_record(declared, run_id):
+    run = suite_record(declared, run_id)
+    run['artifacts']['runner']['sha256'] = campaign.HARNESS_SHA
+    for entry in run['results']:
+        entry['measurement_environment']['hardware_fingerprint'] = selector.original.HARDWARE
+        entry['series_key'] = r3.digest(json.dumps([1, entry['entry_version'], r3.RUNNER,
+            selector.original.HARDWARE, r3.STORAGE, False], separators=(',', ':')).encode())
+        if entry['name'] not in r3.CALLS:
+            continue
+        for result in entry['results']:
+            config = result['run_config']
+            for it in result['iteration_results']:
+                for field in ('duration_samples', 'count_samples'):
+                    it[field] = {k: v for k, v in it[field].items()
+                                 if '-agent-rpc-local-' not in k and '-agent-rpc-remote-' not in k}
+                for language in ('rust', 'ts'):
+                    for target in range(config['size']):
+                        route = 'local' if config['clusterSize'] == 1 or it['index'] % 2 == target % 2 else 'remote'
+                        prefix = f'{language}-agent-rpc-{route}-'
+                        samples = [10] * r3.CALLS[entry['name']]
+                        it['duration_samples'][prefix + f'worker-{target}__secondary'] = samples
+                        it['duration_samples'].setdefault(prefix + 'invocation', []).extend(samples)
+                        for suffix in ('retries', 'timeouts'):
+                            it['count_samples'][prefix + f'worker-{target}-{suffix}__secondary'] = [0] * len(samples)
+                            it['count_samples'].setdefault(prefix + 'invocation-' + suffix, []).extend([0] * len(samples))
+    return run
+
+
+def campaign_selections(declared):
+    rows = []
+    for config_index, spec in enumerate(declared['configurations']):
+        if spec['entry'].removesuffix('-aggregate') not in r3.CALLS:
+            continue
+        c = spec['config']
+        for index in range(5):
+            for language in ('rust', 'ts'):
+                for target in range(c['size']):
+                    local = c['clusterSize'] == 1 or index % 2 == target % 2
+                    identity = f'("rpc-test-{target}-3")'
+                    rows.append(dict(component_id=f'{config_index}/{index}/{language}', iteration=index,
+                        target=target, candidate=3, local=local, parent_pod='p1', child_pod='p1' if local else 'p2',
+                        parent=('RustRpcBenchmarkAgent' if language == 'rust' else 'RpcBenchmarkAgent') + identity,
+                        child=('RustBenchmarkAgent' if language == 'rust' else 'BenchmarkAgent') + identity,
+                        context=[spec['entry'], c['clusterSize'], c['size'], c['length']]))
+    return rows
+
+
+def selection_log(rows):
+    return '\n\n'.join('INFO rpc_selection: ' + json.dumps({k: v for k, v in row.items() if k != 'context'})
+        + '\n in benchmark with name: "%s", cluster_size: %d, size: %d, length: %d' % tuple(row['context']) for row in rows)
+
+
+class R3CampaignTest(unittest.TestCase):
+    def test_fixed_inventory_versions_and_all_selector_modes(self):
+        declared = campaign.declaration()
+        self.assertEqual(len(declared['configurations']), 84)
+        self.assertEqual([len(campaign.declaration(p)['configurations']) for p in campaign.PARTITIONS], [22, 11, 37, 14])
+        expected = {(name + ('-no-cache' if cache else ''), cluster, size, length, cache)
+                    for name, _, clusters, sizes, lengths, cache in r3.SUITE_ENTRIES
+                    for cluster in clusters for size in sizes for length in lengths}
+        actual = {(s['entry'], s['config']['clusterSize'], s['config']['size'], s['config']['length'],
+                   s['config']['disableCompilationCache']) for s in declared['configurations']}
+        self.assertEqual(actual, expected)
+        self.assertEqual(len([b for b in campaign.suite()['benchmarks'] if b['version'] == 2]), 6)
+        self.assertTrue(all(s['iterations'] == 5 for s in declared['configurations']))
+        rows = campaign_selections(declared)
+        self.assertEqual(campaign.validate_selections(campaign.selection_rows(selection_log(rows)), declared),
+                         dict(groups=440, pairs=7540))
+        odd = [r for r in rows if r['context'] == ['throughput-large-input-aggregate', 5, 25, 100]
+               and r['component_id'].endswith('/rust') and r['iteration'] == 0]
+        self.assertEqual(sum(r['local'] for r in odd), 13)
+        for mutation in ('missing', 'duplicate', 'wrong-route', 'wrong-context', 'wrong-identity'):
+            changed = copy.deepcopy(rows)
+            if mutation == 'missing':
+                changed.pop()
+            elif mutation == 'duplicate':
+                changed.append(changed[0])
+            elif mutation == 'wrong-route':
+                changed[0]['local'] = False
+            elif mutation == 'wrong-context':
+                changed[0]['context'][2] = 999
+            else:
+                changed[0]['candidate'] = 4
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                campaign.validate_selections(changed, declared)
+
+    def test_controls_overlap_zero_and_parallel_disagreement(self):
+        declared = campaign.declaration(controls=True)
+        records = [(dict(path=f'host{i}'), campaign_record(declared, f'host{i}')) for i in range(4)]
+        analyses = [r3.analyze([record], declared) for record in records]
+        windows = [dict(started=i, ended=20 + i) for i in range(4)]
+        comparisons = campaign.control_agreement(analyses, windows)
+        self.assertTrue(comparisons)
+        self.assertTrue(all(item['max_min'] == 1 for item in comparisons))
+        with self.assertRaisesRegex(ValueError, 'overlap'):
+            campaign.control_agreement(analyses, [dict(started=i * 10, ended=i * 10 + 2) for i in range(4)])
+        changed = copy.deepcopy(analyses)
+        changed[0]['processes'][0]['configurations'][0]['metrics']['cold-invocation']['estimate'] = 12.01
+        with self.assertRaisesRegex(ValueError, 'max/min'):
+            campaign.control_agreement(changed, windows)
+        changed = copy.deepcopy(analyses)
+        changed[0]['processes'][0]['configurations'][0]['metrics']['cold-invocation-retries']['estimate'] = 1
+        with self.assertRaises(ValueError):
+            campaign.control_agreement(changed, windows)
+
+    def test_dummy_failure_timeout_lateness_and_container_retention(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for kind in ('success', 'failure', 'timeout', 'late', 'container'):
+                begin = time.time() - (6 if kind == 'late' else 0)
+                command = [sys.executable, '-c', 'import sys,time; ' + {
+                    'failure': 'sys.exit(7)', 'timeout': 'time.sleep(30)'
+                }.get(kind, 'print("retained dummy output")')]
+                with self.subTest(kind=kind), patch.object(campaign.subprocess, 'check_output', return_value='owned-leftover\n' if kind == 'container' else ''):
+                    if kind == 'success':
+                        campaign.process_run(command, root, root / kind, begin, begin + 30, os.environ)
+                    else:
+                        with self.assertRaises((ValueError, subprocess.TimeoutExpired)):
+                            campaign.process_run(command, root, root / kind, begin,
+                                                 begin + (19 if kind == 'timeout' else 30), os.environ)
+                    status = json.loads((root / kind / 'status.json').read_text())
+                    self.assertEqual(status['valid'], kind == 'success')
+                    if kind == 'container':
+                        self.assertEqual(status['remaining_containers'], ['owned-leftover'])
+
+    def test_budget_counts_skips_attempts_and_fixed_slots(self):
+        now = time.time()
+        stamp = lambda seconds: campaign.datetime.fromtimestamp(seconds, campaign.timezone.utc).isoformat()
+        frozen = dict(campaign_run_id='123', created_epoch=now - 1200)
+        jobs = dict(jobs=[dict(run_id=123, run_attempt=1, status='completed', conclusion='success',
+            labels=['blacksmith-32vcpu-ubuntu-2204'], started_at=stamp(now - 6400), completed_at=stamp(now)) for _ in range(4)]
+            + [dict(conclusion='skipped', labels=[])])
+        allocation = campaign.budget(frozen, jobs, dict(artifacts=[]), 1)
+        self.assertLess(allocation['projected_with_remaining_and_storage_dollars'], 150)
+        self.assertEqual(campaign.wave_start(frozen, 5) - campaign.wave_start(frozen, 1), 4 * 6600)
+        for mutation in ('extra-job', 'attempt', 'duration', 'artifact'):
+            changed = copy.deepcopy(jobs)
+            artifacts = dict(artifacts=[])
+            if mutation == 'extra-job':
+                changed['jobs'].append(changed['jobs'][0])
+            elif mutation == 'attempt':
+                changed['jobs'][0]['run_attempt'] = 2
+            elif mutation == 'duration':
+                changed['jobs'][0]['started_at'] = stamp(now - 6500)
+            else:
+                artifacts['artifacts'] = [dict(name='r3-wave1-bulk-attempt1', size_in_bytes=campaign.WORKER_BYTES + 1)]
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                campaign.budget(frozen, changed, artifacts, 1)
+
+    def test_public_wave_gate_recomputes_full_evidence_and_rejects_substitution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prepared, evidence = root / 'prepared', root / 'evidence'
+            prepared.mkdir()
+            evidence.mkdir()
+            start = time.time() - 6300
+            original_members = {'target/benchmarks/benchmarks': 'b' * 64}
+            original_members.update({'target/release/' + ('worker-executor' if name == 'golem-worker-executor' else name):
+                                     'c' * 64 for name in r3.SERVICES})
+            original_members.update({f'test-components/{name}.wasm': 'd' * 64 for name in r3.FIXTURES})
+            members = dict(original_members, **{'target/benchmarks/benchmarks': campaign.HARNESS_SHA})
+            campaign.save(prepared / 'campaign.json', dict(campaign_run_id='123', created_epoch=start - 1200,
+                deadline=start + 33000, inputs={}, code={}, original_members=original_members))
+            for partition in campaign.PARTITIONS:
+                host = evidence / f'r3-wave1-{partition}-attempt1'
+                host.mkdir()
+                campaign.save(host / 'original-members.json', original_members)
+                campaign.save(host / 'installed-members.json', members)
+                campaign.save(host / 'status.json', dict(valid=True, wave=1, partition=partition,
+                    started=start + 1, ended=start + 6200))
+                for phase, begin in (('pre', 600), ('main', 840), ('post', 5940)):
+                    path = host / phase
+                    path.mkdir()
+                    declared = campaign.declaration(controls=phase != 'main', partition=partition if phase == 'main' else None)
+                    record = campaign_record(declared, f'r3-123-w1-{partition}-{phase}')
+                    campaign.save(path / 'raw.json', dict(runs=[record]))
+                    (path / 'process.log').write_text(selection_log(campaign_selections(declared)))
+                    campaign.save(path / 'status.json', dict(valid=True, exit_code=0, remaining_containers=[],
+                        started=start + begin + 1, ended=start + begin + 90, cleanup_ended=start + begin + 91))
+            stamp = lambda seconds: campaign.datetime.fromtimestamp(seconds, campaign.timezone.utc).isoformat()
+            campaign.save(root / 'jobs.json', dict(jobs=[dict(run_id=123, run_attempt=1, status='completed',
+                conclusion='success', labels=['blacksmith-32vcpu-ubuntu-2204'],
+                started_at=stamp(start), completed_at=stamp(start + 6300)) for _ in range(4)]))
+            campaign.save(root / 'artifacts.json', dict(artifacts=[]))
+            command = [sys.executable, str(campaign.HERE / 'r3_campaign.py'), 'gate', '--prepared', str(prepared),
+                       '--evidence', str(evidence), '--jobs', str(root / 'jobs.json'),
+                       '--artifacts', str(root / 'artifacts.json'), '--wave', '1']
+            result = subprocess.run(command + ['--output', str(root / 'valid')], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads((root / 'valid/gate.json').read_text())
+            self.assertTrue(report['valid'])
+            self.assertFalse(report['r3_acceptance'])
+            self.assertFalse(report['n_accepted'])
+            raw = evidence / 'r3-wave1-bulk-attempt1/main/raw.json'
+            saved = raw.read_text()
+            for mutation in ('same-primary-wrong-targets', 'missing-metric', 'source', 'member'):
+                data = json.loads(saved)
+                if mutation == 'source':
+                    data['runs'][0]['source']['commitSha'] = r3.SOURCE
+                elif mutation == 'member':
+                    data['runs'][0]['artifacts']['services']['golem-worker-executor']['sha256'] = 'e' * 64
+                else:
+                    entry = next(e for e in data['runs'][0]['results'] if e['name'] == 'throughput-cpu-intensive')
+                    config = next(c for c in entry['results'] if c['run_config']['clusterSize'] == 5 and c['run_config']['size'] == 10)
+                    samples = config['iteration_results'][0]
+                    if mutation == 'missing-metric':
+                        samples['count_samples'].pop('rust-agent-rpc-throughput-ops-per-sec')
+                    else:
+                        # Preserve all primary totals, while assigning target0/1 to the wrong route.
+                        for field in ('duration_samples', 'count_samples'):
+                            for key in list(samples[field]):
+                                if '-rpc-local-worker-0' in key:
+                                    samples[field][key.replace('-local-worker-0', '-remote-worker-0')] = samples[field].pop(key)
+                                elif '-rpc-remote-worker-1' in key:
+                                    samples[field][key.replace('-remote-worker-1', '-local-worker-1')] = samples[field].pop(key)
+                raw.write_text(json.dumps(data))
+                result = subprocess.run(command + ['--output', str(root / mutation)], capture_output=True, text=True)
+                with self.subTest(mutation=mutation):
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(json.loads((root / mutation / 'gate.json').read_text())['valid'])
+                raw.write_text(saved)
 
 
 if __name__ == '__main__':

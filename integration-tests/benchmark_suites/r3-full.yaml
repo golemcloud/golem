@@ -1,0 +1,28 @@
+{
+  "name": "R3 balanced full suite",
+  "benchmarks": [
+    {"name":"cold-start-unknown-small","version":1,"iterations":5,"partition":"startup","clusterSize":[1],"size":[1,5,10],"length":[2],"disableCompilationCache":true},
+    {"name":"cold-start-unknown-medium","version":1,"iterations":5,"partition":"startup","clusterSize":[1],"size":[1,5,10],"length":[5],"disableCompilationCache":true},
+    {"name":"cold-start-unknown-small","version":1,"iterations":5,"partition":"startup","clusterSize":[1],"size":[1,5,10],"length":[2]},
+    {"name":"cold-start-unknown-medium","version":1,"iterations":5,"partition":"startup","clusterSize":[1],"size":[1,5,10],"length":[5]},
+    {"name":"latency-small","version":1,"iterations":5,"partition":"startup","clusterSize":[1],"size":[100,250,500,1000],"length":[2]},
+    {"name":"latency-medium","version":1,"iterations":5,"partition":"startup","clusterSize":[1],"size":[100,250,500],"length":[5]},
+    {"name":"sleep","version":1,"iterations":5,"partition":"startup","clusterSize":[1],"size":[10,100,500],"length":[10000]},
+    {"name":"durability-overhead","version":1,"iterations":5,"partition":"durability-echo","clusterSize":[1],"size":[10,50,100],"length":[5000]},
+    {"name":"throughput-echo","version":2,"iterations":5,"partition":"durability-echo","clusterSize":[1],"size":[1,10,50,100],"length":[1000]},
+    {"name":"throughput-echo-aggregate","version":2,"iterations":5,"partition":"durability-echo","clusterSize":[1],"size":[1,10,50,100],"length":[1000]},
+    {"name":"throughput-large-input","version":2,"iterations":5,"partition":"bulk","clusterSize":[1,5],"size":[1,10,25],"length":[100,10000]},
+    {"name":"throughput-large-input-effect","version":1,"iterations":5,"partition":"bulk","clusterSize":[1],"size":[1],"length":[10000]},
+    {"name":"throughput-large-input-aggregate","version":2,"iterations":5,"partition":"bulk","clusterSize":[1,5],"size":[1,10,25],"length":[100,10000]},
+    {"name":"throughput-cpu-intensive","version":2,"iterations":5,"partition":"bulk","clusterSize":[1,5],"size":[1,10,25],"length":[100]},
+    {"name":"throughput-cpu-intensive-aggregate","version":2,"iterations":5,"partition":"bulk","clusterSize":[1,5],"size":[1,10,25],"length":[100]},
+    {"name":"streaming-tool","version":1,"iterations":5,"partition":"streaming","clusterSize":[1],"size":[1,10],"length":[512]},
+    {"name":"streaming-rpc","version":1,"iterations":5,"partition":"streaming","clusterSize":[1],"size":[1,10],"length":[512]},
+    {"name":"streaming-rpc-history","version":1,"iterations":5,"partition":"streaming","clusterSize":[1],"size":[0,32,128],"length":[512]},
+    {"name":"streaming-rpc-cold-indexed","version":1,"iterations":5,"partition":"streaming","clusterSize":[1],"size":[0,128],"length":[512]},
+    {"name":"streaming-rpc-reconnect","version":1,"iterations":5,"partition":"streaming","clusterSize":[1],"size":[129],"length":[64]},
+    {"name":"streaming-rpc-recovery","version":1,"iterations":5,"partition":"streaming","clusterSize":[1],"size":[0,129],"length":[64]},
+    {"name":"streaming-rpc-recovery-siblings","version":1,"iterations":5,"partition":"streaming","clusterSize":[1],"size":[129],"length":[64]},
+    {"name":"streaming-rpc-recovery-nested","version":1,"iterations":5,"partition":"streaming","clusterSize":[1],"size":[129],"length":[32]}
+  ]
+}
