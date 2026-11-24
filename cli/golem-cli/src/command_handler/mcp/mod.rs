@@ -2157,7 +2157,7 @@ mod tests {
         use crate::oplog_export::export::OplogExportError;
         use crate::oplog_export::model::{
             OplogExportCoverage, OplogExportHeader, OplogExportReport, OplogReportHeader,
-            ReportAgentRef, ReportToken,
+            ReportAgentRef,
         };
         // Escaped and non-ASCII text, so that bytes, characters and the text differ in length.
         let report = OplogExportReport {
@@ -2169,7 +2169,10 @@ mod tests {
                     keep_error_text: false,
                     filtered: false,
                     root: ReportAgentRef {
-                        token: ReportToken("agent:00".to_string()),
+                        agent_id: golem_common::model::AgentId::from_parts(7, 1),
+                        agent_type: Some(golem_common::model::agent::AgentTypeName(
+                            "Zähler \"quoted\"".to_string(),
+                        )),
                     },
                     cli_version: "1.0 \"quoted\"\n\u{1F600}".to_string(),
                     generated_at: "2026-11-18T00:00:00+00:00 Zürich".to_string(),

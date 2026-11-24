@@ -833,6 +833,9 @@ pub struct AgentInitializationParameters {
 pub struct AgentMethodInvocationParameters {
     pub invocation_id: InvocationId,
     pub method_name: String,
+    /// Component-independent original-method-input diagnostic envelope, not the executed
+    /// method's input schema. Captured JSON fields include rejected values; native
+    /// host capabilities are redacted before encoding.
     pub function_input: TypedSchemaValue,
     pub trace_id: TraceId,
     pub trace_states: Vec<String>,

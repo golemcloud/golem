@@ -266,6 +266,7 @@ mod tests {
     struct Ready;
 
     #[async_trait::async_trait]
+    #[golem_async_trait::region_simple]
     impl wasmtime_wasi::Pollable for Ready {
         async fn ready(&mut self) {}
     }

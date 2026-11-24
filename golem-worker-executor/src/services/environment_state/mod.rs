@@ -253,6 +253,7 @@ pub fn tool_activation_from_mcp(
         secret_keys_revealable: SecretKeyScope::Keys(BTreeSet::new()),
         filesystem_access: ToolFilesystemAccess::Denied,
         source: mcp_import_bridge_source(),
+        shell: false,
     };
     let configuration = &deployment.tool_middleware_configuration;
     let environment_binding = configuration.environment_bindings.get(&tool_name);
@@ -766,6 +767,7 @@ impl GrpcEnvironmentStateService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl EnvironmentStateService for GrpcEnvironmentStateService {
     async fn get_mcp_runtime_credential(
         &self,

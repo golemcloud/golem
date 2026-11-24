@@ -94,9 +94,9 @@ pub(super) fn invocation_agent_id(
     }
 }
 
-/// The create intent of the test DSL's invocation of `method` on `name` under `key`, so an agent
-/// acquired with it is the one that invocation creates: the keyed agent of `name` when `durable`,
-/// otherwise the instance without a key whose ID derives from the invocation's owner key.
+/// Explicitly prepares the agent targeted by the test DSL's invocation of `method` under `key`:
+/// the keyed agent of `name` when durable, otherwise the instance without a key whose ID derives
+/// from the invocation's owner key. This setup does not submit method arguments.
 pub(super) fn invocation_create_intent(
     executor: &TestWorkerExecutor,
     component_id: golem_common::model::component::ComponentId,
@@ -107,13 +107,15 @@ pub(super) fn invocation_create_intent(
 ) -> golem_worker_executor::worker::CreateIntent {
     use golem_worker_executor::worker::{CreateIntent, NewOwner};
     if durable {
-        CreateIntent::Invocation {
+        CreateIntent::Create {
             owner: NewOwner::keyed(component_id, name.clone()),
             idempotency_key: None,
+            exclusive: false,
         }
     } else {
-        CreateIntent::Invocation {
+        CreateIntent::Create {
             owner: NewOwner::unkeyed(component_id, name.clone()),
+            exclusive: false,
             idempotency_key: Some(
                 golem_common::model::InvocationRequestKey::external(
                     executor.auth_ctx().idempotency_scope(),
@@ -133,7 +135,13 @@ pub(super) fn managed_filesystem_config(
     if !metering.filesystem {
         return Ok(None);
     }
-    #[cfg(target_os = "linux")]
+    platform::managed_filesystem_config()
+}
+
+#[cfg(target_os = "linux")]
+mod platform {
+    pub(super) fn managed_filesystem_config()
+    -> anyhow::Result<Option<golem_worker_executor::services::golem_config::FilesystemStorageMode>>
     {
         use golem_worker_executor::services::golem_config::FilesystemStorageMode;
         let root = std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
@@ -147,8 +155,15 @@ pub(super) fn managed_filesystem_config(
             xfs_quotad_socket: socket.into_boxed_path(),
         }))
     }
-    #[cfg(not(target_os = "linux"))]
-    anyhow::bail!("ManagedXfs storage metering requires Linux")
+}
+
+#[cfg(not(target_os = "linux"))]
+mod platform {
+    pub(super) fn managed_filesystem_config()
+    -> anyhow::Result<Option<golem_worker_executor::services::golem_config::FilesystemStorageMode>>
+    {
+        anyhow::bail!("ManagedXfs storage metering requires Linux")
+    }
 }
 
 fn managed_runtime_path(owned: &OwnedAgentId) -> anyhow::Result<std::path::PathBuf> {

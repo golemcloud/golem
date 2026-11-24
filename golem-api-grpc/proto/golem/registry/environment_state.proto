@@ -79,6 +79,8 @@ message CompiledToolBinding {
     golem.component.ComponentId component_baseline_id = 17;
   }
   golem.component.ConfigKeyScope config_keys_readable = 18;
+  // The built-in shell: the commands it runs are calls of the agent or tool that calls or hosts it.
+  bool shell = 19;
 }
 
 enum ToolFilesystemAccess {

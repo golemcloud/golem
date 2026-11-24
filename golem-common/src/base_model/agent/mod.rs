@@ -548,7 +548,8 @@ pub struct HttpMountDetails {
     pub path_prefix: Vec<PathSegment>,
     pub auth_details: Option<AgentHttpAuthDetails>,
     pub phantom_agent: bool,
-    pub phantom_id_binding: Option<PhantomIdBinding>,
+    pub agent_id_binding: Option<AgentIdBinding>,
+    pub create_route: Option<Vec<PathSegment>>,
     pub cors_options: CorsOptions,
     pub webhook_suffix: Vec<PathSegment>,
     pub static_bindings: Vec<FileMapping>,
@@ -562,9 +563,9 @@ pub struct HttpMountDetails {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "type")]
-pub enum PhantomIdBinding {
-    Path(PhantomIdBindingDetails),
-    Query(PhantomIdBindingDetails),
+pub enum AgentIdBinding {
+    Path(AgentIdBindingDetails),
+    Query(AgentIdBindingDetails),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
@@ -575,9 +576,8 @@ pub enum PhantomIdBinding {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-pub struct PhantomIdBindingDetails {
+pub struct AgentIdBindingDetails {
     pub name: String,
-    pub optional: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]

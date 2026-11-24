@@ -122,13 +122,14 @@ type session struct {
 	tokenChannels map[string]uint32
 	cursors       map[string]string
 
-	attempt       string
-	descriptor    []byte
-	accepted      bool
-	everAccepted  bool
-	sessionToken  string
-	acceptedOwner AgentID
-	acceptedKey   string
+	attempt        string
+	descriptor     []byte
+	accepted       bool
+	executionReady bool
+	everAccepted   bool
+	sessionToken   string
+	acceptedOwner  AgentID
+	acceptedKey    string
 	// nextDelay is the delay the next connection attempt waits after a
 	// connection that did not stay up.
 	nextDelay time.Duration
@@ -170,13 +171,8 @@ type sessionResult struct {
 }
 
 // openSession starts a call. The call is sent once the connection is up; the
-// result arrives on s.result. A session names its agent by constructor
-// arguments, so only an agent that its arguments reach can stream: one of
-// [Upsert], or one that [Create] made with [Keyed].
+// result arrives on s.result.
 func openSession(a *Agent, method string, params schema.SchemaValue) (*session, error) {
-	if a.parameters == nil {
-		return nil, fmt.Errorf("golem: %s.%s: a streaming call needs an agent addressed by its constructor arguments", a.typeName, method)
-	}
 	life, end := context.WithCancel(context.Background())
 	s := &session{
 		agent:         a,
@@ -247,20 +243,29 @@ func (s *session) prepareStart() error {
 		return err
 	}
 	a := s.agent
-	constructor, err := schema.MarshalWireValue(a.parameters)
-	if err != nil {
-		return fmt.Errorf("golem: %s constructor arguments: %w", a.typeName, err)
+	var target map[string]any
+	if a.byID {
+		target = map[string]any{"kind": "id", "agentId": a.id.Load()}
+		if a.fingerprint != "" {
+			target["expectedFingerprint"] = a.fingerprint
+		}
+	} else {
+		constructor, err := schema.MarshalWireValue(a.parameters)
+		if err != nil {
+			return fmt.Errorf("golem: %s constructor arguments: %w", a.typeName, err)
+		}
+		target = map[string]any{"kind": "key", "constructorParameters": json.RawMessage(constructor)}
 	}
 	methodParams, err := schema.MarshalWireValue(params)
 	if err != nil {
 		return fmt.Errorf("golem: %s.%s arguments: %w", a.typeName, s.method, err)
 	}
 	selector := map[string]any{
-		"agentType":             a.typeName,
-		"application":           a.configuration.AppName,
-		"constructorParameters": json.RawMessage(constructor),
-		"environment":           a.configuration.EnvName,
-		"method":                s.method,
+		"agentType":   a.typeName,
+		"application": a.configuration.AppName,
+		"target":      target,
+		"environment": a.configuration.EnvName,
+		"method":      s.method,
 	}
 	s.attempt = newUUID()
 	s.descriptor, err = encodeMessage("invocationStart", map[string]any{
@@ -292,6 +297,7 @@ func (s *session) prepareResume() error {
 		"sessionToken":  s.sessionToken,
 	})
 	s.accepted = false
+	s.executionReady = false
 	return err
 }
 
@@ -849,11 +855,11 @@ func (s *session) handleText(c *sessionConn, data []byte) error {
 		return err
 	}
 	switch kind {
-	case "invocationAccepted":
+	case "invocationAccepted", "invocationReady":
 		if err := m.members(kind, []string{"attemptId", "agentId", "idempotencyKey", "mappings", "sessionToken"}); err != nil {
 			return err
 		}
-		return s.accept(c, m)
+		return s.accept(c, m, kind == "invocationReady")
 	case "invocationRejected":
 		if err := m.members(kind, []string{"code", "message", "retryable"}, "attemptId", "stderr"); err != nil {
 			return err
@@ -908,7 +914,7 @@ func (s *session) handleText(c *sessionConn, data []byte) error {
 	return protocolErrorf("unknown message type %q", kind)
 }
 
-func (s *session) accept(c *sessionConn, m message) error {
+func (s *session) accept(c *sessionConn, m message, ready bool) error {
 	attempt, err := m.str("attemptId")
 	if err != nil {
 		return err
@@ -938,8 +944,11 @@ func (s *session) accept(c *sessionConn, m message) error {
 	if s.conn != c {
 		return nil
 	}
-	if s.accepted {
+	if s.accepted && !ready {
 		return protocolErrorf("duplicate invocation acceptance")
+	}
+	if ready && (!s.accepted || s.executionReady) {
+		return protocolErrorf("unexpected invocation readiness")
 	}
 	if attempt != s.attempt {
 		return protocolErrorf("the acceptance does not match the pending operation")
@@ -947,13 +956,21 @@ func (s *session) accept(c *sessionConn, m message) error {
 	if s.everAccepted && (s.acceptedOwner != acceptedOwner || s.acceptedKey != key) {
 		return protocolErrorf("accepted invocation identity changed")
 	}
-	if err := s.install(mappings, true); err != nil {
+	if ready && len(s.byToken) == 0 {
+		for ref := range s.byProvisional {
+			if !slices.ContainsFunc(mappings, func(mp mapping) bool { return mp.provisional == ref }) {
+				return protocolErrorf("readiness omitted a stream argument")
+			}
+		}
+	}
+	if err := s.install(mappings, ready || len(mappings) != 0); err != nil {
 		return err
 	}
 	s.sessionToken = token
 	s.acceptedOwner = acceptedOwner
 	s.acceptedKey = key
 	s.accepted = true
+	s.executionReady = ready || len(mappings) != 0
 	c.acceptedAt = time.Now()
 	s.everAccepted = true
 	return nil

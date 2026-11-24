@@ -482,16 +482,7 @@ async fn each_name_of_a_hard_linked_file_comes_back_as_its_own_file(open: OpenSt
         .unwrap();
 
     assert_eq!(listing(into.path()), listing(tree.path()));
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let first = std::fs::metadata(into.path().join("file.txt")).unwrap();
-        let second = std::fs::metadata(into.path().join("second-name.txt")).unwrap();
-        assert_eq!(
-            (first.nlink(), second.nlink(), first.ino() == second.ino()),
-            (1, 1, false)
-        );
-    }
+    native_permissions::assert_independent_files(into.path());
 }
 
 async fn save_stat_list_and_restore_give_the_same_info(open: OpenStore) {
@@ -661,11 +652,28 @@ async fn a_tree_that_cannot_be_read_gives_source_and_publishes_nothing(open: Ope
     );
 }
 
-async fn an_entry_that_cannot_be_read_gives_source_and_publishes_nothing(open: OpenStore) {
-    // A file without read permission is an entry that the store cannot read. Permissions do not
-    // bind a process that runs as root, so the case checks nothing there.
-    #[cfg(unix)]
-    {
+use native_permissions::an_entry_that_cannot_be_read_gives_source_and_publishes_nothing;
+
+#[cfg(unix)]
+mod native_permissions {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    pub(super) fn assert_independent_files(root: &std::path::Path) {
+        use std::os::unix::fs::MetadataExt;
+        let first = std::fs::metadata(root.join("file.txt")).unwrap();
+        let second = std::fs::metadata(root.join("second-name.txt")).unwrap();
+        assert_eq!(
+            (first.nlink(), second.nlink(), first.ino() == second.ino()),
+            (1, 1, false)
+        );
+    }
+
+    pub(super) async fn an_entry_that_cannot_be_read_gives_source_and_publishes_nothing(
+        open: OpenStore,
+    ) {
+        // A file without read permission is an entry that the store cannot read. Permissions do not
+        // bind a process that runs as root, so the case checks nothing there.
         use std::os::unix::fs::PermissionsExt;
         // SAFETY: `geteuid` has no preconditions.
         if unsafe { libc::geteuid() } == 0 {
@@ -694,8 +702,19 @@ async fn an_entry_that_cannot_be_read_gives_source_and_publishes_nothing(open: O
         assert!(matches!(saved, Err(SaveError::Source(_))), "{saved:?}");
         assert_eq!((stat, names), (None, Vec::<String>::new()));
     }
-    #[cfg(not(unix))]
-    drop(open);
+}
+
+#[cfg(not(unix))]
+mod native_permissions {
+    use super::OpenStore;
+
+    pub(super) fn assert_independent_files(_root: &std::path::Path) {}
+
+    pub(super) async fn an_entry_that_cannot_be_read_gives_source_and_publishes_nothing(
+        open: OpenStore,
+    ) {
+        drop(open);
+    }
 }
 
 async fn sequential_saves_get_later_times_and_list_newest_first(open: OpenStore) {

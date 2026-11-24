@@ -111,6 +111,7 @@ fn internal_rpc_child_key(request_key: &InvocationRequestKey) -> anyhow::Result<
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl wasmtime_wasi::p2::Pollable for FutureInvokeResultEntry {
     async fn ready(&mut self) {
         self.payload.ready().await
@@ -1051,6 +1052,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SubscribeAny for FutureInvokeResultState {
     async fn ready(&mut self) {
         // The p3 `future-invoke-result` resource exposes no `subscribe`, so this pollable-readiness

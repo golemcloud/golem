@@ -6,6 +6,115 @@ use test_r::test;
 
 #[test]
 #[test_r::timeout("10s")]
+async fn queued_acceptance_retains_receipt_without_starting_upload() {
+    use crate::custom_api::http_session::tests::{accepted, harness, stream_result};
+    use golem_api_grpc::proto::golem::worker::{
+        InvocationFailure, InvocationFailureKind, InvocationResponse, InvocationSessionCompletion,
+        invocation_response,
+    };
+
+    for outcome in ["transport", "failure", "ready", "invalid"] {
+        let h = harness(1);
+        let Some(invocation_response::Response::Accepted(ready)) = accepted(1, None).response
+        else {
+            unreachable!()
+        };
+        let mut queued = ready.clone();
+        queued.component_revision = None;
+        queued.stream_mappings.clear();
+        if outcome == "invalid" {
+            queued.attachment_id = None;
+        }
+        h.response_txs[0]
+            .send(Ok(InvocationResponse {
+                response: Some(invocation_response::Response::Accepted(queued)),
+            }))
+            .await
+            .unwrap();
+        let polled = Arc::new(AtomicBool::new(false));
+        let body_polled = polled.clone();
+        let body = poem::Body::from_bytes_stream(futures::stream::poll_fn(move |_| {
+            body_polled.store(true, Ordering::Release);
+            std::task::Poll::Ready(None::<Result<Bytes, io::Error>>)
+        }));
+        let mut session = h.start_session();
+        let mut receipt = None;
+        let mut upload = None;
+        let result = {
+            let receive = receive_response_head(
+                &mut session,
+                body,
+                &mut upload,
+                Arc::new(AtomicBool::new(false)),
+                std::time::Duration::from_secs(1),
+                true,
+                HttpVersion::Http1,
+                &mut receipt,
+            );
+            tokio::pin!(receive);
+            if outcome != "invalid" {
+                assert!(
+                    tokio::time::timeout(std::time::Duration::from_millis(30), &mut receive,)
+                        .await
+                        .is_err()
+                );
+                assert!(!polled.load(Ordering::Acquire));
+                match outcome {
+                    "transport" => {
+                        h.response_txs[0]
+                            .send(Err(tonic::Status::unavailable("before readiness")))
+                            .await
+                            .unwrap();
+                    }
+                    "failure" => {
+                        h.response_txs[0]
+                            .send(Ok(InvocationResponse {
+                                response: Some(invocation_response::Response::Finished(
+                                    InvocationSessionCompletion {
+                                        outcome: Some(
+                                            invocation_session_completion::Outcome::Failure(
+                                                InvocationFailure {
+                                                    kind: InvocationFailureKind::Execution as i32,
+                                                    code: "failed".into(),
+                                                    message: "before readiness".into(),
+                                                    worker_error: None,
+                                                },
+                                            ),
+                                        ),
+                                    },
+                                )),
+                            }))
+                            .await
+                            .unwrap();
+                    }
+                    "ready" => {
+                        h.response_txs[0]
+                            .send(Ok(InvocationResponse {
+                                response: Some(invocation_response::Response::Ready(ready.clone())),
+                            }))
+                            .await
+                            .unwrap();
+                        h.response_txs[0].send(Ok(stream_result())).await.unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            receive.await
+        };
+        assert_eq!(result.is_ok(), outcome == "ready");
+        assert_eq!(upload.is_some(), outcome == "ready");
+        assert_eq!(receipt.is_some(), outcome != "invalid");
+        if let Some(receipt) = receipt {
+            assert_eq!(receipt.agent_id, ready.agent_id);
+            assert_eq!(receipt.idempotency_key, ready.idempotency_key);
+            assert_eq!(receipt.environment_id, ready.environment_id);
+        }
+        session.cancellation.cancel();
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
 async fn acceptance_survives_protocol_and_head_errors() {
     use crate::custom_api::http_session::tests::{accepted, harness, stream_result};
     use golem_api_grpc::proto::golem::worker::invocation_response;

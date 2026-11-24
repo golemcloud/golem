@@ -40,7 +40,7 @@ pub(crate) enum LocalPlatform {
 
 impl LocalPlatform {
     pub(crate) fn native() -> Self {
-        if cfg!(target_os = "macos") {
+        if native::IS_MACOS {
             Self::MacOs
         } else {
             Self::Other
@@ -73,6 +73,41 @@ impl LocalPlatform {
             }),
             Self::Other => serde_json::json!({}),
         }
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod native {
+    pub(super) const IS_MACOS: bool = true;
+}
+
+#[cfg(not(target_os = "macos"))]
+mod native {
+    pub(super) const IS_MACOS: bool = false;
+}
+
+#[cfg(unix)]
+mod persistence {
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+
+    pub(super) fn protect(file: &std::fs::File) -> std::io::Result<()> {
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+    }
+
+    pub(super) fn sync_directory(path: &Path) -> anyhow::Result<()> {
+        rustix::fs::fsync(std::fs::File::open(path)?)?;
+        Ok(())
+    }
+}
+
+#[cfg(not(unix))]
+mod persistence {
+    pub(super) fn protect(_file: &std::fs::File) -> std::io::Result<()> {
+        Ok(())
+    }
+    pub(super) fn sync_directory(_path: &std::path::Path) -> anyhow::Result<()> {
+        Ok(())
     }
 }
 
@@ -115,19 +150,12 @@ pub(crate) fn retained_repository_key(data_dir: &Path) -> anyhow::Result<Box<str
         .context("Failed to generate the retained repository key")?;
     let key = hex::encode(bytes).into_boxed_str();
     let mut temporary = tempfile::NamedTempFile::new_in(data_dir)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        temporary
-            .as_file()
-            .set_permissions(std::fs::Permissions::from_mode(0o600))?;
-    }
+    persistence::protect(temporary.as_file())?;
     temporary.write_all(key.as_bytes())?;
     temporary.as_file().sync_all()?;
     match temporary.persist_noclobber(&path) {
         Ok(_) => {
-            #[cfg(unix)]
-            rustix::fs::fsync(std::fs::File::open(data_dir)?)?;
+            persistence::sync_directory(data_dir)?;
             Ok(key)
         }
         Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -213,52 +241,57 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn retained_repository_key_read_not_found_does_not_generate_a_replacement() {
-        let data = tempfile::tempdir().unwrap();
-        let key = data.path().join(KEY_FILE).into_boxed_path();
-        let target = data.path().join("missing-key").into_boxed_path();
-        std::os::unix::fs::symlink(&target, &key).unwrap();
-        let error = super::retained_repository_key(data.path()).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("Failed to read the retained repository key")
-        );
-        assert_eq!(
-            error.downcast_ref::<std::io::Error>().unwrap().kind(),
-            std::io::ErrorKind::NotFound,
-        );
-        assert_eq!(std::fs::read_link(&key).unwrap().as_path(), target.as_ref());
-        assert!(!target.exists());
-        assert_eq!(std::fs::read_dir(data.path()).unwrap().count(), 1);
-    }
+    mod unix {
+        use super::*;
+        use crate::filesystem_config::retained_repository_key;
+        use test_r::test;
 
-    #[cfg(unix)]
-    #[test]
-    fn retained_repository_key_read_failure_makes_no_replacement_attempt() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let data = tempfile::tempdir().unwrap();
-        let key = data.path().join(KEY_FILE).into_boxed_path();
-        std::fs::write(&key, [0xff]).unwrap();
-        // A replacement attempt needs a temporary file in the data directory, which a read-only
-        // directory refuses with an error other than the read failure.
-        std::fs::set_permissions(data.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
-        let result = super::retained_repository_key(data.path());
-        std::fs::set_permissions(data.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        let error = result.unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("Failed to read the retained repository key"),
-            "{error:#}"
-        );
-        assert_eq!(
-            error.downcast_ref::<std::io::Error>().unwrap().kind(),
-            std::io::ErrorKind::InvalidData,
-        );
-        assert_eq!(std::fs::read(&key).unwrap(), [0xff]);
-        assert_eq!(std::fs::read_dir(data.path()).unwrap().count(), 1);
+        #[test]
+        fn retained_repository_key_read_not_found_does_not_generate_a_replacement() {
+            let data = tempfile::tempdir().unwrap();
+            let key = data.path().join(KEY_FILE).into_boxed_path();
+            let target = data.path().join("missing-key").into_boxed_path();
+            std::os::unix::fs::symlink(&target, &key).unwrap();
+            let error = retained_repository_key(data.path()).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Failed to read the retained repository key")
+            );
+            assert_eq!(
+                error.downcast_ref::<std::io::Error>().unwrap().kind(),
+                std::io::ErrorKind::NotFound,
+            );
+            assert_eq!(std::fs::read_link(&key).unwrap().as_path(), target.as_ref());
+            assert!(!target.exists());
+            assert_eq!(std::fs::read_dir(data.path()).unwrap().count(), 1);
+        }
+
+        #[test]
+        fn retained_repository_key_read_failure_makes_no_replacement_attempt() {
+            use std::os::unix::fs::PermissionsExt as _;
+            let data = tempfile::tempdir().unwrap();
+            let key = data.path().join(KEY_FILE).into_boxed_path();
+            std::fs::write(&key, [0xff]).unwrap();
+            // A replacement attempt needs a temporary file in the data directory, which a read-only
+            // directory refuses with an error other than the read failure.
+            std::fs::set_permissions(data.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+            let result = retained_repository_key(data.path());
+            std::fs::set_permissions(data.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+            let error = result.unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Failed to read the retained repository key"),
+                "{error:#}"
+            );
+            assert_eq!(
+                error.downcast_ref::<std::io::Error>().unwrap().kind(),
+                std::io::ErrorKind::InvalidData,
+            );
+            assert_eq!(std::fs::read(&key).unwrap(), [0xff]);
+            assert_eq!(std::fs::read_dir(data.path()).unwrap().count(), 1);
+        }
     }
 
     #[test]

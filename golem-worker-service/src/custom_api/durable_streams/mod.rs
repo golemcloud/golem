@@ -28,7 +28,7 @@ use golem_common::model::invocation_session_public::{
 };
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, DurableStreamRoutePolicy, PhantomSelection,
+    AgentSelection, CallAgentBehaviour, DurableStreamRoutePolicy,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
@@ -188,23 +188,22 @@ impl DurableStreamsHandler {
         }
         let scope = route_scope(route);
         let session_name = suffix.session.clone().unwrap_or_default();
-        let binding =
-            route_agent_binding(request, route, &behaviour.phantom_selection, |phantom| {
-                if phantom {
-                    AgentBinding::StreamSession {
-                        route_scope: scope.clone(),
-                        session: session_name.clone(),
-                    }
-                } else {
-                    AgentBinding::Constructor
-                }
-            })?;
-        let constructor = CallAgentHandler::route_constructor(
-            route,
-            &behaviour.agent_type,
-            &behaviour.constructor_input,
-            &behaviour.constructor_parameters,
-        )?;
+        let binding = route_agent_binding(request, route, &behaviour.agent_selection, |_| {
+            AgentBinding::StreamSession {
+                route_scope: scope.clone(),
+                session: session_name.clone(),
+            }
+        })?;
+        let constructor = if matches!(binding, AgentBinding::Id(_)) {
+            None
+        } else {
+            Some(CallAgentHandler::route_constructor(
+                route,
+                &behaviour.agent_type,
+                &behaviour.constructor_input,
+                &behaviour.constructor_parameters,
+            )?)
+        };
         let request_key = golem_common::model::invocation_id::InvocationRequestKey::RouteSession {
             scope: scope.clone(),
             key: IdempotencyKey::new(session_name),
@@ -213,7 +212,8 @@ impl DurableStreamsHandler {
             .worker_service
             .bound_invocation_target(
                 behaviour.component_id,
-                &constructor,
+                &behaviour.agent_type,
+                constructor.as_ref(),
                 binding,
                 &request_key,
                 &behaviour.method_name,
@@ -531,7 +531,7 @@ fn canonical_selector_path(
     route: &ResolvedRouteEntry,
     behaviour: &CallAgentBehaviour,
 ) -> Result<String, RequestHandlerError> {
-    let PhantomSelection::Path { index } = behaviour.phantom_selection else {
+    let AgentSelection::Path { index } = behaviour.agent_selection else {
         return Ok(path.to_owned());
     };
     let segment_index = route
@@ -547,14 +547,14 @@ fn canonical_selector_path(
             )
         })
         .nth(usize::from(index))
-        .expect("Compiled phantom capture is missing")
+        .expect("Compiled agent ID capture is missing")
         .0
         + 1;
     let mut segments: Vec<_> = path.split('/').map(str::to_owned).collect();
     let segment = segments
         .get_mut(segment_index)
         .ok_or(RequestHandlerError::MissingValue {
-            expected: "phantom UUID path selector",
+            expected: "agent ID path selector",
         })?;
     let decoded =
         urlencoding::decode(segment).map_err(|_| RequestHandlerError::ValueParsingFailed {
@@ -576,9 +576,9 @@ fn resource_url(
     path: &str,
 ) -> Result<String, RequestHandlerError> {
     let mut url = canonical_selector_path(path, route, behaviour)?;
-    if let PhantomSelection::Query { name, .. } = &behaviour.phantom_selection
+    if let AgentSelection::Query { name } = &behaviour.agent_selection
         && let AgentBinding::Id(agent_id) =
-            route_agent_binding(request, route, &behaviour.phantom_selection, |_| {
+            route_agent_binding(request, route, &behaviour.agent_selection, |_| {
                 AgentBinding::Constructor
             })?
     {
@@ -716,16 +716,14 @@ mod tests {
         }
         for replayed in [false, true] {
             for accepted in [false, true] {
-                harness
-                    .durable_stream_reads
-                    .lock()
-                    .unwrap()
-                    .push_back(ReadStreamSlotSuccess {
+                harness.durable_stream_reads.lock().unwrap().push_back(Some(
+                    ReadStreamSlotSuccess {
                         invocation_key: Some(key.into()),
                         content_type: "application/json".into(),
                         writable: true,
                         ..Default::default()
-                    });
+                    },
+                ));
                 if accepted {
                     harness.durable_stream_creations.lock().unwrap().push_back(
                         CreateStreamSessionSuccess {
@@ -771,13 +769,13 @@ mod tests {
                 .durable_stream_reads
                 .lock()
                 .unwrap()
-                .push_back(ReadStreamSlotSuccess {
+                .push_back(Some(ReadStreamSlotSuccess {
                     invocation_key: Some(key.into()),
                     content_type: "application/json".into(),
                     writable: true,
                     tombstoned: rejected,
                     ..Default::default()
-                });
+                }));
             let mut request = request();
             let result = handler
                 .put(
@@ -1080,12 +1078,11 @@ mod tests {
             let RouteBehaviour::CallAgent(call) = &mut compiled.behavior else {
                 unreachable!()
             };
-            call.phantom_selection = if path_selector {
-                PhantomSelection::Path { index: 1.into() }
+            call.agent_selection = if path_selector {
+                AgentSelection::Path { index: 1.into() }
             } else {
-                PhantomSelection::Query {
+                AgentSelection::Query {
                     name: "instance".into(),
-                    optional: true,
                 }
             };
             let behaviour = call.clone();
@@ -1119,13 +1116,20 @@ mod tests {
                     .await
                     .unwrap();
                 let session_path = format!("{base}/invocations/s1");
+                if !present {
+                    assert!(matches!(
+                        resource_url(&request, &resolved, &behaviour, &session_path),
+                        Err(RequestHandlerError::MissingValue {
+                            expected: "agent ID query selector"
+                        })
+                    ));
+                    continue;
+                }
                 let url = resource_url(&request, &resolved, &behaviour, &session_path).unwrap();
                 let expected = if path_selector {
                     format!("/base/west/literal/{p}/run/invocations/s1")
-                } else if present {
-                    format!("/base/west/run/invocations/s1?instance={p}")
                 } else {
-                    "/base/west/run/invocations/s1".into()
+                    format!("/base/west/run/invocations/s1?instance={p}")
                 };
                 assert_eq!(url, expected);
                 let target_path = format!("{base}/forks/alternate/invocations/s1/streams/events");

@@ -2375,6 +2375,7 @@ fn create_intent_records_the_kind_and_only_the_key_that_identifies_the_create() 
     let invocation = |owner: &NewOwner| CreateIntent::Invocation {
         owner: owner.clone(),
         idempotency_key: Some(key.clone()),
+        invocation: None,
     };
     let create = |owner: &NewOwner, exclusive| CreateIntent::Create {
         owner: owner.clone(),

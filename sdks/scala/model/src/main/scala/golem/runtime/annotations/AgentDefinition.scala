@@ -37,7 +37,7 @@ final class agentDefinition(
   val snapshotting: String = "disabled",
   val exposeFiles: Array[(String, String)] = Array.empty,
   val fileResponseHeaders: Array[(String, String)] = Array.empty,
-  val phantomIdPath: String = "",
-  val phantomIdQuery: String = "",
-  val phantomIdOptional: Boolean = false
+  val agentIdPath: String = "",
+  val agentIdQuery: String = "",
+  val createRoute: String = ""
 ) extends StaticAnnotation

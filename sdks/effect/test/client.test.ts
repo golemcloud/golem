@@ -976,6 +976,11 @@ describe("Client 1.6 config and ephemeral receipts", () => {
       const upserted = constructorOf(runtime.opens[1]?.target)!
       expect(upserted.valueNodes.filter((node) => node.tag === "record-value")).toHaveLength(2)
       expect(upserted.valueNodes).toHaveLength(5)
+      const constructorCodec = yield* compileMethodSpec(
+        "constructor",
+        method({ input: OwnerTarget.id, success: Schema.Void }),
+      )
+      expect(yield* constructorCodec.inputCodec.decode(upserted)).toEqual({ name: "main", owner })
     }),
   )
 

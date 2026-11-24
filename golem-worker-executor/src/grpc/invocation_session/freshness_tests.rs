@@ -13,16 +13,12 @@
 // limitations under the License.
 
 use super::{
-    AcceptanceRace, TransportStreamId, build_durable_streaming_request,
+    AcceptanceRace, TransportStreamId, build_durable_streaming_request, capture_method_input,
     decode_invocation_freshness_disposition, decode_invocation_input, effective_session_identity,
     is_attachment_termination, pre_acceptance_rejection_reason, race_invocation_acceptance,
     require_expected_callee_fingerprint,
 };
 use crate::durable_host::durable_session::durable_stream_mapping_to_proto;
-use crate::durable_host::stream_session::{
-    decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
-    encode_recursive_stream_value_with_schema, remap_recursive_stream_references,
-};
 use futures::future;
 use golem_api_grpc::proto::golem::account::PlanId;
 use golem_api_grpc::proto::golem::auth::{AuthCtx, AuthEffectiveSurface, UserAuthCtx, auth_ctx};
@@ -45,6 +41,10 @@ use golem_common::schema::SchemaValue;
 use golem_common::schema::agent::{
     AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, NamedField,
     OutputSchema,
+};
+use golem_common::schema::streaming::{
+    decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
+    encode_recursive_stream_value_with_schema, remap_recursive_stream_references,
 };
 use golem_schema::Empty;
 use golem_schema::proto::golem::common::Uuid;
@@ -378,6 +378,21 @@ fn builder_fixture() -> (InvocationStart, ComponentMetadata, AgentInvocation) {
     let callee = AgentId::from_parts(7, 1);
     let idempotency_key = golem_common::model::InvocationId::from(uuid::Uuid::from_u128(901));
     let fingerprint = AgentFingerprint(uuid::Uuid::from_u128(3));
+    let input = SchemaValue::Record {
+        fields: vec![
+            SchemaValue::Map {
+                entries: vec![(
+                    SchemaValue::Stream(SchemaValueStream::from_host_endpoint(TransportStreamId(
+                        101,
+                    ))),
+                    SchemaValue::Stream(SchemaValueStream::from_host_endpoint(TransportStreamId(
+                        7,
+                    ))),
+                )],
+            },
+            SchemaValue::Stream(SchemaValueStream::from_host_endpoint(TransportStreamId(55))),
+        ],
+    };
     let request = InvocationStart {
         target: Some(golem_api_grpc::proto::golem::worker::AgentTarget {
             target: Some(
@@ -389,26 +404,19 @@ fn builder_fixture() -> (InvocationStart, ComponentMetadata, AgentInvocation) {
         environment_id: Some(environment_id.into()),
         attempt_id: Some(uuid::Uuid::new_v4().into()),
         expected_callee_fingerprint: Some(fingerprint.0.into()),
+        input: Some(
+            golem_common::schema::streaming::encode_recursive_stream_value(&input, |stream, _| {
+                stream.with_host_endpoint::<TransportStreamId, _>(|id| id.0)
+            })
+            .unwrap(),
+        ),
         ..Default::default()
     };
     let invocation = AgentInvocation::AgentMethod {
         idempotency_key,
         method_name: "run".to_string(),
-        input: SchemaValue::Record {
-            fields: vec![
-                SchemaValue::Map {
-                    entries: vec![(
-                        SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
-                            TransportStreamId(101),
-                        )),
-                        SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
-                            TransportStreamId(7),
-                        )),
-                    )],
-                },
-                SchemaValue::Stream(SchemaValueStream::from_host_endpoint(TransportStreamId(55))),
-            ],
-        },
+        input: capture_method_input(&request).unwrap(),
+        allow_streams: true,
         invocation_context: InvocationContextStack::fresh(),
         caller: Caller::anonymous(),
         scope_card: None,
@@ -606,6 +614,94 @@ fn durable_rpc_origin_is_persisted_and_requires_an_agent_caller() {
         assert!(
             build(&invalid).is_err(),
             "invalid origin mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn durable_rpc_origin_accepts_a_tool_of_its_environment_as_the_immediate_caller() {
+    use golem_common::model::caller::{Principal, ToolPrincipal};
+    use golem_common::model::tool::ToolName;
+
+    let (mut request, metadata, invocation) = builder_fixture();
+    let parent: AgentId = callee_of(&request);
+    let origin_environment: EnvironmentId = request.environment_id.unwrap().try_into().unwrap();
+    request.context = Some(golem_api_grpc::proto::golem::worker::InvocationContext {
+        parent: Some(parent.into()),
+        ..Default::default()
+    });
+    request.origin_invocation = Some(
+        golem_api_grpc::proto::golem::worker::StreamInvocationIdentity {
+            callee_environment_id: request.environment_id,
+            callee: super::request::start_agent_id(&request),
+            callee_fingerprint: Some(uuid::Uuid::from_u128(91).into()),
+            idempotency_key: Some(uuid::Uuid::from_u128(902).into()),
+        },
+    );
+    let tool_of = |environment_id: EnvironmentId| {
+        Principal::Tool(ToolPrincipal {
+            issuer: crate::test_callers::TEST_ISSUER.to_string(),
+            environment_id,
+            tool_name: ToolName::try_from("report").unwrap(),
+        })
+    };
+    let build_from = |request: &golem_api_grpc::proto::golem::worker::InvocationStart,
+                      immediate: Principal| {
+        let mut request = request.clone();
+        request.caller = Some(
+            Caller {
+                original: crate::test_callers::user_principal(),
+                immediate,
+                tokens: Vec::new(),
+            }
+            .into(),
+        );
+        let (accepted, _) = tokio::sync::oneshot::channel();
+        build_durable_streaming_request(
+            &request,
+            callee_of(&request),
+            Some(&AgentTypeName("test-agent".to_string())),
+            &metadata,
+            ComponentRevision::INITIAL,
+            AgentFingerprint(uuid::Uuid::from_u128(3)),
+            invocation.clone(),
+            1,
+            accepted,
+            8,
+        )
+    };
+    let build = |immediate: Principal| build_from(&request, immediate);
+
+    assert!(build(crate::test_callers::agent_principal(parent)).is_ok());
+    assert!(build(tool_of(origin_environment)).is_ok());
+
+    let other_agent = crate::test_callers::agent_principal(crate::test_agent_id("other"));
+    for (case, immediate) in [
+        ("another agent", other_agent),
+        (
+            "a tool of another environment",
+            tool_of(EnvironmentId(uuid::Uuid::from_u128(0xe2))),
+        ),
+        ("a user", crate::test_callers::user_principal()),
+        ("anonymous", Principal::Anonymous),
+    ] {
+        assert!(build(immediate).is_err(), "{case} was accepted");
+    }
+
+    // A tool principal names no host, so the origin ties the tool to the agent that sends the
+    // call: a request whose parent or origin callee names another agent is refused.
+    let mut other_parent = request.clone();
+    other_parent.context.as_mut().unwrap().parent = Some(crate::test_agent_id("different").into());
+    let mut other_callee = request.clone();
+    other_callee.origin_invocation.as_mut().unwrap().callee =
+        Some(crate::test_agent_id("different").into());
+    for (case, changed) in [
+        ("the parent names another agent", &other_parent),
+        ("the origin names another agent", &other_callee),
+    ] {
+        assert!(
+            build_from(changed, tool_of(origin_environment)).is_err(),
+            "a tool caller was accepted when {case}"
         );
     }
 }

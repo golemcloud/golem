@@ -3,6 +3,7 @@ import { Effect } from "effect"
 import * as fs from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { gunzipSync } from "node:zlib"
+import { supervise } from "./process.ts"
 import { publishProgress, resourceSample } from "./progress-telemetry.ts"
 import { runTask, type Task } from "./progress.ts"
 
@@ -72,6 +73,24 @@ test("complete merged gzip log, argv boundaries, token omission, and exact exits
   expect((await new Response(child.stdout).text()).length).toBeLessThan(2000)
 })
 
+test("missing native runner retains failed terminal evidence and startup errno", async () => {
+  const { report, directory, env } = await fixture()
+  const child = Bun.spawn([process.execPath, helper, "run", "worker", "first", "--", "/bin/true"], {
+    cwd: directory,
+    env: { ...env, PATH: directory },
+    stdout: "pipe",
+    stderr: "pipe"
+  })
+  expect(await child.exited).toBe(127)
+  const task = await state(report)
+  expect(task.status).toBe("failed")
+  expect(task.exit_code).toBe(127)
+  expect(task.log.endsWith(".gz")).toBe(true)
+  expect(gunzipSync(await fs.readFile(join(report, task.log))).toString()).toContain(
+    "Could not start command: ToolingIoError: I/O or parsing failure (ENOENT)"
+  )
+})
+
 test("command signals and missing commands retain their exact shell status", async () => {
   const { report, directory } = await fixture()
   expect(await Effect.runPromise(runTask(report, "worker", "first", ["/bin/sh", "-c", "kill -TERM $$"]))).toBe(143)
@@ -87,16 +106,20 @@ test("timeout kills stubborn and orphan descendants without killing unrelated pr
   const { report, directory } = await fixture()
   const sibling = Bun.spawn(["sleep", "60"])
   try {
-    for (const leaderExits of [false, true]) {
+    for (const exitCode of [undefined, 0, 7]) {
       const pidFile = join(directory, "pid")
       await fs.rm(pidFile, { force: true })
-      const command = `trap '' TERM; (trap '' TERM; echo $BASHPID > '${pidFile}'; exec sleep 60) & ${
-        leaderExits ? "sleep .2; exit 0" : "wait"
-      }`
+      const command =
+        `trap '' TERM; setsid bash -c 'trap "" TERM; echo $$ > "$1"; exec sleep 60' fixture '${pidFile}' & ${
+          exitCode === undefined ? "wait" : `while [ ! -s '${pidFile}' ]; do sleep .01; done; exit ${exitCode}`
+        }`
       const code = await Effect.runPromise(
-        runTask(report, "service", "orphan", ["bash", "-c", command], { timeoutSeconds: 0.5, graceSeconds: 0.2 })
+        runTask(report, "service", "orphan", ["bash", "-c", command], {
+          timeoutSeconds: 0.5,
+          graceSeconds: exitCode === undefined ? 0.2 : 3
+        })
       )
-      expect(code).toBe(leaderExits ? 0 : 124)
+      expect(code).toBe(exitCode ?? 124)
       const pid = Number(await fs.readFile(pidFile, "utf8"))
       await waitFor(async () => {
         try {
@@ -112,6 +135,232 @@ test("timeout kills stubborn and orphan descendants without killing unrelated pr
   } finally {
     sibling.kill()
     await sibling.exited
+  }
+})
+
+for (const victim of ["published", "outer", "stopped-outer"] as const) {
+  test(`${victim} native supervisor failure settles after escaped workload cleanup`, async () => {
+    const { report, directory } = await fixture()
+    const directPid = join(directory, "direct.pid"),
+      escapedPid = join(directory, "escaped.pid"),
+      portFile = join(directory, "port"),
+      escaped = join(directory, "escaped.ts"),
+      workload = join(directory, "workload.ts")
+    await fs.writeFile(
+      escaped,
+      `process.on("SIGTERM", () => {});
+      const server = Bun.serve({port: 0, fetch: () => new Response("alive")});
+      await Bun.write(${JSON.stringify(escapedPid)}, String(process.pid));
+      await Bun.write(${JSON.stringify(portFile)}, String(server.port));
+      console.log("escaped-ready"); await Bun.sleep(60000);`
+    )
+    await fs.writeFile(
+      workload,
+      `process.on("SIGTERM", () => {});
+      await Bun.write(${JSON.stringify(directPid)}, String(process.pid));
+      Bun.spawn(["setsid", ${JSON.stringify(process.execPath)}, ${JSON.stringify(escaped)}],
+        {stdin: "ignore", stdout: "inherit", stderr: "inherit"});
+      console.log("retained-before-kill"); await Bun.sleep(60000);`
+    )
+    const sibling = Bun.spawn(["sleep", "60"])
+    const result = Effect.runPromise(runTask(report, "worker", "first", [process.execPath, workload], {
+      timeoutSeconds: 3,
+      graceSeconds: 0.3
+    }))
+    const owned: number[] = []
+    let outer: number | undefined
+    try {
+      await waitFor(async () =>
+        (await fs.readFile(join(report, "logs/worker--first.log"), "utf8")).includes("escaped-ready")
+      )
+      const published = (await state(report)).pid!
+      const fields = (await fs.readFile(`/proc/${published}/stat`, "utf8")).split(") ")[1]!.split(" ")
+      outer = Number(fields[1])
+      // Fail safely if the expected native ownership boundary is absent: never
+      // mistake the test process for the outer supervisor and kill it.
+      expect(await fs.readlink(`/proc/${outer}/exe`)).toEndWith("/cargo-test-r")
+      owned.push(Number(await fs.readFile(directPid, "utf8")), Number(await fs.readFile(escapedPid, "utf8")))
+      process.kill(victim === "published" ? published : outer, victim === "stopped-outer" ? "SIGSTOP" : "SIGKILL")
+      const code = victim === "stopped-outer" ? 124 : 137
+      if (victim === "stopped-outer") {
+        await waitFor(async () =>
+          (await Promise.all(owned.map((pid) => fs.exists(`/proc/${pid}`)))).every((alive) => !alive)
+        )
+        expect((await fs.readFile(`/proc/${outer}/stat`, "utf8")).split(") ")[1]!.startsWith("T")).toBe(true)
+        expect((await state(report)).completed_at).toBeNull()
+      }
+      expect(
+        await Promise.race([
+          result,
+          Bun.sleep(14000).then(() => {
+            throw new Error("native owner settlement did not complete")
+          })
+        ])
+      ).toBe(code)
+      for (const pid of owned) expect(await fs.exists(`/proc/${pid}`)).toBe(false)
+      const port = Number(await fs.readFile(portFile, "utf8"))
+      const rebound = Bun.serve({ port, fetch: () => new Response("rebound") })
+      rebound.stop(true)
+      expect(sibling.exitCode).toBeNull()
+      const task = await state(report)
+      expect(task.status).toBe("failed")
+      expect(task.exit_code).toBe(code)
+      expect(task.completed_at).not.toBeNull()
+      const log = gunzipSync(await fs.readFile(join(report, task.log))).toString()
+      expect(log).toContain("retained-before-kill")
+      expect(log).toContain("escaped-ready")
+      if (victim === "stopped-outer") {
+        expect(log).toContain("supervision settlement expired")
+        expect(log).toContain("Command deadline expired")
+      }
+      expect(await Effect.runPromise(runTask(report, "worker", "next", ["true"]))).toBe(0)
+    } finally {
+      if (outer) {
+        try {
+          process.kill(outer, "SIGCONT")
+        } catch { /* Owner already reaped. */ }
+      }
+      await result
+      for (const file of [directPid, escapedPid]) {
+        if (await fs.exists(file)) {
+          const pid = Number(await fs.readFile(file, "utf8"))
+          try {
+            process.kill(pid, "SIGKILL")
+          } catch { /* Already reaped. */ }
+        }
+      }
+      sibling.kill()
+      await sibling.exited
+    }
+  })
+}
+
+test("observed outer results beat late settlement observation", async () => {
+  const { directory } = await fixture()
+  await Promise.all([0, 7, 137].map(async (code) => {
+    const path = join(directory, `observed-${code}.log`), output = await fs.open(path, "w")
+    let delayed = false
+    try {
+      const result = await Effect.runPromise(supervise({
+        command: ["sh", "-c", `sleep .1; echo completed; exit ${code}`],
+        output: output.fd,
+        timeoutSeconds: 0.5,
+        graceSeconds: 0.2,
+        published: async (inner) => {
+          if (code !== 137) return
+          const fields = (await fs.readFile(`/proc/${inner}/stat`, "utf8")).split(") ")[1]!.split(" ")
+          const outer = Number(fields[1])
+          expect(await fs.readlink(`/proc/${outer}/exe`)).toEndWith("/cargo-test-r")
+          setTimeout(() => process.kill(outer, "SIGKILL"), 50)
+        },
+        // Keep the caller from consuming the result until after the 8.5s
+        // settlement cutoff. The native result must win, not a late timer poll.
+        tick: async () => {
+          delayed = true
+          await Bun.sleep(9500)
+        }
+      }))
+      expect(delayed).toBe(true)
+      expect(result).toEqual({ code, interrupted: false })
+      expect(await fs.readFile(path, "utf8")).not.toContain("supervision settlement expired")
+    } finally {
+      await output.close()
+    }
+  }))
+})
+
+test("native task budget survives outer supervisor death while the adapter is stopped", async () => {
+  const { report, directory, env } = await fixture()
+  const pidFile = join(directory, "workload.pid"), wrapper = join(directory, "wrapper.ts")
+  await fs.writeFile(
+    wrapper,
+    `import { Effect } from ${JSON.stringify(join(import.meta.dirname, "node_modules/effect/dist/index.js"))};
+    import { runTask } from ${JSON.stringify(helper)};
+    process.exitCode = await Effect.runPromise(runTask(${JSON.stringify(report)}, "worker", "first",
+      ["bash", "-c", ${JSON.stringify(`trap '' TERM; echo $$ > '${pidFile}'; echo ready; exec sleep 60`)}],
+      {timeoutSeconds: 1, graceSeconds: 0.2}));`
+  )
+  const child = Bun.spawn([process.execPath, wrapper], { cwd: directory, env, stdout: "pipe", stderr: "pipe" })
+  try {
+    await waitFor(() => fs.exists(pidFile))
+    const pid = Number(await fs.readFile(pidFile, "utf8")), published = (await state(report)).pid!
+    const fields = (await fs.readFile(`/proc/${published}/stat`, "utf8")).split(") ")[1]!.split(" ")
+    const outer = Number(fields[1])
+    expect(await fs.readlink(`/proc/${outer}/exe`)).toEndWith("/cargo-test-r")
+    child.kill("SIGSTOP")
+    await waitFor(async () => (await fs.readFile(`/proc/${child.pid}/stat`, "utf8")).split(") ")[1]!.startsWith("T"))
+    process.kill(outer, "SIGKILL")
+    await Bun.sleep(1500)
+    expect(await fs.exists(`/proc/${pid}`)).toBe(false)
+    expect(child.exitCode).toBeNull()
+    child.kill("SIGCONT")
+    expect(await child.exited).toBe(137)
+    const task = await state(report)
+    expect(task.exit_code).toBe(137)
+    expect(gunzipSync(await fs.readFile(join(report, task.log))).toString()).toContain("ready")
+  } finally {
+    if (child.exitCode === null) {
+      child.kill("SIGCONT")
+      child.kill("SIGTERM")
+      await child.exited
+    }
+    if (await fs.exists(pidFile)) {
+      const pid = Number(await fs.readFile(pidFile, "utf8"))
+      try {
+        process.kill(pid, "SIGKILL")
+      } catch { /* Already reaped. */ }
+    }
+  }
+})
+
+test("native safety ceiling drains a stopped inner supervisor without adapter assistance", async () => {
+  const { report, directory, env } = await fixture()
+  const directPid = join(directory, "direct.pid"),
+    escapedPid = join(directory, "escaped.pid"),
+    wrapper = join(directory, "wrapper.ts")
+  const command = `trap '' TERM; setsid bash -c 'trap "" TERM; echo $$ > "${escapedPid}"; exec sleep 60' &
+    echo $$ > '${directPid}'; echo retained-before-stop; wait`
+  await fs.writeFile(
+    wrapper,
+    `import { Effect } from ${JSON.stringify(join(import.meta.dirname, "node_modules/effect/dist/index.js"))};
+    import { runTask } from ${JSON.stringify(helper)};
+    process.exitCode = await Effect.runPromise(runTask(${JSON.stringify(report)}, "worker", "first",
+      ["bash", "-c", ${JSON.stringify(command)}], {timeoutSeconds: 1, graceSeconds: 0.2}));`
+  )
+  const child = Bun.spawn([process.execPath, wrapper], { cwd: directory, env, stdout: "pipe", stderr: "pipe" })
+  let inner: number | undefined
+  try {
+    await waitFor(async () => await fs.exists(directPid) && await fs.exists(escapedPid))
+    inner = (await state(report)).pid!
+    expect(await fs.readlink(`/proc/${inner}/exe`)).toEndWith("/cargo-test-r")
+    child.kill("SIGSTOP")
+    await waitFor(async () => (await fs.readFile(`/proc/${child.pid}/stat`, "utf8")).split(") ")[1]!.startsWith("T"))
+    process.kill(inner, "SIGSTOP")
+    const pids = await Promise.all([directPid, escapedPid].map(async (path) => Number(await fs.readFile(path, "utf8"))))
+    await waitFor(async () =>
+      (await Promise.all(pids.map((pid) => fs.exists(`/proc/${pid}`)))).every((alive) => !alive)
+    )
+    expect(await fs.exists(`/proc/${inner}`)).toBe(false)
+    expect(child.exitCode).toBeNull()
+    child.kill("SIGCONT")
+    expect(await child.exited).toBe(124)
+    const task = await state(report)
+    expect(task.status).toBe("failed")
+    expect(task.exit_code).toBe(124)
+    const log = gunzipSync(await fs.readFile(join(report, task.log))).toString()
+    expect(log).toContain("retained-before-stop")
+    expect(log).toContain("Command deadline expired")
+  } finally {
+    if (inner) {
+      try {
+        process.kill(inner, "SIGCONT")
+      } catch { /* Already reaped. */ }
+    }
+    if (child.exitCode === null) {
+      child.kill("SIGCONT")
+      child.kill("SIGTERM")
+      await child.exited
+    }
   }
 })
 
@@ -268,6 +517,67 @@ test("compression failure retains the complete raw log without changing the verd
   expect(task.log).toBe("logs/worker--first.log")
   expect(await fs.readFile(join(report, task.log), "utf8")).toBe("retained")
   expect(await fs.exists(join(report, task.log + ".gz.partial"))).toBe(false)
+})
+
+test("startup expiry and cancellation settle the handoff and retain terminal evidence", async () => {
+  for (const [signal, code] of [["deadline", 124], ["SIGTERM", 143], ["SIGINT", 130]] as const) {
+    const { directory, report, env } = await fixture(),
+      ownerFile = join(directory, "owner.pid"),
+      marker = join(directory, "workload"),
+      bin = join(directory, "bin"),
+      wrapper = join(directory, "wrapper.ts")
+    const native = Bun.which("cargo-test-r")!
+    await fs.mkdir(bin)
+    // Stop at the native launch boundary, before any handoff writer can publish.
+    await fs.writeFile(
+      join(bin, "cargo-test-r"),
+      `#!/bin/bash\necho $$ > "$STARTUP_OWNER"\nkill -STOP $$\nexec "$NATIVE_TEST_R" "$@"\n`,
+      { mode: 0o755 }
+    )
+    await fs.writeFile(
+      wrapper,
+      `import { Effect } from ${JSON.stringify(join(import.meta.dirname, "node_modules/effect/dist/index.js"))};
+      import { runTask } from ${JSON.stringify(helper)};
+      process.exitCode = await Effect.runPromise(runTask(${JSON.stringify(report)}, "worker", "first",
+        ["touch", ${JSON.stringify(marker)}], { ${
+        signal === "deadline" ? "timeoutSeconds: 0.5," : ""
+      } graceSeconds: 0.2 }));`
+    )
+    const child = Bun.spawn([process.execPath, wrapper], {
+      cwd: directory,
+      env: { ...env, PATH: `${bin}:${process.env.PATH}`, STARTUP_OWNER: ownerFile, NATIVE_TEST_R: native },
+      stdout: "pipe",
+      stderr: "pipe"
+    })
+    let owner: number | undefined
+    try {
+      await waitFor(() => fs.exists(ownerFile))
+      owner = Number(await fs.readFile(ownerFile, "utf8"))
+      await waitFor(async () => (await fs.readFile(`/proc/${owner}/stat`, "utf8")).split(") ")[1]!.startsWith("T"))
+      expect(await fs.exists(join(report, "progress/worker--first.json"))).toBe(false)
+      if (signal !== "deadline") child.kill(signal)
+      await waitFor(async () => child.exitCode !== null)
+      expect(await child.exited).toBe(code)
+      expect(await fs.exists(`/proc/${owner}`)).toBe(false)
+      expect(await fs.exists(marker)).toBe(false)
+      const task = await state(report)
+      expect(task.status).toBe(signal === "deadline" ? "failed" : "interrupted")
+      expect(task.exit_code).toBe(code)
+      expect(task.completed_at).not.toBeNull()
+      expect(task.log).toEndWith(".log.gz")
+      expect(gunzipSync(await fs.readFile(join(report, task.log))).toString()).toBe("")
+    } finally {
+      if (owner) {
+        try {
+          process.kill(owner, "SIGCONT")
+        } catch { /* Already reaped. */ }
+      }
+      if (child.exitCode === null) {
+        child.kill("SIGTERM")
+        await child.exited
+      }
+    }
+  }
 })
 
 test("cancellation joins delayed publication and retains terminal evidence without starting the workload", async () => {

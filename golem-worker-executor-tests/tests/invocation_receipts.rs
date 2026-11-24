@@ -43,7 +43,8 @@ fn increment(idempotency_key: InvocationId) -> AgentInvocation {
     AgentInvocation::AgentMethod {
         idempotency_key,
         method_name: "increment".into(),
-        input: data_value!().value().clone(),
+        allow_streams: false,
+        input: data_value!().value().clone().try_into().unwrap(),
         invocation_context: InvocationContextStack::fresh(),
         caller: callers::anonymous(),
         scope_card: None,

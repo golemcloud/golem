@@ -112,14 +112,12 @@ export const runTask = Effect.fn("Progress.runTask")(function*(
   const outcome = yield* supervise({
     command,
     output: output.fd,
+    environment: { ...process.env, MAIN_VALIDATION_TASK_ID: task.id },
     ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
     ...(options.graceSeconds === undefined ? {} : { graceSeconds: options.graceSeconds }),
     published: async (pid) => {
       task = { ...task, pid }
       await (options.publish ?? save)(path, task)
-    },
-    timedOut: async () => {
-      await output.write(`\n[validation] Task exceeded ${timeoutSeconds}s; terminating its process group\n`)
     }
   }).pipe(Effect.catch((error) =>
     io(async () => {
@@ -229,11 +227,11 @@ export const observe = Effect.fn("Progress.observe")(function*(directory: string
   yield* Effect.acquireRelease(Effect.void, () =>
     Effect.gen(function*() {
       const tasks = yield* io(() => records(directory)).pipe(Effect.catch(() => Effect.succeed([] as Task[])))
-      for (const task of tasks) if (task.status === "running" && task.pid) yield* cleanupGroup(task.pid)
+      for (const task of tasks) if (task.status === "running" && task.pid) yield* cleanupGroup(task.pid, 15)
     }).pipe(Effect.orDie))
   const outcome = yield* supervise({ command, output: output.fd, tick: safeReport })
   const tasks = yield* io(() => records(directory))
-  for (const task of tasks) if (task.status === "running" && task.pid) yield* cleanupGroup(task.pid)
+  for (const task of tasks) if (task.status === "running" && task.pid) yield* cleanupGroup(task.pid, 15)
   yield* io(async () => {
     for (const task of tasks) {
       if (["pending", "running"].includes(task.status)) {
@@ -275,11 +273,37 @@ if (import.meta.main) {
   try {
     const [operation, ...args] = process.argv.slice(2), directory = process.env.MAIN_VALIDATION_REPORT_DIR
     if (!directory) throw new Error("MAIN_VALIDATION_REPORT_DIR is required")
-    if (operation === "observe" && args.length) {
+    if (operation === "test-r" && args[0] === "run") {
+      // Each cargo-make group can contain several invocations. A UUID avoids
+      // collisions while the prefix joins lifecycle records to task progress.
+      if (
+        !args.includes("--binaries-metadata") && !args.includes("--selection") && !args.includes("--cargo-messages")
+      ) {
+        throw new Error("Main validation requires explicit prebuilt test input")
+      }
+      const id = `${process.env.MAIN_VALIDATION_TASK_ID ?? "standalone"}--${crypto.randomUUID()}`
+      await fs.mkdir(join(directory, "runner-events"), { recursive: true })
+      const runner = Bun.which("cargo-test-r")
+      if (!runner) throw new Error("cargo-test-r is required")
+      process.execve!(runner, [
+        runner,
+        "run",
+        "--no-fail-fast",
+        "--deadline",
+        "60m",
+        "--kill-grace",
+        "10s",
+        "--events",
+        join(directory, "runner-events", id + ".jsonl"),
+        "--invocation-id",
+        id,
+        ...args.slice(1)
+      ], process.env)
+    } else if (operation === "observe" && args.length) {
       process.exitCode = await Effect.runPromise(observe(resolve(directory), args[0] === "--" ? args.slice(1) : args))
     } else if (operation === "run" && args.length > 3 && args[2] === "--") {
       process.exitCode = await Effect.runPromise(runTask(resolve(directory), args[0]!, args[1]!, args.slice(3)))
-    } else throw new Error("usage: observe -- command ... | run lane task -- command ...")
+    } else throw new Error("usage: observe -- command ... | run lane task -- command ... | test-r run ...")
   } catch (error) {
     console.error(`progress: ${String(error)}`)
     process.exitCode = 1

@@ -6,7 +6,7 @@ use super::super::route_schema::StreamSlotSchema;
 use super::super::schema_mapping::render_output_schema;
 use super::*;
 use golem_service_base::custom_api::{
-    DurableStreamRepresentation, MethodParameter, PhantomSelection,
+    AgentSelection, DurableStreamRepresentation, MethodParameter,
 };
 
 const OFFSET: &str = "GolemDSOffset";
@@ -60,12 +60,12 @@ pub(super) fn emit(
         components,
         &mut creation_parameters,
     )?;
-    let identity_parameter = match &behaviour.phantom_selection {
-        PhantomSelection::Query { name, .. } => {
+    let identity_parameter = match &behaviour.agent_selection {
+        AgentSelection::Query { name } => {
             let index = creation_parameters
                 .iter()
                 .position(|p| p["in"] == "query" && p["name"] == name.as_str())
-                .expect("Lowered phantom query selector is missing");
+                .expect("Lowered agent ID query selector is missing");
             Some(creation_parameters.remove(index))
         }
         _ => None,

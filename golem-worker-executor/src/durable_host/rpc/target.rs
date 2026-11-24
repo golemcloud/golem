@@ -68,6 +68,7 @@ use golem_common::model::oplog::SpanKind;
 use golem_common::model::oplog::SpanStarted;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcPrepareInvocation;
 use golem_common::model::oplog::payload::HostRequestGolemRpcCreate;
+use golem_common::schema::SchemaValue;
 use golem_common::schema::agent::AgentTypeSchema;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
@@ -192,6 +193,8 @@ pub(super) async fn prepare_rpc_invocation_identity<Ctx: WorkerCtx>(
     remote_agent_id: &OwnedAgentId,
     child_key: &IdempotencyKey,
     method_name: &str,
+    input: &SchemaValue,
+    allow_streams: bool,
     freshness: InvocationFreshnessDisposition,
 ) -> anyhow::Result<Result<(OwnedInvocationId, AgentFingerprint), InternalRpcError>> {
     let request_key = InvocationRequestKey::Internal(child_key.clone());
@@ -255,10 +258,15 @@ pub(super) async fn prepare_rpc_invocation_identity<Ctx: WorkerCtx>(
         let result = loop {
             let rpc = ctx.rpc();
             let interrupt = ctx.create_interrupt_signal().map(Error::from);
-            let caller = Caller::entry(ctx.self_principal());
+            let caller = ctx.outgoing_caller();
             let demand = rpc.create_demand(
                 dispatch_target(remote_agent_id, ephemeral.as_ref()),
                 method_name,
+                Some(crate::worker::invocation::native_invocation_start(
+                    method_name,
+                    input,
+                    allow_streams,
+                )?),
                 ctx.created_by(),
                 ctx.agent_id(),
                 &env,
@@ -322,7 +330,7 @@ where
     let rpc = ctx.rpc();
     let created_by = ctx.created_by();
     let agent_id = *ctx.agent_id();
-    let caller = Caller::entry(ctx.self_principal());
+    let caller = ctx.outgoing_caller();
     let stack = ctx.clone_as_inherited_stack(span.span_id());
     let key = handle
         .idempotency_key_position(ctx)
@@ -492,6 +500,7 @@ pub(super) async fn activate_rpc_target(
         .create_demand(
             ResolvedTarget::existing(remote_agent_id.clone()),
             method_name,
+            None,
             created_by,
             agent_id,
             env,
@@ -544,7 +553,7 @@ pub(super) async fn ensure_rpc_target_activated<Ctx: WorkerCtx>(
     let demand = {
         let created_by = ctx.created_by();
         let agent_id = *ctx.agent_id();
-        let caller = Caller::entry(ctx.self_principal());
+        let caller = ctx.outgoing_caller();
         let interrupt_signal = ctx.create_interrupt_signal().map(Error::from);
         let activation = activate_rpc_target(
             rpc.as_ref(),

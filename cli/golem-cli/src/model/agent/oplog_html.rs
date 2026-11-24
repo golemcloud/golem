@@ -81,15 +81,27 @@ pub fn render_oplog_live_export_viewer_html(
     document: &OplogLiveExportViewerDocument,
 ) -> anyhow::Result<String> {
     render_template(
-        &document.header.root.pseudonym(),
+        &document.header.root.label(),
         &serde_json::to_string(document)?,
     )
 }
 
 fn render_template(title: &str, json: &str) -> anyhow::Result<String> {
-    Ok(VIEWER_TEMPLATE
-        .replacen(TITLE_PLACEHOLDER, &escape_html_text(title), 1)
-        .replacen(DATA_PLACEHOLDER, &escape_json_for_script(json), 1))
+    let (prefix, suffix) = template_parts(title)?;
+    Ok(format!("{prefix}{}{suffix}", escape_json_for_script(json)))
+}
+
+/// The template before the data placeholder, with the title, and the template after it. The
+/// template is split before the title goes in, so a title that holds the data placeholder text
+/// stays title text.
+fn template_parts(title: &str) -> anyhow::Result<(String, &'static str)> {
+    let split = VIEWER_TEMPLATE
+        .find(DATA_PLACEHOLDER)
+        .ok_or_else(|| anyhow!("the viewer template has no data placeholder"))?;
+    Ok((
+        VIEWER_TEMPLATE[..split].replacen(TITLE_PLACEHOLDER, &escape_html_text(title), 1),
+        &VIEWER_TEMPLATE[split + DATA_PLACEHOLDER.len()..],
+    ))
 }
 
 /// Writes the viewer page of an obfuscated export entry by entry into a temporary file next to
@@ -100,6 +112,39 @@ pub struct OplogExportHtmlWriter {
     file: tempfile::NamedTempFile,
     suffix: &'static str,
     entries: usize,
+}
+
+#[cfg(unix)]
+mod platform {
+    use anyhow::Context;
+    use std::path::Path;
+
+    pub(super) fn temporary(parent: &Path) -> std::io::Result<tempfile::NamedTempFile> {
+        tempfile::Builder::new()
+            .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o666))
+            .tempfile_in(parent)
+    }
+
+    pub(super) fn preserve_mode(file: &std::fs::File, path: &Path) -> anyhow::Result<()> {
+        if let Ok(existing) = std::fs::metadata(path) {
+            file.set_permissions(existing.permissions())
+                .with_context(|| format!("failed to set the mode of {}", path.display()))?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(unix))]
+mod platform {
+    use std::path::Path;
+
+    pub(super) fn temporary(parent: &Path) -> std::io::Result<tempfile::NamedTempFile> {
+        tempfile::NamedTempFile::new_in(parent)
+    }
+
+    pub(super) fn preserve_mode(_file: &std::fs::File, _path: &Path) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 impl OplogExportHtmlWriter {
@@ -115,34 +160,17 @@ impl OplogExportHtmlWriter {
         // The file gets the mode that a plain `--html` write gives it: an existing target keeps
         // its mode, and a new file gets 0666 under the umask instead of the 0600 of a temporary
         // file.
-        #[cfg(unix)]
-        let file = tempfile::Builder::new()
-            .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o666))
-            .tempfile_in(&parent);
-        #[cfg(not(unix))]
-        let file = tempfile::NamedTempFile::new_in(&parent);
+        let file = platform::temporary(&parent);
         let mut file = file.with_context(|| {
             format!("failed to create a temporary file in {}", parent.display())
         })?;
-        #[cfg(unix)]
-        if let Ok(existing) = std::fs::metadata(path) {
-            file.as_file()
-                .set_permissions(existing.permissions())
-                .with_context(|| format!("failed to set the mode of {}", path.display()))?;
-        }
-        let template = VIEWER_TEMPLATE.replacen(TITLE_PLACEHOLDER, &escape_html_text(title), 1);
-        let split = template
-            .find(DATA_PLACEHOLDER)
-            .ok_or_else(|| anyhow!("the viewer template has no data placeholder"))?;
-        let suffix_start = VIEWER_TEMPLATE
-            .find(DATA_PLACEHOLDER)
-            .ok_or_else(|| anyhow!("the viewer template has no data placeholder"))?
-            + DATA_PLACEHOLDER.len();
-        file.write_all(&template.as_bytes()[..split])?;
+        platform::preserve_mode(file.as_file(), path)?;
+        let (prefix, suffix) = template_parts(title)?;
+        file.write_all(prefix.as_bytes())?;
         Ok(Self {
             path: path.to_path_buf(),
             file,
-            suffix: &VIEWER_TEMPLATE[suffix_start..],
+            suffix,
             entries: 0,
         })
     }
@@ -307,9 +335,9 @@ mod tests {
             keep_error_text: false,
             filtered: false,
             root: crate::oplog_export::model::ReportAgentRef {
-                token: crate::oplog_export::model::ReportToken(format!(
-                    "agent:{}",
-                    "ab".repeat(16)
+                agent_id: golem_common::model::AgentId::from_parts(0x2a, 0xab),
+                agent_type: Some(golem_common::model::agent::AgentTypeName(
+                    "Counter".to_string(),
                 )),
             },
             cli_version: "test".to_string(),
@@ -356,7 +384,7 @@ mod tests {
 
     fn write_export(path: &Path, entries: &[ReportEntry]) {
         let header = export_header();
-        let mut writer = OplogExportHtmlWriter::create(path, &header.root.pseudonym()).unwrap();
+        let mut writer = OplogExportHtmlWriter::create(path, &header.root.label()).unwrap();
         writer.header(&header).unwrap();
         for entry in entries {
             writer.entry(entry).unwrap();
@@ -375,11 +403,15 @@ mod tests {
         let html = std::fs::read_to_string(&path).unwrap();
         let header = export_header();
         assert!(html.contains(&format!(
-            "<title>Golem oplog · {}</title>",
-            header.root.pseudonym()
+            "<title>Golem oplog · Counter[{}]</title>",
+            header.root.agent_id
         )));
         let doc = embedded(&html);
         assert_eq!(doc["mode"], "export");
+        assert_eq!(
+            doc["header"]["root"]["agentId"],
+            header.root.agent_id.to_string()
+        );
         assert_eq!(doc["header"], serde_json::to_value(&header).unwrap());
         assert_eq!(doc["entries"], serde_json::to_value(&entries).unwrap());
         assert_eq!(doc["coverage"]["notes"][0], "a note");
@@ -432,23 +464,28 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn export_html_writer_keeps_the_mode_of_a_plain_write() {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-        let dir = tempfile::tempdir().unwrap();
+    mod unix {
+        use super::*;
+        use test_r::test;
 
-        let plain = dir.path().join("plain.html");
-        std::fs::write(&plain, "x").unwrap();
-        let new = dir.path().join("new.html");
-        write_export(&new, &[]);
-        assert_eq!(mode(&new), mode(&plain));
+        #[test]
+        fn export_html_writer_keeps_the_mode_of_a_plain_write() {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            let dir = tempfile::tempdir().unwrap();
 
-        let existing = dir.path().join("existing.html");
-        std::fs::write(&existing, "old").unwrap();
-        std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o640)).unwrap();
-        write_export(&existing, &[]);
-        assert_eq!(mode(&existing), 0o640);
+            let plain = dir.path().join("plain.html");
+            std::fs::write(&plain, "x").unwrap();
+            let new = dir.path().join("new.html");
+            write_export(&new, &[]);
+            assert_eq!(mode(&new), mode(&plain));
+
+            let existing = dir.path().join("existing.html");
+            std::fs::write(&existing, "old").unwrap();
+            std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o640)).unwrap();
+            write_export(&existing, &[]);
+            assert_eq!(mode(&existing), 0o640);
+        }
     }
 
     #[test]
@@ -486,7 +523,44 @@ mod tests {
         }
         assert!(html.contains(&format!(
             "<title>Golem oplog · {}</title>",
-            header.root.pseudonym()
+            header.root.label()
         )));
+    }
+
+    #[test]
+    fn a_title_that_holds_the_placeholders_stays_title_text() {
+        let mut header = export_header();
+        header.root.agent_type = Some(golem_common::model::agent::AgentTypeName(format!(
+            "A{DATA_PLACEHOLDER}{TITLE_PLACEHOLDER}"
+        )));
+        let title = format!("<title>Golem oplog · {}</title>", header.root.label());
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("report.html");
+        let mut writer = OplogExportHtmlWriter::create(&path, &header.root.label()).unwrap();
+        writer.header(&header).unwrap();
+        writer.entry(&export_entry(1, "one")).unwrap();
+        writer.finish(&OplogExportCoverage::new(vec![])).unwrap();
+        let html = std::fs::read_to_string(&path).unwrap();
+        assert!(html.contains(&title), "{html}");
+        assert_eq!(
+            embedded(&html)["header"],
+            serde_json::to_value(&header).unwrap()
+        );
+        assert_eq!(embedded(&html)["entries"][0]["index"], 1);
+
+        let html = render_oplog_live_export_viewer_html(&OplogLiveExportViewerDocument {
+            mode: OplogViewerMode::LiveExport,
+            header: header.clone(),
+            from: None,
+            query: None,
+            page_size: 50,
+        })
+        .unwrap();
+        assert!(html.contains(&title), "{html}");
+        assert_eq!(
+            embedded(&html)["header"],
+            serde_json::to_value(&header).unwrap()
+        );
     }
 }

@@ -14,7 +14,7 @@
 
 use desert_rust::BinaryCodec;
 
-use super::{InvocationOperation, InvocationStatus};
+use super::{AgentMethodInput, InvocationOperation, InvocationStatus};
 use crate::base_model::caller::Caller;
 use crate::model::account::AccountId;
 use crate::model::card::ScopeCard;
@@ -56,7 +56,8 @@ pub enum AgentInvocation {
     AgentMethod {
         idempotency_key: InvocationId,
         method_name: String,
-        input: SchemaValue,
+        input: AgentMethodInput,
+        allow_streams: bool,
         invocation_context: InvocationContextStack,
         caller: Caller,
         scope_card: Option<ScopeCard>,
@@ -106,7 +107,8 @@ pub enum AgentInvocationPayload {
     },
     AgentMethod {
         method_name: String,
-        input: SchemaValue,
+        input: AgentMethodInput,
+        allow_streams: bool,
         caller: Caller,
         scope_card: Option<ScopeCard>,
     },
@@ -199,7 +201,8 @@ pub enum StoredAgentInvocationPayload {
         caller: Caller,
     },
     AgentMethod {
-        input: SchemaValue,
+        input: AgentMethodInput,
+        allow_streams: bool,
         caller: Caller,
         scope_card: Option<ScopeCard>,
     },
@@ -246,6 +249,7 @@ impl StoredAgentInvocationPayload {
             (
                 Self::AgentMethod {
                     input,
+                    allow_streams,
                     caller,
                     scope_card,
                 },
@@ -253,6 +257,7 @@ impl StoredAgentInvocationPayload {
             ) => AgentInvocationPayload::AgentMethod {
                 method_name,
                 input,
+                allow_streams,
                 caller,
                 scope_card,
             },
@@ -372,12 +377,14 @@ impl AgentInvocationPayload {
             Self::AgentMethod {
                 method_name,
                 input,
+                allow_streams,
                 caller,
                 scope_card,
             } => (
                 Op::AgentMethod { method_name },
                 Stored::AgentMethod {
                     input,
+                    allow_streams,
                     caller,
                     scope_card,
                 },
@@ -447,20 +454,23 @@ impl AgentInvocationPayload {
                 Self::AgentMethod {
                     method_name,
                     input,
+                    allow_streams,
                     caller,
                     scope_card,
                 },
                 Self::AgentMethod {
                     method_name: other_method,
                     input: other_input,
+                    allow_streams: other_allow_streams,
                     caller: other_caller,
                     scope_card: other_card,
                 },
             ) => {
                 method_name == other_method
+                    && allow_streams == other_allow_streams
                     && caller == other_caller
                     && scope_card == other_card
-                    && schema_value_same_request(input, other_input)
+                    && input == other_input
             }
             (
                 Self::ExternalTool {
@@ -784,12 +794,14 @@ impl AgentInvocation {
             AgentInvocationPayload::AgentMethod {
                 method_name,
                 input,
+                allow_streams,
                 caller,
                 scope_card,
             } => Self::AgentMethod {
                 idempotency_key,
                 method_name,
                 input,
+                allow_streams,
                 invocation_context,
                 caller,
                 scope_card,
@@ -866,6 +878,7 @@ impl AgentInvocation {
                 idempotency_key,
                 method_name,
                 input,
+                allow_streams,
                 invocation_context,
                 caller,
                 scope_card,
@@ -874,6 +887,7 @@ impl AgentInvocation {
                 AgentInvocationPayload::AgentMethod {
                     method_name,
                     input,
+                    allow_streams,
                     caller,
                     scope_card,
                 },
@@ -1152,6 +1166,7 @@ mod request_equality_tests {
                     secret_keys_revealable: Default::default(),
                     filesystem_access: ToolFilesystemAccess::Denied,
                     source,
+                    shell: false,
                 },
                 filesystem: FilesystemCapability::Incapable,
                 middleware_chain: None,
@@ -1170,7 +1185,8 @@ mod request_equality_tests {
             },
             AgentInvocationPayload::AgentMethod {
                 method_name: "run".to_string(),
-                input: value.clone(),
+                input: value.clone().try_into().unwrap(),
+                allow_streams: true,
                 caller: Caller::anonymous(),
                 scope_card: None,
             },
@@ -1196,9 +1212,12 @@ mod request_equality_tests {
                     },
                     AgentInvocationPayload::AgentMethod {
                         method_name: "run".to_string(),
+                        allow_streams: false,
                         input: SchemaValue::Tuple {
                             elements: Vec::new(),
-                        },
+                        }
+                        .try_into()
+                        .unwrap(),
                         caller: caller.clone(),
                         scope_card: None,
                     },
@@ -1211,6 +1230,38 @@ mod request_equality_tests {
                 for (a, b) in payloads(caller).iter().zip(payloads(other)) {
                     assert_eq!(a.same_caller_request(&b), index == other_index, "{a:?}");
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn stored_method_request_retains_original_input_and_stream_policy() {
+        for input in [
+            SchemaValue::Record {
+                fields: vec![SchemaValue::U32(7)],
+            }
+            .try_into()
+            .unwrap(),
+            AgentMethodInput::PublicJson(
+                crate::model::invocation_session_public::JsonMethodInput::capture(
+                    br#"{"amount": 7}"#,
+                )
+                .unwrap(),
+            ),
+        ] {
+            for allow_streams in [false, true] {
+                let request = AgentInvocationPayload::AgentMethod {
+                    method_name: "increment".into(),
+                    input: input.clone(),
+                    allow_streams,
+                    caller: Caller::anonymous(),
+                    scope_card: None,
+                };
+                let (operation, payload) = request.clone().into_stored();
+                let bytes = desert_rust::serialize_to_byte_vec(&payload).unwrap();
+                let stored: super::StoredAgentInvocationPayload =
+                    desert_rust::deserialize(&bytes).unwrap();
+                assert_eq!(stored.with_operation(operation).unwrap(), request);
             }
         }
     }

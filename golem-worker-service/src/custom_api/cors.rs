@@ -67,11 +67,14 @@ pub fn handle_selected_preflight(
     }
     if matches!(
         selected.route.behavior,
-        RichRouteBehaviour::OidcPkceToken(_)
+        RichRouteBehaviour::OidcPkceToken(_) | RichRouteBehaviour::CreateAgent(_)
     ) {
         allowed_headers.insert(http::header::CONTENT_TYPE.as_str().to_string());
     }
     match &selected.route.behavior {
+        RichRouteBehaviour::CreateAgent(_) => {
+            allowed_headers.insert("idempotency-key".to_string());
+        }
         RichRouteBehaviour::CallAgent(agent)
             if agent.route_mode
                 == golem_service_base::custom_api::AgentRouteMode::DurableStreams =>
@@ -332,6 +335,14 @@ pub fn apply_cors_outgoing_middleware(
         response.headers_mut().insert(
             http::header::ACCESS_CONTROL_EXPOSE_HEADERS,
             exposed.join(", ").parse().map_err(anyhow::Error::from)?,
+        );
+    } else if matches!(
+        &resolved_route.route.behavior,
+        super::RichRouteBehaviour::CreateAgent(_)
+    ) {
+        response.headers_mut().insert(
+            http::header::ACCESS_CONTROL_EXPOSE_HEADERS,
+            HeaderValue::from_static("Location"),
         );
     }
     let cors = &resolved_route.route.cors;

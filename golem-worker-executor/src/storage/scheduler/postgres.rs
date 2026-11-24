@@ -68,6 +68,7 @@ impl PostgresSchedulerStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerStorage for PostgresSchedulerStorage {
     async fn insert(
         &self,

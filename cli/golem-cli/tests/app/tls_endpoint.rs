@@ -1,6 +1,3 @@
-// The platform TLS verifier honours SSL_CERT_FILE on Linux.
-#![cfg(target_os = "linux")]
-
 use crate::app::agents::{streaming_agent, streaming_invocation_context};
 use crate::app::{TestContext, cmd, test_binary_path, test_binary_profile};
 use rustls::pki_types::pem::PemObject;

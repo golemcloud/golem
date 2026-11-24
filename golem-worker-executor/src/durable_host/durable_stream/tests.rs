@@ -278,6 +278,29 @@ impl Debug for TestOplog {
 }
 
 impl TestOplog {
+    pub(crate) fn session_acceptance(
+        &self,
+        key: &golem_common::model::InvocationId,
+    ) -> golem_common::model::durable_stream::StreamSessionAcceptance {
+        self.entries()
+            .into_iter()
+            .rev()
+            .find_map(|entry| {
+                if let OplogEntry::StreamSession {
+                    record: OplogPayload::Inline(record),
+                    ..
+                } = entry
+                    && let StreamSessionRecord::Prepared(prepared) = *record
+                    && prepared.session_key == *key
+                {
+                    Some(prepared.acceptance())
+                } else {
+                    None
+                }
+            })
+            .expect("fixture must prepare its session before attaching")
+    }
+
     pub(crate) fn take_read_ranges(&self) -> Vec<(OplogIndex, u64)> {
         std::mem::take(&mut *self.read_ranges.lock().unwrap())
     }
@@ -322,6 +345,7 @@ impl TestOplog {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Oplog for TestOplog {
     async fn add(
         &self,
@@ -1962,6 +1986,7 @@ async fn consumer_source_unavailable_uses_the_warm_consumer_head_only() {
 struct FixedConsumerProbe(ConsumerAttachmentStatus);
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl StreamAttachmentConsumerProbe for FixedConsumerProbe {
     async fn status(
         &self,
@@ -1985,6 +2010,7 @@ fn cascade_reader_id() -> LocalStreamReaderId {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl StreamAttachmentConsumerProbe for CascadeConsumerProbe {
     async fn status(
         &self,
@@ -2046,6 +2072,7 @@ struct FailingConsumerProbe {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl StreamAttachmentConsumerProbe for FailingConsumerProbe {
     async fn status(
         &self,
@@ -2068,6 +2095,7 @@ struct AdvancingCascadeProbe {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl StreamAttachmentConsumerProbe for AdvancingCascadeProbe {
     async fn status(
         &self,
@@ -2111,6 +2139,7 @@ struct AmbiguousOverlayCommitProbe {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl StreamAttachmentConsumerProbe for AmbiguousOverlayCommitProbe {
     async fn status(
         &self,

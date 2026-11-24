@@ -191,7 +191,8 @@ impl RawHandler {
             .worker_service
             .bound_invocation_target(
                 target.agent.component_id,
-                &constructor,
+                &target.agent.agent_type,
+                Some(&constructor),
                 AgentBinding::Constructor,
                 &request_key,
                 &handler.method_name,
@@ -262,6 +263,9 @@ pub(super) async fn receive_response_head(
             None => session.events.recv().await,
         };
         match event.ok_or(RequestHandlerError::RawBadGateway)? {
+            HttpSessionEvent::QueuedAccepted(identity) => {
+                *accepted = Some(identity);
+            }
             HttpSessionEvent::Accepted(identity) => {
                 *accepted = Some(identity);
                 acceptance_deadline = None;

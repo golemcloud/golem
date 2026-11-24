@@ -2774,38 +2774,43 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn symlinks_that_leave_the_data_directory_are_outside() {
-        use std::os::unix::fs::symlink;
+    mod unix {
+        use super::*;
+        use test_r::test;
 
-        let temp_dir = tempfile::tempdir().unwrap();
-        let base = std::fs::canonicalize(temp_dir.path()).unwrap();
-        let elsewhere = base.join("elsewhere");
-        std::fs::create_dir_all(&elsewhere).unwrap();
+        #[test]
+        fn symlinks_that_leave_the_data_directory_are_outside() {
+            use std::os::unix::fs::symlink;
 
-        let data_dir = base.join("data");
-        std::fs::create_dir_all(&data_dir).unwrap();
-        symlink(&elsewhere, data_dir.join("kv-store")).unwrap();
-        symlink(
-            elsewhere.join("scheduler.db"),
-            data_dir.join("scheduler.db"),
-        )
-        .unwrap();
-        let config = GolemServerConfig::for_data_dir(&data_dir).unwrap();
-        assert_eq!(
-            config.state_outside(&data_dir),
-            vec![
-                "worker_executor.key_value_storage",
-                "worker_executor.scheduler_storage",
-            ]
-        );
+            let temp_dir = tempfile::tempdir().unwrap();
+            let base = std::fs::canonicalize(temp_dir.path()).unwrap();
+            let elsewhere = base.join("elsewhere");
+            std::fs::create_dir_all(&elsewhere).unwrap();
 
-        let linked_data_dir = base.join("linked-data");
-        symlink(base.join("real-data"), &linked_data_dir).unwrap();
-        let config = GolemServerConfig::for_data_dir(&linked_data_dir).unwrap();
-        let outside = config.state_outside(&linked_data_dir);
-        assert!(outside.contains(&"registry_service.db"), "{outside:?}");
-        assert_eq!(outside, config.state_outside(&base.join("unrelated")));
+            let data_dir = base.join("data");
+            std::fs::create_dir_all(&data_dir).unwrap();
+            symlink(&elsewhere, data_dir.join("kv-store")).unwrap();
+            symlink(
+                elsewhere.join("scheduler.db"),
+                data_dir.join("scheduler.db"),
+            )
+            .unwrap();
+            let config = GolemServerConfig::for_data_dir(&data_dir).unwrap();
+            assert_eq!(
+                config.state_outside(&data_dir),
+                vec![
+                    "worker_executor.key_value_storage",
+                    "worker_executor.scheduler_storage",
+                ]
+            );
+
+            let linked_data_dir = base.join("linked-data");
+            symlink(base.join("real-data"), &linked_data_dir).unwrap();
+            let config = GolemServerConfig::for_data_dir(&linked_data_dir).unwrap();
+            let outside = config.state_outside(&linked_data_dir);
+            assert!(outside.contains(&"registry_service.db"), "{outside:?}");
+            assert_eq!(outside, config.state_outside(&base.join("unrelated")));
+        }
     }
 
     #[test]

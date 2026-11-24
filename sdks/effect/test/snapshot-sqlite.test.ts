@@ -345,7 +345,7 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
         serialized.length = 0
         agent.select()
         await dispatchLoadSnapshot(snapshot, wire())
-        expect(agent.restored).toHaveBeenCalledWith()
+        expect(agent.restored).toHaveBeenCalledExactlyOnceWith()
         expect(hydrated).toEqual(handles.filter((db) => db.location() === null))
         expect(warmed).toEqual(handles)
         // This read is discarded cache warming, not a saved file image.

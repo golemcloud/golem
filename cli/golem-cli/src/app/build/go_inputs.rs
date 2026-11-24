@@ -115,9 +115,8 @@ mod tests {
         *seen = now;
     }
 
-    /// Every change the review found tidy reading — in a local replacement,
-    /// in a `_` directory or file, through a symlink, in a build constraint or
-    /// an escaped import, and in a replacement's own go.mod — changes the hash.
+    /// Changes to a local replacement, a `_` directory or file, a build constraint,
+    /// an escaped import, and a replacement's own go.mod change the hash.
     #[test]
     fn dependency_relevant_changes_change_the_hash() {
         let dir = tempfile::tempdir().unwrap();
@@ -149,8 +148,20 @@ mod tests {
         changes(&root, &mut seen, "a new file");
         write(root.join("tool.go"), "package main\n");
         changes(&root, &mut seen, "a removed legacy build constraint");
-        #[cfg(unix)]
-        {
+    }
+
+    #[cfg(unix)]
+    mod unix {
+        use super::*;
+        use test_r::test;
+
+        #[test]
+        fn symlinked_files_change_the_hash() {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("app");
+            write(root.join("go.mod"), "module app\n");
+            write(root.join("main.go"), "package main\n");
+            let mut seen = tidy_inputs_hash(&root);
             write(dir.path().join("outside/linked.go"), "package main\n");
             std::os::unix::fs::symlink(
                 dir.path().join("outside/linked.go"),
@@ -159,21 +170,20 @@ mod tests {
             .unwrap();
             changes(&root, &mut seen, "a symlinked file");
         }
-    }
 
-    /// Links that cannot be part of the build — a dangling one, and a
-    /// directory link back to the module — do not stop the hash.
-    #[cfg(unix)]
-    #[test]
-    fn unrelated_broken_links_are_skipped() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("app");
-        write(root.join("go.mod"), "module app\n");
-        write(root.join("main.go"), "package main\n");
-        let before = tidy_inputs_hash(&root);
-        std::os::unix::fs::symlink(root.join("missing"), root.join("missing-link")).unwrap();
-        std::os::unix::fs::symlink(&root, root.join("loop")).unwrap();
-        assert_eq!(tidy_inputs_hash(&root), before);
+        /// Links that cannot be part of the build — a dangling one, and a
+        /// directory link back to the module — do not stop the hash.
+        #[test]
+        fn unrelated_broken_links_are_skipped() {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("app");
+            write(root.join("go.mod"), "module app\n");
+            write(root.join("main.go"), "package main\n");
+            let before = tidy_inputs_hash(&root);
+            std::os::unix::fs::symlink(root.join("missing"), root.join("missing-link")).unwrap();
+            std::os::unix::fs::symlink(&root, root.join("loop")).unwrap();
+            assert_eq!(tidy_inputs_hash(&root), before);
+        }
     }
 
     /// Editing a non-Go file does not rerun tidy.

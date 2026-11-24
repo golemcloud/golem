@@ -21,8 +21,8 @@ use crate::model::api_definition::{
     UnboundCompiledRoute, UnboundRouteSecurity, UnboundSecuritySchemeRouteSecurity,
 };
 use golem_common::model::agent::{
-    AgentMode, AgentTypeName, CachePolicy, HttpEndpointDetails, HttpMethod, HttpMountDetails,
-    PhantomIdBinding, RegisteredAgentTypeImplementer, SystemVariable,
+    AgentIdBinding, AgentMode, AgentTypeName, CachePolicy, HttpEndpointDetails, HttpMethod,
+    HttpMountDetails, RegisteredAgentTypeImplementer, SystemVariable,
 };
 use golem_common::model::deployment::{
     HttpApiReadOnlyMethodBoundToNonGetVerb, HttpApiReadOnlyTtlBelowOneSecond,
@@ -40,12 +40,12 @@ use golem_common::schema::{
 use golem_schema::Empty;
 use golem_schema::http as schema_http;
 use golem_service_base::custom_api::{
-    AgentRouteMode, CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema,
+    AgentRouteMode, AgentSelection, CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema,
     ConstructorParameter, CorsOptions, CorsPreflightBehaviour, CorsPreflightMethodPolicy,
-    MethodParameter, MountAgent, MountAgentMethod, MountBehaviour, MountFileSource, MountTarget,
-    OpenApiSpecBehaviour, OpenApiSpecFormat, OriginPattern, PathSegment, PhantomSelection,
-    RequestBodySchema, RouteBehaviour, RouteMatch, RouterMethod, SessionFromHeaderRouteSecurity,
-    WebhookCallbackBehaviour,
+    CreateAgentBehaviour, MethodParameter, MountAgent, MountAgentMethod, MountBehaviour,
+    MountFileSource, MountTarget, OpenApiSpecBehaviour, OpenApiSpecFormat, OriginPattern,
+    PathSegment, RequestBodySchema, RouteBehaviour, RouteMatch, RouterMethod,
+    SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use heck::ToKebabCase;
 use itertools::Itertools;
@@ -108,12 +108,19 @@ pub fn compile_fallback_mount(
     route_id: i32,
 ) -> Result<Option<UnboundCompiledRoute>, DeployValidationError> {
     let invalid = make_invalid_agent_mount_error_maker(deployment, mount, agent);
+    let agent_selection = compile_agent_selection(agent, mount).map_err(&invalid)?;
+    if mount.agent_id_binding.is_some() && !constructor_parameters.is_empty() {
+        return Err(invalid(
+            "Agent ID selection cannot bind constructor parameters".into(),
+        ));
+    }
     let mount_agent = MountAgent {
         component_id: implementer.component_id,
         component_revision: implementer.component_revision,
         agent_type: agent.type_name.clone(),
         constructor_input: compiled_input(agent, &agent.constructor.input_schema),
         constructor_parameters: constructor_parameters.clone(),
+        agent_selection,
     };
     let behavior = if agent.kind == golem_common::schema::AgentTypeKind::HttpRouter {
         let compile_method = |method: &AgentMethodSchema| {
@@ -157,7 +164,7 @@ pub fn compile_fallback_mount(
                 )
             })
             .count();
-        if captures != constructor_parameters.len() {
+        if mount.agent_id_binding.is_none() && captures != constructor_parameters.len() {
             return Err(invalid(
                 "Filesystem mount captures must bind exactly the constructor parameters".into(),
             ));
@@ -201,20 +208,119 @@ pub fn compile_fallback_mount(
     }))
 }
 
-pub(super) fn expand_http_mount(mount: &HttpMountDetails) -> Vec<HttpMountDetails> {
-    let mut alternatives = vec![mount.clone()];
-    if let Some(PhantomIdBinding::Path(details)) = &mount.phantom_id_binding
-        && details.optional
-    {
-        let mut absent = mount.clone();
-        absent.path_prefix.retain(|segment| {
-            !matches!(segment,
-            golem_common::model::agent::PathSegment::Segment(schema_http::PathSegment::PathVariable(variable))
-                if variable.variable_name == details.name)
-        });
-        alternatives.push(absent);
+fn compile_agent_selection(
+    agent: &AgentTypeSchema,
+    mount: &HttpMountDetails,
+) -> Result<AgentSelection, String> {
+    use golem_common::model::agent::PathSegment as AgentPathSegment;
+
+    if mount.agent_id_binding.is_some() {
+        super::http_parameter_conversion::build_http_agent_constructor_parameters(
+            mount,
+            &agent.schema,
+            &agent.constructor.input_schema,
+            &|error| error,
+        )?;
     }
-    alternatives
+    match &mount.agent_id_binding {
+        None if agent.kind == golem_common::schema::AgentTypeKind::HttpRouter => {
+            Ok(AgentSelection::Key)
+        }
+        None if mount.phantom_agent || agent.mode == AgentMode::Ephemeral => {
+            Ok(AgentSelection::Fresh)
+        }
+        None => Ok(AgentSelection::Key),
+        Some(_)
+            if mount.phantom_agent
+                || agent.mode != AgentMode::Durable
+                || agent.kind != golem_common::schema::AgentTypeKind::Regular =>
+        {
+            Err("Agent ID selection requires a durable regular agent without phantomAgent".into())
+        }
+        Some(AgentIdBinding::Query(details)) => Ok(AgentSelection::Query {
+            name: details.name.clone(),
+        }),
+        Some(AgentIdBinding::Path(details)) => {
+            let index = mount.path_prefix.iter().filter_map(|segment| match segment {
+                AgentPathSegment::Segment(segment @ (schema_http::PathSegment::PathVariable(_) | schema_http::PathSegment::RemainingPathVariable(_))) => Some(segment),
+                _ => None,
+            }).position(|segment| matches!(segment,
+                schema_http::PathSegment::PathVariable(variable) if variable.variable_name == details.name
+            )).ok_or_else(|| "Required agent ID path selector is missing from mount".to_string())?;
+            Ok(AgentSelection::Path {
+                index: (index as u32).into(),
+            })
+        }
+    }
+}
+
+pub fn compile_create_route(
+    environment: &Environment,
+    deployment: &HttpApiDeployment,
+    agent: &AgentTypeSchema,
+    implementer: &RegisteredAgentTypeImplementer,
+    mount: &HttpMountDetails,
+    options: &HttpApiDeploymentAgentOptions,
+    route_id: i32,
+) -> Result<Option<UnboundCompiledRoute>, DeployValidationError> {
+    let Some(create_path) = &mount.create_route else {
+        return Ok(None);
+    };
+    let invalid = make_invalid_agent_mount_error_maker(deployment, mount, agent);
+    if mount.agent_id_binding.is_none() {
+        return Err(invalid("Create routes require agent ID selection".into()));
+    }
+    let agent_selection = compile_agent_selection(agent, mount).map_err(&invalid)?;
+    let path: Vec<_> = create_path
+        .iter()
+        .map(|segment| compile_agent_path_segment(agent, implementer, segment))
+        .collect();
+    if path
+        .iter()
+        .any(|segment| !matches!(segment, PathSegment::Literal { .. }))
+    {
+        return Err(invalid(
+            "Create routes permit only literal and system path segments".into(),
+        ));
+    }
+    let location = mount
+        .path_prefix
+        .iter()
+        .map(|segment| compile_agent_path_segment(agent, implementer, segment))
+        .collect();
+    let behaviour = RouteBehaviour::CreateAgent(CreateAgentBehaviour {
+        agent: MountAgent {
+            component_id: implementer.component_id,
+            component_revision: implementer.component_revision,
+            agent_type: agent.type_name.clone(),
+            constructor_input: compiled_input(agent, &agent.constructor.input_schema),
+            constructor_parameters: vec![],
+            agent_selection,
+        },
+        location,
+    });
+    let route_match: RouteMatch =
+        HttpMethod::Method(schema_http::HttpMethod::Post(Empty {})).into();
+    route_match.validate(&path, &behaviour).map_err(invalid)?;
+    let security = resolve_route_security(environment, options, agent, mount, None)?;
+    let allowed_patterns = mount
+        .cors_options
+        .allowed_patterns
+        .iter()
+        .cloned()
+        .map(OriginPattern)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    Ok(Some(UnboundCompiledRoute {
+        domain: deployment.domain.clone(),
+        route_id,
+        route_match,
+        path,
+        behaviour,
+        security,
+        cors: CorsOptions { allowed_patterns },
+    }))
 }
 
 pub fn add_agent_method_http_routes(
@@ -233,44 +339,21 @@ pub fn add_agent_method_http_routes(
     stream_limits: &crate::config::DurableStreamRouteLimits,
 ) {
     let constructor_input = compiled_input(agent, &agent.constructor.input_schema);
-    let phantom_selection = match &http_mount.phantom_id_binding {
-        None => PhantomSelection::Policy {
-            phantom: http_mount.phantom_agent || agent.mode == AgentMode::Ephemeral,
-        },
-        Some(PhantomIdBinding::Query(details)) => PhantomSelection::Query {
-            name: details.name.clone(),
-            optional: details.optional,
-        },
-        Some(PhantomIdBinding::Path(details)) => {
-            let index = http_mount
-                .path_prefix
-                .iter()
-                .filter(|segment| {
-                    matches!(
-                        segment,
-                        golem_common::model::agent::PathSegment::Segment(schema_http::PathSegment::PathVariable(_)
-                            | schema_http::PathSegment::RemainingPathVariable(_))
-                    )
-                })
-                .position(|segment| {
-                    matches!(segment,
-                    golem_common::model::agent::PathSegment::Segment(schema_http::PathSegment::PathVariable(variable))
-                        if variable.variable_name == details.name)
-                });
-            match index {
-                Some(index) => PhantomSelection::Path {
-                    index: (index as u32).into(),
-                },
-                None if details.optional => PhantomSelection::Original,
-                None => {
-                    errors.push(make_invalid_agent_mount_error_maker(
-                        deployment, http_mount, agent,
-                    )(
-                        "Required phantom path selector is missing from mount".into(),
-                    ));
-                    return;
-                }
-            }
+    if http_mount.agent_id_binding.is_some() && !constructor_parameters.is_empty() {
+        errors.push(make_invalid_agent_mount_error_maker(
+            deployment, http_mount, agent,
+        )(
+            "Agent ID selection cannot bind constructor parameters".into(),
+        ));
+        return;
+    }
+    let agent_selection = match compile_agent_selection(agent, http_mount) {
+        Ok(selection) => selection,
+        Err(error) => {
+            errors.push(make_invalid_agent_mount_error_maker(
+                deployment, http_mount, agent,
+            )(error));
+            return;
         }
     };
 
@@ -430,7 +513,7 @@ pub fn add_agent_method_http_routes(
                 agent_type: agent.type_name.clone(),
                 agent_mode: agent.mode,
                 method_name: agent_method.name.clone(),
-                phantom_selection: phantom_selection.clone(),
+                agent_selection: agent_selection.clone(),
                 constructor_input: constructor_input.clone(),
                 constructor_parameters: constructor_parameters.clone(),
                 method_input: compiled_input(agent, &agent_method.input_schema),
@@ -824,6 +907,9 @@ fn collect_allowed_request_headers(compiled_route: &UnboundCompiledRoute) -> BTr
         golem_service_base::custom_api::cors_allowed_request_headers(body, parameters, session);
     if matches!(&compiled_route.behaviour, RouteBehaviour::CallAgent(_)) {
         headers.insert("idempotency-key".to_owned());
+    }
+    if matches!(compiled_route.behaviour, RouteBehaviour::CreateAgent(_)) {
+        headers.extend(["content-type".to_string(), "idempotency-key".to_string()]);
     }
     if matches!(&compiled_route.behaviour, RouteBehaviour::CallAgent(agent)
         if agent.route_mode == AgentRouteMode::DurableStreams)
@@ -1312,7 +1398,8 @@ mod tests {
                 )],
                 auth_details: None,
                 phantom_agent,
-                phantom_id_binding: None,
+                agent_id_binding: None,
+                create_route: None,
                 cors_options: AgentCorsOptions {
                     allowed_patterns: vec![],
                 },
@@ -2016,9 +2103,7 @@ mod tests {
                     agent_mode: AgentMode::Durable,
                     constructor_input: empty_compiled_input(),
                     constructor_parameters: vec![],
-                    phantom_selection: golem_service_base::custom_api::PhantomSelection::Policy {
-                        phantom: false,
-                    },
+                    agent_selection: AgentSelection::Key,
                     method_name: "list".to_string(),
                     method_input: empty_compiled_input(),
                     body: RequestBodySchema::Unused,
@@ -2054,9 +2139,7 @@ mod tests {
                     agent_mode: AgentMode::Durable,
                     constructor_input: empty_compiled_input(),
                     constructor_parameters: vec![],
-                    phantom_selection: golem_service_base::custom_api::PhantomSelection::Policy {
-                        phantom: false,
-                    },
+                    agent_selection: AgentSelection::Key,
                     method_name: "add".to_string(),
                     method_input: empty_compiled_input(),
                     body: RequestBodySchema::JsonBody {
@@ -2159,20 +2242,14 @@ mod tests {
     #[test]
     fn ephemeral_agents_force_http_routes_to_be_phantom() {
         let behaviour = compiled_call_agent_behaviour(AgentMode::Ephemeral, false);
-        assert_eq!(
-            behaviour.phantom_selection,
-            golem_service_base::custom_api::PhantomSelection::Policy { phantom: true }
-        );
+        assert_eq!(behaviour.agent_selection, AgentSelection::Fresh);
         assert_eq!(behaviour.agent_mode, AgentMode::Ephemeral);
     }
 
     #[test]
     fn durable_agents_keep_explicit_http_phantom_flag() {
         let behaviour = compiled_call_agent_behaviour(AgentMode::Durable, true);
-        assert_eq!(
-            behaviour.phantom_selection,
-            golem_service_base::custom_api::PhantomSelection::Policy { phantom: true }
-        );
+        assert_eq!(behaviour.agent_selection, AgentSelection::Fresh);
         assert_eq!(behaviour.agent_mode, AgentMode::Durable);
     }
 

@@ -104,6 +104,8 @@ impl DurableStreamsHandler {
             component_id: None,
             method_name: Some(behaviour.method_name.clone()),
             external_tool: None,
+            captured_method_input: None,
+            allow_streams: true,
             input: Some(input),
             idempotency_key: Some(IdempotencyKey::new(session.to_owned()).into()),
             request_key: Some(
@@ -412,7 +414,7 @@ impl DurableStreamsHandler {
             return Ok(response(StatusCode::NOT_FOUND));
         };
         let mut streams = Vec::new();
-        let mut closed = true;
+        let mut closed = !read.queued;
         for slot in &read.slots {
             let declared_slot = behaviour
                 .durable_streams
