@@ -209,7 +209,7 @@ export const faq = {
     {
       question: "How do the memory and filesystem units work?",
       answer:
-        "A GiB is 1,073,741,824 bytes. Memory usage is allocated GiB multiplied by active hours. Filesystem usage is allocated space multiplied by active time, normalized to a 730-hour month, so a GiB-month is 1 GiB for 730 hours. The included amounts reset on the 1st of each month (UTC). The usage API, the billing page and invoices write these binary units as GB, and the usage API reports memory in GB-seconds. Divide by 3,600 to get GiB-hours.",
+        "A GiB is 1,073,741,824 bytes. Memory usage is allocated GiB multiplied by active hours. Filesystem usage is allocated space multiplied by active time, normalized to a 730-hour month, so a GiB-month is 1 GiB for 730 hours. The included amounts reset on the 1st of each month (UTC).",
     },
   ],
 };
