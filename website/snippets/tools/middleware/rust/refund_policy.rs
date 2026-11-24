@@ -8,11 +8,11 @@ fn refuse(why: &str) -> ToolInvokeError<AppError> {
 impl RefundMiddleware for RefundPolicy { //@
   async fn refund(&self, underlying: &RefundUnderlying,
     charge: String, amount: u64, api_key: GuestSecretHandle,
-    caller: Principal,
+    ctx: InvocationContext,
   ) -> Result<Receipt, ToolInvokeError<AppError>> {
     // reject calls by their arguments and enforce a rate limit:
     if amount > 100_000 { return Err(refuse("over the limit")); } //@
-    check_rate_limit(&caller).await?; //@
+    check_rate_limit(ctx.caller().original()).await?; //@
     if amount > 10_000 {
       // the durable caller can wait for a person across restarts:
       let approval = create_promise(); //@
