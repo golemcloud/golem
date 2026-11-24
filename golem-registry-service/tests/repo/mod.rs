@@ -25,6 +25,7 @@ use golem_registry_service::repo::account_tree::AccountTreeRepo;
 use golem_registry_service::repo::account_usage::AccountUsageRepo;
 use golem_registry_service::repo::agent_secret::AgentSecretRepo;
 use golem_registry_service::repo::application::ApplicationRepo;
+use golem_registry_service::repo::audit_staging::AuditStagingRepo;
 use golem_registry_service::repo::component::ComponentRepo;
 use golem_registry_service::repo::deployment::DeploymentRepo;
 use golem_registry_service::repo::environment::EnvironmentRepo;
@@ -87,6 +88,7 @@ pub struct Deps {
     pub agent_secret_repo: Box<dyn AgentSecretRepo>,
     pub retry_policy_repo: Box<dyn RetryPolicyRepo>,
     pub installation_repo: Box<dyn InstallationRepo>,
+    pub audit_staging_repo: Box<dyn AuditStagingRepo>,
     pub application_repo: Box<dyn ApplicationRepo>,
     pub environment_repo: Arc<dyn EnvironmentRepo>,
     pub blob_storage: Arc<dyn BlobStorage>,

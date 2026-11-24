@@ -20,6 +20,7 @@ pub mod account_tree_cache;
 pub mod account_usage;
 pub mod agent_secret;
 pub mod application;
+pub mod audit_sink;
 pub mod auth;
 pub mod builtin_artifact;
 pub mod builtin_plugin_provisioner;

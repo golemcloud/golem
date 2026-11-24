@@ -21,6 +21,7 @@ use golem_registry_service::repo::account_tree::{DbAccountTreeRepo, preview_sche
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
 use golem_registry_service::repo::agent_secret::DbAgentSecretRepo;
 use golem_registry_service::repo::application::DbApplicationRepo;
+use golem_registry_service::repo::audit_staging::DbAuditStagingRepo;
 use golem_registry_service::repo::component::DbComponentRepo;
 use golem_registry_service::repo::deployment::DbDeploymentRepo;
 use golem_registry_service::repo::environment::DbEnvironmentRepo;
@@ -124,6 +125,7 @@ async fn deps(db: &SqliteDb) -> Deps {
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(db.pool.clone())),
         retry_policy_repo: Box::new(DbRetryPolicyRepo::logged(db.pool.clone())),
         installation_repo: Box::new(DbInstallationRepo::logged(db.pool.clone())),
+        audit_staging_repo: Box::new(DbAuditStagingRepo::logged(db.pool.clone())),
         application_repo: Box::new(DbApplicationRepo::logged(db.pool.clone())),
         environment_repo: std::sync::Arc::new(DbEnvironmentRepo::logged(db.pool.clone())),
         blob_storage: std::sync::Arc::new(
@@ -167,6 +169,21 @@ async fn test_runtime_card_creation_rejects_system_cards(deps: &Deps) {
 #[test]
 async fn test_installation_golem_issuer_is_stored_once(deps: &Deps) {
     crate::repo::common::test_installation_golem_issuer_is_stored_once(deps).await;
+}
+
+#[test]
+async fn test_audit_staging_stores_a_record_once(deps: &Deps) {
+    crate::repo::common::test_audit_staging_stores_a_record_once(deps).await;
+}
+
+#[test]
+async fn test_audit_staging_insert_commits_with_its_transaction(deps: &Deps) {
+    crate::repo::common::test_audit_staging_insert_commits_with_its_transaction(deps).await;
+}
+
+#[test]
+async fn test_audit_staging_keeps_the_record_of_a_decision(deps: &Deps) {
+    crate::repo::common::test_audit_staging_keeps_the_record_of_a_decision(deps).await;
 }
 
 #[test]

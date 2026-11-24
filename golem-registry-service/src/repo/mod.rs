@@ -19,6 +19,7 @@ pub mod account_tree;
 pub mod account_usage;
 pub mod agent_secret;
 pub mod application;
+pub mod audit_staging;
 pub mod card;
 pub mod component;
 pub mod deployment;

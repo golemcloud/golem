@@ -15679,3 +15679,151 @@ pub async fn test_http_routing_mutation_epoch_serializes_scheme_and_deployment_w
             .is_empty()
     );
 }
+
+fn audit_staging_record(
+    event: u128,
+) -> golem_registry_service::repo::audit_staging::AuditStagingRecord {
+    golem_registry_service::repo::audit_staging::AuditStagingRecord {
+        event_id: Uuid::from_u128(event),
+        recorded_at: golem_service_base::repo::SqlDateTime::now(),
+        surface: "rest".to_string(),
+        operation: "read-agent-oplog".to_string(),
+        outcome: "allowed".to_string(),
+        target_account_id: Some(Uuid::from_u128(0xacc0)),
+        target_environment_id: Some(Uuid::from_u128(0xe0)),
+        record: r#"{"version":1,"operation":"read-agent-oplog"}"#.to_string(),
+    }
+}
+
+pub async fn test_audit_staging_stores_a_record_once(deps: &Deps) {
+    let record = audit_staging_record(0xa1);
+
+    deps.audit_staging_repo.insert(&record).await.unwrap();
+    // A sender that lost the answer sends the same event again; the table keeps one row.
+    deps.audit_staging_repo.insert(&record).await.unwrap();
+
+    let stored = deps.audit_staging_repo.get(record.event_id).await.unwrap();
+    assert!(stored == Some(record));
+}
+
+pub async fn test_audit_staging_insert_commits_with_its_transaction(deps: &Deps) {
+    use golem_registry_service::repo::audit_staging::DbAuditStagingRepo;
+
+    let rolled_back = audit_staging_record(0xa2);
+    let committed = audit_staging_record(0xa3);
+
+    match &deps.test_db {
+        TestDb::Postgres(pool) => {
+            let mut tx = pool
+                .with_rw("audit_staging_test", "insert")
+                .begin()
+                .await
+                .unwrap();
+            DbAuditStagingRepo::<PostgresPool>::insert_in_tx(&mut tx, &rolled_back)
+                .await
+                .unwrap();
+            tx.rollback().await.unwrap();
+
+            let mut tx = pool
+                .with_rw("audit_staging_test", "insert")
+                .begin()
+                .await
+                .unwrap();
+            DbAuditStagingRepo::<PostgresPool>::insert_in_tx(&mut tx, &committed)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+        TestDb::Sqlite(pool) => {
+            let mut tx = pool
+                .with_rw("audit_staging_test", "insert")
+                .begin()
+                .await
+                .unwrap();
+            DbAuditStagingRepo::<SqlitePool>::insert_in_tx(&mut tx, &rolled_back)
+                .await
+                .unwrap();
+            tx.rollback().await.unwrap();
+
+            let mut tx = pool
+                .with_rw("audit_staging_test", "insert")
+                .begin()
+                .await
+                .unwrap();
+            DbAuditStagingRepo::<SqlitePool>::insert_in_tx(&mut tx, &committed)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+    }
+
+    assert!(
+        deps.audit_staging_repo
+            .get(rolled_back.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        deps.audit_staging_repo
+            .get(committed.event_id)
+            .await
+            .unwrap()
+            == Some(committed)
+    );
+}
+
+pub async fn test_audit_staging_keeps_the_record_of_a_decision(deps: &Deps) {
+    use golem_common::model::AgentFingerprint;
+    use golem_common::model::auth::TokenId;
+    use golem_common::model::authority::{
+        AgentTarget, AuthorizationRequest, CatalogOperation, Decision, Grantors, Operation,
+        Resource, Target,
+    };
+    use golem_common::model::caller::{AccountAuthentication, AccountPrincipal, Caller, Principal};
+    use golem_registry_service::repo::audit_staging::AuditStagingRecord;
+    use golem_service_base::model::auth::audit::{AuditContext, AuditRecord};
+    use golem_service_base::model::auth::surface::Surface;
+
+    let environment_id = EnvironmentId(Uuid::from_u128(0xe7));
+    let request = AuthorizationRequest::new(
+        Caller::entry(Principal::Account(AccountPrincipal {
+            issuer: "https://golem.example".to_string(),
+            account_id: AccountId(Uuid::from_u128(0xa7)),
+            authentication: AccountAuthentication::ApiToken,
+        })),
+        Operation::single(
+            CatalogOperation::ReadAgentOplog,
+            Resource::None,
+            Target::Agent(AgentTarget {
+                environment_id,
+                agent_type: AgentTypeName("Report".to_string()),
+                agent_id: AgentId::from_parts(7, 0x71),
+                fingerprint: Some(AgentFingerprint(Uuid::from_u128(0xf7))),
+            }),
+        )
+        .unwrap(),
+    );
+    let record = AuditRecord::new(
+        &request,
+        &Decision::Allow(Grantors::default()),
+        &AuditContext::new(Surface::Rest).authenticated_by(TokenId(Uuid::from_u128(0x70))),
+    );
+
+    let row = AuditStagingRecord::from_audit_record(&record).unwrap();
+    assert!(row.event_id == record.event_id);
+    assert!(row.outcome == "allowed");
+    assert!(row.operation == "read-agent-oplog");
+    assert!(row.surface == "rest");
+    assert!(row.target_environment_id == Some(environment_id.0));
+    assert!(row.target_account_id == None);
+
+    deps.audit_staging_repo.insert(&row).await.unwrap();
+    let stored = deps
+        .audit_staging_repo
+        .get(record.event_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(stored.to_audit_record().unwrap() == record);
+}
