@@ -1,13 +1,14 @@
 // The Effect fixture of the streaming fault matrix. It implements the fixture contract
 // documented in integration-tests/src/fault_matrix.rs. Record `seq` of run `run` is the number
 // `run * 100_000 + seq`, for `seq` in 1..=count.
-import { Effect, Schema, Stream } from "effect";
+import { Effect, Layer, Schema, Stream } from "effect";
 import {
   Agents,
   defineAgent,
   Ids,
   method,
   Schema as GolemSchema,
+  Tool,
   WitTypes,
 } from "@golemcloud/effect-golem";
 
@@ -118,3 +119,44 @@ FaultMatrixFixture.implement({
       }).pipe(Effect.scoped, Effect.orDie),
   }),
 });
+
+const recordBytes = (run: number, seq: number) => {
+  const bytes = new Uint8Array(4);
+  new DataView(bytes.buffer).setUint32(0, record(run, seq));
+  return bytes;
+};
+
+Tool.toolDefinition("fault-matrix", { version: "1.0.0" })
+  .command("produce", (produce) =>
+    produce.body((body) =>
+      body
+        .positional("run", U32)
+        .positional("count", U32)
+        .positional("pause-after", U32)
+        .positional("gate", Ids.PromiseId)
+        .output({ required: true })
+        .returns(U32),
+    ),
+  )
+  .implement(
+    {
+      produce: ({ run, count, "pause-after": pauseAfter, gate }, context) =>
+        Effect.gen(function* () {
+          if (!context.stdout) return yield* Effect.die("stdout is missing");
+          yield* context.stdout(
+            Stream.fromIterable(seqs(count)).pipe(
+              Stream.mapEffect((seq) =>
+                seq === pauseAfter + 1
+                  ? Agents.Promises.await(encodeGate(gate)).pipe(
+                      Effect.as(recordBytes(run, seq)),
+                      Effect.orDie,
+                    )
+                  : Effect.succeed(recordBytes(run, seq)),
+              ),
+            ),
+          );
+          return count;
+        }),
+    },
+    Layer.empty,
+  );

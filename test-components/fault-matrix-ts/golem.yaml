@@ -15,6 +15,14 @@ components:
     dir: "."
     templates: ts, ts-test-component
 
+tools:
+  fault-matrix: {}
+
+agents:
+  FaultMatrixFixture:
+    tools:
+      fault-matrix: {}
+
 environments:
   local:
     server: local
