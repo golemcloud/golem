@@ -261,13 +261,13 @@ export class ReflectedAgentClientFactory {
 
   /**
    * Address the existing durable agent with this ID. Never creates the agent: an unknown ID, or
-   * the ID of an agent of another type, rejects with a `not-found` `RemoteCallError`.
+   * the ID of an agent of another type, throws a `not-found` `RemoteCallError`.
    */
-  async getById(agentId: AgentId, options?: RemoteClientOptions): Promise<ReflectedAgentClient> {
+  getById(agentId: AgentId, options?: RemoteClientOptions): ReflectedAgentClient {
     this.requireMode('durable', 'getById');
     return new ReflectedAgentClient(
       this.agentType,
-      await getRemoteAgentById(this.agentType.name, agentId),
+      getRemoteAgentById(this.agentType.name, agentId),
       options?.scopeCard,
     );
   }

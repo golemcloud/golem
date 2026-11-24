@@ -40,10 +40,10 @@ export class DynamicAgentClient implements DynamicAgentClientSurface {
 
   /**
    * Connects to the existing agent with this ID; its type comes from the ID's type tag. Never
-   * creates the agent: an ID whose tag names no deployed agent type, or an unknown agent, rejects
-   * with a `not-found` {@link RemoteCallError}.
+   * creates the agent: an ID whose tag names no deployed agent type, or an unknown agent, throws
+   * a `not-found` {@link RemoteCallError}.
    */
-  static async getById(agentId: AgentId): Promise<DynamicAgentClient> {
+  static getById(agentId: AgentId): DynamicAgentClient {
     const registered = getAgentTypeByAgentId(agentId);
     if (registered === undefined) {
       throw new RemoteCallError(`Failed to connect to remote agent ${agentId.toString()}`, {
@@ -53,7 +53,7 @@ export class DynamicAgentClient implements DynamicAgentClientSurface {
     }
     return new DynamicAgentClient(
       agentId,
-      await getRemoteAgentById(registered.agentType.typeName, agentId),
+      getRemoteAgentById(registered.agentType.typeName, agentId),
     );
   }
 

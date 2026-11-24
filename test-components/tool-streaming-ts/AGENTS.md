@@ -271,7 +271,7 @@ Config values are provisioned via `golem.yaml` (`env`/`envDefaults`/`secretDefau
 
 ## Calling Other Agents (RPC)
 
-Every agent definition exposes a `.client` factory. Use `.upsert(id)` for the keyed agent of the constructor parameters (created when it is missing), `await .create(id, { keyed, config, env })` to create a new agent (without `keyed`, it has no key and a new agent ID; with `keyed`, an existing keyed agent rejects with a `conflict` error), or `await .getById(agentId)` to address an existing agent by its ID (an unknown ID rejects with `not-found`). `await client.agentId()` returns a durable client's agent ID. An ephemeral agent offers only `.upsert(id)`. `await client.m(input, { signal })` invokes with optional cancellation; `client.m.trigger(input)` is fire-and-forget; `client.m.schedule(at, input)` enqueues for later and returns a `CancellationToken`.
+Every agent definition exposes a `.client` factory. Use `.upsert(id)` for the keyed agent of the constructor parameters (created when it is missing), `await .create(id, { keyed, config, env })` to create a new agent (without `keyed`, it has no key and a new agent ID; with `keyed`, an existing keyed agent rejects with a `conflict` error), or `.getById(agentId)` to address an existing agent by its ID (an unknown ID throws `not-found`). `await client.agentId()` returns a durable client's agent ID. An ephemeral agent offers only `.upsert(id)`. `await client.m(input, { signal })` invokes with optional cancellation; `client.m.trigger(input)` is fire-and-forget; `client.m.schedule(at, input)` enqueues for later and returns a `CancellationToken`.
 
 ```typescript
 import { Counter } from './counter-agent.js';

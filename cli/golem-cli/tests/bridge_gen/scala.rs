@@ -1656,9 +1656,9 @@ fn guest_agent_client_surface_targets_scala_sdk_rpc() {
     assert!(client_source.contains(
         "_root_.golem.runtime.rpc.AgentIdentity.create(agentTypeName, constructorPayload, options)"
     ));
-    assert!(client_source.contains(
-        "def getById(agentId: _root_.golem.AgentId): _root_.scala.concurrent.Future[CounterAgentRemote]"
-    ));
+    assert!(
+        client_source.contains("def getById(agentId: _root_.golem.AgentId): CounterAgentRemote =")
+    );
     assert!(client_source.contains(
         "def agentId(): _root_.scala.concurrent.Future[_root_.golem.AgentId] = resolved.agentId()"
     ));
@@ -1887,7 +1887,7 @@ fn guest_durable_constructors_use_agent_identity() {
         "def create(name: _root_.scala.Predef.String, keyed: _root_.scala.Boolean = false, region: _root_.scala.Option[_root_.scala.Predef.String] = _root_.scala.None, env: _root_.scala.Predef.Map[_root_.scala.Predef.String, _root_.scala.Predef.String] = _root_.scala.Predef.Map.empty): _root_.scala.concurrent.Future[DurableAgentRemote] =",
         "_root_.golem.runtime.rpc.CreateOptions(keyed, agentConfig, env)",
         "_root_.golem.runtime.rpc.AgentIdentity.create(agentTypeName, constructorPayload, options)",
-        "def getById(agentId: _root_.golem.AgentId): _root_.scala.concurrent.Future[DurableAgentRemote] =",
+        "def getById(agentId: _root_.golem.AgentId): DurableAgentRemote =",
         "_root_.golem.runtime.rpc.AgentIdentity.getById(agentTypeName, agentId)",
         "def agentId(): _root_.scala.concurrent.Future[_root_.golem.AgentId] = resolved.agentId()",
     ] {

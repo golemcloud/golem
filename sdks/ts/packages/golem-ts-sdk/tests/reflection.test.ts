@@ -283,7 +283,7 @@ describe('agent reflection', () => {
 
     vi.mocked(hostGetAgentTypeByAgentId).mockReturnValueOnce(registeredType());
     const before = vi.mocked(hostGetAgentType).mock.calls.length;
-    const client = await DynamicAgentClient.getById(ECHO_AGENT_ID);
+    const client = DynamicAgentClient.getById(ECHO_AGENT_ID);
     expect(vi.mocked(WasmRpc.getById).mock.calls.at(-1)).toEqual(['ReflectedEcho', ECHO_AGENT_ID]);
     const rpc = vi.mocked(WasmRpc.getById).mock.results.at(-1)!.value;
     rpc.asyncInvokeAndAwait.mockReturnValue({
@@ -309,22 +309,27 @@ describe('agent reflection', () => {
     vi.mocked(hostGetAgentType).mockReturnValueOnce(registeredType());
     const reflected = getAgentType('ReflectedEcho')!;
 
-    const client = await reflected.client.getById(ECHO_AGENT_ID);
+    const client = reflected.client.getById(ECHO_AGENT_ID);
 
     expect(vi.mocked(WasmRpc.getById).mock.calls.at(-1)).toEqual(['ReflectedEcho', ECHO_AGENT_ID]);
     expect(client.method('echo').definition.name).toBe('echo');
   });
 
-  it('rejects getById of an unknown or wrong-type ID with a typed not-found error', async () => {
+  it('throws on getById of an unknown or wrong-type ID with a typed not-found error', () => {
     vi.mocked(hostGetAgentType).mockReturnValueOnce(registeredType());
     const reflected = getAgentType('ReflectedEcho')!;
     vi.mocked(WasmRpc.getById).mockImplementationOnce(() => {
       throw { tag: 'not-found', val: 'no ReflectedEcho has this ID' };
     });
 
-    const rejection = reflected.client.getById(ECHO_AGENT_ID);
-    await expect(rejection).rejects.toBeInstanceOf(RemoteCallError);
-    await expect(rejection).rejects.toMatchObject({
+    let error: unknown;
+    try {
+      reflected.client.getById(ECHO_AGENT_ID);
+    } catch (thrown) {
+      error = thrown;
+    }
+    expect(error).toBeInstanceOf(RemoteCallError);
+    expect(error).toMatchObject({
       cause: { tag: 'not-found', details: 'no ReflectedEcho has this ID' },
     });
   });
@@ -467,7 +472,7 @@ describe('agent reflection', () => {
     await expect(reflected.client.create({ id: 'one' })).rejects.toThrow(
       'create is not available for ephemeral agent types',
     );
-    await expect(reflected.client.getById(ECHO_AGENT_ID)).rejects.toThrow(
+    expect(() => reflected.client.getById(ECHO_AGENT_ID)).toThrow(
       'getById is not available for ephemeral agent types',
     );
     expect(WasmRpc.create).toHaveBeenCalledTimes(creates);

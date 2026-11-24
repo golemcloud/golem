@@ -437,7 +437,7 @@ Choose the narrowest caller surface that owns the information you have:
 1. Normal RPC uses a shared source definition through the SDK's ordinary typed client and owns all lifecycle factories allowed by its mode.
 2. Caller-defined static clients use local schemas without discovery. `defineAgentClient({ methods })` connects to an existing durable agent with `getById(agentId)`, which takes the agent type from the type tag of the `AgentId`; `defineAgentClient({ name, id, methods, mode?, config? })` adds the lifecycle factories `upsert`, `create`, and `getById`, and declaration-aware config validation.
 3. Discovered clients use `reflection.getReflectedAgentType` and retain an immutable deployed metadata snapshot for runtime-selected types and methods.
-4. Fully dynamic clients use `await DynamicAgentClient.getById(agentId)` to transport schema-native values to an existing durable agent. They do not retain schemas or create a target.
+4. Fully dynamic clients use `DynamicAgentClient.getById(agentId)` to transport schema-native values to an existing durable agent. They do not retain schemas or create a target.
 
 Normal RPC and caller-defined static clients encode through their local schemas before opening RPC. Full-client binding also checks the declared type name and constructor shape. Discovered clients apply the complete snapshot input restrictions and validate output cardinality and shape. The host remains authoritative for visibility, authorization, effective configuration, identity resolution, and deployed-schema validation.
 

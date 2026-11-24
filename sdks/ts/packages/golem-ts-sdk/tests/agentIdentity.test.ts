@@ -103,8 +103,8 @@ describe('identity boundaries', () => {
     expect((error as RemoteCallError).message).toContain('conflict: key is current');
   });
 
-  it('gets by ID through the host get-by-id and never creates', async () => {
-    await getRemoteAgentById('Durable', targetId);
+  it('gets by ID through the host get-by-id and never creates', () => {
+    getRemoteAgentById('Durable', targetId);
     expect(WasmRpc.getById).toHaveBeenCalledWith('Durable', targetId);
     expect(WasmRpc.upsert).not.toHaveBeenCalled();
     expect(WasmRpc.create).not.toHaveBeenCalled();
@@ -112,9 +112,14 @@ describe('identity boundaries', () => {
     vi.mocked(WasmRpc.getById).mockImplementationOnce(() => {
       throw { tag: 'not-found', val: 'no agent' };
     });
-    const missing = getRemoteAgentById('Durable', targetId);
-    await expect(missing).rejects.toBeInstanceOf(RemoteCallError);
-    await expect(missing).rejects.toMatchObject({
+    let missing: unknown;
+    try {
+      getRemoteAgentById('Durable', targetId);
+    } catch (thrown) {
+      missing = thrown;
+    }
+    expect(missing).toBeInstanceOf(RemoteCallError);
+    expect(missing).toMatchObject({
       cause: { tag: 'not-found', details: 'no agent' },
     });
   });
@@ -128,16 +133,22 @@ describe('identity boundaries', () => {
     expect(agentId.equals(MOCK_REMOTE_AGENT_ID)).toBe(true);
   });
 
-  it('connects a dynamic client by ID to the agent type that the ID tag names', async () => {
+  it('connects a dynamic client by ID to the agent type that the ID tag names', () => {
     vi.mocked(getAgentTypeByAgentId).mockReturnValueOnce({
       agentType: { typeName: 'Dynamic', mode: 'durable' },
     } as never);
-    const client = await DynamicAgentClient.getById(targetId);
+    const client = DynamicAgentClient.getById(targetId);
     expect(client.agentId).toBe(targetId);
     expect(WasmRpc.getById).toHaveBeenCalledWith('Dynamic', targetId);
 
     vi.mocked(getAgentTypeByAgentId).mockReturnValueOnce(undefined);
-    await expect(DynamicAgentClient.getById(targetId)).rejects.toMatchObject({
+    let missing: unknown;
+    try {
+      DynamicAgentClient.getById(targetId);
+    } catch (thrown) {
+      missing = thrown;
+    }
+    expect(missing).toMatchObject({
       name: 'RemoteCallError',
       cause: { tag: 'not-found' },
     });

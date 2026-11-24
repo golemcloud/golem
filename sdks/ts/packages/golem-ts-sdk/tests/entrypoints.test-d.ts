@@ -71,6 +71,7 @@ agentId.client;
 agentId.parts;
 // @ts-expect-error reflected agent types no longer name the implementing component
 getAgentType('ExampleAgent')!.implementedBy;
+// @ts-expect-error getById returns the client at once
 getAgentType('ExampleAgent')!.client.getById(agentId) satisfies Promise<unknown>;
 getAgentType('ExampleAgent')!
   .client.upsert({ name: 'example' })
@@ -79,12 +80,12 @@ getAgentType('ExampleAgent')!
 const definition = defineAgentClient({
   methods: { ping: method({ input: { message: z.string() }, returns: z.string() }) },
 });
-definition.getById(agentId).then((client) => client.ping({ message: 'hello' }));
+definition.getById(agentId).ping({ message: 'hello' });
+// @ts-expect-error getById returns the client at once
+definition.getById(agentId) satisfies Promise<unknown>;
 // @ts-expect-error method-only clients address agents by ID only
 definition.upsert;
-DynamicAgentClient.getById(agentId).then((client) =>
-  client.method('ping').invokeValue(v.record([])),
-);
+DynamicAgentClient.getById(agentId).method('ping').invokeValue(v.record([]));
 // @ts-expect-error dynamic clients are only connected through getById
 new DynamicAgentClient(agentId);
 
@@ -99,7 +100,9 @@ upserted.agentId() satisfies Promise<AgentId>;
 fullDefinition.client
   .create({ name: 'example' }, { keyed: true, env: { MODE: 'test' } })
   .then((client) => client.ping({ message: 'create' }));
-fullDefinition.client.getById(agentId).then((client) => client.agentId());
+fullDefinition.client.getById(agentId).agentId() satisfies Promise<AgentId>;
+// @ts-expect-error getById returns the client at once
+fullDefinition.client.getById(agentId) satisfies Promise<unknown>;
 // @ts-expect-error upsert takes no configuration overrides
 fullDefinition.client.upsert({ name: 'example' }, { config: {} });
 // @ts-expect-error env overrides are string values

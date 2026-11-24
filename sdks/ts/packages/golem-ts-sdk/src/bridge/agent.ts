@@ -336,10 +336,7 @@ export async function createRemoteAgent(
  * unknown ID, or the ID of an agent of another type, fails with a `not-found`
  * {@link RemoteCallError}.
  */
-export async function getRemoteAgentById(
-  agentTypeName: string,
-  agentId: AgentId,
-): Promise<RemoteAgentHandle> {
+export function getRemoteAgentById(agentTypeName: string, agentId: AgentId): RemoteAgentHandle {
   const target = `${agentTypeName}[${agentId.toString()}]`;
   const rpc = mapRpcError(`Failed to connect to remote agent ${target}`, () =>
     WasmRpc.getById(agentTypeName, agentId),
