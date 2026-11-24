@@ -1937,7 +1937,8 @@ type RawPendingUpdateParameters struct {
 	Description        RawUpdateDescription
 	UpdateAttemptIndex witTypes.Option[uint64]
 	// Who requested the update, in the oplog's binary encoding, as an `oplog-payload` holds the
-	// caller of an invocation. `enrich-oplog-entries` gives it as a `public-caller`.
+	// caller of an invocation, without a user's verified claims. `enrich-oplog-entries` gives
+	// it as a `public-caller`.
 	Requester []uint8
 }
 
