@@ -1,7 +1,14 @@
 import { Context, Data, Effect, Layer, RcMap, type Scope, Semaphore } from "effect"
 import type pg from "pg"
 import type { Currency } from "./Currency.ts"
-import { connectionOf, Database, LockConnection, requireTables, type SchemaError } from "./Database.ts"
+import {
+  connectionOf,
+  Database,
+  LockConnection,
+  requireColumns,
+  requireTables,
+  type SchemaError
+} from "./Database.ts"
 
 /**
  * The statuses in which Polar bills the usage events of a subscription (`billable` of a Polar
@@ -399,6 +406,16 @@ export const tableNames: ReadonlyArray<string> = [
 ]
 
 /**
+ * The columns of `tables` that the startup check requires besides the tables: the currency of
+ * each subscription, order and settlement. `migrate` does not add them to a table that exists.
+ */
+export const requiredColumns: ReadonlyArray<readonly [string, string]> = [
+  ["polar_subscriptions", "currency"],
+  ["polar_orders", "currency"],
+  ["overage_settlements", "currency"]
+]
+
+/**
  * The usage events of account $1 that an order can still bill: not held, recorded after the usage
  * settlement of the account, and either
  *
@@ -499,10 +516,11 @@ const fromCheckoutRow = (row: CheckoutRow): Checkout => ({
   expiresAt: row.expires_at
 })
 
-/** Checks that the tables exist, and returns the queries. */
+/** Checks that the tables and their required columns exist, and returns the queries. */
 const make: Effect.Effect<SubscriptionsShape, SchemaError, Database | Scope.Scope> =
   Effect.gen(function* () {
     yield* requireTables(tableNames)
+    yield* requireColumns(requiredColumns)
     const { pool } = yield* Database
     // A queue for each account with a caller of `withAccountLock`. A caller that waited for the
     // advisory lock on a connection would hold that connection, and enough callers of one account

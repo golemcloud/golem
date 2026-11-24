@@ -59,7 +59,10 @@ variables. It runs under a PostgreSQL advisory lock, so two runs migrate one aft
 a run on a migrated schema changes nothing. It does not create the schema: an administrator
 creates the schema for the owner role first, and `migrate` fails without it. The web app,
 `push-usage` and `cleanup-deleted-accounts` run no DDL. At start, each checks that the tables
-exist, and fails with a message that names `migrate` when one is missing.
+exist, and fails with a message that names `migrate` when one is missing. `migrate` does not add a
+column to a table that exists, so the web app and the cleanup also check the `currency` column of
+`polar_subscriptions`, `polar_orders` and `overage_settlements` (`Subscriptions.requiredColumns`),
+and fail with a message that names the missing column.
 
 Better Auth reads the columns of every table in the database during `migrate`. When a registry
 migration changes a table at the same moment, the read fails; `migrate` tries it again up to five
