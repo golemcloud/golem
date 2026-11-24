@@ -14,6 +14,7 @@
 
 pub mod matcher;
 pub mod payload;
+mod processor_batch;
 mod protobuf;
 mod public_types;
 pub(crate) mod raw_types;
