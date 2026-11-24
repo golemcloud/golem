@@ -72,6 +72,7 @@ describe("GitHub sign-in", () => {
     const [login, ...otherLogins] = upstreams.registryLogins()
     expect(otherLogins).toEqual([])
     expect(login!.url.search).toBe("")
+    expect(login!.headers.get("content-type")).toMatch(/^application\/json(?:\s*;|$)/i)
     expect(login!.body).toEqual({ provider: "github", accessToken: upstreams.github.accessToken })
 
     expect(await users()).toEqual([

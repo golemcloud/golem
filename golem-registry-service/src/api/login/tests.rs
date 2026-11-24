@@ -177,7 +177,12 @@ async fn login_oauth2_leaves_a_wrongly_typed_access_token_out_of_the_error() {
     .await;
 
     assert_eq!(error.status(), StatusCode::BAD_REQUEST);
-    assert!(!error.to_string().contains("gho_typed_token"), "{error}");
+    let message = error.to_string();
+    assert!(
+        message.contains(r#"{"provider":"github","accessToken":"<string>"}"#),
+        "{message}"
+    );
+    assert!(!message.contains("gho_typed_token"), "{message}");
     assert!(fixture.github.access_tokens.lock().unwrap().is_empty());
 }
 

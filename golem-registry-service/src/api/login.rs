@@ -63,7 +63,9 @@ impl ParsePayload for OAuth2LoginBody {
         match <Json<OAuth2Login> as ParsePayload>::from_request(request, body).await {
             Ok(Json(login)) => Ok(Self(login)),
             Err(error) if error.is::<ParseRequestPayloadError>() => Err(ParseRequestPayloadError {
-                reason: "the body is not a valid OAuth2Login object".to_string(),
+                reason:
+                    r#"expected a JSON object like {"provider":"github","accessToken":"<string>"}"#
+                        .to_string(),
             }
             .into()),
             Err(error) => Err(error),
