@@ -6386,7 +6386,8 @@ async fn guest_oplog_search_stops_at_the_granted_window(
 /// A guest batch that starts after index 1 decodes its first entries with the component revision
 /// of the last successful update before its start. The target runs `set`, which only the second
 /// revision has, between an update to that revision and an update away from it, so only that
-/// revision decodes the input of `set`.
+/// revision decodes the output of `set`. The input of an agent method invocation does not show the
+/// revision, because the public entry gives the original input without the component metadata.
 #[test]
 #[timeout("3m")]
 #[tracing::instrument]
@@ -6478,16 +6479,16 @@ async fn a_later_guest_oplog_batch_decodes_with_the_revision_at_its_start(
     executor
         .start_agent(&reader.id, reader_agent.clone())
         .await?;
-    let inputs = executor
+    let outputs = executor
         .invoke_and_await_agent(
             &reader,
             &reader_agent,
-            "read_oplog_method_inputs",
+            "read_oplog_method_outputs",
             data_value!(target.agent_id(), start.as_u64()),
         )
         .await?
         .into_typed::<Result<Vec<(String, Vec<u64>)>, String>>()?;
-    assert_eq!(inputs, Ok(vec![("set".to_string(), vec![7])]));
+    assert_eq!(outputs, Ok(vec![("set".to_string(), vec![7])]));
     Ok(())
 }
 
