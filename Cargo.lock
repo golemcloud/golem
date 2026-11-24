@@ -4141,6 +4141,7 @@ dependencies = [
  "minijinja",
  "phf",
  "poem",
+ "poem-openapi",
  "portable-pty",
  "pretty_assertions",
  "prettyplease 0.2.37",

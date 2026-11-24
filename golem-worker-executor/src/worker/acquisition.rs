@@ -164,14 +164,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
         loop {
-            let worker =
-                match Self::get_exact_existing_suspended(deps, owned_agent_id, Caller::anonymous())
-                    .await
-                {
-                    Ok(worker) => worker,
-                    Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(None),
-                    Err(error) => return Err(error.into()),
-                };
+            let worker = match Self::get_exact_existing_suspended(deps, owned_agent_id).await {
+                Ok(worker) => worker,
+                Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(None),
+                Err(error) => return Err(error.into()),
+            };
             if worker.agent_mode() != AgentMode::Ephemeral {
                 return Ok(Some((worker, None)));
             }
@@ -251,13 +248,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn get_exact_existing_suspended<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-        caller: Caller,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
         deps.active_agents()
-            .get_existing(deps, owned_agent_id, caller)
+            .get_existing(deps, owned_agent_id)
             .await
     }
     /// Pins an existing owner's response metadata without allowing owner creation. With an
@@ -266,7 +262,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn get_exact_existing_suspended_for_response<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(Arc<Self>, Option<Arc<EphemeralResponseLease>>), WorkerExecutorError>
     where
@@ -275,12 +270,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         loop {
             let worker = deps
                 .active_agents()
-                .get_existing_with_fingerprint(
-                    deps,
-                    owned_agent_id,
-                    caller.clone(),
-                    expected_fingerprint,
-                )
+                .get_existing_with_fingerprint(deps, owned_agent_id, expected_fingerprint)
                 .await?;
             // The deleting generation stays cached until its deletion ends, with its runtime
             // stopped, so it is refused here rather than by whichever step reads it next.
@@ -384,12 +374,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     {
         let worker = deps
             .active_agents()
-            .get_existing_with_fingerprint(
-                deps,
-                owned_agent_id,
-                Caller::anonymous(),
-                Some(expected_fingerprint),
-            )
+            .get_existing_with_fingerprint(deps, owned_agent_id, Some(expected_fingerprint))
             .await?;
 
         let lifecycle = deps
@@ -823,7 +808,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub(crate) async fn ensure_existing_with_fingerprint(
         self: &Arc<Self>,
-        _principal: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError> {
         // Existing-only acquisition resolves identity, not execution readiness. Deletion
@@ -1266,6 +1250,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             owner_execution,
             owner_runtime_resources,
             last_known_status_detached,
+            settlement_commit_deferred: AtomicBool::new(false),
             status_flusher,
             status_checkpointer,
             last_resume_request: Mutex::new(Timestamp::now_utc()),

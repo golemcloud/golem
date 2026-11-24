@@ -184,6 +184,7 @@ async fn worker_adapter_uses_derived_private_identity_and_canonical_input() {
             idempotency_key: None,
             oplog_index: None,
             agent_fingerprint: None,
+            background_failure: None,
         },
         AgentMode::Ephemeral,
         AgentConstructorSchema {

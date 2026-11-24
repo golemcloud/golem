@@ -138,6 +138,7 @@ async fn typed_cache_privacy_follows_authentication_not_principal_usage() {
                     idempotency_key: None,
                     oplog_index: Some(OplogIndex::from_u64(17)),
                     agent_fingerprint: Some(AgentFingerprint(uuid::Uuid::new_v4())),
+                    background_failure: None,
                 },
                 AgentConstructorSchema {
                     name: None,
@@ -636,6 +637,7 @@ async fn http_api_request_validation_errors_preserve_json_details_and_cors() {
             idempotency_key: None,
             oplog_index: None,
             agent_fingerprint: None,
+            background_failure: None,
         },
         AgentConstructorSchema {
             name: None,
@@ -736,6 +738,7 @@ async fn http_api_body_limit_rejects_before_invocation_and_keeps_cors() {
                     idempotency_key: None,
                     oplog_index: None,
                     agent_fingerprint: None,
+                    background_failure: None,
                 },
                 AgentConstructorSchema {
                     name: None,
@@ -1393,6 +1396,7 @@ async fn agent_selector_runs_after_auth_and_before_etag_revalidation() {
             idempotency_key: None,
             oplog_index: None,
             agent_fingerprint: None,
+            background_failure: None,
         },
         AgentConstructorSchema {
             name: None,
@@ -2029,6 +2033,7 @@ fn route_harness(
             idempotency_key: None,
             oplog_index: None,
             agent_fingerprint: None,
+            background_failure: None,
         },
         golem_common::schema::AgentTypeSchema {
             kind: golem_common::schema::agent::AgentTypeKind::Regular,
@@ -2377,6 +2382,7 @@ async fn valid_lazy_append_creates_once_and_preserves_body() {
         .unwrap()
         .public_session_creation = Some(CreateStreamSessionSuccess {
         session: session.clone(),
+        invocation_key: Some(uuid::Uuid::new_v4().into()),
         ..Default::default()
     });
     harness.script_durable_stream_reads(vec![

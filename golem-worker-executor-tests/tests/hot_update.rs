@@ -35,6 +35,8 @@ use golem_common::model::{AgentEvent, AgentStatus, OwnedAgentId, ScanCursor, Tim
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::{TestDsl, update_counts};
 
+use golem_common::model::account::AccountId;
+use golem_common::model::caller::{Caller, ClaimVisibility, PublicCaller};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::replayable_stream::ErasedReplayableStream;
@@ -52,6 +54,7 @@ use golem_worker_executor::services::golem_config::{
     FilesystemSnapshotUploadConfig, OplogConfig, SnapshotPolicy,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start, start_customized, start_with_overrides,
@@ -60,7 +63,7 @@ use golem_worker_executor_test_utils::{
 use http::StatusCode;
 use log::info;
 use pretty_assertions::{assert_eq, assert_ne};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -2156,6 +2159,16 @@ async fn assert_snapshot_assisted_suffix_failure(
         "unexpected assisted failure: {details}"
     );
     assert_eq!(failed.failure_class, expected_class, "{details}");
+    // The target code decides the divergence of an update replay, not the snapshot load.
+    assert_eq!(
+        failed
+            .divergence
+            .as_ref()
+            .and_then(|divergence| divergence.replay_start.clone()),
+        None,
+        "{details}"
+    );
+    assert!(!details.contains("replay started"), "{details}");
     assert_eq!(
         failed
             .snapshot_assisted_details
@@ -2861,8 +2874,17 @@ async fn restart_before_attempt_and_later_update_modes_succeed(
     let assisted = executor
         .update_component(&component.id, "it_agent_update_v2_release")
         .await?;
-    executor
-        .auto_update_worker(&worker_id, assisted.revision, true)
+    // The strategy entry of this update is written after the restart: it must still name the
+    // requester of the admission.
+    let assisted_requester = callers::account(AccountId::new());
+    let assisted_attempt = executor
+        .update_worker_as_caller(
+            &worker_id,
+            AgentUpdateMode::Automatic,
+            assisted.revision,
+            true,
+            assisted_requester.clone(),
+        )
         .await?;
     let pending = wait_for_update_counts(&executor, &worker_id, (1, 0, 0)).await?;
     assert_eq!(pending.component_revision, component.revision);
@@ -2907,8 +2929,15 @@ async fn restart_before_attempt_and_later_update_modes_succeed(
     let manual = executor
         .update_component(&component.id, "it_agent_update_v2_release")
         .await?;
-    executor
-        .manual_update_worker(&worker_id, manual.revision, false)
+    let manual_requester = callers::account(AccountId::new());
+    let manual_attempt = executor
+        .update_worker_as_caller(
+            &worker_id,
+            AgentUpdateMode::Manual,
+            manual.revision,
+            false,
+            manual_requester.clone(),
+        )
         .await?;
     executor
         .wait_for_component_revision(&worker_id, manual.revision, Duration::from_secs(30))
@@ -2939,6 +2968,11 @@ async fn restart_before_attempt_and_later_update_modes_succeed(
         update_counts(&executor.get_worker_metadata(&worker_id).await?),
         (0, 4, 0)
     );
+    // The admission and the strategy entry of the first update, and the queued manual update
+    // and its `PendingUpdate`, each name their own requester.
+    let requesters = update_requesters(&executor, &worker_id).await?;
+    assert_requested_by(&requesters, assisted_attempt, &assisted_requester, 2);
+    assert_requested_by(&requesters, manual_attempt, &manual_requester, 2);
     files
         .assert_files(
             &executor,
@@ -3020,11 +3054,27 @@ async fn queued_automatic_targets_select_strategy_when_each_reaches_queue_head(
     let revision_three = executor
         .update_component(&component.id, "it_agent_update_v2_release")
         .await?;
-    executor
-        .auto_update_worker(&worker_id, revision_two.revision, true)
+    // Two accounts each queue one update. The executor writes the strategy entry of each when it
+    // reaches the head of the queue, with the requester of that update's own admission.
+    let first_requester = callers::account(AccountId::new());
+    let second_requester = callers::account(AccountId::new());
+    let first_attempt = executor
+        .update_worker_as_caller(
+            &worker_id,
+            AgentUpdateMode::Automatic,
+            revision_two.revision,
+            true,
+            first_requester.clone(),
+        )
         .await?;
-    executor
-        .auto_update_worker(&worker_id, revision_three.revision, true)
+    let second_attempt = executor
+        .update_worker_as_caller(
+            &worker_id,
+            AgentUpdateMode::Automatic,
+            revision_three.revision,
+            true,
+            second_requester.clone(),
+        )
         .await?;
 
     let pending = wait_for_update_counts(&executor, &worker_id, (2, 0, 0)).await?;
@@ -3065,6 +3115,9 @@ async fn queued_automatic_targets_select_strategy_when_each_reaches_queue_head(
             .collect::<HashSet<_>>(),
         pending_attempts,
     );
+    let requesters = update_requesters(&executor, &worker_id).await?;
+    assert_requested_by(&requesters, first_attempt, &first_requester, 2);
+    assert_requested_by(&requesters, second_attempt, &second_requester, 2);
     http_server.abort();
     Ok(())
 }
@@ -4539,8 +4592,17 @@ async fn manual_update_on_idle(
         .invoke_and_await_agent(&component, &agent_id, "f2", data_value!())
         .await?;
 
-    executor
-        .manual_update_worker(&worker_id, updated_component.revision, false)
+    // An account requests the update: the queued manual update and its `PendingUpdate` both
+    // record it.
+    let requester = callers::account(AccountId::new());
+    let attempt = executor
+        .update_worker_as_caller(
+            &worker_id,
+            AgentUpdateMode::Manual,
+            updated_component.revision,
+            false,
+            requester.clone(),
+        )
         .await?;
 
     let after_update = executor
@@ -4548,6 +4610,7 @@ async fn manual_update_on_idle(
         .await?;
 
     let metadata = executor.get_worker_metadata(&worker_id).await?;
+    let requesters = update_requesters(&executor, &worker_id).await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -4561,6 +4624,7 @@ async fn manual_update_on_idle(
     assert_eq!(before_update, after_update);
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));
+    assert_requested_by(&requesters, attempt, &requester, 2);
 
     Ok(())
 }
@@ -4713,8 +4777,17 @@ async fn manual_update_on_idle_without_save_snapshot(
         .invoke_and_await_agent(&component, &agent_id, "f1", data_value!(0u64))
         .await?;
 
-    executor
-        .manual_update_worker(&worker_id, updated_component.revision, false)
+    // The save fails, so no `PendingUpdate` exists: the queued manual update alone records the
+    // requester.
+    let requester = callers::account(AccountId::new());
+    let attempt = executor
+        .update_worker_as_caller(
+            &worker_id,
+            AgentUpdateMode::Manual,
+            updated_component.revision,
+            false,
+            requester.clone(),
+        )
         .await?;
 
     let result = executor
@@ -4722,6 +4795,7 @@ async fn manual_update_on_idle_without_save_snapshot(
         .await?;
 
     let metadata = executor.get_worker_metadata(&worker_id).await?;
+    let requesters = update_requesters(&executor, &worker_id).await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -4736,6 +4810,7 @@ async fn manual_update_on_idle_without_save_snapshot(
     assert_eq!(result.into_typed::<u64>()?, 5);
     assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
     assert_eq!(update_counts(&metadata), (0, 0, 1));
+    assert_requested_by(&requesters, attempt, &requester, 1);
 
     Ok(())
 }
@@ -8892,6 +8967,7 @@ async fn a_divergent_bootstrap_block_fails_the_snapshot_based_update(
                 function_name: HostFunctionName::WallClockNow,
                 invocation_id: None,
                 observational_owner: None,
+                driver: None,
                 request: None,
                 durable_function_type: DurableFunctionType::ReadLocal,
                 span_started: None,
@@ -10010,6 +10086,48 @@ async fn an_automatic_update_from_a_promoted_snapshot_that_the_target_cannot_loa
     Ok(())
 }
 
+/// The requester of every `PendingUpdate` and of every queued manual update of the agent, by the
+/// update attempt that each belongs to, in oplog order.
+async fn update_requesters(
+    executor: &impl TestDsl,
+    worker_id: &OwnedAgentId,
+) -> anyhow::Result<BTreeMap<OplogIndex, Vec<PublicCaller>>> {
+    let mut requesters: BTreeMap<OplogIndex, Vec<PublicCaller>> = BTreeMap::new();
+    for entry in executor.get_oplog(worker_id, OplogIndex::INITIAL).await? {
+        match entry.entry {
+            PublicOplogEntry::PendingUpdate(params) => requesters
+                .entry(params.update_attempt_index)
+                .or_default()
+                .push(params.requester),
+            PublicOplogEntry::PendingAgentInvocation(params) => {
+                if let PublicAgentInvocation::ManualUpdate(manual) = params.invocation {
+                    requesters
+                        .entry(entry.oplog_index)
+                        .or_default()
+                        .push(manual.requester);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(requesters)
+}
+
+/// Every record of update attempt `attempt` names `requester`, and there are `count` of them.
+fn assert_requested_by(
+    requesters: &BTreeMap<OplogIndex, Vec<PublicCaller>>,
+    attempt: OplogIndex,
+    requester: &Caller,
+    count: usize,
+) {
+    let expected = PublicCaller::new(requester, ClaimVisibility::Hidden);
+    assert_eq!(
+        requesters.get(&attempt).cloned().unwrap_or_default(),
+        vec![expected; count],
+        "the requesters of update attempt {attempt}"
+    );
+}
+
 /// An automatic update whose target makes a different host call than the recorded one fails with
 /// the class `Divergence` and the divergence at the recorded `Start`. After a real restart, the
 /// agent metadata and the public oplog still show the class, the index, both calls and the
@@ -10082,6 +10200,8 @@ async fn a_diverging_automatic_update_keeps_its_class_and_divergence_across_a_re
         .clone()
         .expect("the oplog keeps the divergence");
     assert_eq!(from_metadata.divergence.as_ref(), Some(&divergence));
+    // The new code decides the divergence of an update replay, so it names no replay start.
+    assert_eq!(divergence.replay_start, None);
 
     // The index names the recorded `Start` of the call that the source made.
     let recorded = oplog

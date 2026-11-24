@@ -13,6 +13,34 @@
 // limitations under the License.
 
 use super::*;
+use crate::worker::invocation::{ReturnRecorded, record_result_at_return};
+use std::future::Future;
+use std::pin::Pin;
+use wasmtime::StoreContextMut;
+
+/// Records a replayed result at the export's return: it consumes the recorded terminal, or at
+/// the replay tail records the result live.
+struct ReplayRecorder {
+    uses_streams: bool,
+    outcome: Option<ReturnRecorded>,
+}
+
+impl<Ctx: WorkerCtx> ReturnRecorder<Ctx> for ReplayRecorder {
+    fn record<'a>(
+        &'a mut self,
+        store: &'a mut StoreContextMut<'_, Ctx>,
+        display_name: &'a str,
+        result: InvokeResult,
+    ) -> Pin<Box<dyn Future<Output = (InvokeResult, bool)> + Send + 'a>> {
+        Box::pin(async move {
+            let (result, recorded) =
+                record_result_at_return(store, display_name, result, self.uses_streams).await;
+            let ok = recorded.as_ref().is_some_and(ReturnRecorded::is_recorded);
+            self.outcome = recorded;
+            (result, ok)
+        })
+    }
+}
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Replays the recorded invocations of the start. A failure says
@@ -163,6 +191,27 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             }
                         };
                         let full_function_name = lowered.display_name.clone();
+                        let stream_session = uses_streams.then_some(&idempotency_key);
+                        if lowered.records_result_at_return(stream_session)
+                            && let Err(error) = store
+                                .as_context_mut()
+                                .data_mut()
+                                .durable_ctx_mut()
+                                .open_invocation_anchor(oplog_index, idempotency_key)
+                                .await
+                        {
+                            store
+                                .as_context_mut()
+                                .data_mut()
+                                .durable_ctx_mut()
+                                .clear_invocation_scope_card()
+                                .await;
+                            break Err(error);
+                        }
+                        let mut recorder = ReplayRecorder {
+                            uses_streams,
+                            outcome: None,
+                        };
 
                         debug!("Replaying function {}", &full_function_name);
                         debug!(
@@ -191,8 +240,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             .data_mut()
                             .durable_ctx_mut()
                             .state
-                            .loop_invocation_state_mut()
-                            .start_index = Some(oplog_index);
+                            .set_loop_invocation_start_index(oplog_index);
                         // An invocation retained only through its start has no recorded body.
                         // Publish live before pure guest code or logging runs, without waiting
                         // for a durable host call to observe the exhausted replay cursor.
@@ -214,7 +262,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             lowered,
                             store,
                             instance,
-                            uses_streams.then_some(&idempotency_key),
+                            stream_session,
+                            Some(&mut recorder),
                         )
                         .instrument(span)
                         .await;
@@ -228,7 +277,34 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             store.as_context_mut().data_mut().remove_span(&span_id)?;
                         }
 
+                        let recorded_success = match recorder.outcome.take() {
+                            Some(
+                                ReturnRecorded::Succeeded(Err(error))
+                                | ReturnRecorded::MethodFailed(Err(
+                                    crate::worker::MethodFailureSettlementError::Invocation(error)
+                                    | crate::worker::MethodFailureSettlementError::Recovery(error),
+                                )),
+                            ) => break Err(error),
+                            Some(ReturnRecorded::Succeeded(Ok(())))
+                                if matches!(invoke_result, Ok(InvokeResult::Succeeded { .. })) =>
+                            {
+                                Some(true)
+                            }
+                            Some(ReturnRecorded::MethodFailed(Ok(())))
+                                if matches!(invoke_result, Ok(InvokeResult::MethodFailed { .. })) =>
+                            {
+                                Some(false)
+                            }
+                            // The result was recorded at the export's return and the drain of the
+                            // background work failed: the failure is handled below.
+                            Some(_) => None,
+                            None => None,
+                        };
                         match invoke_result {
+                            Ok(InvokeResult::MethodFailed { .. }) if recorded_success == Some(false) => {
+                                number_of_replayed_functions += 1;
+                                continue;
+                            }
                             Ok(InvokeResult::Succeeded {
                                 result: invocation_result,
                                 consumed_fuel,
@@ -244,16 +320,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     idempotency_key: None,
                                     oplog_index: None,
                                     agent_fingerprint: None,
+                                    background_failure: None,
                                 };
-                                if let Err(err) = store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .on_agent_invocation_success(
-                                        &full_function_name,
-                                        consumed_fuel,
-                                        &mut output,
-                                    )
-                                    .await
+                                if recorded_success != Some(true)
+                                    && let Err(err) = store
+                                        .as_context_mut()
+                                        .data_mut()
+                                        .on_agent_invocation_success(
+                                            &full_function_name,
+                                            consumed_fuel,
+                                            &mut output,
+                                            ResultRecordedAt::Settlement,
+                                        )
+                                        .await
                                 {
                                     break Err(err);
                                 }
@@ -285,7 +364,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 if let Err(
                                     crate::worker::MethodFailureSettlementError::Invocation(error)
                                     | crate::worker::MethodFailureSettlementError::Recovery(error)
-                                ) = Self::on_agent_method_failure(store, &full_function_name, error, uses_streams).await {
+                                ) = Self::on_agent_method_failure(store, &full_function_name, error, uses_streams, ResultRecordedAt::Settlement).await {
                                     break Err(error);
                                 }
                                 number_of_replayed_functions += 1;
@@ -331,6 +410,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 let trap_type = match invoke_result {
                                     Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
                                     Err(error) => {
+                                        // A rejected periodic snapshot is reported with its own
+                                        // index, so only a divergence that ends the replay
+                                        // names the snapshot that the replay started from.
+                                        let error = if snapshot_divergence
+                                            && Self::rejects_diverged_record(store, &error)
+                                        {
+                                            error
+                                        } else {
+                                            Self::with_replay_start(store, error)
+                                        };
                                         Some(TrapType::from_worker_executor_error::<Ctx>(
                                             error,
                                             OplogIndex::INITIAL,
@@ -524,10 +613,53 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )));
         }
         result.map_err(|error| ReplayFailure {
-            error,
+            error: Self::with_replay_start(store, error),
             diverged,
             provenance,
         })
+    }
+
+    /// Records where the recovery replay started on a divergence at a recorded entry that does
+    /// not name its start yet: the loaded snapshot or a replay without a snapshot, each with the
+    /// oplog indexes of the automatic snapshots that the starts of this incarnation rejected. The
+    /// replay of an update keeps no start, because the new code, not a snapshot load, decides its
+    /// divergence. A divergence without an oplog index is not a position of the replay and keeps
+    /// no start.
+    fn with_replay_start(store: &Store<Ctx>, error: WorkerExecutorError) -> WorkerExecutorError {
+        let state = &store.data().durable_ctx().state;
+        let mut divergence = match error {
+            WorkerExecutorError::UnexpectedOplogEntry { divergence }
+                if divergence.oplog_index != OplogIndex::NONE
+                    && !matches!(
+                        state.snapshot_replay_purpose,
+                        SnapshotReplayPurpose::AssistedUpdate
+                            | SnapshotReplayPurpose::AutomaticUpdate
+                    ) =>
+            {
+                divergence
+            }
+            error => return error,
+        };
+        if divergence.replay_start.is_none() {
+            let mut rejected: Vec<OplogIndex> = store
+                .data()
+                .get_public_state()
+                .worker()
+                .read_exclusions(
+                    crate::worker::snapshot_selection::SnapshotExclusions::persisted_rejections,
+                )
+                .into_iter()
+                .flatten()
+                .collect();
+            rejected.sort();
+            divergence.replay_start = Some(match state.last_snapshot_index {
+                Some(snapshot_index) => {
+                    golem_common::model::oplog::ReplayStart::snapshot(snapshot_index, rejected)
+                }
+                None => golem_common::model::oplog::ReplayStart::full_replay(rejected),
+            });
+        }
+        WorkerExecutorError::UnexpectedOplogEntry { divergence }
     }
 
     /// Begins the bootstrap phase of the primary Store, before its core initializer runs.

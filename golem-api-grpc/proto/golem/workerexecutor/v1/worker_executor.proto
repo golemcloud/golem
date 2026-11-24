@@ -362,6 +362,7 @@ message UpdateWorkerRequest {
   bool disable_wakeup = 6;
   reserved 7;
   reserved "principal";
+  // The caller of the request. The executor records it as the requester of the update.
   golem.component.Caller caller = 9;
   golem.common.UUID expected_fingerprint = 8;
 }
@@ -371,6 +372,13 @@ message UpdateWorkerResponse {
     uint64 success = 1;
     golem.worker.v1.WorkerExecutionError failure = 2;
   }
+}
+
+// Whether the public oplog of a read holds the users' verified claims. The worker service asks
+// for SHOWN only for a reader that asked for the claims and passed the oplog read check.
+enum ClaimVisibility {
+  CLAIM_VISIBILITY_HIDDEN = 0;
+  CLAIM_VISIBILITY_SHOWN = 1;
 }
 
 message GetOplogRequest {
@@ -386,6 +394,8 @@ message GetOplogRequest {
   // The scan allowance that a range read may still spend. Without it, the read gets the
   // configured allowance of the executor. The executor clamps it to its configured allowance.
   optional golem.worker.OplogScanAllowance scan_allowance = 9;
+  // Whether the callers in the entries hold the users' verified claims.
+  ClaimVisibility claims = 10;
 }
 
 message GetOplogResponse {
@@ -415,6 +425,8 @@ message GetOplogEntryRequest {
   // The component revision to decode the entry with. Without it, the executor scans the oplog
   // up to the entry to find it.
   optional uint64 component_revision = 5;
+  // Whether the callers in the entries hold the users' verified claims.
+  ClaimVisibility claims = 6;
 }
 
 message GetOplogEntryResponse {
@@ -431,6 +443,8 @@ message SearchOplogRequest {
   uint64 count = 4;
   golem.common.EnvironmentId environment_id = 5;
   golem.auth.AuthCtx auth_ctx = 6;
+  // Whether the callers in the entries hold the users' verified claims.
+  ClaimVisibility claims = 7;
 }
 
 message SearchOplogResponse {
@@ -623,6 +637,8 @@ enum InvocationLifecycleState {
   INVOCATION_LIFECYCLE_STATE_COMPLETED = 7;
   INVOCATION_LIFECYCLE_STATE_FAILED = 8;
   INVOCATION_LIFECYCLE_STATE_CANCELLED = 9;
+  // The invocation recorded its result, then the agent gave up during its background work.
+  INVOCATION_LIFECYCLE_STATE_BACKGROUND_FAILED = 10;
 }
 
 enum InvocationKind {
@@ -1008,6 +1024,7 @@ message ProcessOplogEntriesRequest {
   golem.auth.AuthCtx auth_ctx = 10;
   // The component of the oplog processor. It creates the processor when it is missing.
   golem.component.ComponentId component_id = 11;
+  golem.component.Caller caller = 12;
 }
 
 message ProcessOplogEntriesResponse {

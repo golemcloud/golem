@@ -17286,6 +17286,7 @@ components:
       - pluginRegistrationId
       - pluginName
       - pluginVersion
+      - installedBy
       properties:
         environmentPluginGrantId:
           type: string
@@ -17313,6 +17314,12 @@ components:
         oplogProcessorComponentRevision:
           type: integer
           format: uint64
+        installedBy:
+          type: string
+          format: uuid
+          description: |-
+            The account that installed the plugin. An oplog processor processes each batch with
+            this account as its original caller.
     KnownExports:
       type: object
       title: KnownExports

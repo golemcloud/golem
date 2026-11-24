@@ -6340,6 +6340,12 @@ async fn assert_queued_manual_update_before_pending(ctx: &TestContext, agent: &s
         })
         .expect("the manual update must still be queued");
     assert_eq!(pending.pending_update_index, queued["index"].as_u64());
+    // The queued manual update names the account that requested it, in both roles.
+    let requester = &queued["entry"]["invocation"]["requester"];
+    assert_eq!(requester["original"]["kind"], "account", "{requester}");
+    assert_eq!(requester["original"]["authentication"], "apiToken");
+    assert_eq!(requester["original"], requester["immediate"]);
+    assert_eq!(requester["tokens"], serde_json::json!([]));
     // Metadata projects a queued manual invocation as pending before snapshot preparation writes
     // a PendingUpdate entry. Check that distinction in the oplog, not the metadata projection.
     assert!(
@@ -6871,4 +6877,225 @@ async fn test_agent_oplog_served_viewer() {
 
     server.start_kill().unwrap();
     server.wait().await.unwrap();
+}
+
+/// `--show-claims` shows the verified claims of a signed-in user on every output of the oplog
+/// that is not obfuscated: the text output, the JSON output, one page, the HTML export, the live
+/// viewer and the MCP `agent_oplog` tool. Each structured output gives the claims as a JSON
+/// object. Without the flag, no output shows claims.
+#[test]
+#[timeout("20 minutes")]
+async fn test_agent_oplog_shows_claims_on_request_on_every_output() {
+    use crate::app::mcp_serve::{call, mcp_client, structured};
+
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+    let app_name = "oplog-claims";
+    assert!(
+        ctx.cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+            .await
+            .success_or_dump()
+    );
+    ctx.cd(app_name);
+
+    // The `increment` route asks for a signed-in user. The deployment reads the session of the
+    // user from a test header, so the test needs no identity provider.
+    let source_path = ctx.cwd_path_join("src/counter_agent.rs");
+    let source = fs::read_to_string(&source_path).unwrap();
+    let open_route = r#"#[endpoint(post = "/increment")]"#;
+    assert!(source.contains(open_route), "{source}");
+    fs::write_str(
+        &source_path,
+        source.replace(
+            open_route,
+            r#"#[endpoint(post = "/increment", auth = true)]"#,
+        ),
+    )
+    .unwrap();
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let mut manifest: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["localServer"]["customRequestPort"] = ctx.custom_request_port().into();
+    manifest["httpApi"]["deployments"]["local"][0]["agents"]["CounterAgent"]["testSessionHeaderName"] =
+        "x-test-session".into();
+    fs::write_str(&manifest_path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+
+    // The user `bob` calls the route. The route creates the agent and invokes `increment`.
+    let hostname = format!("{app_name}.localhost");
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .resolve(&hostname, "127.0.0.1:0".parse().unwrap())
+        .build()
+        .unwrap();
+    let response = client
+        .post(format!(
+            "http://{hostname}:{}/counters/claims/increment",
+            ctx.custom_request_port()
+        ))
+        .header("x-test-session", r#"{"subject":"bob"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        response.status().is_success(),
+        "{}: {}",
+        response.status(),
+        response.text().await.unwrap()
+    );
+    let agent = "CounterAgent(\"claims\")";
+
+    // The claims of the original caller of each `agent.oplog` document in `entries`.
+    fn claims_of(entries: &[serde_json::Value]) -> Vec<&serde_json::Value> {
+        entries
+            .iter()
+            .filter_map(|entry| entry.pointer("/entry/invocation/caller/original/claims"))
+            .collect()
+    }
+    // With the flag, at least one entry holds the claims of `bob`, as an object.
+    fn assert_shown(output: &str, entries: &[serde_json::Value]) {
+        let claims = claims_of(entries);
+        assert!(!claims.is_empty(), "{output}: no claims in {entries:?}");
+        for claims in claims {
+            assert!(claims.is_object(), "{output}: {claims}");
+            assert_eq!(claims["sub"], "bob", "{output}: {claims}");
+            assert_eq!(claims["iss"], "http://test-idp.com", "{output}: {claims}");
+        }
+    }
+    // Without the flag, the user is there, and no entry holds claims.
+    fn assert_hidden(output: &str, entries: &[serde_json::Value]) {
+        assert!(
+            entries.iter().any(|entry| {
+                entry.pointer("/entry/invocation/caller/original/kind")
+                    == Some(&serde_json::json!("user"))
+            }),
+            "{output}: no user caller in {entries:?}"
+        );
+        assert!(claims_of(entries).is_empty(), "{output}: {entries:?}");
+    }
+
+    // Text output.
+    let text = ctx.cli([cmd::AGENT, "oplog", agent, "--show-claims"]).await;
+    assert!(text.success_or_dump());
+    let text = text.stdout_text();
+    assert!(text.contains("original caller:   user ("), "{text}");
+    assert!(text.contains("claims:"), "{text}");
+    assert!(text.contains(r#""sub":"bob""#), "{text}");
+    let text = ctx.cli([cmd::AGENT, "oplog", agent]).await;
+    assert!(text.success_or_dump());
+    let text = text.stdout_text();
+    assert!(text.contains("original caller:   user ("), "{text}");
+    assert!(!text.contains("claims:"), "{text}");
+
+    // JSON output: the stream of entries.
+    let json = |show_claims: bool| {
+        let ctx = &ctx;
+        async move {
+            let mut args = vec![cmd::AGENT, "oplog", agent, flag::FORMAT, "json"];
+            if show_claims {
+                args.push("--show-claims");
+            }
+            let outputs = ctx.cli(args).await;
+            assert!(outputs.success_or_dump());
+            outputs.stdout_json::<serde_json::Value>()
+        }
+    };
+    assert_shown("json", &json(true).await);
+    assert_hidden("json", &json(false).await);
+
+    // JSON output: one page.
+    let page = |show_claims: bool| {
+        let ctx = &ctx;
+        async move {
+            let mut args = vec![cmd::AGENT, "oplog", agent, "--page", flag::FORMAT, "json"];
+            if show_claims {
+                args.push("--show-claims");
+            }
+            let outputs = ctx.cli(args).await;
+            assert!(outputs.success_or_dump());
+            let mut documents = outputs.stdout_json::<serde_json::Value>();
+            assert_eq!(documents.len(), 1);
+            documents.remove(0)["entries"].as_array().unwrap().clone()
+        }
+    };
+    assert_shown("page", &page(true).await);
+    assert_hidden("page", &page(false).await);
+
+    // HTML export.
+    let html = |show_claims: bool| {
+        let ctx = &ctx;
+        async move {
+            let path = ctx.cwd_path_join(format!("viewer/oplog-{show_claims}.html"));
+            let mut args = vec![cmd::AGENT, "oplog", agent, "--html", path.to_str().unwrap()];
+            if show_claims {
+                args.push("--show-claims");
+            }
+            assert!(ctx.cli(args).await.success_or_dump());
+            let document = embedded_oplog_viewer_document(&fs::read_to_string(&path).unwrap());
+            document["entries"].as_array().unwrap().clone()
+        }
+    };
+    assert_shown("html", &html(true).await);
+    assert_hidden("html", &html(false).await);
+
+    // Live viewer.
+    let served = |show_claims: bool| {
+        let ctx = &ctx;
+        async move {
+            let mut args = vec![
+                cmd::AGENT,
+                "oplog",
+                agent,
+                "--serve",
+                "--port",
+                "0",
+                "--no-open",
+            ];
+            if show_claims {
+                args.push("--show-claims");
+            }
+            let (mut server, serving_line) = ctx
+                .cli_process_after_line(args, "Serving oplog viewer at")
+                .await;
+            let url = serving_line[serving_line.find("http://").unwrap()..]
+                .split_whitespace()
+                .next()
+                .unwrap()
+                .to_string();
+            let page: serde_json::Value = reqwest::get(format!("{url}api/oplog"))
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            server.start_kill().unwrap();
+            server.wait().await.unwrap();
+            page["entries"].as_array().unwrap().clone()
+        }
+    };
+    assert_shown("serve", &served(true).await);
+    assert_hidden("serve", &served(false).await);
+
+    // MCP tool.
+    let mcp = mcp_client(&ctx, &[]).await;
+    let tool = |show_claims: bool| {
+        let mcp = &mcp;
+        async move {
+            let mut arguments = serde_json::json!({"agent_id": agent});
+            if show_claims {
+                arguments["show_claims"] = true.into();
+            }
+            let result = call(mcp, "agent_oplog", arguments).await;
+            structured(&result)["entries"].as_array().unwrap().clone()
+        }
+    };
+    assert_shown("mcp", &tool(true).await);
+    assert_hidden("mcp", &tool(false).await);
+    mcp.cancel().await.unwrap();
+
+    // An obfuscated export refuses the flag.
+    let refused = ctx
+        .cli([cmd::AGENT, "oplog", agent, "--show-claims", "--obfuscate"])
+        .await;
+    assert!(!refused.success());
 }

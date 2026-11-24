@@ -29,7 +29,7 @@
 //! - Anonymous responses vary on credential headers independently of principal usage
 //! - Authenticated responses are private and require revalidation
 
-use super::assert_json_content_type;
+use super::{assert_invocation_receipt, assert_json_content_type, assert_no_invocation_receipt};
 use crate::custom_api::http_test_context::{HttpTestContext, make_test_context};
 use golem_common::base_model::agent::AgentTypeName;
 use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
@@ -97,6 +97,60 @@ fn header_has_token(header_value: &str, token: &str) -> bool {
     header_value
         .split(',')
         .any(|part| part.trim().eq_ignore_ascii_case(token))
+}
+
+#[test]
+async fn invocation_receipts_do_not_deduplicate_external_keys(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let mut ids = Vec::new();
+    for count in [1, 2] {
+        let response = agent
+            .client
+            .post(
+                agent
+                    .base_url
+                    .join("/readonly-agents/invocation-headers/increment")?,
+            )
+            .header("Idempotency-Key", "Same/Case-Sensitive:Key")
+            .send()
+            .await?;
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        ids.push(assert_invocation_receipt(agent, &response).await?);
+        assert_eq!(
+            response.json::<serde_json::Value>().await?,
+            serde_json::json!(count.to_string())
+        );
+    }
+    assert_eq!(ids[0].agent_id(), ids[1].agent_id());
+    assert_ne!(ids[0].id(), ids[1].id());
+
+    let failed = agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join("/readonly-agents/invocation-failure/fail")?,
+        )
+        .send()
+        .await?;
+    assert_eq!(failed.status(), reqwest::StatusCode::INTERNAL_SERVER_ERROR);
+    assert_invocation_receipt(agent, &failed).await?;
+
+    let invalid = agent
+        .client
+        .post(
+            agent
+                .base_url
+                .join("/readonly-agents/invocation-headers/increment")?,
+        )
+        .header("Idempotency-Key", "")
+        .send()
+        .await?;
+    assert_eq!(invalid.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_no_invocation_receipt(&invalid);
+    assert!(invalid.text().await?.contains("Idempotency-Key"));
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -167,6 +221,7 @@ async fn h2_if_none_match_returns_304(
         reqwest::StatusCode::NOT_MODIFIED,
         "If-None-Match with the current ETag must return 304"
     );
+    assert_no_invocation_receipt(&revalidate);
 
     // 304 responses must echo the same ETag and Cache-Control so caches can
     // refresh their freshness state without re-downloading the body.

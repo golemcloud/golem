@@ -52,6 +52,9 @@ pub fn handle_selected_preflight(
     };
     let mut allowed_headers =
         golem_service_base::custom_api::cors_allowed_request_headers(body, parameters, session);
+    if matches!(selected.route.behavior, RichRouteBehaviour::CallAgent(_)) {
+        allowed_headers.insert("idempotency-key".to_owned());
+    }
     if matches!(
         &selected.route.security,
         RichRouteSecurity::SecurityScheme(security)
@@ -223,6 +226,15 @@ pub fn apply_cors_outgoing_middleware(
     ] {
         response.headers_mut().remove(name);
     }
+    let mut exposed = match &resolved_route.route.behavior {
+        super::RichRouteBehaviour::CallAgent(_) => {
+            vec!["Golem-Invocation-Id", "Golem-Environment-Id"]
+        }
+        super::RichRouteBehaviour::Mount(mount) if mount.handler.is_some() => {
+            vec!["Golem-Invocation-Id", "Golem-Environment-Id"]
+        }
+        _ => Vec::new(),
+    };
     if let super::RichRouteBehaviour::CallAgent(behaviour) = &resolved_route.route.behavior
         && behaviour.route_mode == golem_service_base::custom_api::AgentRouteMode::DurableStreams
     {
@@ -254,7 +266,7 @@ pub fn apply_cors_outgoing_middleware(
                         .slot_by_public_name(slot)
                 })
                 .is_some_and(|slot| slot.writable());
-        let mut exposed = vec!["Allow", "Retry-After"];
+        exposed.extend(["Allow", "Retry-After"]);
         match resolved_route.route.route_match.method() {
             Some(HttpMethod::Method(schema_http::HttpMethod::Put(_))) if is_base => {
                 exposed.push("Location")
@@ -318,6 +330,8 @@ pub fn apply_cors_outgoing_middleware(
             }
             _ => {}
         }
+    }
+    if !exposed.is_empty() {
         response.headers_mut().insert(
             http::header::ACCESS_CONTROL_EXPOSE_HEADERS,
             exposed.join(", ").parse().map_err(anyhow::Error::from)?,
@@ -535,6 +549,31 @@ mod tests {
                 AgentRouteMode::DurableStreams,
                 "If-None-Match, Stream-Expires-At, Stream-Forked-From, Content-Type",
                 StatusCode::NO_CONTENT,
+            ),
+            (
+                AgentRouteMode::Plain,
+                "Idempotency-Key",
+                StatusCode::NO_CONTENT,
+            ),
+            (
+                AgentRouteMode::DurableStreams,
+                "Idempotency-Key",
+                StatusCode::NO_CONTENT,
+            ),
+            (
+                AgentRouteMode::DurableStreams,
+                "IDEMPOTENCY-KEY, Producer-Id, Producer-Epoch, Producer-Seq, Content-Type",
+                StatusCode::NO_CONTENT,
+            ),
+            (
+                AgentRouteMode::Plain,
+                "Idempotency-Key, Producer-Id",
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                AgentRouteMode::DurableStreams,
+                "Idempotency-Key, X-Unexpected",
+                StatusCode::FORBIDDEN,
             ),
             (AgentRouteMode::Plain, "Producer-Id", StatusCode::FORBIDDEN),
             (

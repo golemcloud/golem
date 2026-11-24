@@ -329,6 +329,17 @@ impl ReplayState {
         self.await_natural_tail_exhaustion(activity).await
     }
 
+    /// Parks `activity`, a task of the primary Store, until an invocation drives its live work:
+    /// the invocation the loop runs, unless the recorded history already closed it. A task that
+    /// its invocation left parked at that invocation's recorded close resumes only in a later
+    /// invocation, so its live work follows that invocation's `AgentInvocationStarted` and
+    /// precedes its settlement.
+    pub(in crate::durable_host) async fn await_driving_invocation(&self, activity: &TailActivity) {
+        activity
+            .park_until_driven(|started| !self.invocation_closed_in_history(started))
+            .await;
+    }
+
     /// Awaits the resolution of the call identified by `handle`, treating end-of-replay as a hard
     /// error (the caller requires the call to have completed in the oplog).
     pub async fn await_resolution(
@@ -472,25 +483,46 @@ impl ReplayState {
                 // in-flight transaction — and re-check the receiver before concluding the call is
                 // incomplete, so a just-resolved final terminal is never misreported. The lock is
                 // taken on an owned task (this is an accessor future; see `run_owned_cursor_op`),
-                // which owns the receiver for the duration of the check; every branch is terminal,
-                // so the receiver never needs to be handed back.
+                // which owns the receiver for the duration of the check. Only the wait for the
+                // abort of a cancelled body hands the receiver back.
+                enum AtTail<R, H> {
+                    Outcome(ResolutionOutcome),
+                    AwaitAbort(R, H, tokio::sync::watch::Receiver<HashSet<OplogIndex>>),
+                }
                 let outcome = self
                     .run_owned_cursor_op(move |state| async move {
-                        let _historical_reconstruction = historical_reconstruction;
                         let mut st = state
                             .cursor
                             .state.lock()
                             .await;
                         match receiver.try_recv() {
-                            Ok(outcome) => Ok(outcome),
+                            Ok(outcome) => Ok(AtTail::Outcome(outcome)),
                             Err(oneshot::error::TryRecvError::Empty) => {
+                                // A call of a replaying body with a recorded `Cancelled` was in
+                                // flight when the live run cancelled the body. It stays
+                                // incomplete and is never repaired: the resolution waits until the
+                                // body is aborted, which drops a call of the body itself.
+                                if let Some(body) = st
+                                    .claim_nearest_body(st.starts.claimed_parent(start_idx), None)
+                                    .filter(|body| st.owners.is_cancelled_entity(*body))
+                                {
+                                    let mut bodies =
+                                        state.cursor.reconstruction_claims.subscribe_bodies();
+                                    if bodies.borrow_and_update().contains(&body) {
+                                        return Ok(AtTail::AwaitAbort(
+                                            receiver,
+                                            historical_reconstruction,
+                                            bodies,
+                                        ));
+                                    }
+                                }
                                 // Genuinely reached the end of the oplog without the matching
                                 // `End`/`Cancelled`: a committed lone `Start` (a forced commit
                                 // flushed it before its `End`, or a crash happened in between).
                                 // Drop the stale registration and report Incomplete so the caller
                                 // can re-execute the side effect and complete the existing `Start`.
                                 st.starts.unregister_incomplete(start_idx);
-                                Ok(ResolutionOutcome::Incomplete)
+                                Ok(AtTail::Outcome(ResolutionOutcome::Incomplete))
                             }
                             Err(oneshot::error::TryRecvError::Closed) => {
                                 st.starts.unregister(start_idx);
@@ -501,10 +533,18 @@ impl ReplayState {
                         }
                     })
                     .await?;
-                return match outcome {
-                    ResolutionOutcome::Incomplete => Ok(ResolutionOutcome::Incomplete),
-                    resolved => validate(resolved),
-                };
+                match outcome {
+                    AtTail::Outcome(ResolutionOutcome::Incomplete) => {
+                        return Ok(ResolutionOutcome::Incomplete);
+                    }
+                    AtTail::Outcome(resolved) => return validate(resolved),
+                    AtTail::AwaitAbort(returned_receiver, reconstruction, mut bodies) => {
+                        receiver = returned_receiver;
+                        historical_reconstruction = reconstruction;
+                        let _ = bodies.changed().await;
+                        continue;
+                    }
+                }
             }
 
             // This call's terminal is not at the cursor head and replay is not over: a
