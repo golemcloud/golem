@@ -306,6 +306,18 @@ async fn constructor_self_schedule_survives_restart_but_self_call_is_rejected(
                 _ => None,
             })
             .collect::<Vec<_>>();
+        let settlements = history
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| match entry {
+                OplogEntry::AgentInvocationSettled { invocation_id, .. }
+                    if *invocation_id == constructor_id =>
+                {
+                    Some(index)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         let starts = history
             .iter()
             .enumerate()
@@ -319,10 +331,11 @@ async fn constructor_self_schedule_survives_restart_but_self_call_is_rejected(
             })
             .collect::<Vec<_>>();
         assert_eq!(terminals.len(), 1);
+        assert_eq!(settlements.len(), 1);
         assert_eq!(starts.len(), 1);
         assert!(
-            terminals[0] < starts[0],
-            "scheduled method starts after constructor completion"
+            terminals[0] < settlements[0] && settlements[0] < starts[0],
+            "scheduled method starts after constructor result and settlement"
         );
     }
     Ok(())
@@ -3461,6 +3474,7 @@ async fn prepare_session(
                 method_name: Some("increment".into()),
                 consumed_fuel: 0,
                 component_revision: metadata.last_known_status.component_revision,
+                awaits_settlement: false,
             })
             .await
             .unwrap();
@@ -3534,6 +3548,7 @@ async fn completion_receipt_precedes_fifo_status_fold(
             method_name: Some("increment".into()),
             consumed_fuel: 0,
             component_revision: metadata.last_known_status.component_revision,
+            awaits_settlement: false,
         })
         .await
         .unwrap();
@@ -3693,6 +3708,7 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
                 .get_initial_worker_metadata()
                 .last_known_status
                 .component_revision,
+            awaits_settlement: false,
         })
         .await?;
     // Actor-owned reconstruction must reach the checkpoint before publishing the repaired status.
@@ -3724,6 +3740,7 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
                 idempotency_key: None,
                 oplog_index: Some(finished),
                 agent_fingerprint: None,
+                background_failure: None,
             },
         ),
     )

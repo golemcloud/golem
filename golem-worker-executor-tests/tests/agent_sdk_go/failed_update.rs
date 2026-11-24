@@ -93,6 +93,7 @@ fn host_call(
         parent_start_index: None,
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         carries_request,
         request: request
             .map(|request| Box::new(request.to_string().into_typed_schema_value().unwrap())),

@@ -33,17 +33,25 @@
 //! policy scopes, never the invocation. Golem's scoped value also carries the slot value of the
 //! task a store task was spawned for, so [`InvocationAttribution::guest_task_context`] answers for
 //! store tasks too.
+//!
+//! The attribution also keeps the authority cut-off of an invocation at its export's return
+//! ([`ExportReturned`]): which invocations returned, and which host calls were made before the
+//! cut-off applied, so that a call keeps the authority it was made with while the call's host
+//! code continues after the return (see [`InvocationAttribution::issued_before_cut_off`]).
 
 use crate::durable_host::durability::GuestTaskContext;
 use golem_common::model::InvocationId;
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::{Pin, pin};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, Wake, Waker};
 use tracing::{debug, error, warn};
-use wasmtime::component::{TaskGroupHook, TaskGroupId};
+use wasmtime::component::{
+    Access, Accessor, HasData, RuntimeActivityId, TaskGroupHook, TaskGroupId,
+};
 
 /// The invocation a host call is attributed to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -72,6 +80,14 @@ struct GroupState {
     instantiating: Option<InvocationKey>,
     groups: HashMap<TaskGroupId, InvocationKey>,
     current: Option<TaskGroupId>,
+    /// The return signal of each invocation whose export call can return; see
+    /// [`ExportReturned`].
+    returned: HashMap<InvocationKey, ExportReturned>,
+    /// Whether the guest import that starts next was made before the cut-off of its invocation,
+    /// as the Store's call hook decided it.
+    next_import_before_cut_off: Option<bool>,
+    /// The guest imports in progress that were made before the cut-off of their invocation.
+    imports_before_cut_off: HashSet<RuntimeActivityId>,
 }
 
 /// The attribution state of one Store, shared by its [`TaskGroupHook`] and its host code.
@@ -80,17 +96,23 @@ pub struct InvocationAttribution {
     state: Arc<Mutex<GroupState>>,
 }
 
-/// The scoped attribution of one Store: its invocation, and the context slot value of the task
-/// the scoped work belongs to.
+/// The scoped attribution of one Store: its invocation, the context slot value of the task
+/// the scoped work belongs to, and whether that task was spawned before its invocation's
+/// cut-off.
 #[derive(Clone)]
 struct Scope {
     store: usize,
     key: Option<InvocationKey>,
     context: Option<Arc<GuestTaskContext>>,
+    before_cut_off: bool,
 }
 
 thread_local! {
     static SCOPED: RefCell<Option<Scope>> = const { RefCell::new(None) };
+    /// The guest import whose host code runs a synchronous Store access now; see
+    /// [`with_import_activity`]. Runtime activity IDs are never reused in a process, so the ID
+    /// needs no Store tag.
+    static IMPORT_ACTIVITY: Cell<Option<RuntimeActivityId>> = const { Cell::new(None) };
 }
 
 struct ScopedGuard(Option<Scope>);
@@ -98,6 +120,110 @@ struct ScopedGuard(Option<Scope>);
 impl Drop for ScopedGuard {
     fn drop(&mut self) {
         SCOPED.with(|scoped| *scoped.borrow_mut() = self.0.take());
+    }
+}
+
+/// Runs `f` with the Store access of `accessor`, so that authority reads and store-task captures
+/// in `f` see the cut-off state that the accessor's guest import was made with (see
+/// [`InvocationAttribution::issued_before_cut_off`]).
+///
+/// Every synchronous Store access of an accessor's host code that can run after an await must
+/// go through it: the accessor's inherent `with` does not know which import it serves.
+pub fn with_import_access<T, D: HasData + ?Sized, R>(
+    accessor: &Accessor<T, D>,
+    f: impl FnOnce(Access<'_, T, D>) -> R,
+) -> R {
+    with_import_activity(accessor.runtime_activity(), || accessor.with(f))
+}
+
+/// Runs `f`, a synchronous Store access of the host code of the guest import `activity`.
+fn with_import_activity<R>(activity: Option<RuntimeActivityId>, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<RuntimeActivityId>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            IMPORT_ACTIVITY.with(|current| current.set(self.0));
+        }
+    }
+    let _restore = Restore(IMPORT_ACTIVITY.with(|current| current.replace(activity)));
+    f()
+}
+
+/// The return signal of one invocation's export call: set when the call's result is sent, or when
+/// the call ends without one (a trap, a poisoned Store).
+///
+/// [`ExportReturned::observe`] sets it from the waker of the export future, which `task.return`
+/// wakes synchronously inside the intrinsic, before more guest code runs. Every holder reads the
+/// same flag:
+///
+/// - the Store's call hook applies the invocation's authority cut-off at the next host call that
+///   the invocation makes;
+/// - in replay, the open invocation anchor of the invocation reads it: before it is set, replay
+///   reproduces only calls the live run made before the export returned, and their records
+///   precede the invocation's terminal; after it, a background task's records can follow the
+///   terminal. Setting it only makes cursor readers wait for the terminal read that they did not
+///   wait for before, so it does not wake parked readers.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ExportReturned(Arc<AtomicBool>);
+
+impl ExportReturned {
+    pub(crate) fn mark(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn is_marked(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+
+    /// Polls `future`, the future of the export call, with a waker that sets this signal when it
+    /// fires and then wakes the caller's waker.
+    ///
+    /// The export future waits only on the channel that its task's result is sent through, so its
+    /// waker fires when the result is sent or the sender is dropped. A poll that finds the future
+    /// still pending after the signal was set means something else woke it, and the signal was set
+    /// too early; it is reported as an error.
+    pub(crate) async fn observe<F: Future>(&self, future: F) -> F::Output {
+        let mut future = pin!(future);
+        let signal = Arc::new(ReturnWaker {
+            returned: self.clone(),
+            outer: futures::task::AtomicWaker::new(),
+        });
+        let waker = Waker::from(signal.clone());
+        std::future::poll_fn(move |cx| {
+            signal.outer.register(cx.waker());
+            let woken = self.is_marked();
+            match future.as_mut().poll(&mut Context::from_waker(&waker)) {
+                Poll::Ready(output) => {
+                    self.mark();
+                    Poll::Ready(output)
+                }
+                Poll::Pending => {
+                    if woken {
+                        error!(
+                            "An export call was woken without its result; its authority cut-off \
+                             applied before the export returned"
+                        );
+                    }
+                    Poll::Pending
+                }
+            }
+        })
+        .await
+    }
+}
+
+struct ReturnWaker {
+    returned: ExportReturned,
+    outer: futures::task::AtomicWaker,
+}
+
+impl Wake for ReturnWaker {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.returned.mark();
+        self.outer.wake();
     }
 }
 
@@ -185,30 +311,113 @@ impl InvocationAttribution {
         SCOPED.with(|scoped| scoped.borrow().clone().filter(|scope| scope.store == id))
     }
 
-    /// Captures the attribution of the running host code for a store task it spawns.
+    /// Captures the attribution of the running host code for a store task it spawns. The task
+    /// keeps the cut-off state of the code that spawns it: a task spawned before its invocation's
+    /// cut-off keeps the authority the invocation had before it.
     pub fn capture(&self) -> CapturedAttribution {
+        let key = self.resolve();
+        let before_cut_off = self.issued_before_cut_off()
+            || key.is_some_and(|key| {
+                key != InvocationKey::AgentLevel && !self.export_returned_is_marked(key)
+            });
         CapturedAttribution {
             attribution: self.clone(),
-            key: self.resolve(),
+            key,
             context: self.guest_task_context(),
+            before_cut_off,
         }
+    }
+
+    /// The return signal of the export call of `key`, created at the first request. Replay hands
+    /// it to the invocation's open anchor, and the invocation loop observes the export call with
+    /// it ([`ExportReturned::observe`]).
+    pub(crate) fn export_returned(&self, key: InvocationKey) -> ExportReturned {
+        self.state
+            .lock()
+            .unwrap()
+            .returned
+            .entry(key)
+            .or_default()
+            .clone()
+    }
+
+    /// Whether the export call of `key` returned.
+    pub(crate) fn export_returned_is_marked(&self, key: InvocationKey) -> bool {
+        self.state
+            .lock()
+            .unwrap()
+            .returned
+            .get(&key)
+            .is_some_and(ExportReturned::is_marked)
+    }
+
+    /// Forgets the return signals of every invocation other than `key`, when the loop begins
+    /// `key`: the loop runs one invocation at a time, and work of an earlier invocation reads the
+    /// running invocation's entry.
+    pub(crate) fn retain_export_returned(&self, key: InvocationKey) {
+        self.state
+            .lock()
+            .unwrap()
+            .returned
+            .retain(|existing, _| *existing == key);
+    }
+
+    /// Called from the Store's call hook on `CallHook::CallingHost`: whether the guest import
+    /// that starts next is made before the cut-off of its invocation.
+    pub(crate) fn mark_next_import_before_cut_off(&self, before_cut_off: bool) {
+        self.state.lock().unwrap().next_import_before_cut_off = Some(before_cut_off);
+    }
+
+    /// Called from the runtime observer when a guest import activity starts.
+    pub(crate) fn import_started(&self, activity: RuntimeActivityId) {
+        let mut state = self.state.lock().unwrap();
+        if state.next_import_before_cut_off.take() == Some(true) {
+            state.imports_before_cut_off.insert(activity);
+        }
+    }
+
+    /// Called from the runtime observer when an activity finishes.
+    pub(crate) fn activity_finished(&self, activity: RuntimeActivityId) {
+        self.state
+            .lock()
+            .unwrap()
+            .imports_before_cut_off
+            .remove(&activity);
+    }
+
+    /// Whether the running host code belongs to a call made before its invocation's cut-off,
+    /// whose own code continues after the cut-off: a guest import made before it, whose
+    /// synchronous Store access runs in [`with_import_activity`], or a store task spawned before
+    /// it. Such code keeps the scope card that the cut-off hides. Any other code, which includes
+    /// the synchronous part of every host call, sees the invocation's current state.
+    pub fn issued_before_cut_off(&self) -> bool {
+        let import_before_cut_off = IMPORT_ACTIVITY.with(Cell::get).is_some_and(|activity| {
+            self.state
+                .lock()
+                .unwrap()
+                .imports_before_cut_off
+                .contains(&activity)
+        });
+        import_before_cut_off || self.scope().is_some_and(|scope| scope.before_cut_off)
     }
 
     /// Runs `f` with `key` as the scoped attribution of this Store.
     pub fn with_scope<R>(&self, key: Option<InvocationKey>, f: impl FnOnce() -> R) -> R {
-        self.with_task_scope(key, None, f)
+        self.with_task_scope(key, None, false, f)
     }
 
     fn with_task_scope<R>(
         &self,
         key: Option<InvocationKey>,
         context: Option<Arc<GuestTaskContext>>,
+        before_cut_off: bool,
         f: impl FnOnce() -> R,
     ) -> R {
         let scope = (key.is_some() || context.is_some()).then(|| Scope {
             store: self.id(),
             key,
             context,
+            before_cut_off,
         });
         let previous = SCOPED.with(|scoped| scoped.replace(scope));
         let _guard = ScopedGuard(previous);
@@ -229,17 +438,19 @@ pub struct CapturedAttribution {
     attribution: InvocationAttribution,
     key: Option<InvocationKey>,
     context: Option<Arc<GuestTaskContext>>,
+    before_cut_off: bool,
 }
 
 impl CapturedAttribution {
-    /// Runs a context window with the invocation and task context captured at initiation.
+    /// Runs a context window with the invocation, task context and cut-off state captured at
+    /// initiation.
     pub(crate) fn with<R>(&self, f: impl FnOnce() -> R) -> R {
         self.attribution
-            .with_task_scope(self.key, self.context.clone(), f)
+            .with_task_scope(self.key, self.context.clone(), self.before_cut_off, f)
     }
 
-    /// Polls `future` with the captured invocation and task context as the scoped attribution of
-    /// its Store.
+    /// Polls `future` with the captured invocation, task context and cut-off state as the scoped
+    /// attribution of its Store.
     pub async fn run<F: Future>(&self, future: F) -> F::Output {
         let mut future = pin!(future);
         std::future::poll_fn(move |cx| self.with(|| future.as_mut().poll(cx))).await
@@ -354,7 +565,7 @@ impl<P> Attributed<P> {
                 });
         }
         let attribution = this.attribution.clone();
-        attribution.with_task_scope(this.last, this.context.clone(), || {
+        attribution.with_task_scope(this.last, this.context.clone(), false, || {
             f(this.inner.as_mut(), store)
         })
     }
@@ -432,9 +643,10 @@ mod tests {
         let origin = InvocationKey::Invocation(InvocationId(uuid::Uuid::new_v4()));
         let caller = InvocationKey::Invocation(InvocationId(uuid::Uuid::new_v4()));
         let context = Arc::new(GuestTaskContext::default());
-        let captured = attribution.with_task_scope(Some(origin), Some(context.clone()), || {
-            attribution.capture()
-        });
+        let captured =
+            attribution.with_task_scope(Some(origin), Some(context.clone()), false, || {
+                attribution.capture()
+            });
 
         attribution.with_scope(Some(caller), || {
             captured.with(|| {
@@ -482,5 +694,222 @@ mod tests {
         assert_eq!(outer.resolve(), None);
         assert!(future.now_or_never().is_some());
         assert_eq!(outer.resolve(), None);
+    }
+
+    /// A waker that counts its wakes.
+    struct CountingWaker(std::sync::atomic::AtomicUsize);
+
+    impl Wake for CountingWaker {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn counting_waker() -> (Arc<CountingWaker>, Waker) {
+        let counter = Arc::new(CountingWaker(Default::default()));
+        let waker = Waker::from(counter.clone());
+        (counter, waker)
+    }
+
+    #[test]
+    fn the_return_signal_is_set_by_the_wake_of_the_result_before_the_next_poll() {
+        let returned = ExportReturned::default();
+        let (sender, receiver) = futures::channel::oneshot::channel::<u32>();
+        let mut call = Box::pin(returned.observe(receiver));
+        let (counter, waker) = counting_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        assert!(call.as_mut().poll(&mut cx).is_pending());
+        assert!(!returned.is_marked(), "nothing returned yet");
+
+        sender.send(7).unwrap();
+        assert!(
+            returned.is_marked(),
+            "the send sets the signal synchronously, before the export future is polled again"
+        );
+        assert_eq!(counter.0.load(Ordering::SeqCst), 1, "the wake is forwarded");
+
+        assert!(matches!(call.as_mut().poll(&mut cx), Poll::Ready(Ok(7))));
+        assert!(returned.is_marked());
+    }
+
+    #[test]
+    fn the_return_signal_is_set_when_the_result_sender_is_dropped() {
+        let returned = ExportReturned::default();
+        let (sender, receiver) = futures::channel::oneshot::channel::<u32>();
+        let mut call = Box::pin(returned.observe(receiver));
+        let (counter, waker) = counting_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        assert!(call.as_mut().poll(&mut cx).is_pending());
+        drop(sender);
+        assert!(
+            returned.is_marked(),
+            "a call that ends without a result also ends"
+        );
+        assert_eq!(counter.0.load(Ordering::SeqCst), 1);
+        assert!(matches!(call.as_mut().poll(&mut cx), Poll::Ready(Err(_))));
+    }
+
+    #[test]
+    fn the_return_signal_forwards_the_wake_to_the_latest_poller() {
+        let returned = ExportReturned::default();
+        let (sender, receiver) = futures::channel::oneshot::channel::<u32>();
+        let mut call = Box::pin(returned.observe(receiver));
+        let (first, first_waker) = counting_waker();
+        let (second, second_waker) = counting_waker();
+
+        assert!(
+            call.as_mut()
+                .poll(&mut Context::from_waker(&first_waker))
+                .is_pending()
+        );
+        assert!(
+            call.as_mut()
+                .poll(&mut Context::from_waker(&second_waker))
+                .is_pending()
+        );
+        sender.send(1).unwrap();
+        assert_eq!(first.0.load(Ordering::SeqCst), 0);
+        assert_eq!(second.0.load(Ordering::SeqCst), 1);
+    }
+
+    /// Distinct runtime activity identities, taken from a Store that only spawns tasks.
+    fn activities(count: usize) -> Vec<RuntimeActivityId> {
+        use wasmtime::component::RuntimeObservation;
+        use wasmtime::{AsContextMut, Config, Engine, Store};
+
+        let mut config = Config::new();
+        config.wasm_component_model_async(true);
+        let mut store = Store::new(&Engine::new(&config).unwrap(), ());
+        let ids = Arc::new(Mutex::new(Vec::new()));
+        let observed = ids.clone();
+        store
+            .as_context_mut()
+            .set_runtime_observer(Arc::new(move |event| {
+                if let RuntimeObservation::ActivityStarted { activity, .. } = event {
+                    observed.lock().unwrap().push(activity);
+                }
+            }))
+            .unwrap();
+        for _ in 0..count {
+            store
+                .as_context_mut()
+                .spawn(async |_: &Accessor<()>| {
+                    std::future::pending::<wasmtime::Result<()>>().await
+                })
+                .unwrap();
+        }
+        let ids = ids.lock().unwrap().clone();
+        assert_eq!(ids.len(), count);
+        ids
+    }
+
+    #[test]
+    fn an_import_made_before_the_cut_off_keeps_its_state_until_it_finishes() {
+        let attribution = InvocationAttribution::default();
+        let ids = activities(2);
+        let (before, after) = (ids[0], ids[1]);
+
+        attribution.mark_next_import_before_cut_off(true);
+        attribution.import_started(before);
+        attribution.mark_next_import_before_cut_off(false);
+        attribution.import_started(after);
+
+        assert!(!attribution.issued_before_cut_off(), "outside any import");
+        assert!(with_import_activity(Some(before), || attribution.issued_before_cut_off()));
+        assert!(!with_import_activity(Some(after), || attribution.issued_before_cut_off()));
+        assert!(
+            !attribution.issued_before_cut_off(),
+            "the import's Store access ended"
+        );
+
+        attribution.activity_finished(before);
+        assert!(!with_import_activity(Some(before), || attribution.issued_before_cut_off()));
+        assert!(
+            !InvocationAttribution::default().issued_before_cut_off(),
+            "another Store does not know the import"
+        );
+    }
+
+    #[test]
+    fn a_decision_without_an_import_activity_does_not_carry_to_the_next_import() {
+        let attribution = InvocationAttribution::default();
+        let ids = activities(1);
+
+        // The call hook also runs for intrinsics such as `task.return`, which start no import.
+        attribution.mark_next_import_before_cut_off(true);
+        attribution.mark_next_import_before_cut_off(false);
+        attribution.import_started(ids[0]);
+        assert!(!with_import_activity(Some(ids[0]), || attribution.issued_before_cut_off()));
+    }
+
+    #[test]
+    fn a_store_task_keeps_the_cut_off_state_of_the_code_that_spawned_it() {
+        let attribution = InvocationAttribution::default();
+        let key = InvocationKey::Invocation(InvocationId(uuid::Uuid::new_v4()));
+        let returned = attribution.export_returned(key);
+
+        let spawned_before = attribution.with_scope(Some(key), || attribution.capture());
+        returned.mark();
+        let spawned_after = attribution.with_scope(Some(key), || attribution.capture());
+
+        let observe = |captured: &CapturedAttribution| {
+            captured
+                .run(std::future::ready(()).map(|()| attribution.issued_before_cut_off()))
+                .now_or_never()
+                .unwrap()
+        };
+        assert!(observe(&spawned_before));
+        assert!(!observe(&spawned_after));
+        let spawned_by_spawned_before = spawned_before
+            .run(std::future::ready(()).map(|()| attribution.capture()))
+            .now_or_never()
+            .unwrap();
+        assert!(
+            observe(&spawned_by_spawned_before),
+            "a task spawned by a task spawned before the cut-off keeps its state"
+        );
+    }
+
+    #[test]
+    fn a_store_task_spawned_after_the_return_by_an_import_made_before_it_keeps_its_state() {
+        use wasmtime::{AsContextMut, Config, Engine, Store};
+
+        let mut config = Config::new();
+        config.wasm_component_model_async(true);
+        let mut store = Store::new(&Engine::new(&config).unwrap(), ());
+        store
+            .as_context_mut()
+            .set_runtime_observer(Arc::new(|_| {}))
+            .unwrap();
+        let attribution = InvocationAttribution::default();
+        let key = InvocationKey::Invocation(InvocationId(uuid::Uuid::new_v4()));
+        let returned = attribution.export_returned(key);
+
+        let (through_import, plain) =
+            futures::executor::block_on(store.run_concurrent(async |accessor: &Accessor<()>| {
+                // The accessor serves an import that the call hook saw before the return, and
+                // its host code reaches the capture only after the export returned.
+                let activity = accessor
+                    .runtime_activity()
+                    .expect("a Store with a runtime observer identifies the accessor");
+                attribution.mark_next_import_before_cut_off(true);
+                attribution.import_started(activity);
+                returned.mark();
+                attribution.with_scope(Some(key), || {
+                    (
+                        with_import_access(accessor, |_| attribution.capture()),
+                        accessor.with(|_| attribution.capture()),
+                    )
+                })
+            }))
+            .unwrap();
+
+        assert!(through_import.before_cut_off);
+        assert!(
+            !plain.before_cut_off,
+            "without the import's activity, the capture sees only the current cut-off state"
+        );
     }
 }

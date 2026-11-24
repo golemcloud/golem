@@ -29,6 +29,7 @@ pub mod agent_sdk_go;
 pub mod agent_sdk_moonbit;
 pub mod agent_sdk_ts;
 pub mod api;
+pub mod background_work;
 mod blob_mutation_storage;
 pub mod blobstore;
 mod cancel_rejection;
@@ -177,6 +178,7 @@ tag_suite!(permission_cards_scala, group4);
 tag_suite!(scalability, group4);
 tag_suite!(readonly, group4);
 tag_suite!(invocation_context, group4);
+tag_suite!(background_work, group4);
 
 tag_suite!(ignite_service, ignite_service);
 tag_suite!(rdbms_service, rdbms_service);

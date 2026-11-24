@@ -11,7 +11,8 @@ pub(super) use commit::is_auto_skippable_hint;
 use reads::is_active_stream_observation;
 use retained::{custom_subtree_entry_is_drainable, host_internal_calls_are_replay_inert};
 pub(super) use selection::{
-    head_owner, scope_entry_owner, start_parent, terminal_kind, terminal_start_index,
+    head_owner, is_custom_invocation_start, is_entity_invocation_start, scope_entry_owner,
+    start_parent, terminal_kind, terminal_start_index,
 };
 #[cfg(test)]
 pub(super) use selection::{missing_start_waits_for, nearest_active_body};
@@ -20,20 +21,21 @@ pub(super) use settling::historical_reconstruction_owner_failure;
 use super::claims::{AdmissionRefusal, RecordedStart, StartClaim, matching_admission_refusal};
 use super::{
     AbandonedStarts, AgentInvocationResult, AgentInvocationStartedEntry, Arc, AtomicBool,
-    AtomicOplogIndex, AtomicReplayTransitionPhase, BlockedOn, BootstrapTail, CHUNK_SIZE,
-    CompletionMarker, CompletionMarkers, CursorState, DeletedRegions, DurableInvocationId,
-    EntityAttribution, Future, GuestReadOrder, HashMap, HashSet, Hasher, HostFunctionName,
-    InvocationContextStack, InvocationFinishes, LivePublicationOutcome, LogLevel, MetroHash128,
-    MissingStart, Mutex, MutexGuard, Notify, Oplog, OplogEntry, OplogEntryLookupResult, OplogIndex,
-    OplogOps, OplogRegion, OplogScopeProjection, Ordering, OwnedAgentId, PublishedPosition,
-    QuotaClass, ReplayCallHandle, ReplayCursor, ReplayDivergence, ReplayEvent, ReplayStarts,
-    ReplayState, ReplayStep, ReplayToLiveOutcome, ReplayTransitionPhase, Resolution, RetainedStart,
-    RetainedStartCounts, ScannedRecoveryMetadata, StartClaimAttempt, StartsByInvocationId,
-    StreamObservationPositions, ToolAttachmentReconstruction, TransactionMarkers, VecDeque,
-    WorkerExecutorError, debug, warn,
+    AtomicOplogIndex, AtomicReplayTransitionPhase, BlockedOn, BootstrapTail, BoundaryKind,
+    CHUNK_SIZE, CompletionMarker, CompletionMarkers, CursorState, DeletedRegions,
+    DurableInvocationId, EntityAttribution, Future, GuestReadOrder, HashMap, HashSet, Hasher,
+    HostFunctionName, InvocationBoundaries, InvocationContextStack, LivePublicationOutcome,
+    LogLevel, MetroHash128, MissingStart, Mutex, MutexGuard, Notify, Oplog, OplogEntry,
+    OplogEntryLookupResult, OplogIndex, OplogOps, OplogRegion, OplogScopeProjection, Ordering,
+    OwnedAgentId, PublishedPosition, QuotaClass, RecordedBoundary, ReplayCallHandle, ReplayCursor,
+    ReplayDivergence, ReplayEvent, ReplayStarts, ReplayState, ReplayStep, ReplayToLiveOutcome,
+    ReplayTransitionPhase, Resolution, RetainedStart, RetainedStartCounts, ScannedRecoveryMetadata,
+    SettledAt, StartClaimAttempt, StartsByInvocationId, StreamObservationPositions,
+    ToolAttachmentReconstruction, TransactionMarkers, VecDeque, WorkerExecutorError, debug, warn,
 };
 #[cfg(any(test, feature = "test-utils"))]
 use super::{CardId, StoredCard};
+use super::{ExportReturned, is_invocation_terminal_of, primary_invocation_terminal_id};
 use crate::durable_host::PositionalRead;
 use crate::durable_host::tool::operation::OwnerToolOperation;
 use crate::services::oplog::UnreadableOplog;
@@ -89,6 +91,47 @@ enum UnclaimedStarts {
     /// Leave the `Start` at the head and return `None` (a claim's head fast path: the head is
     /// simply not this claim's `Start`).
     Leave,
+}
+
+/// The invocation-boundary rules a cursor read applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoundaryRead {
+    /// No invocation-boundary rule. The terminal of an open invocation whose export returned
+    /// stays at the head for the open-anchor reader.
+    None,
+    /// The read of the terminal of an open invocation that records its result at the export's
+    /// return. Retained `Start`s stay retained for the background work of the invocation.
+    OpenAnchor,
+    /// A walk to the end of an invocation whose guest tasks exited. It tolerates live-only
+    /// abandoned durable-call records (see [`AbandonedStarts`]). With `settlement_after`, the
+    /// anchor of an invocation that records its result at the export's return, the walk goes to
+    /// the `AgentInvocationSettled` of that invocation after its background work ended: it stops
+    /// once the cursor recorded an `AgentInvocationSettled` after the anchor, and a body that can
+    /// still claim a retained `Start` keeps the delivery marker of that `Start` at the head.
+    /// Without it the walk goes to the terminal of an invocation.
+    ToleratingAbandoned {
+        settlement_after: Option<OplogIndex>,
+    },
+}
+
+impl BoundaryRead {
+    fn tolerates_abandoned(self) -> bool {
+        matches!(self, Self::ToleratingAbandoned { .. })
+    }
+}
+
+/// The divergence of a read at an invocation boundary: the recorded history holds what
+/// `recorded` describes at `oplog_index`, where the replay reached the end of the invocation.
+pub(super) fn boundary_divergence(
+    oplog_index: OplogIndex,
+    recorded: String,
+) -> WorkerExecutorError {
+    WorkerExecutorError::replay_divergence(ReplayDivergence {
+        oplog_index,
+        expected: ReplayStep::described(recorded),
+        actual: ReplayStep::invocation_end(),
+        mismatched: Vec::new(),
+    })
 }
 
 /// Which unconditional positional reader parked, for [`CursorTx::check_parked_positional_read`].

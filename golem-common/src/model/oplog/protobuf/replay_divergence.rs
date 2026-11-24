@@ -138,6 +138,7 @@ impl TryFrom<ReplayHostCall> for proto::ReplayHostCall {
             parent_start_index: value.parent_start_index.map(Into::into),
             invocation_id: value.invocation_id.map(Into::into),
             observational_owner: value.observational_owner.map(Into::into),
+            driver: value.driver.map(Into::into),
             carries_request: value.carries_request,
             request: value
                 .request
@@ -160,6 +161,7 @@ impl TryFrom<proto::ReplayHostCall> for ReplayHostCall {
             parent_start_index: value.parent_start_index.map(OplogIndex::from_u64),
             invocation_id: value.invocation_id.map(Into::into),
             observational_owner: value.observational_owner.map(OplogIndex::from_u64),
+            driver: value.driver.map(OplogIndex::from_u64),
             carries_request: value.carries_request,
             request: value
                 .request
@@ -179,6 +181,7 @@ impl From<StartIdentityField> for proto::StartIdentityField {
             StartIdentityField::ObservationalOwner => Self::ObservationalOwner,
             StartIdentityField::RequestPresence => Self::RequestPresence,
             StartIdentityField::Parent => Self::Parent,
+            StartIdentityField::Driver => Self::Driver,
         }
     }
 }
@@ -192,6 +195,7 @@ impl From<proto::StartIdentityField> for StartIdentityField {
             proto::StartIdentityField::ObservationalOwner => Self::ObservationalOwner,
             proto::StartIdentityField::RequestPresence => Self::RequestPresence,
             proto::StartIdentityField::Parent => Self::Parent,
+            proto::StartIdentityField::Driver => Self::Driver,
         }
     }
 }

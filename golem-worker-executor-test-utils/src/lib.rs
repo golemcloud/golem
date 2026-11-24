@@ -181,8 +181,8 @@ pub use golem_worker_executor::workerctx::ReplayAdmissionStage;
 use golem_worker_executor::workerctx::{
     CallCountManagement, EntityInvocationBodyHook, EntityInvocationManagement, ExternalOperations,
     FileSystemReading, FuelManagement, InvocationContextManagement, InvocationHooks,
-    InvocationManagement, LogEventEmitBehaviour, P3HttpBodyProducerHook, StatusManagement,
-    UpdateManagement, WorkerCtx, WorkerFilesystemContext,
+    InvocationManagement, LogEventEmitBehaviour, P3HttpBodyProducerHook, ResultRecordedAt,
+    StatusManagement, UpdateManagement, WorkerCtx, WorkerFilesystemContext,
 };
 use golem_worker_executor::{
     Bootstrap, RunDetails, bootstrap_and_run_worker_executor, derive_disjoint_sqlite_config,
@@ -1175,6 +1175,16 @@ impl TestWorkerExecutor {
     pub fn oplog_entries_read(&self, agent_id: &AgentId) -> u64 {
         self.additional_test_deps
             .oplog_entries_read(&OwnedAgentId::new(
+                self.context.default_environment_id,
+                agent_id,
+            ))
+    }
+
+    /// The entries of each commit of the agent's opened oplog that stored entries, in commit
+    /// order: one list of indices per commit made at a level other than `ReportOnly`.
+    pub fn oplog_commit_writes(&self, agent_id: &AgentId) -> Vec<Vec<OplogIndex>> {
+        self.additional_test_deps
+            .oplog_commit_writes(&OwnedAgentId::new(
                 self.context.default_environment_id,
                 agent_id,
             ))
@@ -4083,9 +4093,10 @@ impl InvocationHooks for TestWorkerCtx {
         &mut self,
         full_function_name: &str,
         error: AgentError,
+        recorded_at: ResultRecordedAt,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .record_agent_method_failure(full_function_name, error)
+            .record_agent_method_failure(full_function_name, error, recorded_at)
             .await
     }
 
@@ -4094,6 +4105,7 @@ impl InvocationHooks for TestWorkerCtx {
         full_function_name: &str,
         consumed_fuel: u64,
         output: &mut AgentInvocationOutput,
+        recorded_at: ResultRecordedAt,
     ) -> Result<(), WorkerExecutorError> {
         if let Some(gate) = self
             .additional_test_deps
@@ -4117,7 +4129,7 @@ impl InvocationHooks for TestWorkerCtx {
             }
         }
         self.durable_ctx
-            .on_agent_invocation_success(full_function_name, consumed_fuel, output)
+            .on_agent_invocation_success(full_function_name, consumed_fuel, output, recorded_at)
             .await
     }
 
@@ -6415,6 +6427,13 @@ impl Oplog for TestOplog {
             }
         }
         let committed = self.oplog.commit(level).await;
+        if level != CommitLevel::ReportOnly
+            && let Ok(entries) = &committed
+            && !entries.is_empty()
+        {
+            self.additional_test_deps
+                .record_oplog_commit_write(&self.owned_agent_id, entries.keys().copied().collect());
+        }
         if committed.as_ref().is_ok_and(|entries| {
             entries
                 .values()
@@ -7126,6 +7145,7 @@ pub struct AdditionalTestDeps {
     oplog_end_gates: Arc<std::sync::Mutex<OplogEndGates>>,
     oplog_call_counts: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, &'static str), usize>>>,
     oplog_entries_read: Arc<std::sync::Mutex<HashMap<OwnedAgentId, u64>>>,
+    oplog_commit_writes: Arc<std::sync::Mutex<HashMap<OwnedAgentId, Vec<Vec<OplogIndex>>>>>,
     oplog_download_failures: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     oplog_download_outages: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     oplog_download_outage_targets: Arc<std::sync::Mutex<HashMap<AgentId, PayloadId>>>,
@@ -7218,6 +7238,7 @@ impl AdditionalTestDeps {
             rpc_memory_failures: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_call_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_entries_read: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            oplog_commit_writes: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_download_failures: Arc::new(std::sync::Mutex::new(HashSet::new())),
             oplog_download_outages: Arc::new(std::sync::Mutex::new(HashSet::new())),
             oplog_download_outage_targets: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -7748,6 +7769,24 @@ impl AdditionalTestDeps {
             .unwrap()
             .entry(owned_agent_id.clone())
             .or_default() += entries;
+    }
+
+    fn record_oplog_commit_write(&self, owned_agent_id: &OwnedAgentId, indices: Vec<OplogIndex>) {
+        self.oplog_commit_writes
+            .lock()
+            .unwrap()
+            .entry(owned_agent_id.clone())
+            .or_default()
+            .push(indices);
+    }
+
+    fn oplog_commit_writes(&self, owned_agent_id: &OwnedAgentId) -> Vec<Vec<OplogIndex>> {
+        self.oplog_commit_writes
+            .lock()
+            .unwrap()
+            .get(owned_agent_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn oplog_entries_read(&self, owned_agent_id: &OwnedAgentId) -> u64 {

@@ -2129,6 +2129,10 @@
         },
         "resultFormat": {
           "type": "string"
+        },
+        "backgroundFailure": {
+          "type": "string",
+          "description": "The failure of the agent during the background work of the invocation, after it recorded the result."
         }
       },
       "additionalProperties": false
@@ -6970,6 +6974,7 @@
         { "$ref": "#/definitions/PublicOplogEntryAgentInvocationStarted" },
         { "$ref": "#/definitions/PublicOplogEntryAgentInvocationFinished" },
         { "$ref": "#/definitions/PublicOplogEntryAgentInvocationFailed" },
+        { "$ref": "#/definitions/PublicOplogEntryAgentInvocationSettled" },
         { "$ref": "#/definitions/PublicOplogEntrySuspend" },
         { "$ref": "#/definitions/PublicOplogEntryError" },
         { "$ref": "#/definitions/PublicOplogEntryRecoverySucceeded" },
@@ -7074,7 +7079,7 @@
     },
     "PublicOplogEntryStart": {
       "type": "object",
-      "required": ["type", "timestamp", "parentStartIndex", "functionName", "invocationId", "observationalOwner", "request", "durableFunctionType", "spanStarted", "denial"],
+      "required": ["type", "timestamp", "parentStartIndex", "functionName", "invocationId", "observationalOwner", "driver", "request", "durableFunctionType", "spanStarted", "denial"],
       "properties": {
         "type": { "const": "Start" },
         "timestamp": { "type": "string" },
@@ -7082,6 +7087,7 @@
         "functionName": { "type": "string" },
         "invocationId": { "oneOf": [{ "$ref": "#/definitions/DurableInvocationId" }, { "type": "null" }] },
         "observationalOwner": { "type": ["integer", "null"], "minimum": 0 },
+        "driver": { "type": ["integer", "null"], "minimum": 0 },
         "request": { "oneOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] },
         "durableFunctionType": { "$ref": "#/definitions/PublicDurableFunctionType" },
         "spanStarted": { "oneOf": [{ "$ref": "#/definitions/PublicSpanStarted" }, { "type": "null" }] },
@@ -7149,6 +7155,17 @@
         "invocationId": { "type": "string" },
         "error": { "type": "string" },
         "startIndex": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryAgentInvocationSettled": {
+      "type": "object",
+      "required": ["type", "timestamp", "invocationId", "consumedFuel"],
+      "properties": {
+        "type": { "const": "AgentInvocationSettled" },
+        "timestamp": { "type": "string" },
+        "invocationId": { "type": "string" },
+        "consumedFuel": { "type": "integer" }
       },
       "additionalProperties": false
     },
@@ -7232,7 +7249,7 @@
       "oneOf": [
         {
           "type": "object",
-          "required": ["type", "functionName", "durableFunctionType", "parentStartIndex", "invocationId", "observationalOwner", "carriesRequest", "request"],
+          "required": ["type", "functionName", "durableFunctionType", "parentStartIndex", "invocationId", "observationalOwner", "driver", "carriesRequest", "request"],
           "properties": {
             "type": { "const": "HostCall" },
             "functionName": { "type": "string" },
@@ -7240,6 +7257,7 @@
             "parentStartIndex": { "type": ["integer", "null"], "minimum": 0 },
             "invocationId": { "anyOf": [{ "$ref": "#/definitions/DurableInvocationId" }, { "type": "null" }] },
             "observationalOwner": { "type": ["integer", "null"], "minimum": 0 },
+            "driver": { "type": ["integer", "null"], "minimum": 0 },
             "carriesRequest": { "type": "boolean" },
             "request": { "anyOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] }
           },
@@ -7252,7 +7270,7 @@
     },
     "StartIdentityField": {
       "type": "string",
-      "enum": ["function-name", "function-type", "invocation-id", "observational-owner", "request-presence", "parent"]
+      "enum": ["function-name", "function-type", "invocation-id", "observational-owner", "request-presence", "parent", "driver"]
     },
     "PublicOplogEntryGrowMemory": {
       "type": "object",
@@ -9056,7 +9074,7 @@
       "additionalProperties": false
     },
     "InvocationState": {
-      "enum": ["scheduled", "pending", "running", "waiting", "retrying", "interrupted", "completed", "failed", "cancelled"]
+      "enum": ["scheduled", "pending", "running", "waiting", "retrying", "interrupted", "completed", "background-failed", "failed", "cancelled"]
     },
     "InvocationKind": {
       "enum": ["method", "constructor", "tool"]
@@ -9086,6 +9104,16 @@
           "required": ["type", "error"],
           "properties": {
             "type": { "const": "Failure" },
+            "error": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "value", "error"],
+          "properties": {
+            "type": { "const": "BackgroundFailure" },
+            "value": { "oneOf": [{ "$ref": "#/definitions/ExternalTypedSchemaValue" }, { "type": "null" }] },
             "error": { "type": "string" }
           },
           "additionalProperties": false

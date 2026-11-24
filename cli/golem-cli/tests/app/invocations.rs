@@ -399,3 +399,191 @@ async fn invocation_commands_get_list_and_cancel(_tracing: &Tracing) {
         .await;
     assert!(!outputs.success());
 }
+
+/// An invocation whose background work fails the agent after the result is `background-failed`:
+/// `invocation get` shows the recorded result and the error, the state filter finds it, and a
+/// same-key `agent invoke` by agent ID prints the result with a warning and exits 0.
+#[test]
+#[timeout("15 minutes")]
+async fn invocation_commands_show_a_background_failure(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    let app_name = "invocations-background";
+
+    ctx.start_server().await;
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
+    assert!(outputs.success_or_dump());
+    ctx.cd(app_name);
+    golem_cli::fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        indoc::formatdoc! { r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: {app_name}
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              {app_name}:rust-main:
+                templates: rust
+        "#, MANIFEST_VERSION = golem_cli::versions::sdk::MANIFEST },
+    )
+    .unwrap();
+    golem_cli::fs::write_str(
+        ctx.cwd_path_join("src/counter_agent.rs"),
+        indoc::indoc! { r#"
+            use golem_rust::agentic::spawn_local;
+            use golem_rust::{agent_definition, agent_implementation};
+
+            #[agent_definition]
+            pub trait CounterAgent {
+                fn new(name: String) -> Self;
+                async fn fail_in_background(&self) -> String;
+            }
+
+            struct CounterImpl {
+                _name: String,
+            }
+
+            #[agent_implementation]
+            impl CounterAgent for CounterImpl {
+                fn new(name: String) -> Self {
+                    Self { _name: name }
+                }
+
+                async fn fail_in_background(&self) -> String {
+                    spawn_local(async {
+                        golem_rust::wasip3::clocks::monotonic_clock::wait_for(500_000_000).await;
+                        panic!("background work failed after the result");
+                    });
+                    "returned".to_string()
+                }
+            }
+        "# },
+    )
+    .unwrap();
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    let agent = format!("CounterAgent(\"{}\")", Uuid::new_v4());
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "--idempotency-key",
+            "background-key",
+            &agent,
+            "fail_in_background",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let get = [
+        flag::FORMAT,
+        "json",
+        INVOCATION,
+        cmd::GET,
+        "--agent",
+        agent.as_str(),
+        "--idempotency-key",
+        "background-key",
+    ];
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let failed = loop {
+        let outputs = ctx.cli(get).await;
+        assert!(outputs.success_or_dump());
+        let got = single_json(&outputs);
+        if got["summary"]["state"] == "background-failed" {
+            break got;
+        }
+        assert_eq!(got["summary"]["state"], "completed", "{got:?}");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the invocation did not become background-failed: {got:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    };
+    assert_eq!(failed["result"]["type"], "BackgroundFailure");
+    assert!(
+        failed["result"]["value"]
+            .to_string()
+            .contains("\"returned\""),
+        "the background failure keeps the recorded result: {failed:?}"
+    );
+    assert!(
+        failed["result"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("background work failed after the result"),
+        "{failed:?}"
+    );
+    let agent_id = failed["summary"]["agentId"].as_str().unwrap().to_string();
+
+    let outputs = ctx
+        .cli([
+            flag::FORMAT,
+            "json",
+            INVOCATION,
+            cmd::LIST,
+            "--agent",
+            &agent,
+            "--status",
+            "background-failed",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let listed = single_json(&outputs);
+    assert_eq!(
+        listed["invocations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|invocation| invocation["invocationId"].clone())
+            .collect::<Vec<_>>(),
+        vec![failed["summary"]["invocationId"].clone()]
+    );
+
+    // The same key by agent ID goes through the REST invoke, which reports the failure.
+    let outputs = ctx
+        .cli([
+            flag::FORMAT,
+            "json",
+            cmd::AGENT,
+            cmd::INVOKE,
+            "--idempotency-key",
+            "background-key",
+            &agent_id,
+            "fail_in_background",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let invoked = single_json(&outputs);
+    assert_eq!(invoked["$type"], "agent.invoke");
+    assert!(
+        invoked["backgroundFailure"]
+            .as_str()
+            .is_some_and(|failure| failure.contains("background work failed after the result")),
+        "{invoked:?}"
+    );
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::INVOKE,
+            "--idempotency-key",
+            "background-key",
+            &agent_id,
+            "fail_in_background",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(
+        outputs.stderr_contains("failed during the background work")
+            || outputs.stdout_contains("failed during the background work"),
+        "the text output warns about the background failure"
+    );
+}

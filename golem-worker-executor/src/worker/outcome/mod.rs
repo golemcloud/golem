@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::InvocationId;
+use golem_common::model::{BackgroundFailure, InvocationId};
 
 use crate::model::TrapType;
 use crate::services::golem_config::GolemConfig;
@@ -445,8 +445,50 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     // Called by the invocation loop, or by the retiring owner after the loop has stopped.
     pub async fn store_invocation_failure(&self, key: &InvocationId, trap_type: &TrapType) {
         let status = self.last_known_status.load_full();
-        let keys_to_fail =
-            invocation_keys_to_fail(&status, Some(key), !trap_type.is_invocation_rejection());
+        // A rejection of an invocation that a user cancellation had already withdrawn: the
+        // committed cancellation stays its result, and its waiters were told so.
+        if trap_type.is_invocation_rejection()
+            && self.has_committed_cancellation(&status, key).await
+        {
+            self.external_invocation_origins.write().await.remove(key);
+            return;
+        }
+        let keys_to_fail = if trap_type.is_invocation_rejection() {
+            invocation_keys_to_fail(&status, Some(key), false)
+        } else {
+            invocation_keys_failed_on_giving_up(&status, Some(key), false)
+        };
+        self.fail_invocations(&status, keys_to_fail, trap_type)
+            .await;
+    }
+
+    /// Fails the pending and running invocations of a terminal agent failure, except
+    /// `recorded`, the invocation that recorded its result before its background work failed.
+    pub async fn store_queued_invocation_failures(
+        &self,
+        recorded: Option<&InvocationId>,
+        trap_type: &TrapType,
+    ) {
+        // The result of `recorded` now carries the background failure. A warm entry of a key that
+        // left the recent results cannot see that, so it goes.
+        if let Some(recorded) = recorded {
+            self.hydrated_invocation_results
+                .write()
+                .await
+                .remove_value(recorded);
+        }
+        let status = self.last_known_status.load_full();
+        let keys_to_fail = invocation_keys_failed_on_giving_up(&status, recorded, true);
+        self.fail_invocations(&status, keys_to_fail, trap_type)
+            .await;
+    }
+
+    async fn fail_invocations(
+        &self,
+        status: &AgentStatusRecord,
+        keys_to_fail: Vec<InvocationId>,
+        trap_type: &TrapType,
+    ) {
         let stderr = self.worker_event_service.get_last_invocation_errors();
         let golem_error = trap_type.as_golem_error(&stderr);
         // A lost shard is not the invocation's outcome: the new owner resumes it. The waiters are
@@ -455,14 +497,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             for key in &keys_to_fail {
                 self.publish_completion(key, Err(WorkerExecutorError::ShardingNotReady));
             }
-            return;
-        }
-        // A rejection of an invocation that a user cancellation had already withdrawn: the
-        // committed cancellation stays its result, and its waiters were told so.
-        if trap_type.is_invocation_rejection()
-            && self.has_committed_cancellation(&status, key).await
-        {
-            self.external_invocation_origins.write().await.remove(key);
             return;
         }
         let mut map = self.hydrated_invocation_results.write().await;
@@ -739,18 +773,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // The invocation loop withdraws a queued duplicate of a key that already has a result.
             // When that result has left the recent results, the fold records the withdrawal
             // instead, so an older result in the index outranks it.
-            let oplog_idx = if position.end == InvocationEnd::Cancelled
+            let position = if position.end == InvocationEnd::Cancelled
                 && !status.invocation_results.is_exact_complete()
             {
                 match self.resolve_old_invocation_result_index(&status, key).await {
-                    Ok(Some(older)) if older.end != InvocationEnd::Cancelled => older.terminal,
-                    Ok(_) => position.terminal,
+                    Ok(Some(older)) if older.end != InvocationEnd::Cancelled => older,
+                    Ok(_) => position.clone(),
                     Err(error) => return LookupResult::Complete(Err(error.into())),
                 }
             } else {
-                position.terminal
+                position.clone()
             };
-            Some((Arc::new(InvocationResult::Lazy { oplog_idx }), oplog_idx))
+            Some(InvocationResult::lazy(&position))
         } else if status.invocation_results.is_exact_complete() {
             crate::metrics::workers::record_invocation_result_resolution("memory_exact_miss");
             None
@@ -760,10 +794,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         } else {
             // An oplog that does not read is not a miss: the key may well have a result there.
             match self.resolve_old_invocation_result_index(&status, key).await {
-                Ok(position) => position.map(|position| {
-                    let oplog_idx = position.terminal;
-                    (Arc::new(InvocationResult::Lazy { oplog_idx }), oplog_idx)
-                }),
+                Ok(position) => position.map(|position| InvocationResult::lazy(&position)),
                 Err(error) => return LookupResult::Complete(Err(error.into())),
             }
         };
@@ -1128,9 +1159,17 @@ impl HydratedInvocationResultCache {
     ) -> Option<(&Arc<InvocationResult>, OplogIndex)> {
         self.values.get(key).and_then(|entry| {
             (entry.revert_generation == status.invocation_results.revert_generation()
-                && !status.deleted_regions.is_in_deleted_region(entry.oplog_idx))
+                && !status.deleted_regions.is_in_deleted_region(entry.oplog_idx)
+                && !background_failure_changed(entry, status.invocation_results.position(key)))
             .then_some((&entry.result, entry.oplog_idx))
         })
+    }
+
+    /// Forgets the warm result of `key`, keeping its unprojected completion.
+    pub(in crate::worker) fn remove_value(&mut self, key: &InvocationId) {
+        if self.values.remove(key).is_some() {
+            self.insertion_order.retain(|entry| entry != key);
+        }
     }
 
     #[cfg(test)]
@@ -1182,7 +1221,43 @@ impl HydratedInvocationResultCache {
     }
 }
 
+/// Whether the recent result of a key gained or lost a background failure after its warm entry
+/// was cached. A warm result is cached at the last change of its position, so a give-up after it
+/// lies above that index.
+fn background_failure_changed(
+    entry: &HydratedInvocationResultCacheEntry,
+    position: Option<&InvocationResultPosition>,
+) -> bool {
+    let Some(position) = position else {
+        return false;
+    };
+    let cached_failure = matches!(
+        entry.result.as_ref(),
+        InvocationResult::Cached { result: Ok(output) } if output.background_failure.is_some()
+    );
+    match position.end {
+        InvocationEnd::BackgroundFailed { failure } => failure > entry.oplog_idx,
+        _ => cached_failure,
+    }
+}
+
 impl InvocationResult {
+    /// The unread result at `position`, with the oplog index it is cached at: the last change of
+    /// the position.
+    fn lazy(position: &InvocationResultPosition) -> (Arc<Self>, OplogIndex) {
+        let background_failure = match position.end {
+            InvocationEnd::BackgroundFailed { failure } => Some(failure),
+            _ => None,
+        };
+        (
+            Arc::new(Self::Lazy {
+                oplog_idx: position.terminal,
+                background_failure,
+            }),
+            position.last_change(),
+        )
+    }
+
     pub async fn cache<T: HasOplog + HasOplogService + HasConfig + HasComponentService>(
         &mut self,
         owned_agent_id: &OwnedAgentId,
@@ -1190,8 +1265,13 @@ impl InvocationResult {
         agent_fingerprint: AgentFingerprint,
         services: &T,
     ) -> Result<(), UnreadableOplog> {
-        if let Self::Lazy { oplog_idx } = self {
+        if let Self::Lazy {
+            oplog_idx,
+            background_failure,
+        } = self
+        {
             let oplog_idx = *oplog_idx;
+            let background_failure_idx = *background_failure;
             let entry = services.oplog().read(oplog_idx).await?;
 
             if matches!(entry, OplogEntry::CancelPendingInvocation { .. }) {
@@ -1211,6 +1291,18 @@ impl InvocationResult {
                         .download_payload(result)
                         .await
                         .expect("failed to deserialize function response payload");
+                    let background_failure = match background_failure_idx {
+                        Some(failure_idx) => Some(
+                            read_background_failure(
+                                services,
+                                owned_agent_id,
+                                agent_mode,
+                                failure_idx,
+                            )
+                            .await?,
+                        ),
+                        None => None,
+                    };
                     Ok(AgentInvocationOutput {
                         result: invocation_result,
                         consumed_fuel: Some(consumed_fuel as u64),
@@ -1226,6 +1318,7 @@ impl InvocationResult {
                         // necessarily produced by that instance.
                         oplog_index: Some(oplog_idx),
                         agent_fingerprint: Some(agent_fingerprint),
+                        background_failure,
                     })
                 }
                 OplogEntry::AgentInvocationFailed { error, .. } => {
@@ -1264,5 +1357,28 @@ impl InvocationResult {
             *self = Self::Cached { result }
         }
         Ok(())
+    }
+}
+
+/// The background failure recorded at `failure_idx`: the give-up `Error` or `Exited` of a
+/// [`InvocationEnd::BackgroundFailed`] result.
+async fn read_background_failure<
+    T: HasOplog + HasOplogService + HasConfig + HasComponentService,
+>(
+    services: &T,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    failure_idx: OplogIndex,
+) -> Result<BackgroundFailure, UnreadableOplog> {
+    match services.oplog().read(failure_idx).await? {
+        OplogEntry::Error { error, .. } => {
+            let stderr =
+                recover_stderr_logs(services, owned_agent_id, agent_mode, failure_idx).await;
+            Ok(BackgroundFailure::Trapped { error, stderr })
+        }
+        OplogEntry::Exited { .. } => Ok(BackgroundFailure::Exited),
+        _ => panic!(
+            "Unexpected oplog entry pointed by a background failure at index {failure_idx} for {owned_agent_id:?}"
+        ),
     }
 }
