@@ -649,7 +649,10 @@ ends only that input stream. The server records the input terminal at the
 sequence of the invalid item and sends the client a `stream-end` with
 `direction` `input` and the outcome
 `{"kind":"failed","error":{"kind":"interrupted","message":"..."}}` in place of
-the ACK of that terminal. The session and its other streams continue. The
+the ACK of that terminal. The session and its other streams continue, but a
+client runtime fails the call with that outcome: a `failed` input
+`stream-end` from the server is at an item that the caller sent, while a
+`consumer-cancelled` one only stops the input. The
 server drops the later items and the `stream-end` that the client sends on
 that channel. When the consumer has already cancelled the input, the server
 drops the invalid item like the other frames of the cancelled input. Protocol

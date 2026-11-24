@@ -3534,7 +3534,15 @@ for (const outcome of [
         ([input], register) => ({ input: register(input, (value) => value) }),
         () => undefined,
       );
-      await method(source);
+      if (outcome.kind === 'failed')
+        // A failed input end is at an item the caller sent, so the call fails with it.
+        await assert.rejects(method(source), (error) => {
+          assert.ok(error instanceof StreamingProtocolError);
+          assert.equal(error.code, outcome.error.kind);
+          assert.deepEqual(error.outcome, outcome);
+          return true;
+        });
+      else await method(source);
       await new Promise((resolve) => setTimeout(resolve, 10));
       assert.equal(returned, 1);
       assert.deepEqual(frames, []);
@@ -3543,6 +3551,81 @@ for (const outcome of [
     }
   });
 }
+
+test('an input that the server ends with a failure fails the call with that failure', async () => {
+  const local = await server((socket) => {
+    let items = 0;
+    socket.on('message', (data) => {
+      const message = JSON.parse(data);
+      if (message.type === 'invocationStart') {
+        const provisionalRef = message.methodParameters.input.value.provisionalRef;
+        socket.send(
+          JSON.stringify(
+            accepted(message, [
+              {
+                channel: 1,
+                direction: 'input',
+                streamToken: 'input',
+                provisionalRef,
+                inputHighWater: { sequence: '0', terminal: false },
+              },
+            ]),
+          ),
+        );
+      } else if (message.type === 'inputStreamItem' && ++items === 1) {
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'inputStreamAck',
+            channel: 1,
+            highestContiguousSequence: '1',
+            mappings: [],
+            terminal: false,
+          }),
+        );
+      } else if (message.type === 'inputStreamItem') {
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'stream-end',
+            channel: 1,
+            direction: 'input',
+            sequence: '1',
+            outcome: {
+              kind: 'failed',
+              error: {
+                kind: 'interrupted',
+                message: 'input item 1 does not satisfy the element schema',
+              },
+            },
+          }),
+        );
+      }
+    });
+  });
+  try {
+    const source = agentStream(
+      (async function* () {
+        yield { kind: 'u32', value: 1 };
+        yield { kind: 'u32', value: 2 };
+      })(),
+    );
+    const method = createStreamingRemoteMethod(
+      () => ({ server: local.endpoint }),
+      () => descriptor,
+      ([input], register) => ({ input: register(input, (value) => value) }),
+      () => undefined,
+    );
+    await assert.rejects(method(source), (error) => {
+      assert.ok(error instanceof StreamingProtocolError);
+      assert.equal(error.code, 'interrupted');
+      assert.match(error.message, /item 1: input item 1 does not satisfy the element schema/u);
+      return true;
+    });
+  } finally {
+    await local.close();
+  }
+});
 
 test('consumer drop sends cancellation and remains distinct from protocol terminal', async () => {
   let cancellation;

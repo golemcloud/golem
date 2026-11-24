@@ -4375,6 +4375,24 @@ class StreamingSession {
         const terminal = decodeStreamSessionEnd(message);
         if (terminal.direction === 'input') {
           this.cancelChannel(terminal.channel);
+          // A failed input end is at an item the caller sent, so the call fails with it.
+          // A consumer cancellation only stops the input.
+          const outcome = terminal.outcome;
+          if (outcome.kind === 'failed') {
+            const detail =
+              'message' in outcome.error
+                ? outcome.error.message
+                : `input stream ${outcome.error.kind}`;
+            this.fail(
+              new StreamingProtocolError(
+                outcome.error.kind,
+                `the server ended the input at item ${terminal.sequence}: ${detail}`,
+                undefined,
+                outcome,
+              ),
+            );
+            this.socket?.close(1000);
+          }
           break;
         }
         const output = this.outputByChannel(message.channel);

@@ -2059,6 +2059,12 @@ async fn dispatch_server_message(
       release_input_replay(input)
       input.terminal = true
       (input.cancel)()
+      // A failed input end is at an item the caller sent, so the call fails with
+      // it. A consumer cancellation only stops the input.
+      match decode_stream_outcome(get_field(message, "outcome")) {
+        Some(StreamFailed(_) as failure) => raise failure
+        _ => ()
+      }
       pump_next_input(session)
     }
     "attachmentRevoked" => {

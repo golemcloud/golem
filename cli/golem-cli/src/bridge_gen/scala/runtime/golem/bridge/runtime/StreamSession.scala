@@ -707,6 +707,12 @@ object StreamSession {
               Option(channels.get(ch)).flatMap(token => Option(session.inputTokens.get(token))).foreach { in =>
                 in.stop()
               }
+              // A failed input end is at an item the caller sent, so the call fails with it.
+              // A consumer cancellation only stops the input.
+              outcome match {
+                case failed: StreamOutcome.Failed => fatal(AgentStreamEnded(failed))
+                case _ => ()
+              }
             } else Option(channels.get(ch)).flatMap(token => Option(session.outputs.get(token)).map(token -> _)).foreach { case (token, output) =>
               output.accept(StreamSessionProtocol.u64(json, "sequence"), 0, finish = true)
               val bytes = json.render.getBytes(java.nio.charset.StandardCharsets.UTF_8).length

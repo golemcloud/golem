@@ -128,6 +128,10 @@ async test "streaming recovery rejects or completes" {
     run_input_terminal_recovery("__MODE__" == "input-failure-replay")
     return
   }
+  if "__MODE__" == "input-server-failure" {
+    run_input_server_failure()
+    return
+  }
   if "__MODE__" == "input-prefetch-delayed" ||
     "__MODE__" == "input-prefetch-before-attachment" {
     run_prefetch_owner_recovery(
@@ -210,6 +214,44 @@ async fn run_input_terminal_recovery(failed : Bool) -> Unit {
   assert_eq(input.failure.diagnostic, "")
   assert_eq(input.failure.bytes, 0)
   assert_true(input.pending is None)
+}
+
+///|
+/// A failed input end from the server is at an item the caller sent, so the
+/// call fails with that failure.
+async fn run_input_server_failure() -> Unit {
+  let source : AgentStream[String] = AgentStream::from_next(fn() {
+    Some("item")
+  })
+  let context = StreamEncodeContext::new()
+  let reference = register_input_stream(
+    context,
+    source,
+    fn(value) { StringValue(value) },
+    public_value_codec("{\"root\":{\"kind\":\"string\",\"value\":{}}}"),
+  )
+  let unit_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"tuple\",\"value\":{\"elements\":[]}}}",
+  )
+  let input_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"stream\",\"value\":{\"inner\":{\"kind\":\"string\",\"value\":{}}}}}",
+  )
+  let resolved = recovery_agent()
+  let failure = try {
+    ignore(
+      invoke_streaming_agent(
+        context, unit_codec, input_codec, unit_codec, resolved, "run", reference,
+      ),
+    )
+    None
+  } catch {
+    StreamFailed(failure) => Some(failure)
+    error => fail("unexpected error: \{error}")
+  }
+  assert_eq(
+    failure,
+    Some(Interrupted("input item 1 does not satisfy the element schema")),
+  )
 }
 
 ///|

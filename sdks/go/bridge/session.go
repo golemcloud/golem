@@ -1440,7 +1440,7 @@ func (s *session) receiveEnd(c *sessionConn, m message) error {
 		return err
 	}
 	if direction == "input" {
-		return s.receiveCancel(c, m)
+		return s.receiveCancel(c, m, end)
 	}
 	channel, err := m.channel()
 	if err != nil {
@@ -1500,7 +1500,10 @@ func (s *session) receiveAck(c *sessionConn, m message) error {
 	return s.byToken[token].acknowledge(high, terminal)
 }
 
-func (s *session) receiveCancel(c *sessionConn, m message) error {
+// receiveCancel stops an input that the server ended. A failed outcome ends
+// the input at an item the caller sent, so the call fails with a
+// StreamItemError; a consumer cancellation only stops the input.
+func (s *session) receiveCancel(c *sessionConn, m message, end error) error {
 	channel, err := m.channel()
 	if err != nil {
 		return err
@@ -1527,6 +1530,11 @@ func (s *session) receiveCancel(c *sessionConn, m message) error {
 	poke(in.wake)
 	s.mu.Unlock()
 	in.h.stop(reason)
+	var failure *StreamError
+	if errors.As(end, &failure) {
+		sequence, _ := m.u64("sequence")
+		s.abort(&StreamItemError{Err: fmt.Errorf("golem: the server ended input stream item %d: %w", sequence, failure)})
+	}
 	return nil
 }
 

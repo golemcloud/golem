@@ -2169,6 +2169,64 @@ func TestAnItemTheCallCannotSendFailsTheCall(t *testing.T) {
 	}
 }
 
+// An input that the server ends with a failure, such as at an item that does
+// not satisfy its element schema, fails the call with a StreamItemError that
+// names the item. A consumer cancellation of an input only stops the input.
+func TestAnInputTheServerEndsWithAFailureFailsTheCall(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		outcome map[string]any
+		fails   bool
+	}{
+		{
+			name: "failed",
+			outcome: map[string]any{"kind": "failed", "error": map[string]any{
+				"kind": "interrupted", "message": "input item 1 does not satisfy the element schema",
+			}},
+			fails: true,
+		},
+		{
+			name:    "consumer cancelled",
+			outcome: map[string]any{"kind": "consumer-cancelled", "details": "consumer-drop"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newFakeServer(t, func(c *fakeConn) {
+				start := c.expect("invocationStart")
+				refs := provisionalRefs(t, start)
+				accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
+				c.expect("inputStreamItem")
+				ack(c, 1, 1, false)
+				c.expect("inputStreamItem")
+				c.send("stream-end", map[string]any{
+					"channel": 1, "direction": "input", "sequence": "1", "outcome": tc.outcome,
+				})
+				if !tc.fails {
+					noResult(c)
+					finished(c)
+				}
+				for c.readUntilClose().kind != "" {
+				}
+			})
+			err := InvokeStreaming(ctxT(t), server.agent(t), "consume",
+				streamParams(EncodeStream(EncodeU32)(StreamOf[uint32](1, 2))))
+			if !tc.fails {
+				if err != nil {
+					t.Fatalf("a consumer cancellation failed the call: %v", err)
+				}
+				return
+			}
+			var rejected *StreamItemError
+			var failure *StreamError
+			if !errors.As(err, &rejected) || !errors.As(err, &failure) || failure.Kind != StreamErrorInterrupted ||
+				!strings.Contains(err.Error(), "item 1") ||
+				!strings.Contains(err.Error(), "does not satisfy the element schema") {
+				t.Fatalf("got %v, want a *StreamItemError naming item 1", err)
+			}
+		})
+	}
+}
+
 // A source that fails only makes its input unavailable: the server decides
 // what that means for the call, and here it still completes it.
 func TestAFailingSourceDoesNotFailTheCall(t *testing.T) {
