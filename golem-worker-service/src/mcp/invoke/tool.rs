@@ -130,6 +130,7 @@ pub async fn invoke_tool(
                 None,
                 request_key,
                 None,
+                None,
                 freshness_disposition,
                 Vec::new(),
                 component.environment_id,

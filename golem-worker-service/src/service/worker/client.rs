@@ -14,8 +14,9 @@
 
 use super::WorkerResult;
 use super::{
-    AgentCall, AllExecutors, CallWorkerExecutorError, HasWorkerExecutorClients, RandomExecutor,
-    ResponseMapResult, RoutedTarget, RoutingLogic, WorkerServiceError, WorkerStream,
+    AcceptedInvocation, AgentCall, AllExecutors, CallWorkerExecutorError, HasWorkerExecutorClients,
+    RandomExecutor, ResponseMapResult, RoutedTarget, RoutingLogic, WorkerServiceError,
+    WorkerStream,
 };
 use crate::service::auth::AuthServiceError;
 use async_trait::async_trait;
@@ -27,9 +28,9 @@ use golem_api_grpc::proto::golem::worker::invocation_response;
 use golem_api_grpc::proto::golem::worker::invocation_session_completion;
 use golem_api_grpc::proto::golem::worker::invocation_session_result;
 use golem_api_grpc::proto::golem::worker::{
-    InvocationContext, InvocationFailure, InvocationFailureKind, InvocationRejected,
-    InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionResult,
-    InvocationStart, LogEvent, ScheduledInvocationCancellation,
+    InvocationAccepted, InvocationContext, InvocationFailure, InvocationFailureKind,
+    InvocationRejected, InvocationRejectionReason, InvocationRequest, InvocationResponse,
+    InvocationSessionResult, InvocationStart, LogEvent, ScheduledInvocationCancellation,
 };
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
@@ -77,6 +78,7 @@ use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::{ComponentFileSystemNode, FileReadResponse, GetOplogResponse};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
 use std::pin::Pin;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{Semaphore, mpsc};
@@ -399,8 +401,10 @@ fn decode_invocation_result(
 async fn run_one_shot_invocation_session(
     client: &mut WorkerExecutorClient<OtelGrpcService<Channel>>,
     start: InvocationStart,
+    accepted: &OnceLock<AcceptedInvocation>,
 ) -> Result<OneShotInvocationSessionResult, Status> {
     let (requests, receiver) = mpsc::channel(1);
+    let environment_id = start.environment_id;
     let request = InvocationRequest {
         request: Some(invocation_request::Request::Start(start)),
     };
@@ -416,12 +420,55 @@ async fn run_one_shot_invocation_session(
         .invoke_agent_session(ReceiverStream::new(receiver))
         .await?
         .into_inner();
-    collect_one_shot_invocation_session(responses, state).await
+    collect_one_shot_invocation_session(responses, state, accepted, environment_id).await
+}
+
+fn remember_acceptance(
+    accepted: &OnceLock<AcceptedInvocation>,
+    identity: InvocationAccepted,
+    environment_id: Option<golem_api_grpc::proto::golem::common::EnvironmentId>,
+) -> Result<(), String> {
+    let identity = AcceptedInvocation {
+        id: golem_common::model::OwnedInvocationId::new(
+            identity
+                .agent_id
+                .ok_or("acceptance has no agent ID")?
+                .try_into()?,
+            identity
+                .idempotency_key
+                .ok_or("acceptance has no invocation ID")?
+                .into(),
+        ),
+        environment_id: identity
+            .environment_id
+            .or(environment_id)
+            .ok_or("acceptance has no environment ID")?
+            .try_into()?,
+    };
+    if accepted.get_or_init(|| identity.clone()) != &identity {
+        return Err("invocation identity changed between dispatch attempts".into());
+    }
+    Ok(())
+}
+
+fn accepted_invocation_error(
+    error: WorkerServiceError,
+    accepted: &OnceLock<AcceptedInvocation>,
+) -> WorkerServiceError {
+    match accepted.get() {
+        Some(accepted) => WorkerServiceError::AcceptedInvocation {
+            accepted: accepted.clone(),
+            source: Box::new(error),
+        },
+        None => error,
+    }
 }
 
 async fn collect_one_shot_invocation_session<S>(
     mut responses: S,
     mut state: InvocationSessionState,
+    accepted: &OnceLock<AcceptedInvocation>,
+    environment_id: Option<golem_api_grpc::proto::golem::common::EnvironmentId>,
 ) -> Result<OneShotInvocationSessionResult, Status>
 where
     S: Stream<Item = Result<InvocationResponse, Status>> + Unpin,
@@ -434,8 +481,12 @@ where
             return Ok(protocol_failure(details));
         }
         match response.response {
-            Some(invocation_response::Response::Accepted(_))
-            | Some(invocation_response::Response::Ready(_)) => {}
+            Some(invocation_response::Response::Accepted(identity)) => {
+                if let Err(details) = remember_acceptance(accepted, identity, environment_id) {
+                    return Ok(protocol_failure(details));
+                }
+            }
+            Some(invocation_response::Response::Ready(_)) => {}
             Some(invocation_response::Response::Rejected(rejected)) => {
                 terminal_outcome = Some(Ok(OneShotInvocationSessionResult::Rejected(rejected)));
             }
@@ -779,6 +830,7 @@ pub trait WorkerClient: Send + Sync {
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         request_key: InvocationRequestKey,
+        supplied_key: Option<IdempotencyKey>,
         invocation_context: Option<InvocationContext>,
         freshness_disposition: InvocationFreshnessDisposition,
         config: Vec<AgentConfigEntryDto>,
@@ -2498,6 +2550,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         request_key: InvocationRequestKey,
+        supplied_key: Option<IdempotencyKey>,
         invocation_context: Option<InvocationContext>,
         freshness_disposition: InvocationFreshnessDisposition,
         config: Vec<AgentConfigEntryDto>,
@@ -2512,17 +2565,19 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         let target = target.clone();
         let first_dispatch = Arc::new(AtomicBool::new(true));
         let attempt_id = uuid::Uuid::new_v4();
+        let accepted = Arc::new(OnceLock::new());
+        let attempt_acceptance = accepted.clone();
         let captured_method_input = method_parameters
             .as_ref()
             .map(golem_common::serialization::serialize)
             .transpose()
             .map_err(WorkerServiceError::Internal)?;
-        let idempotency_key = match &request_key {
+        let idempotency_key = supplied_key.or_else(|| match &request_key {
             InvocationRequestKey::External { key, .. }
             | InvocationRequestKey::Internal(key)
             | InvocationRequestKey::RouteSession { key, .. } => Some(key.clone()),
             InvocationRequestKey::Unkeyed(_) => None,
-        };
+        });
 
         let result = self
             .call_worker_executor(
@@ -2568,10 +2623,10 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         external_tool: None,
                     };
                     target.apply(&mut start);
-                    Box::pin(run_one_shot_invocation_session(
-                        worker_executor_client,
-                        start,
-                    ))
+                    let accepted = attempt_acceptance.clone();
+                    Box::pin(async move {
+                        run_one_shot_invocation_session(worker_executor_client, start, &accepted).await
+                    })
                 },
                 |outcome| match outcome {
                     OneShotInvocationSessionResult::Success(output) => Ok(*output),
@@ -2598,7 +2653,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                 },
                 WorkerServiceError::InternalCallError,
             )
-            .await?;
+            .await
+            .map_err(|error| accepted_invocation_error(error, &accepted))?;
 
         Ok(result)
     }
@@ -2692,6 +2748,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     ) -> WorkerResult<AgentInvocationOutput> {
         let agent_id = *agent_id;
         let first_dispatch = Arc::new(AtomicBool::new(true));
+        let accepted = Arc::new(OnceLock::new());
+        let attempt_acceptance = accepted.clone();
         self.call_worker_executor(
             agent_id,
             "invoke_agent_session",
@@ -2712,10 +2770,10 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     InvocationFreshnessDisposition::KnownFresh => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh as i32,
                     InvocationFreshnessDisposition::MayExist => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
                 };
-                Box::pin(run_one_shot_invocation_session(
-                    worker_executor_client,
-                    start,
-                ))
+                let accepted = attempt_acceptance.clone();
+                Box::pin(async move {
+                    run_one_shot_invocation_session(worker_executor_client, start, &accepted).await
+                })
             },
             |outcome| match outcome {
                 OneShotInvocationSessionResult::Success(output) => Ok(*output),
@@ -2732,6 +2790,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             WorkerServiceError::InternalCallError,
         )
         .await
+        .map_err(|error| accepted_invocation_error(error, &accepted))
     }
 
     async fn control_export_stream(
@@ -3295,8 +3354,8 @@ mod freshness_tests {
 #[cfg(test)]
 mod one_shot_session_tests {
     use super::{
-        OneShotInvocationSessionResult, collect_one_shot_invocation_session,
-        decode_invocation_failure, decode_invocation_result, protocol_executor_error,
+        OneShotInvocationSessionResult, decode_invocation_failure, decode_invocation_result,
+        protocol_executor_error,
     };
     use futures::stream;
     use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
@@ -3313,6 +3372,22 @@ mod one_shot_session_tests {
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use test_r::test;
     use tonic::Status;
+
+    async fn collect_one_shot_invocation_session<S>(
+        responses: S,
+        state: InvocationSessionState,
+    ) -> Result<OneShotInvocationSessionResult, Status>
+    where
+        S: futures::Stream<Item = Result<InvocationResponse, Status>> + Unpin,
+    {
+        super::collect_one_shot_invocation_session(
+            responses,
+            state,
+            &Default::default(),
+            Some(golem_common::model::environment::EnvironmentId::new().into()),
+        )
+        .await
+    }
 
     fn key() -> Option<golem_schema::proto::golem::common::Uuid> {
         Some(uuid::Uuid::nil().into())
@@ -3368,6 +3443,63 @@ mod one_shot_session_tests {
         })
     }
 
+    #[test]
+    async fn adversarial_invalid_acceptance_cannot_poison_receipt() {
+        use golem_common::model::environment::EnvironmentId;
+        use std::sync::OnceLock;
+
+        let environment = EnvironmentId::new();
+        for prior_acceptance in [false, true] {
+            for invalid_kind in 0..3 {
+                let receipt = OnceLock::new();
+                let mut frames = Vec::new();
+                if prior_acceptance {
+                    frames.push(frame(accepted()));
+                }
+                let mut invalid = InvocationAccepted {
+                    agent_id: agent_id(),
+                    idempotency_key: key(),
+                    component_revision: Some(3),
+                    ..Default::default()
+                };
+                match invalid_kind {
+                    0 => invalid.agent_id = None,
+                    1 => invalid.idempotency_key = None,
+                    // Supplying an environment alone is an incomplete durable acceptance.
+                    _ => invalid.environment_id = Some(EnvironmentId::new().into()),
+                }
+                frames.push(frame(invocation_response::Response::Accepted(invalid)));
+                frames.push(Err(Status::unavailable(
+                    "transport lost after invalid acceptance",
+                )));
+                let result = super::collect_one_shot_invocation_session(
+                    stream::iter(frames),
+                    state_after_start(),
+                    &receipt,
+                    Some(environment.into()),
+                )
+                .await
+                .unwrap();
+                assert!(matches!(
+                    result,
+                    OneShotInvocationSessionResult::ProtocolFailure(_)
+                ));
+                assert_eq!(receipt.get().is_some(), prior_acceptance);
+                if let Some(receipt) = receipt.get() {
+                    assert_eq!(receipt.environment_id, environment);
+                    assert_eq!(
+                        *receipt.id.agent_id(),
+                        golem_common::model::AgentId::from_parts(7, 1)
+                    );
+                    assert_eq!(
+                        receipt.id.id(),
+                        golem_common::model::InvocationId(uuid::Uuid::nil())
+                    );
+                }
+            }
+        }
+    }
+
     fn no_result() -> invocation_response::Response {
         invocation_response::Response::Result(InvocationSessionResult {
             result: Some(invocation_session_result::Result::NoResult(Empty {})),
@@ -3382,6 +3514,53 @@ mod one_shot_session_tests {
         invocation_response::Response::Finished(InvocationSessionCompletion {
             outcome: Some(outcome),
         })
+    }
+
+    #[test]
+    async fn queued_ready_preserves_acceptance_receipt() {
+        use std::sync::OnceLock;
+        let environment = golem_common::model::environment::EnvironmentId::new();
+        let mut queued = InvocationAccepted {
+            agent_id: agent_id(),
+            idempotency_key: key(),
+            environment_id: Some(environment.into()),
+            callee_fingerprint: Some(uuid::Uuid::from_u128(31).into()),
+            attachment_id: Some(uuid::Uuid::from_u128(32).into()),
+            attempt_id: Some(uuid::Uuid::from_u128(33).into()),
+            epoch: 1,
+            method_name: Some("run".into()),
+            ..Default::default()
+        };
+        let initial = frame(invocation_response::Response::Accepted(queued.clone()));
+        queued.component_revision = Some(3);
+        let receipt = OnceLock::new();
+        let result = super::collect_one_shot_invocation_session(
+            stream::iter([
+                initial,
+                frame(invocation_response::Response::Ready(queued)),
+                frame(no_result()),
+                frame(finished(invocation_session_completion::Outcome::Success(
+                    Empty {},
+                ))),
+            ]),
+            state_after_start(),
+            &receipt,
+            Some(environment.into()),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(result, OneShotInvocationSessionResult::Success(_)),
+            "{result:?}"
+        );
+        let receipt = receipt
+            .get()
+            .expect("queued acceptance must retain its receipt");
+        assert_eq!(receipt.environment_id, environment);
+        assert_eq!(
+            receipt.id.id(),
+            golem_common::model::InvocationId(uuid::Uuid::nil())
+        );
     }
 
     fn string_result(value: String) -> invocation_response::Response {
@@ -3898,6 +4077,8 @@ mod rejection_mapping_tests {
         }
     }
 
+    type OneShotResponses = std::collections::VecDeque<Vec<Result<InvocationResponse, Status>>>;
+
     /// Rejects every invocation as `NotFound`, after first rejecting `routing_misses` of them as
     /// having reached an executor that does not own the agent's shard. With `accept` it accepts
     /// instead of rejecting as `NotFound`, and keeps the session open until its request stream ends.
@@ -3911,6 +4092,7 @@ mod rejection_mapping_tests {
         cancel_requests: Arc<std::sync::Mutex<Vec<CancelInvocationRequest>>>,
         accept: bool,
         calls: Arc<AtomicUsize>,
+        one_shot_responses: Option<Arc<std::sync::Mutex<OneShotResponses>>>,
         /// The opening frame's freshness disposition, one per call in call order.
         dispositions: Arc<std::sync::Mutex<Vec<i32>>>,
         request_keys: Arc<
@@ -3918,6 +4100,7 @@ mod rejection_mapping_tests {
                 Vec<Option<golem_api_grpc::proto::golem::worker::InvocationRequestKey>>,
             >,
         >,
+        supplied_keys: Arc<std::sync::Mutex<Vec<Option<String>>>>,
         /// Receives `(call index, frames after the opening one)` once a call's request stream has
         /// ended, which happens after the call returned its response stream.
         tail_frames: Option<tokio::sync::mpsc::UnboundedSender<(usize, usize)>>,
@@ -4203,22 +4386,32 @@ mod rejection_mapping_tests {
         ) -> Result<Response<Self::InvokeAgentSessionStream>, Status> {
             let mut requests = request.into_inner();
             let start = requests.message().await?.expect("missing invocation start");
-            let (agent_id, freshness_disposition, request_key) = match start.request {
+            let (agent_id, freshness_disposition, request_key, supplied_key) = match start.request {
                 Some(golem_api_grpc::proto::golem::worker::invocation_request::Request::Start(
                     start,
                 )) => (
                     start.target_agent_id().cloned(),
                     start.freshness_disposition,
                     start.request_key,
+                    start.idempotency_key.map(|key| key.value),
                 ),
                 other => panic!("expected invocation start, got {other:?}"),
             };
             let call = self.calls.fetch_add(1, Ordering::SeqCst);
             self.request_keys.lock().unwrap().push(request_key);
+            self.supplied_keys.lock().unwrap().push(supplied_key);
             self.dispositions
                 .lock()
                 .unwrap()
                 .push(freshness_disposition);
+            if let Some(attempts) = &self.one_shot_responses {
+                let frames = attempts
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .expect("unexpected retry");
+                return Ok(Response::new(Box::pin(futures::stream::iter(frames))));
+            }
             let routing_miss = self
                 .routing_misses
                 .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
@@ -4401,6 +4594,17 @@ mod rejection_mapping_tests {
     ) -> WorkerServiceError {
         let (client, agent_id) = client_against(executor, max_decoding_message_size).await;
 
+        invoke_once(&client, agent_id, EnvironmentId::new(), None)
+            .await
+            .unwrap_err()
+    }
+
+    async fn invoke_once(
+        client: &WorkerExecutorWorkerClient,
+        agent_id: AgentId,
+        environment_id: EnvironmentId,
+        supplied_key: Option<golem_common::model::IdempotencyKey>,
+    ) -> super::WorkerResult<golem_common::model::AgentInvocationOutput> {
         client
             .invoke_agent(
                 &RoutedTarget::existing(agent_id, None),
@@ -4417,11 +4621,12 @@ mod rejection_mapping_tests {
                 )),
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 None,
-                golem_common::model::InvocationRequestKey::external(None, None),
+                golem_common::model::InvocationRequestKey::external(None, supplied_key.as_ref()),
+                supplied_key,
                 None,
                 InvocationFreshnessDisposition::MayExist,
                 vec![],
-                EnvironmentId::new(),
+                environment_id,
                 AccountId::new(),
                 AuthCtx::System,
                 Caller::anonymous().into(),
@@ -4429,7 +4634,176 @@ mod rejection_mapping_tests {
                 None,
             )
             .await
-            .unwrap_err()
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn one_shot_acceptance_survives_transport_and_routing_retries() {
+        use crate::service::worker::WorkerServiceError;
+        use golem_api_grpc::proto::golem::worker::{
+            InvocationFailure, InvocationFailureKind, InvocationSessionCompletion,
+            InvocationSessionResult, invocation_session_completion, invocation_session_result,
+        };
+        use golem_schema::proto::golem::common::Empty;
+
+        let owner = AgentId::from_parts(7, 19);
+        let environment = EnvironmentId::new();
+        let invocation = golem_common::model::InvocationId(uuid::Uuid::from_u128(91));
+        for durable in [false, true] {
+            let accepted = || {
+                Ok(InvocationResponse {
+                    response: Some(invocation_response::Response::Accepted(
+                        InvocationAccepted {
+                            agent_id: Some(owner.into()),
+                            environment_id: durable.then(|| environment.into()),
+                            idempotency_key: Some(invocation.into()),
+                            component_revision: Some(3),
+                            attachment_id: durable.then(|| uuid::Uuid::from_u128(1).into()),
+                            attempt_id: durable.then(|| uuid::Uuid::from_u128(2).into()),
+                            epoch: if durable { 1 } else { 0 },
+                            callee_fingerprint: durable.then(|| uuid::Uuid::from_u128(3).into()),
+                            ..Default::default()
+                        },
+                    )),
+                })
+            };
+            let finished = || {
+                vec![
+                    accepted(),
+                    Ok(InvocationResponse {
+                        response: Some(invocation_response::Response::Result(
+                            InvocationSessionResult {
+                                result: Some(invocation_session_result::Result::NoResult(Empty {})),
+                                agent_id: Some(owner.into()),
+                                idempotency_key: Some(invocation.into()),
+                                component_revision: Some(3),
+                                ..Default::default()
+                            },
+                        )),
+                    }),
+                    Ok(InvocationResponse {
+                        response: Some(invocation_response::Response::Finished(
+                            InvocationSessionCompletion {
+                                outcome: Some(invocation_session_completion::Outcome::Success(
+                                    Empty {},
+                                )),
+                            },
+                        )),
+                    }),
+                ]
+            };
+            let routing_rejection = || {
+                vec![Ok(InvocationResponse {
+                    response: Some(invocation_response::Response::Rejected(
+                        InvocationRejected {
+                            reason: InvocationRejectionReason::Internal as i32,
+                            worker_error: Some(WorkerExecutorError::ShardingNotReady.into()),
+                            ..Default::default()
+                        },
+                    )),
+                })]
+            };
+            for outcome in 0..4 {
+                let last = match outcome {
+                    0 => finished(),
+                    1 => vec![Err(Status::permission_denied(
+                        "transport authorization lost",
+                    ))],
+                    2 => vec![
+                        accepted(),
+                        Ok(InvocationResponse {
+                            response: Some(invocation_response::Response::Finished(
+                                InvocationSessionCompletion {
+                                    outcome: Some(invocation_session_completion::Outcome::Failure(
+                                        InvocationFailure {
+                                            kind: InvocationFailureKind::Execution as i32,
+                                            message: "execution failed after acceptance".into(),
+                                            ..Default::default()
+                                        },
+                                    )),
+                                },
+                            )),
+                        }),
+                    ],
+                    _ => vec![Ok(InvocationResponse {
+                        response: Some(invocation_response::Response::Accepted(
+                            InvocationAccepted {
+                                agent_id: Some(owner.into()),
+                                environment_id: durable.then(|| environment.into()),
+                                idempotency_key: Some(
+                                    golem_common::model::InvocationId(uuid::Uuid::from_u128(92))
+                                        .into(),
+                                ),
+                                component_revision: Some(3),
+                                attachment_id: durable.then(|| uuid::Uuid::from_u128(1).into()),
+                                attempt_id: durable.then(|| uuid::Uuid::from_u128(2).into()),
+                                epoch: if durable { 1 } else { 0 },
+                                callee_fingerprint: durable
+                                    .then(|| uuid::Uuid::from_u128(3).into()),
+                                ..Default::default()
+                            },
+                        )),
+                    })],
+                };
+                let attempts = Arc::new(std::sync::Mutex::new(std::collections::VecDeque::from([
+                    routing_rejection(),
+                    vec![
+                        accepted(),
+                        Err(Status::unavailable("accepted response lost")),
+                    ],
+                    routing_rejection(),
+                    last,
+                ])));
+                let executor = RejectingExecutor {
+                    one_shot_responses: Some(attempts.clone()),
+                    ..Default::default()
+                };
+                let keys = executor.request_keys.clone();
+                let supplied_keys = executor.supplied_keys.clone();
+                let (client, target) = client_against(executor, 32 * 1024 * 1024).await;
+                let result = invoke_once(
+                    &client,
+                    target,
+                    environment,
+                    Some(golem_common::model::IdempotencyKey::new("k1".into())),
+                )
+                .await;
+                if outcome != 0 {
+                    let WorkerServiceError::AcceptedInvocation { accepted, source } =
+                        result.unwrap_err()
+                    else {
+                        panic!("terminal error lost the accepted identity");
+                    };
+                    assert_eq!(*accepted.id.agent_id(), owner);
+                    assert_eq!(accepted.id.id(), invocation);
+                    assert_eq!(accepted.environment_id, environment);
+                    if outcome == 1 {
+                        assert!(matches!(*source, WorkerServiceError::InternalCallError(_)));
+                    } else if outcome == 3 {
+                        assert!(
+                            matches!(*source, WorkerServiceError::GolemError(WorkerExecutorError::Unknown { details }) if details.contains("invocation identity changed between dispatch attempts"))
+                        );
+                    } else {
+                        assert!(matches!(*source, WorkerServiceError::GolemError(_)));
+                    }
+                } else {
+                    let result = result.unwrap();
+                    assert_eq!(result.agent_id, Some(owner));
+                    assert_eq!(result.idempotency_key, Some(invocation));
+                }
+                assert!(attempts.lock().unwrap().is_empty());
+                let keys = keys.lock().unwrap();
+                assert_eq!(keys.len(), 4);
+                assert!(keys.iter().all(|key| key == &keys[0]));
+                let decoded: golem_common::model::InvocationRequestKey =
+                    keys[0].clone().unwrap().try_into().unwrap();
+                assert!(matches!(
+                    decoded,
+                    golem_common::model::InvocationRequestKey::Unkeyed(_)
+                ));
+                assert_eq!(*supplied_keys.lock().unwrap(), vec![Some("k1".into()); 4]);
+            }
+        }
     }
 
     #[test]
