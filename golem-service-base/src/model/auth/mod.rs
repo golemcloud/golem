@@ -12,8 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod compatibility;
+#[cfg(test)]
+mod compatibility_tests;
 #[cfg(test)]
 mod tests;
+
+pub use compatibility::CompatibilityAuthorizer;
 
 use async_trait::async_trait;
 use axum::http::header;

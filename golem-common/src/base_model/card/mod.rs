@@ -14,6 +14,7 @@
 
 mod algebra;
 mod class;
+mod compatibility;
 mod defaults;
 mod envelope;
 mod monomorphization;
@@ -24,6 +25,9 @@ mod pattern;
 pub mod recipient;
 mod rendering;
 mod types;
+
+#[cfg(test)]
+mod compatibility_tests;
 
 #[cfg(test)]
 mod parsing_tests;
@@ -39,6 +43,7 @@ mod tests;
 
 pub use algebra::*;
 pub use class::*;
+pub use compatibility::*;
 pub use defaults::*;
 pub use envelope::*;
 pub use monomorphization::*;
