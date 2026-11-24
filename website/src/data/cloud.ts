@@ -43,7 +43,7 @@ export const offers = [
     price: "$20",
     period: "a month",
     priceNote:
-      "Tax added at checkout. €24 in countries that use the euro and £19 in the UK, VAT included.",
+      "Tax added at checkout. €24 in countries that use the euro and £19 in the UK, tax included.",
     description:
       "Run your agents and tools on Golem Cloud, with a monthly allowance of each resource.",
     included: [
@@ -53,7 +53,7 @@ export const offers = [
       { amount: "5 GiB-months", label: "of active ephemeral filesystem" },
     ],
     runOut:
-      "Your agents stop until the allowance resets on the 1st of the month (UTC), unless the account owner turns on paid overage.",
+      "Durable agents pause until the 1st of the next month (UTC). They keep their state and queued calls. Calls to ephemeral agents fail. Nothing is deleted. If the account owner turns on paid overage, agents keep running and the extra usage goes on the next invoice.",
     cta: upgrade,
     ctaNote:
       "Sign in with GitHub at billing.golem.cloud and upgrade. Cancel at any time. Pro runs until the end of the billing period.",
@@ -68,7 +68,7 @@ export const planNotes = [
   },
   {
     heading: "Payment",
-    body: "Polar, our merchant of record, takes the payment and picks the currency from your location at checkout. You pay in EUR in countries that use the euro, in GBP in the UK, and in USD with tax added everywhere else.",
+    body: "Polar, our merchant of record, takes the payment and picks the currency from your location at checkout. You pay in EUR in countries that use the euro and in GBP in the UK, with tax included. Everywhere else you pay in USD, with tax added at checkout.",
     link: { label: "Terms of service", href: "/legal" },
   },
 ];
@@ -80,8 +80,8 @@ export const overage = {
   rowHeader: "Per unit above the included amounts",
   currencies: [
     { code: "USD", tax: "tax added" },
-    { code: "EUR", tax: "VAT included" },
-    { code: "GBP", tax: "VAT included" },
+    { code: "EUR", tax: "tax included" },
+    { code: "GBP", tax: "tax included" },
   ],
   rows: [
     { name: "Compute", unit: "per million GCU", prices: ["$0.0112", "€0.0131", "£0.0103"] },
@@ -194,12 +194,12 @@ export const faq = {
     {
       question: "What happens when an included amount runs out?",
       answer:
-        "On Free, durable agents pause until the 1st of the next month (UTC). They keep their state and queued calls, and calls to ephemeral agents fail. Nothing is deleted. On Pro, your agents stop until the allowance resets on the 1st, unless the account owner has turned on paid overage. Per-agent memory and filesystem limits are separate from the monthly amounts. Reaching one can reject an allocation or a write.",
+        "On both plans, durable agents pause until the 1st of the next month (UTC). They keep their state and queued calls, and calls to ephemeral agents fail. Nothing is deleted. On Pro, the account owner can turn on paid overage instead. Agents then keep running, and the extra usage goes on the next invoice. Per-agent memory and filesystem limits are separate from the monthly amounts. Reaching one can reject an allocation or a write.",
     },
     {
       question: "How do I control what I pay?",
       answer:
-        "Free costs nothing. With paid overage off, Pro costs its monthly price and nothing more, because your agents stop when an amount runs out. With paid overage on, each unit above the included amounts costs the price in the overage table. The account owner can turn paid overage off at billing.golem.cloud. The change takes up to 5 minutes to reach running agents, and usage in that time is still billed.",
+        "Free costs nothing. With paid overage off, Pro costs its monthly price and nothing more, because usage stops at the included amounts. With paid overage on, each unit above the included amounts costs the price in the overage table. The account owner turns paid overage on and off at billing.golem.cloud.",
     },
     {
       question: "How do I upgrade to Pro?",
