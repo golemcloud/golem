@@ -683,7 +683,6 @@ fn guest_tool_mode_generates_schema_complete_buildable_consumer_module() {
         "body: @model.Duration",
         "\"schema-complete.Recursive\"",
         "[\"en\", \"de\"]",
-        "[\"fr\"]",
     ] {
         assert!(source.contains(expected), "missing {expected}:\n{source}");
     }
@@ -1831,7 +1830,7 @@ fn guest_mode_moon_checks_unstructured_text_codec() {
 }
 
 #[test]
-fn guest_mode_unstructured_text_encoder_rejects_disallowed_language() {
+fn guest_mode_unstructured_text_encoder_leaves_language_restrictions_to_the_server() {
     let media = def(
         "media",
         SchemaType::record(vec![named_field(
@@ -1853,13 +1852,8 @@ fn guest_mode_unstructured_text_encoder_rejects_disallowed_language() {
     let guest = generate_without_check(agent, MoonBitBridgeMode::GuestWasmRpc);
     std::fs::write(
         guest.path().join("client/unstructured_wbtest.mbt"),
-        r#"test "unstructured text encoder enforces language restrictions" {
-  try encode_Media({ body: Inline("bonjour", Some("fr")) }) catch {
-    CodecError(_) => ()
-    _ => fail("expected CodecError for a disallowed language")
-  } noraise {
-    _ => fail("expected CodecError for a disallowed language")
-  }
+        r#"test "unstructured text encoder leaves language restrictions to the server" {
+  ignore(encode_Media({ body: Inline("bonjour", Some("fr")) }))
 }
 "#,
     )
@@ -1976,8 +1970,8 @@ fn guest_mode_moon_checks_referenced_unstructured_codecs_with_distinct_restricti
     );
     let guest = generate_without_check(agent, MoonBitBridgeMode::GuestWasmRpc);
     let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
-    assert!(source.contains("guest_decode_unstructured_text(fields[0], [\"en\", \"de\"])"));
-    assert!(source.contains("guest_decode_unstructured_binary(fields[1], [\"image/png\"])"));
+    assert!(source.contains("guest_decode_unstructured_text(fields[0])"));
+    assert!(source.contains("guest_decode_unstructured_binary(fields[1])"));
 
     let output = std::process::Command::new("moon")
         .arg("-C")
@@ -2978,7 +2972,7 @@ fn multimodal_enums_are_deduplicated() {
 // --- Unstructured text / binary restrictions -------------------------------
 
 #[test]
-fn unstructured_text_and_binary_restrictions_are_enforced() {
+fn unstructured_text_and_binary_decoders_leave_restrictions_to_the_server() {
     let agent_type = agent(
         "MediaAgent",
         "moonbit",
@@ -3010,13 +3004,9 @@ fn unstructured_text_and_binary_restrictions_are_enforced() {
     // Ergonomic wrapper return types.
     assert!(client.contains("-> @runtime.UnstructuredText raise {"));
     assert!(client.contains("-> @runtime.UnstructuredBinary raise {"));
-    // Decode validates against the allowed language / MIME lists.
-    assert!(client.contains(
-        "@runtime.unstructured_text_from_schema_value(\"output\", value, [\"en\", \"de\"])"
-    ));
-    assert!(client.contains(
-        "@runtime.unstructured_binary_from_schema_value(\"output\", value, [\"image/png\"])"
-    ));
+    // Decode leaves the allowed language / MIME lists to the server.
+    assert!(client.contains("@runtime.unstructured_text_from_schema_value(\"output\", value)"));
+    assert!(client.contains("@runtime.unstructured_binary_from_schema_value(\"output\", value)"));
 }
 
 #[test]
@@ -3633,7 +3623,7 @@ fn rich_agent() -> AgentTypeSchema {
 }
 
 #[test]
-fn external_rich_kinds_round_trip_and_check_units_and_languages() {
+fn external_rich_kinds_round_trip_check_units_and_leave_languages_to_the_server() {
     let pkg = GeneratedPackage::new(rich_agent());
     let client = pkg.client_source();
     for expected in [
@@ -3732,11 +3722,10 @@ test "quantity unit outside the schema is rejected on encode and decode" {
 }
 
 ///|
-test "text language outside the schema is rejected on encode and decode" {
+test "text language outside the schema is left to the server" {
   let codec = rich_codec()
-  assert_true(client_rejects(() => ignore(codec.encode(sample_value("kg", "fr")))))
-  let foreign = @runtime.schema_value_to_json(sample_value("kg", "fr"))
-  assert_true(client_rejects(() => ignore(codec.decode(foreign))))
+  let foreign = sample_value("kg", "fr")
+  assert_true(codec.decode(codec.encode(foreign)) == foreign)
 }
 "#
         .replace("__GRAPH__", &graph_json),
@@ -3746,7 +3735,7 @@ test "text language outside the schema is rejected on encode and decode" {
 }
 
 #[test]
-fn guest_rich_kinds_use_sdk_types_and_check_units_and_languages() {
+fn guest_rich_kinds_use_sdk_types_check_units_and_leave_restrictions_to_the_server() {
     let guest = generate_without_check(rich_agent(), MoonBitBridgeMode::GuestWasmRpc);
     let client = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
     for expected in [
@@ -3818,16 +3807,9 @@ test "rich kinds round trip through the guest codec" {
 }
 
 ///|
-test "binary MIME type outside the schema is rejected on encode and decode" {
-  try encode_Rich(sample("en", image_mime="image/gif")) catch {
-    CodecError(_) => ()
-    _ => fail("expected CodecError for a disallowed MIME type")
-  } noraise {
-    _ => fail("expected CodecError for a disallowed MIME type")
-  }
-  assert_decode_rejected(
-    sample_value("kg", "en", image_mime=Some("image/gif")),
-  )
+test "binary MIME type outside the schema is left to the server" {
+  let value = sample("en", image_mime="image/gif")
+  assert_true(decode_Rich(encode_Rich(value)) == value)
 }
 
 ///|
@@ -3836,15 +3818,9 @@ test "quantity unit outside the schema is rejected on decode" {
 }
 
 ///|
-test "text language outside the schema is rejected on encode and decode" {
+test "text language outside the schema is left to the server" {
   let value = sample("fr")
-  try encode_Rich(value) catch {
-    CodecError(_) => ()
-    _ => fail("expected CodecError for a disallowed language")
-  } noraise {
-    _ => fail("expected CodecError for a disallowed language")
-  }
-  assert_decode_rejected(sample_value("kg", "fr"))
+  assert_true(decode_Rich(encode_Rich(value)) == value)
 }
 "#,
     )

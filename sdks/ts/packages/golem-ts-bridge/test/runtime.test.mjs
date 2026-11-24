@@ -2738,6 +2738,12 @@ test('public value codec enforces canonical values, restrictions, and strict sha
   assert.throws(() => binary.validate({ kind: 'binary', value: { bytes: [256] } }, 'none'), {
     code: 'validation-error',
   });
+  // Only the server checks restrictions; the bridge checks the wire form.
+  const outsideRestrictions = {
+    kind: 'binary',
+    value: { bytes: [1, 2, 3], mimeType: 'image/png' },
+  };
+  assert.deepEqual(binary.validate(outsideRestrictions, 'none'), outsideRestrictions);
   assert.throws(() => binary.validate({ bytes: '+/8=', mimeType: 'image/png' }, 'none'), {
     code: 'validation-error',
   });

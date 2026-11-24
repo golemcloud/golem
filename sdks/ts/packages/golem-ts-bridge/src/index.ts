@@ -1964,34 +1964,34 @@ class PublicValueValidator {
         this.add(1);
         return payload;
       case 's8':
-        this.integer(body, payload, -128, 127, 1, 'signed');
+        this.integer(payload, -128, 127, 1);
         return payload;
       case 's16':
-        this.integer(body, payload, -32768, 32767, 2, 'signed');
+        this.integer(payload, -32768, 32767, 2);
         return payload;
       case 's32':
-        this.integer(body, payload, -2147483648, 2147483647, 4, 'signed');
+        this.integer(payload, -2147483648, 2147483647, 4);
         return payload;
       case 'u8':
-        this.integer(body, payload, 0, 255, 1, 'unsigned');
+        this.integer(payload, 0, 255, 1);
         return payload;
       case 'u16':
-        this.integer(body, payload, 0, 65535, 2, 'unsigned');
+        this.integer(payload, 0, 65535, 2);
         return payload;
       case 'u32':
-        this.integer(body, payload, 0, 4294967295, 4, 'unsigned');
+        this.integer(payload, 0, 4294967295, 4);
         return payload;
       case 's64':
-        this.decimalInteger(body, payload, true);
+        this.decimalInteger(payload, true);
         return payload;
       case 'u64':
-        this.decimalInteger(body, payload, false);
+        this.decimalInteger(payload, false);
         return payload;
       case 'f32':
-        this.float(body, payload, true);
+        this.float(payload, true);
         return;
       case 'f64':
-        this.float(body, payload, false);
+        this.float(payload, false);
         return;
       case 'char': {
         if (typeof payload !== 'string' || [...payload].length !== 1)
@@ -2119,24 +2119,15 @@ class PublicValueValidator {
         return;
       }
       case 'text':
-        this.text(body.restrictions, payload);
+        this.text(payload);
         return;
       case 'binary':
-        this.binary(body.restrictions, payload);
+        this.binary(payload);
         return;
       case 'path': {
         const input = publicObject(payload, 'path payload');
         publicExactMembers(input, new Set(['path']), 'path payload');
         const path = publicString(input.path, 'path');
-        if (path.length === 0) this.fail('validation-error', 'path must be non-empty');
-        const parts = path.split('/');
-        const name = parts[parts.length - 1] ?? path;
-        const index = name.lastIndexOf('.');
-        if (index >= 0 && index < name.length - 1 && body.spec.allowedExtensions) {
-          const extension = name.slice(index + 1);
-          if (!body.spec.allowedExtensions.includes(extension))
-            this.fail('validation-error', 'path extension is not allowed');
-        }
         this.string(path);
         return;
       }
@@ -2144,7 +2135,7 @@ class PublicValueValidator {
         {
           const input = publicObject(payload, 'URL payload');
           publicExactMembers(input, new Set(['url']), 'URL payload');
-          this.url(body.restrictions, input.url);
+          this.url(input.url);
         }
         return;
       case 'uuid': {
@@ -2282,38 +2273,25 @@ class PublicValueValidator {
     values.forEach((item) => this.value(type, item, depth + 1));
   }
 
-  private integer(
-    body: { restrictions?: NumericRestrictions },
-    value: unknown,
-    min: number,
-    max: number,
-    width: number,
-    family: 'signed' | 'unsigned',
-  ): void {
+  private integer(value: unknown, min: number, max: number, width: number): void {
     if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max)
       this.fail('validation-error', 'integer is out of range');
-    this.numeric(body.restrictions, family, BigInt(value));
     this.add(width);
   }
 
-  private decimalInteger(
-    body: { restrictions?: NumericRestrictions },
-    value: unknown,
-    signed: boolean,
-  ): void {
+  private decimalInteger(value: unknown, signed: boolean): void {
     if (typeof value !== 'string')
       this.fail('malformed-message', '64-bit integer payload must be a decimal string');
-    const parsed = publicDecimal(
+    publicDecimal(
       value,
       signed,
       signed ? -(1n << 63n) : 0n,
       signed ? (1n << 63n) - 1n : (1n << 64n) - 1n,
     );
-    this.numeric(body.restrictions, signed ? 'signed' : 'unsigned', parsed);
     this.add(8);
   }
 
-  private float(body: { restrictions?: NumericRestrictions }, value: unknown, f32: boolean): void {
+  private float(value: unknown, f32: boolean): void {
     let number: number;
     if (typeof value === 'number') {
       number = value;
@@ -2335,64 +2313,20 @@ class PublicValueValidator {
             ? Number.POSITIVE_INFINITY
             : Number.NEGATIVE_INFINITY;
     }
-    if (Number.isFinite(number)) this.numeric(body.restrictions, 'float', number);
-    else if (body.restrictions?.min || body.restrictions?.max)
-      this.fail('validation-error', 'exceptional float does not satisfy numeric restrictions');
     this.add(f32 ? 4 : 8);
   }
 
-  private numeric(
-    restrictions: NumericRestrictions | undefined,
-    family: 'signed' | 'unsigned' | 'float',
-    value: bigint | number,
-  ): void {
-    if (!restrictions) return;
-    const compare = (bound: NumericBound): number => {
-      if (family === 'float') {
-        if (bound.tag !== 'float-bits')
-          this.fail('validation-error', 'numeric bound family does not match schema');
-        const bytes = Buffer.allocUnsafe(8);
-        bytes.writeBigUInt64BE(BigInt.asUintN(64, bound.val));
-        const decoded = bytes.readDoubleBE();
-        return (value as number) < decoded ? -1 : (value as number) > decoded ? 1 : 0;
-      }
-      if (bound.tag !== family)
-        this.fail('validation-error', 'numeric bound family does not match schema');
-      return (value as bigint) < bound.val ? -1 : (value as bigint) > bound.val ? 1 : 0;
-    };
-    if (restrictions.min && compare(restrictions.min) < 0)
-      this.fail('validation-error', 'number is below schema minimum');
-    if (restrictions.max && compare(restrictions.max) > 0)
-      this.fail('validation-error', 'number is above schema maximum');
-  }
-
-  private text(restrictions: TextRestrictions, value: unknown): void {
+  private text(value: unknown): void {
     const input = publicObject(value, 'text');
     publicExactOptionalMembers(input, new Set(['text']), new Set(['language']), 'text');
     const text = publicString(input.text, 'text body');
     const language =
       input.language === undefined ? undefined : publicString(input.language, 'language');
-    if (language !== undefined && !/^[A-Za-z]{1,8}(?:-[A-Za-z0-9]{1,8})*$/u.test(language))
-      this.fail('validation-error', 'invalid BCP-47 language tag');
-    if (
-      language !== undefined &&
-      restrictions.languages &&
-      restrictions.languages.length > 0 &&
-      !restrictions.languages.includes(language)
-    )
-      this.fail('validation-error', 'text language is not allowed');
-    const length = [...text].length;
-    if (restrictions.minLength !== undefined && length < restrictions.minLength)
-      this.fail('validation-error', 'text is shorter than schema minimum');
-    if (restrictions.maxLength !== undefined && length > restrictions.maxLength)
-      this.fail('validation-error', 'text is longer than schema maximum');
-    if (restrictions.regex !== undefined && !new RegExp(restrictions.regex, 'u').test(text))
-      this.fail('validation-error', 'text does not match schema regex');
     this.string(text);
     if (language !== undefined) this.string(language);
   }
 
-  private binary(restrictions: BinaryRestrictions, value: unknown): void {
+  private binary(value: unknown): void {
     const input = publicObject(value, 'binary');
     publicExactOptionalMembers(input, new Set(['bytes']), new Set(['mimeType']), 'binary');
     const bytes = publicArray(input.bytes, 'binary bytes');
@@ -2406,49 +2340,26 @@ class PublicValueValidator {
       input.mimeType === undefined ? undefined : publicString(input.mimeType, 'MIME type');
     if (mime !== undefined && !/^[A-Za-z0-9!#$&^_.+\-]+\/[A-Za-z0-9!#$&^_.+\-]+$/u.test(mime))
       this.fail('validation-error', 'invalid MIME type');
-    if (
-      mime !== undefined &&
-      restrictions.mimeTypes &&
-      restrictions.mimeTypes.length > 0 &&
-      !restrictions.mimeTypes.includes(mime)
-    )
-      this.fail('validation-error', 'binary MIME type is not allowed');
-    if (restrictions.minBytes !== undefined && bytes.length < restrictions.minBytes)
-      this.fail('validation-error', 'binary is shorter than schema minimum');
-    if (restrictions.maxBytes !== undefined && bytes.length > restrictions.maxBytes)
-      this.fail('validation-error', 'binary is longer than schema maximum');
     this.add(bytes.length);
     if (mime !== undefined) this.string(mime);
   }
 
-  private url(restrictions: UrlRestrictions, value: unknown): void {
+  private url(value: unknown): void {
     const raw = publicString(value, 'URL');
     if (raw.length === 0 || /[\u0000-\u0020\u007f]/u.test(raw))
       this.fail('validation-error', 'invalid URL');
-    let parsed: URL;
     try {
-      parsed = new URL(raw);
+      new URL(raw);
     } catch {
       this.fail('validation-error', 'invalid URL');
     }
-    const scheme = parsed.protocol.slice(0, -1);
-    if (restrictions.allowedSchemes?.every((item) => item.toLowerCase() !== scheme.toLowerCase()))
-      this.fail('validation-error', 'URL scheme is not allowed');
-    if (
-      restrictions.allowedHosts &&
-      (parsed.hostname.length === 0 ||
-        restrictions.allowedHosts.every(
-          (item) => item.toLowerCase() !== parsed.hostname.toLowerCase(),
-        ))
-    )
-      this.fail('validation-error', 'URL host is not allowed');
     this.string(raw);
   }
 
   private quantity(spec: QuantitySpec, value: unknown): void {
     const input = publicObject(value, 'quantity');
     publicExactMembers(input, new Set(['mantissa', 'scale', 'unit']), 'quantity');
-    const mantissa = publicDecimal(input.mantissa, true, -(1n << 63n), (1n << 63n) - 1n);
+    publicDecimal(input.mantissa, true, -(1n << 63n), (1n << 63n) - 1n);
     if (
       typeof input.scale !== 'number' ||
       !Number.isInteger(input.scale) ||
@@ -2459,11 +2370,6 @@ class PublicValueValidator {
     const unit = publicString(input.unit, 'quantity unit');
     const allowed = spec.allowedSuffixes.length === 0 ? [spec.baseUnit] : spec.allowedSuffixes;
     if (!allowed.includes(unit)) this.fail('validation-error', 'quantity unit is not allowed');
-    const current: QuantityValue = { mantissa, scale: input.scale, unit };
-    if (spec.min && !publicQuantityLe(spec.min, current))
-      this.fail('validation-error', 'quantity is below schema minimum');
-    if (spec.max && !publicQuantityLe(current, spec.max))
-      this.fail('validation-error', 'quantity is above schema maximum');
     this.add(12);
     this.string(unit);
   }
@@ -3154,27 +3060,6 @@ function publicDecimal(value: unknown, signed: boolean, min: bigint, max: bigint
       'Public value codec: decimal integer is out of range',
     );
   return parsed;
-}
-
-function publicQuantityLe(left: QuantityValue, right: QuantityValue): boolean {
-  const common = Math.max(left.scale, right.scale);
-  const leftShift = common - left.scale;
-  const rightShift = common - right.scale;
-  if (leftShift > 38 || rightShift > 38)
-    throw new StreamingProtocolError(
-      'validation-error',
-      'Public value codec: quantity comparison overflows',
-    );
-  const leftValue = left.mantissa * 10n ** BigInt(leftShift);
-  const rightValue = right.mantissa * 10n ** BigInt(rightShift);
-  const min = -(1n << 127n);
-  const max = (1n << 127n) - 1n;
-  if (leftValue < min || leftValue > max || rightValue < min || rightValue > max)
-    throw new StreamingProtocolError(
-      'validation-error',
-      'Public value codec: quantity comparison overflows',
-    );
-  return leftValue <= rightValue;
 }
 
 function validPublicDatetime(value: string): boolean {

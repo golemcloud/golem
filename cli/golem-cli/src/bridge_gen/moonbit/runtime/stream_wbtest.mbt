@@ -85,44 +85,22 @@ test "public codec quantity restrictions and canonical u64" {
 }
 
 ///|
-test "public codec rejects quantity comparison overflow" {
-  let quantity = public_value_codec(
-    "{\"root\":{\"kind\":\"quantity\",\"value\":{\"spec\":{\"baseUnit\":\"m\",\"allowedSuffixes\":[],\"min\":{\"mantissa\":\"1\",\"scale\":-2147483648,\"unit\":\"m\"}}}}}",
-  )
-  inspect(
-    raises(() => {
-      quantity.decode(
-        @json.parse(
-          "{\"kind\":\"quantity\",\"value\":{\"mantissa\":\"1\",\"scale\":2147483647,\"unit\":\"m\"}}",
-        ),
-      )
-    }),
-    content="true",
-  )
-}
-
-///|
-test "public codec accepts non-hierarchical URLs without host restrictions" {
-  let unrestricted = public_value_codec(
-    "{\"root\":{\"kind\":\"url\",\"value\":{\"restrictions\":{\"allowedSchemes\":[\"mailto\"]}}}}",
+test "public codec leaves URL scheme and host restrictions to the server" {
+  let restricted = public_value_codec(
+    "{\"root\":{\"kind\":\"url\",\"value\":{\"restrictions\":{\"allowedSchemes\":[\"https\"],\"allowedHosts\":[\"example.com\"]}}}}",
   )
   assert_true(
-    unrestricted.decode(
+    restricted.decode(
       @json.parse(
-        "{\"kind\":\"url\",\"value\":{\"url\":\"mailto:user@example.com\"}}",
+        "{\"kind\":\"url\",\"value\":{\"url\":\"mailto:user@example.org\"}}",
       ),
     ) ==
-    UrlValue("mailto:user@example.com"),
-  )
-  let hosted = public_value_codec(
-    "{\"root\":{\"kind\":\"url\",\"value\":{\"restrictions\":{\"allowedHosts\":[\"example.com\"]}}}}",
+    UrlValue("mailto:user@example.org"),
   )
   inspect(
     raises(() => {
-      hosted.decode(
-        @json.parse(
-          "{\"kind\":\"url\",\"value\":{\"url\":\"mailto:user@example.com\"}}",
-        ),
+      restricted.decode(
+        @json.parse("{\"kind\":\"url\",\"value\":{\"url\":\"no scheme\"}}"),
       )
     }),
     content="true",

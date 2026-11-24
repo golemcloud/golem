@@ -95,10 +95,10 @@ the non-streaming public API. Every value is an object with exactly `kind` and
 that node's payload. Nested values repeat this representation recursively.
 
 A decoder also has the exact `SchemaGraph` and expected `SchemaType`. It MUST
-validate every native node against that schema, including its kind,
-restrictions, arity, and case indexes. A named reference is resolved through
-the pinned graph; its value uses the native representation of the resolved
-body and does not carry the reference name.
+check the wire form of every native node against that schema: its kind,
+arity, case indexes, and the encodings in §3.1 and §3.2. A named reference is
+resolved through the pinned graph; its value uses the native representation of
+the resolved body and does not carry the reference name.
 
 ### 3.1 Scalar and rich values
 
@@ -130,10 +130,16 @@ Binary `bytes` is an array of JSON integers from 0 through 255. MIME types are
 ASCII and match
 `^[A-Za-z0-9!#$&^_.+\-]+/[A-Za-z0-9!#$&^_.+\-]+$`.
 
-The decoder applies all restrictions from the expected schema after decoding,
-including numeric ranges, text restrictions, binary MIME allow-lists, binary
-minimum and maximum lengths, path restrictions, URL restrictions, and
-quantity restrictions.
+Only the server validates restrictions. After decoding, it applies all
+restrictions from the expected schema, including numeric ranges, text
+restrictions, binary MIME allow-lists, binary minimum and maximum lengths,
+path restrictions, URL restrictions, and quantity restrictions. It also checks
+that a `text` `language` has the syntax of a BCP-47 language tag. A client
+does not check these. The server rejects a client value that does not satisfy
+them with `validation-error`; an input item ends only its input stream (§8).
+An output item that does not satisfy them ends its output stream with a
+`failed` terminal. The diagnostic of a validation error names the path and the
+restriction, and does not contain the value.
 
 ### 3.2 Structural values
 
