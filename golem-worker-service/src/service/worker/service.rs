@@ -2848,7 +2848,7 @@ impl WorkerService {
             auth_ctx,
             &component,
             &target,
-            &AgentAccess::invoke(&operation.to_string()),
+            &AgentAccess::invoke(operation),
         )
         .await?;
         Ok((target, component, freshness_disposition))
