@@ -114,6 +114,12 @@ For `Snapshot.define`, the SDK owns save and load:
 This decoder boundary is how Effect agents evolve snapshot state. There is no
 `Snapshot.migrate`, `migrations`, or `version` option in `@golemcloud/effect-golem`.
 
+Golem runs the save and the load in read-only mode, for an automatic snapshot and for a manual
+update, and does not write anything they do to the oplog. Mutating host operations and outgoing
+HTTP or agent RPC calls in a `Snapshot.custom` save or load are rejected before they take effect.
+A rejected save keeps no automatic snapshot of that point, and a manual update fails and the
+agent stays on its source revision.
+
 ## Agent Files
 
 A snapshot holds only the agent's in-memory state: the value of the snapshot `Ref`, encoded
@@ -124,8 +130,8 @@ does not hold the files that the agent wrote.
   the snapshot and restores them before the snapshot loads, so the restore can read them. The
   snapshot and the files form one restore point.
 - Do not write files in a `Snapshot.custom` save or load, and do not copy file contents into the
-  snapshot state to keep them. Golem does not run the save again in a replay, and the load runs in
-  read-only mode.
+  snapshot state to keep them. Golem does not run the save again in a replay, and the save and the
+  load run in read-only mode.
 - On an executor without filesystem snapshots, Golem takes a snapshot only while the agent's files
   are its initial files. After the agent changes its files, Golem takes no automatic snapshot: a
   start uses an older restore point or replays the full oplog, which writes the files again

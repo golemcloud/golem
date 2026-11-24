@@ -234,7 +234,9 @@ rather than replaced by a recorded result.
 
 Snapshot save/load runs in snapshotting mode (`durability_is_suppressed` ==
 `snapshotting_mode`): durable calls neither append nor consume entries (`DurableCallSession` with
-`persisted: false`). Snapshot admission is governed by `SnapshotBoundaryConditions`; do not add
+`persisted: false`). Both hooks run read-only (`read_only_method` of `save-snapshot` and
+`load-snapshot`), so write calls are refused before they open a call; do not add write paths for
+snapshotting mode. Snapshot admission is governed by `SnapshotBoundaryConditions`; do not add
 parallel boundary predicates.
 Automatic snapshots are revision-scoped baselines chosen at instance creation
 (`worker/snapshot_selection.rs`): the last usable entry, else the previous usable entry that the

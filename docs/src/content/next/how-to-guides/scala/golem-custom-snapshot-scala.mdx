@@ -173,6 +173,10 @@ def loadSnapshot(
 
 The macro detects these convention methods and wires them into the snapshot exports automatically. The restore context provides the identity fields (the decoded constructor parameters), the agent ID, the restored principal, and fresh configuration.
 
+## Saving Is Read-Only
+
+Golem runs `saveSnapshot` in read-only mode too, for an automatic snapshot and for a manual update, and does not write anything it does to the oplog. Reading the agent's state, local computation, and other permitted reads can be used to build the snapshot. Mutating host operations and outgoing HTTP or agent RPC calls are rejected before they take effect, and the save fails: Golem keeps no automatic snapshot of that point, and a manual update fails and the agent stays on its source revision.
+
 ## Restoration Is Read-Only
 
 `loadSnapshot` is a specially supported SDK lifecycle operation, not an agent method. Normal construction is skipped, and the factory must return the complete fresh instance. Golem installs it only after the returned `Future` succeeds.
@@ -186,7 +190,7 @@ If the factory fails, partial state is discarded. A manual update remains on the
 A snapshot holds only the agent's in-memory state: the JSON of `Snapshotted[S]`, or the bytes that `saveSnapshot` returns. It does not hold the files that the agent wrote.
 
 - On an executor with filesystem snapshots, Golem captures the agent's files at the same point as the snapshot and restores them before `loadSnapshot` runs, so `loadSnapshot` can read them. The snapshot and the files form one restore point.
-- Do not write files in `saveSnapshot` or `loadSnapshot`, and do not copy file contents into the snapshot to keep them. Golem does not run `saveSnapshot` again in a replay, and `loadSnapshot` runs in read-only mode.
+- Do not write files in `saveSnapshot` or `loadSnapshot`, and do not copy file contents into the snapshot to keep them. Golem does not run `saveSnapshot` again in a replay, and both run in read-only mode.
 - On an executor without filesystem snapshots, Golem takes a snapshot only while the agent's files are its initial files. After the agent changes its files, Golem takes no automatic snapshot: a start uses an older restore point or replays the full oplog, which writes the files again without data loss. A snapshot-based manual update fails with `UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS`.
 
 Filesystem snapshots are off by default on standalone executors and on local servers, except `golem server run` on macOS. See [Agent files and snapshots](https://learn.golem.cloud/next/develop/snapshotting#agent-files-and-snapshots).

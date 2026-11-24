@@ -570,9 +570,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
         if let Some(outcome) = periodic_snapshot_failure_outcome(&result) {
             match &result {
-                Ok(InvokeResult::Failed { .. } | InvokeResult::MethodFailed { .. }) => {
+                Ok(
+                    InvokeResult::Failed { error, .. } | InvokeResult::MethodFailed { error, .. },
+                ) => {
                     warn!(
-                        "Periodic snapshot save function failed; restarting worker to recover the store"
+                        "Periodic snapshot save function failed: {error:?}; restarting worker to recover the store"
                     );
                 }
                 Err(err) => {

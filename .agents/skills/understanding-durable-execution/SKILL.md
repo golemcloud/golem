@@ -3018,6 +3018,11 @@ supported"); an entity body's synchronous call into its owner must pass
 Snapshot save/load runs guest code in a third mode: it neither appends nor consumes durable-call
 oplog entries (`DurableCallSession` executes with `CallRecording::Unrecorded`; `durability_is_suppressed`
 is exactly `snapshotting_mode`).
+Both hooks also run read-only: `lower_invocation` gives `save-snapshot` and `load-snapshot` a
+`read_only_method`, so every `WriteLocal`/`WriteRemote` call (outgoing HTTP, RPC, promise and
+wallet writes) is refused with `AgentError::ReadOnlyViolation` before it opens a call. Tool
+attachments stay allowed: in snapshotting mode they open no durable call. A refused save gives
+no snapshot: a periodic save restarts the agent, and a manual update fails.
 
 Which history the new instance replays is decided in `Worker` construction (`worker/mod.rs`,
 `create_instance`, through `Worker::decide_start`, which loads the persisted rejections and calls

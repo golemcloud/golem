@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
+import { defineAgent, method, openBucket } from '@golemcloud/golem-ts-sdk';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 
@@ -141,27 +141,23 @@ export const SqliteSnapshotAgentImpl = SqliteSnapshotAgent.implement({
     },
 });
 
-// `save` asks the server at `faultPort` whether to fail. On "oom" it allocates until the executor
-// refuses to grow the memory of the agent; on "throw" it throws an error. The save runs in
-// snapshotting mode, so this request is neither recorded nor replayed: the server alone decides
-// each attempt.
+// `save` reads the key `fault` of the bucket `save-fault` to decide whether to fail. On "oom" it
+// allocates until the executor refuses to grow the memory of the agent; on "throw" it throws an
+// error. The save runs read-only and in snapshotting mode, so this read is neither recorded nor
+// replayed: the key-value service alone decides each attempt.
 export const SaveFaultAgent = defineAgent({
     name: 'SaveFaultAgent',
     id: { id: z.string() },
     snapshotting: { everyNInvocations: 1000 },
     methods: {
-        setFaultPort: method({ input: { port: z.number() }, returns: z.void() }),
         increment: method({ input: {}, returns: z.number() }),
         get: method({ input: {}, returns: z.number() }),
     },
 });
 
 export const SaveFaultAgentImpl = SaveFaultAgent.implement({
-    init: () => ({ count: 0, faultPort: 0 }),
+    init: () => ({ count: 0 }),
     methods: {
-        async setFaultPort({ port }) {
-            this.faultPort = port;
-        },
         async increment() {
             this.count += 1;
             return this.count;
@@ -172,7 +168,8 @@ export const SaveFaultAgentImpl = SaveFaultAgent.implement({
     },
     snapshot: {
         async save() {
-            const fault = await (await fetch(`http://localhost:${this.faultPort}/save-fault`)).text();
+            const stored = (await openBucket('save-fault')).get('fault');
+            const fault = stored === undefined ? 'ok' : new TextDecoder().decode(stored);
             if (fault === 'throw') {
                 throw new Error('save fault');
             }
@@ -182,10 +179,10 @@ export const SaveFaultAgentImpl = SaveFaultAgent.implement({
                     chunks.push(new Uint8Array(4 * 1024 * 1024).fill(1));
                 }
             }
-            return new TextEncoder().encode(JSON.stringify({ count: this.count, faultPort: this.faultPort }));
+            return new TextEncoder().encode(JSON.stringify({ count: this.count }));
         },
         load(bytes) {
-            return JSON.parse(new TextDecoder().decode(bytes)) as { count: number; faultPort: number };
+            return JSON.parse(new TextDecoder().decode(bytes)) as { count: number };
         },
     },
 });

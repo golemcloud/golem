@@ -2747,6 +2747,91 @@ async fn snapshot_load_rejects_write_http_and_rpc_and_falls_back_to_the_older_sn
     Ok(())
 }
 
+/// The periodic save hook runs read-only: a write, an HTTP request and an RPC call in it are
+/// refused before they reach their peer, and the save writes no snapshot.
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn periodic_snapshot_save_refuses_write_http_and_rpc(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let requests = Arc::new(AtomicU32::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
+        let requests = requests.clone();
+        async move {
+            let route = Router::new().route(
+                "/",
+                get(move || {
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    async { "ok" }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+    }));
+
+    for (mode, peer) in [
+        ("write", String::new()),
+        ("http", format!("http://127.0.0.1:{port}/")),
+        ("rpc", "periodic-snapshot-save-rpc-peer".to_string()),
+    ] {
+        let agent_id = agent_key!("SnapshotSaveProbe", mode, peer.clone());
+        let worker_id = executor.keyed_agent_id(component.environment_id, &agent_id)?;
+        let incremented = executor
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+            .await?;
+        assert_eq!(incremented.into_typed::<u64>()?, 1);
+        // The save after `increment` ends before the agent runs `get`.
+        let value = executor
+            .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
+            .await?;
+        assert_eq!(value.into_typed::<u64>()?, 1, "{mode}");
+        let snapshots = executor
+            .get_oplog(&worker_id, OplogIndex::INITIAL)
+            .await?
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+            .count();
+        assert_eq!(snapshots, 0, "{mode}: the refused save writes no snapshot");
+    }
+
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        0,
+        "the HTTP request must not reach the peer"
+    );
+    let rpc_peer_count = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_key!("ReadonlyAgent", "periodic-snapshot-save-rpc-peer"),
+            "get_count",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(
+        rpc_peer_count.into_typed::<u64>()?,
+        0,
+        "the RPC call must not reach the peer"
+    );
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 async fn snapshot_based_recovery_preserves_state_across_multiple_restarts(

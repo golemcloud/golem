@@ -94,6 +94,10 @@ inherit_test_dep!(
     #[tagged_as("constructor_parameter_echo")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("agent_sdk_rust")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 pub struct F1Blocker {
@@ -1249,159 +1253,6 @@ impl golem_worker_executor::services::card::CardService for SaveHookCardService 
         assert!(self.revoked.lock().unwrap().insert(id));
         Ok(golem_worker_executor::services::card::CardRevokeResult::Revoked(vec![id]))
     }
-}
-
-#[test]
-#[timeout("120s")]
-async fn gol838_save_hook_mutations_publish_owner_wallet_before_snapshot(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    use golem_common::model::card::{
-        Card, CardId, CardManagedByRuntimeDerived, PolymorphicPermissionPattern, StoredCard,
-        parse_permission_fields, parse_polymorphic_permission,
-    };
-    use golem_schema::model::CardId as SchemaCardId;
-    use golem_worker_executor::services::card::CardService;
-
-    for revoke in [false, true] {
-        let context = TestContext::new(last_unique_id);
-        let service = Arc::new(SaveHookCardService::default());
-        let overrides = TestExecutorOverrides {
-            configure: Some(Arc::new(|config| {
-                config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
-            })),
-            create_card_service: Some(Arc::new({
-                let service = service.clone();
-                move || service.clone()
-            })),
-            // This proves source-side transfer, not target-side delivery.
-            wrap_worker_proxy: Some(Arc::new(crate::api::accepting_card_transfer_proxy)),
-            ..Default::default()
-        };
-        let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
-        let component = executor
-            .component_dep(&context.default_environment_id, agent_update_v1)
-            .update_agent_provision_config("WalletSnapshotProbe", |config| {
-                let grants = &mut config.initial_permissions.lower_bound.positive;
-                grants.retain(|grant| !matches!(grant, PolymorphicPermissionPattern::Config(_)));
-                grants.push(
-                    parse_polymorphic_permission("config(?agent) @ * : read : control").unwrap(),
-                );
-            })
-            .store()
-            .await?;
-        let agent = agent_key!("WalletSnapshotProbe", format!("save-hook-{revoke}"));
-        let worker = executor.start_agent(&component.id, agent.clone()).await?;
-        let card_id = CardId::new();
-        let schema_id = SchemaCardId { uuid: card_id.0 };
-        executor
-            .invoke_and_await_agent(&component, &agent, "observe", data_value!(schema_id))
-            .await?;
-        wait_for_snapshot_after(&executor, &worker, OplogIndex::INITIAL).await?;
-        let card = StoredCard::Concrete(Card {
-            card_id,
-            parent_ids: Vec::new(),
-            lower_positive: vec![
-                parse_permission_fields("config", "*/*/*/*/*", "*", "read", "probe").unwrap(),
-            ],
-            lower_negative: Vec::new(),
-            upper_positive: Vec::new(),
-            upper_negative: Vec::new(),
-            created_at: chrono::Utc::now(),
-            expires_at: None,
-            system_card: false,
-            managed_by: None,
-        });
-        service
-            .create_runtime_card(
-                card.clone(),
-                CardManagedByRuntimeDerived {
-                    environment_id: context.default_environment_id,
-                    agent_id: worker.agent_id,
-                    invocation_key: golem_common::model::InvocationId(uuid::Uuid::new_v4()),
-                    oplog_index: OplogIndex::INITIAL,
-                },
-            )
-            .await?;
-        executor.queue_card_install(&worker.agent_id, card).await?;
-        // A transfer reaches only an existing agent, so the target exists before the change.
-        let target = if revoke {
-            None
-        } else {
-            Some(
-                executor
-                    .start_agent(&component.id, agent_key!("WalletSnapshotProbe", "target"))
-                    .await?
-                    .agent_id,
-            )
-        };
-        executor
-            .invoke_and_await_agent(
-                &component,
-                &agent,
-                "arm_snapshot_change",
-                data_value!(schema_id, target),
-            )
-            .await?;
-        let before = last_start_of(&executor, &worker, "arm_snapshot_change").await?;
-        let snapshot_index = wait_for_snapshot_after(&executor, &worker, before).await?;
-        let entries = executor.stored_oplog(&worker.agent_id).await;
-        let OplogEntry::Snapshot {
-            active_cards,
-            wallet_generation,
-            ..
-        } = &entries[snapshot_index.as_u64() as usize - 1]
-        else {
-            panic!("expected snapshot")
-        };
-        assert!(!active_cards.iter().any(|card| card.card_id() == card_id));
-        assert_eq!(*wallet_generation, 2);
-        assert_eq!(
-            entries
-                .iter()
-                .filter(|entry| match entry {
-                    OplogEntry::CardRevokedCascade {
-                        revoked_card_ids,
-                        local_wallet_generation,
-                        ..
-                    } if revoke => {
-                        assert_eq!(*local_wallet_generation, 2);
-                        revoked_card_ids == &[card_id]
-                    }
-                    OplogEntry::CardTransferStarted {
-                        card_id: transferred_card_id,
-                        source_wallet_generation,
-                        ..
-                    } if !revoke => {
-                        assert_eq!(*source_wallet_generation, 2);
-                        *transferred_card_id == card_id
-                    }
-                    _ => false,
-                })
-                .count(),
-            1
-        );
-        let observed = executor
-            .invoke_and_await_agent(&component, &agent, "observe", data_value!(schema_id))
-            .await?
-            .into_typed::<(bool, u64, bool, bool)>()?;
-        assert_eq!(observed, (false, 2, true, true));
-        let observed_start = last_start_of(&executor, &worker, "observe").await?;
-        wait_for_snapshot_after(&executor, &worker, observed_start).await?;
-        executor.shutdown_and_wait_for_invocation_loops().await?;
-        let executor = start_with_overrides(deps, &context, overrides).await?;
-        let mut events = executor.capture_output(&worker).await?;
-        let recovered = executor
-            .invoke_and_await_agent(&component, &agent, "observe", data_value!(schema_id))
-            .await?
-            .into_typed::<(bool, u64, bool, bool)>()?;
-        assert_eq!(recovered, (false, 2, true, true));
-        assert_snapshot_recovery_loaded(&mut events).await;
-    }
-    Ok(())
 }
 
 #[test]
@@ -4968,9 +4819,101 @@ async fn manual_update_on_idle_with_failing_load(
     Ok(())
 }
 
-/// Starts a resident `SaveFaultAgent` whose save hook asks a local server whether to fail: the
-/// server answers with `faults` in order and "ok" after them. Gives the agent, a new revision of
-/// its component to update to, and the count of saves that asked the server.
+/// Answers the read of the key `fault` in the bucket `save-fault`, which the save hook of
+/// `SaveFaultAgent` makes, with `faults` in order and "ok" after them, and counts the reads.
+struct SaveFaultKeyValueService {
+    inner: Arc<dyn KeyValueService>,
+    faults: &'static [&'static str],
+    saves: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl KeyValueService for SaveFaultKeyValueService {
+    async fn get(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        if bucket == "save-fault" && key == "fault" {
+            let save = self.saves.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let fault = self.faults.get(save).copied().unwrap_or("ok");
+            return Ok(Some(fault.as_bytes().to_vec()));
+        }
+        self.inner.get(environment_id, bucket, key).await
+    }
+
+    async fn delete(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<()> {
+        self.inner.delete(environment_id, bucket, key).await
+    }
+
+    async fn delete_many(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        keys: Arc<[String]>,
+    ) -> anyhow::Result<()> {
+        self.inner.delete_many(environment_id, bucket, keys).await
+    }
+
+    async fn exists(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<bool> {
+        self.inner.exists(environment_id, bucket, key).await
+    }
+
+    async fn get_keys(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+    ) -> anyhow::Result<Vec<String>> {
+        self.inner.get_keys(environment_id, bucket).await
+    }
+
+    async fn get_many(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        keys: Arc<[String]>,
+    ) -> anyhow::Result<Vec<Option<Vec<u8>>>> {
+        self.inner.get_many(environment_id, bucket, keys).await
+    }
+
+    async fn set(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        key: String,
+        outgoing_value: Vec<u8>,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .set(environment_id, bucket, key, outgoing_value)
+            .await
+    }
+
+    async fn set_many(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        key_values: Arc<[(String, Vec<u8>)]>,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .set_many(environment_id, bucket, key_values)
+            .await
+    }
+}
+
+/// Starts a resident `SaveFaultAgent` whose save hook reads whether to fail from the key-value
+/// service: the service answers with `faults` in order and "ok" after them. Gives the agent, a new
+/// revision of its component to update to, and the count of saves that read the service.
 async fn start_save_fault_agent(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
@@ -4978,22 +4921,6 @@ async fn start_save_fault_agent(
     faults: &'static [&'static str],
 ) -> anyhow::Result<SaveFaultAgent> {
     let saves = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
-    let port = listener.local_addr()?.port();
-    let fault_server = spawn({
-        let saves = saves.clone();
-        async move {
-            let route = Router::new().route(
-                "/save-fault",
-                axum::routing::get(move || {
-                    let save = saves.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    async move { faults.get(save).copied().unwrap_or("ok") }
-                }),
-            );
-            axum::serve(listener, route).await.unwrap();
-        }
-    });
-
     let executor = start_with_overrides(
         deps,
         context,
@@ -5002,6 +4929,16 @@ async fn start_save_fault_agent(
                 config.memory.system_memory_override = Some(256 * 1024 * 1024);
                 config.memory.worker_memory_ratio = 1.0;
                 config.memory.component_size_coefficient = 0.0;
+            })),
+            wrap_key_value_service: Some(Arc::new({
+                let saves = saves.clone();
+                move |inner| {
+                    Arc::new(SaveFaultKeyValueService {
+                        inner,
+                        faults,
+                        saves: saves.clone(),
+                    })
+                }
             })),
             ..Default::default()
         },
@@ -5014,14 +4951,6 @@ async fn start_save_fault_agent(
     let agent_id = agent_key!("SaveFaultAgent", "resident");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
-        .await?;
-    executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "setFaultPort",
-            data_value!(port as f64),
-        )
         .await?;
     for _ in 0..2 {
         executor
@@ -5038,7 +4967,6 @@ async fn start_save_fault_agent(
         worker_id,
         target_revision: target.revision,
         saves,
-        fault_server,
     })
 }
 
@@ -5049,7 +4977,6 @@ struct SaveFaultAgent {
     worker_id: OwnedAgentId,
     target_revision: ComponentRevision,
     saves: Arc<std::sync::atomic::AtomicUsize>,
-    fault_server: JoinHandle<()>,
 }
 
 impl SaveFaultAgent {
@@ -5110,7 +5037,6 @@ impl SaveFaultAgent {
         self.executor
             .check_oplog_is_queryable(&self.worker_id)
             .await?;
-        self.fault_server.abort();
         Ok(())
     }
 }
@@ -5141,7 +5067,8 @@ async fn a_manual_update_after_a_save_hook_ran_out_of_memory_succeeds(
 /// A save hook that throws traps the guest (the SDK turns the uncaught error into a panic), and
 /// it throws on every save: a restart would not heal it. So the agent keeps its instance after the
 /// failed update, and a second update requested right after it fails without running the hook
-/// again, as before the out-of-memory restart. The server counts each save that reached the hook.
+/// again, as before the out-of-memory restart. The key-value service counts each save that reached
+/// the hook.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -5174,7 +5101,106 @@ async fn a_manual_update_whose_save_hook_threw_keeps_the_instance(
     let saves = agent.saves.load(std::sync::atomic::Ordering::SeqCst);
     assert_eq!(saves, 1, "{:?}", settled.updates);
     assert_ne!(settled.component_revision, agent.target_revision);
-    agent.fault_server.abort();
+    Ok(())
+}
+
+/// The save hook of a manual update runs read-only: a write, an HTTP request and an RPC call in
+/// it are refused before they reach their peer, so the update fails and the agent keeps its
+/// revision and its state.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_manual_update_whose_save_hook_makes_a_side_effect_fails_as_read_only(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let _server = tokio_util::task::AbortOnDropHandle::new(spawn({
+        let requests = requests.clone();
+        async move {
+            let route = Router::new().route(
+                "/",
+                axum::routing::get(move || {
+                    requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    async { "ok" }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+    }));
+
+    let mut agents = Vec::new();
+    for (mode, peer) in [
+        ("write", String::new()),
+        ("http", format!("http://127.0.0.1:{port}/")),
+        ("rpc", "manual-update-save-rpc-peer".to_string()),
+    ] {
+        let agent_id = agent_key!("SnapshotSaveProbe", mode, peer);
+        let worker_id = executor
+            .start_agent(&component.id, agent_id.clone())
+            .await?;
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+            .await?;
+        agents.push((mode, agent_id, worker_id));
+    }
+    let target = executor
+        .update_component(&component.id, &agent_sdk_rust.wasm_name)
+        .await?;
+
+    for (mode, agent_id, worker_id) in agents {
+        executor
+            .manual_update_worker(&worker_id, target.revision, false)
+            .await?;
+        let failed = wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
+        let details = failed
+            .updates
+            .iter()
+            .find_map(|record| match record {
+                UpdateRecord::FailedUpdate(update) => update.details.clone(),
+                _ => None,
+            })
+            .unwrap_or_default();
+        assert!(
+            details.starts_with("failed to get a snapshot for manual update: ")
+                && details.contains("Read-only agent method attempted a side effect"),
+            "{mode}: {details}"
+        );
+        assert_ne!(failed.component_revision, target.revision, "{mode}");
+        let value = executor
+            .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
+            .await?;
+        assert_eq!(value.into_typed::<u64>()?, 1, "{mode}");
+    }
+
+    assert_eq!(
+        requests.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the HTTP request must not reach the peer"
+    );
+    let rpc_peer_count = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_key!("ReadonlyAgent", "manual-update-save-rpc-peer"),
+            "get_count",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(
+        rpc_peer_count.into_typed::<u64>()?,
+        0,
+        "the RPC call must not reach the peer"
+    );
     Ok(())
 }
 

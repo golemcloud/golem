@@ -328,53 +328,51 @@ where
         ));
     }
 
-    if !ctx.state.snapshotting_mode {
-        if !executed_live {
-            ctx.state
-                .replay_state
-                .await_card_derivation(card_id, parent)
-                .await?;
-            if let Some(hook) = ctx.replay_admission_hook() {
-                hook.before_runtime_card_audit_lookup(start).await;
-            }
+    if !executed_live {
+        ctx.state
+            .replay_state
+            .await_card_derivation(card_id, parent)
+            .await?;
+        if let Some(hook) = ctx.replay_admission_hook() {
+            hook.before_runtime_card_audit_lookup(start).await;
         }
-        let found = owner.recorded_derivation(start, parent, &created).await?;
-        if !found {
-            if !executed_live {
-                let replay_exhausted = ctx.state.replay_state.at_replay_tail();
-                if !replay_exhausted || ctx.rejects_live_continuation_at_replay_tail() {
-                    return Err(anyhow!(
-                        "replayed runtime permission-card creation {card_id} is missing its CardDerived audit event"
-                    ));
-                }
-                if !ctx
-                    .continue_live_at_replay_tail(
-                        replay_exhausted,
-                        format!("repair of runtime-card audit for Start {start}"),
-                    )
-                    .await?
-                {
-                    return Err(anyhow!(
-                        "replay resumed before runtime-card audit repair for Start {start}"
-                    ));
-                }
-            }
-            if !ctx.state.is_live() {
+    }
+    let found = owner.recorded_derivation(start, parent, &created).await?;
+    if !found {
+        if !executed_live {
+            let replay_exhausted = ctx.state.replay_state.at_replay_tail();
+            if !replay_exhausted || ctx.rejects_live_continuation_at_replay_tail() {
                 return Err(anyhow!(
-                    "runtime-card audit repair for Start {start} did not acquire live continuation"
+                    "replayed runtime permission-card creation {card_id} is missing its CardDerived audit event"
                 ));
             }
-            ctx.commit_wallet_entry(OplogEntry::CardDerived {
-                timestamp: Timestamp::now_utc(),
-                entity_parent_start_index: parent,
-                card: Box::new(created.clone()),
-                wallet_generation: 0,
-                transfer_id: None,
-            })
-            .await?;
+            if !ctx
+                .continue_live_at_replay_tail(
+                    replay_exhausted,
+                    format!("repair of runtime-card audit for Start {start}"),
+                )
+                .await?
+            {
+                return Err(anyhow!(
+                    "replay resumed before runtime-card audit repair for Start {start}"
+                ));
+            }
         }
-        ctx.process_pending_replay_events().await?;
+        if !ctx.state.is_live() {
+            return Err(anyhow!(
+                "runtime-card audit repair for Start {start} did not acquire live continuation"
+            ));
+        }
+        ctx.commit_wallet_entry(OplogEntry::CardDerived {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: parent,
+            card: Box::new(created.clone()),
+            wallet_generation: 0,
+            transfer_id: None,
+        })
+        .await?;
     }
+    ctx.process_pending_replay_events().await?;
 
     Ok(Ok(created))
 }
