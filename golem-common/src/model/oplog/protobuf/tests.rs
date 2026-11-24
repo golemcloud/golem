@@ -210,8 +210,29 @@ mod observational_start_proto_tests {
             function_name: HostFunctionName::Custom("wasi:http/outgoing-handler::handle".into()),
             invocation_id: None,
             observational_owner: Some(OplogIndex::from_u64(7)),
+            driver: None,
             request: None,
             durable_function_type: DurableFunctionType::WriteRemote,
+            span_started: None,
+            denial: None,
+        };
+
+        let proto: RawOplogEntry = original.clone().try_into().unwrap();
+        let roundtrip = OplogEntry::try_from(proto).unwrap();
+        assert_eq!(roundtrip, original);
+    }
+
+    #[test]
+    fn driven_start_raw_protobuf_roundtrips() {
+        let original = OplogEntry::Start {
+            timestamp: Timestamp::now_utc().rounded(),
+            parent_start_index: Some(OplogIndex::from_u64(12)),
+            function_name: HostFunctionName::Custom("wasi:http/types::incoming-body::read".into()),
+            invocation_id: None,
+            observational_owner: None,
+            driver: Some(OplogIndex::from_u64(21)),
+            request: None,
+            durable_function_type: DurableFunctionType::ReadRemote,
             span_started: None,
             denial: None,
         };
@@ -229,6 +250,7 @@ mod observational_start_proto_tests {
             function_name: HostFunctionName::KeyvalueEventualSet,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: None,
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,
@@ -275,6 +297,7 @@ mod observational_start_proto_tests {
             function_name: HostFunctionName::Custom("test".into()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: None,
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: Some(Box::new(started)),
@@ -592,6 +615,7 @@ mod successful_update_proto_tests {
                     snapshot_bootstrap,
                 },
                 update_attempt_index: Some(OplogIndex::from_u64(2)),
+                requester: Box::new(crate::model::caller::Caller::anonymous()),
             };
 
             let proto: RawOplogEntry = original.clone().try_into().unwrap();
@@ -918,6 +942,7 @@ pub(crate) mod replay_divergence_tests {
             parent_start_index: Some(OplogIndex::from_u64(4)),
             invocation_id: Some(DurableInvocationId::new(OplogIndex::from_u64(2), 3)),
             observational_owner: Some(OplogIndex::from_u64(5)),
+            driver: None,
             carries_request: true,
             request: request
                 .map(|request| Box::new(request.to_string().into_typed_schema_value().unwrap())),
@@ -934,6 +959,7 @@ pub(crate) mod replay_divergence_tests {
                     parent_start_index: None,
                     invocation_id: None,
                     observational_owner: None,
+                    driver: None,
                     carries_request: false,
                     ..host_call("rpc::invoke", Some("replayed"))
                 }),

@@ -370,7 +370,7 @@ pub(super) async fn prepare_tool_call<U, Ctx>(
     stderr_requested: bool,
     call_mode: EntityCallMode,
     pinned_activation: Option<Arc<ToolActivationSnapshot>>,
-    caller: Option<Caller>,
+    caller: Caller,
 ) -> anyhow::Result<ToolCallPreparation>
 where
     U: Send + 'static,
@@ -682,7 +682,6 @@ where
     let descriptor = EntityInvocationDescriptor::Tool(descriptor);
     let operation = accessor.with(|mut access| {
         let ctx = access.get();
-        let caller = caller.unwrap_or_else(|| ctx.invocation_caller());
         ctx.owner_execution
             .tool_operations()
             .create(operation::OwnerToolOperationContext {
@@ -717,7 +716,7 @@ pub(super) async fn dispatch_tool_attempt<U, Ctx>(
     has_stderr: bool,
     call_mode: EntityCallMode,
     pinned_activation: Option<Arc<ToolActivationSnapshot>>,
-    caller: Option<Caller>,
+    caller: Caller,
     attachment_counterparty: ToolAttachmentCounterparty,
 ) -> anyhow::Result<ToolCallDispatch>
 where
@@ -857,6 +856,15 @@ where
     U: Send + 'static,
     Ctx: WorkerCtx,
 {
+    // A tool that the code of this Store calls sees it as the immediate caller. A middleware's
+    // call of its next layer keeps the middleware's own caller: no middleware changes the roles.
+    let caller = accessor.with(|mut access| {
+        let ctx = access.get();
+        match &target {
+            ToolCallTarget::Ambient(_) => ctx.outgoing_caller(),
+            ToolCallTarget::Underlying(_) => ctx.invocation_caller(),
+        }
+    });
     let attempt = read_tool_attempt(accessor, target, input)?;
     dispatch_tool_attempt(
         accessor,
@@ -867,7 +875,7 @@ where
         has_stderr,
         call_mode,
         None,
-        None,
+        caller,
         ToolAttachmentCounterparty::Guest,
     )
     .await
@@ -1020,6 +1028,7 @@ where
                             accessor,
                             response,
                             crate::durable_host::concurrent::InvocationIdSource::GuestImport,
+                            None,
                         )
                         .await
                     },
@@ -1032,6 +1041,7 @@ where
         accessor,
         response,
         crate::durable_host::concurrent::InvocationIdSource::GuestImport,
+        None,
     )
     .await
 }

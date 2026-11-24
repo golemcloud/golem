@@ -89,6 +89,7 @@ impl GatedArchive {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogArchive for GatedArchive {
     async fn read_source(
         &self,

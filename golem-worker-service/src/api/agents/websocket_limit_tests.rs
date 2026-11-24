@@ -64,6 +64,7 @@ async fn spawn_agents_api(
             idempotency_key: None,
             oplog_index: None,
             agent_fingerprint: None,
+            background_failure: None,
         },
         AgentConstructorSchema {
             name: None,

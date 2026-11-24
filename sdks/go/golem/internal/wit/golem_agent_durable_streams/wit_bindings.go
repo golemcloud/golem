@@ -303,17 +303,17 @@ func (self *DurableStreamReader) Read(request DurableStreamReadRequest) witTypes
 	returnArea := uintptr(witRuntime.Allocate(pinner, (56 + 4*4), 8))
 	params := witRuntime.Allocate(pinner, (10 * 4), 4)
 	*(*int32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 0)), 0)) = (self).Handle()
-	wasm_lower_1_t528(pinner, request, unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 4)), 0))
+	wasm_lower_1_t545(pinner, request, unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 4)), 0))
 
 	witAsync.SubtaskWait(uint32(wasm_import_method_durable_stream_reader_read(uintptr(params), returnArea)))
 	var result1 witTypes.Result[DurableStreamBatch, DurableStreamError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result := wasm_lift_1_t530(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result := wasm_lift_1_t547(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result1 = witTypes.Ok[DurableStreamBatch, DurableStreamError](result)
 	case 1:
-		result0 := wasm_lift_1_t537(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result0 := wasm_lift_1_t554(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result1 = witTypes.Err[DurableStreamBatch, DurableStreamError](result0)
 	default:
@@ -367,17 +367,17 @@ func (self *DurableStreamWriter) Append(request DurableStreamAppendRequest) witT
 	returnArea := uintptr(witRuntime.Allocate(pinner, (64 + 2*4), 8))
 	params := witRuntime.Allocate(pinner, (32 + 2*4), 8)
 	*(*int32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 0)), 0)) = (self).Handle()
-	wasm_lower_1_t533(pinner, request, unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 8)), 0))
+	wasm_lower_1_t550(pinner, request, unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 8)), 0))
 
 	witAsync.SubtaskWait(uint32(wasm_import_method_durable_stream_writer_append(uintptr(params), returnArea)))
 	var result1 witTypes.Result[DurableStreamAppendReceipt, DurableStreamError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result := wasm_lift_1_t534(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result := wasm_lift_1_t551(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result1 = witTypes.Ok[DurableStreamAppendReceipt, DurableStreamError](result)
 	case 1:
-		result0 := wasm_lift_1_t537(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result0 := wasm_lift_1_t554(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result1 = witTypes.Err[DurableStreamAppendReceipt, DurableStreamError](result0)
 	default:
@@ -389,8 +389,8 @@ func (self *DurableStreamWriter) Append(request DurableStreamAppendRequest) witT
 }
 
 //go:noinline
-func wasm_lower_1_t528(pinner *runtime.Pinner, value DurableStreamReadRequest, dst unsafe.Pointer) {
-	wasm_lower_1_t526(pinner, (value).Checkpoint, unsafe.Add(unsafe.Pointer(dst), 0))
+func wasm_lower_1_t545(pinner *runtime.Pinner, value DurableStreamReadRequest, dst unsafe.Pointer) {
+	wasm_lower_1_t543(pinner, (value).Checkpoint, unsafe.Add(unsafe.Pointer(dst), 0))
 	*(*int8)(unsafe.Add(unsafe.Pointer(dst), (5 * 4))) = int8(int32((value).Transport))
 
 	switch (value).ContentType.Tag() {
@@ -412,16 +412,16 @@ func wasm_lower_1_t528(pinner *runtime.Pinner, value DurableStreamReadRequest, d
 }
 
 //go:noinline
-func wasm_lift_1_t530(src unsafe.Pointer) DurableStreamBatch {
+func wasm_lift_1_t547(src unsafe.Pointer) DurableStreamBatch {
 	value0 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
-	result := wasm_lift_1_t526(unsafe.Add(unsafe.Pointer(src), (4 * 4)))
+	result := wasm_lift_1_t543(unsafe.Add(unsafe.Pointer(src), (4 * 4)))
 
 	return DurableStreamBatch{Payload: value0, ContentType: value1, Next: result, UpToDate: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (9 * 4)))) != 0), Closed: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (1 + 9*4)))) != 0)}
 }
 
 //go:noinline
-func wasm_lift_1_t537(src unsafe.Pointer) DurableStreamError {
+func wasm_lift_1_t554(src unsafe.Pointer) DurableStreamError {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
 	var option witTypes.Option[uint64]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 2*4)))) {
@@ -461,8 +461,8 @@ func wasm_lift_1_t537(src unsafe.Pointer) DurableStreamError {
 }
 
 //go:noinline
-func wasm_lower_1_t533(pinner *runtime.Pinner, value DurableStreamAppendRequest, dst unsafe.Pointer) {
-	wasm_lower_1_t532(pinner, (value).Payload, unsafe.Add(unsafe.Pointer(dst), 0))
+func wasm_lower_1_t550(pinner *runtime.Pinner, value DurableStreamAppendRequest, dst unsafe.Pointer) {
+	wasm_lower_1_t549(pinner, (value).Payload, unsafe.Add(unsafe.Pointer(dst), 0))
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), (8 + 2*4))) = int64((value).Sequence)
 	var result int32
 	if (value).Close {
@@ -475,7 +475,7 @@ func wasm_lower_1_t533(pinner *runtime.Pinner, value DurableStreamAppendRequest,
 }
 
 //go:noinline
-func wasm_lift_1_t534(src unsafe.Pointer) DurableStreamAppendReceipt {
+func wasm_lift_1_t551(src unsafe.Pointer) DurableStreamAppendReceipt {
 	var option witTypes.Option[string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -493,7 +493,7 @@ func wasm_lift_1_t534(src unsafe.Pointer) DurableStreamAppendReceipt {
 }
 
 //go:noinline
-func wasm_lower_1_t526(pinner *runtime.Pinner, value DurableStreamCheckpoint, dst unsafe.Pointer) {
+func wasm_lower_1_t543(pinner *runtime.Pinner, value DurableStreamCheckpoint, dst unsafe.Pointer) {
 	utf8 := unsafe.Pointer(unsafe.StringData((value).Offset))
 	pinner.Pin(utf8)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).Offset)))
@@ -518,7 +518,7 @@ func wasm_lower_1_t526(pinner *runtime.Pinner, value DurableStreamCheckpoint, ds
 }
 
 //go:noinline
-func wasm_lift_1_t526(src unsafe.Pointer) DurableStreamCheckpoint {
+func wasm_lift_1_t543(src unsafe.Pointer) DurableStreamCheckpoint {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	var option witTypes.Option[string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))) {
@@ -537,7 +537,7 @@ func wasm_lift_1_t526(src unsafe.Pointer) DurableStreamCheckpoint {
 }
 
 //go:noinline
-func wasm_lower_1_t532(pinner *runtime.Pinner, value DurableStreamAppendPayload, dst unsafe.Pointer) {
+func wasm_lower_1_t549(pinner *runtime.Pinner, value DurableStreamAppendPayload, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case DurableStreamAppendPayloadJson:

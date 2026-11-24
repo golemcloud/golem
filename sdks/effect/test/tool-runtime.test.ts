@@ -99,6 +99,16 @@ it("preserves tool endpoint options and rejects agent admission", () => {
   })
   expect(() => Http.compileToolHttp(Http.post("/events", { auth: true }))).toThrow("export")
   expect(() => Http.compileToolMount(Http.mount("/{agent-type}"))).toThrow("system variables")
+  for (const mount of [
+    Http.mount("/reports", { agentIdBinding: Http.agentId.query("instance") }),
+    Http.mount("/reports/{instance}", {
+      agentIdBinding: Http.agentId.path("instance"),
+      createRoute: "/reports",
+    }),
+    { ...Http.mount("/reports"), createRoute: [] },
+  ]) {
+    expect(() => Http.compileToolMount(mount)).toThrow("only a path")
+  }
 })
 
 const input = () => {

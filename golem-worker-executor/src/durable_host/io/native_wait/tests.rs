@@ -13,19 +13,17 @@
 // limitations under the License.
 
 use super::*;
-use crate::durable_host::io::poll::wait_tcp_connect;
 use crate::durable_host::io::streams::interruptible_tcp_input;
 use crate::durable_host::tool::operation::OwnerToolOperations;
 use crate::model::ExecutionStatus;
 use golem_common::model::Timestamp;
 use golem_common::model::agent::AgentMode;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use test_r::test;
 use tokio_util::sync::CancellationToken;
 use wasmtime::component::{Resource, ResourceTable};
 use wasmtime_wasi::StreamError;
-use wasmtime_wasi::p2::bindings::io::poll::HostPollable;
 use wasmtime_wasi::p2::bindings::io::streams::{
     HostInputStream, HostOutputStream, InputStream, OutputStream,
 };
@@ -124,66 +122,6 @@ enum Order {
     CompletionFirst,
 }
 
-#[derive(Default)]
-struct ReadinessObserved {
-    pending: AtomicUsize,
-    completed: AtomicUsize,
-    dropped: AtomicUsize,
-}
-
-struct ControlledReadiness {
-    ready: tokio::sync::oneshot::Receiver<()>,
-    observed: Arc<ReadinessObserved>,
-}
-
-#[async_trait::async_trait]
-impl wasmtime_wasi::Pollable for ControlledReadiness {
-    async fn ready(&mut self) {
-        struct Read(Arc<ReadinessObserved>);
-        impl Drop for Read {
-            fn drop(&mut self) {
-                self.0.dropped.fetch_add(1, Ordering::SeqCst);
-            }
-        }
-        let _read = Read(self.observed.clone());
-        std::future::poll_fn(|cx| {
-            let result = Pin::new(&mut self.ready).poll(cx);
-            if result.is_pending() {
-                self.observed.pending.fetch_add(1, Ordering::SeqCst);
-            }
-            result
-        })
-        .await
-        .unwrap();
-        self.observed.completed.fetch_add(1, Ordering::SeqCst);
-    }
-}
-
-struct PendingReadiness;
-
-#[async_trait::async_trait]
-impl wasmtime_wasi::Pollable for PendingReadiness {
-    async fn ready(&mut self) {
-        std::future::pending::<()>().await;
-    }
-}
-
-fn pending_pollable() -> (wasmtime_wasi::IoCtx, ResourceTable, u32) {
-    let (_, io_ctx, mut table) = crate::wasi_host::create_context(
-        &[] as &[&str],
-        std::io::empty(),
-        std::io::empty(),
-        std::io::empty(),
-        |duration| wasmtime::Error::from(crate::durable_host::SuspendForSleep(duration)),
-        None,
-        None,
-    )
-    .unwrap();
-    let parent = table.push(PendingReadiness).unwrap();
-    let pollable = wasmtime_wasi::subscribe(&mut table, parent, None).unwrap();
-    (io_ctx, table, pollable.rep())
-}
-
 fn assert_interrupt(result: wasmtime::Result<()>) {
     let error = result.expect_err("native connect wait must trap");
     assert!(
@@ -193,206 +131,6 @@ fn assert_interrupt(result: wasmtime::Result<()>) {
         ),
         "expected typed InterruptKind::Interrupt, got {error:?}"
     );
-}
-
-#[test]
-async fn native_connect_observes_deadline_before_subscription() {
-    let sources = Sources::running();
-    sources.invocation_deadline.store(true, Ordering::Release);
-    assert!(
-        sources
-            .signal
-            .send(InterruptKind::Interrupt(Timestamp::now_utc()))
-            .is_err()
-    );
-    let (mut io_ctx, mut table, rep) = pending_pollable();
-    let mut io = wasmtime_wasi::IoData {
-        table: &mut table,
-        io_ctx: &mut io_ctx,
-    };
-    let wait = wait_tcp_connect(
-        NativeIoWait::new(sources.borrow()),
-        HostPollable::block(&mut io, Resource::new_borrow(rep)),
-    );
-    tokio::pin!(wait);
-    let std::task::Poll::Ready(result) = futures::poll!(wait.as_mut()) else {
-        panic!("latched deadline was missed by the native connect subscription");
-    };
-    assert_interrupt(result);
-    assert!(sources.status.read().unwrap().is_running());
-}
-
-#[test]
-async fn native_connect_preserves_lifecycle_kind_over_entity_cancellation() {
-    let sources = Sources::running();
-    sources.cancellation.cancel();
-    let expected = sources.trigger(Source::Lifecycle).unwrap();
-    let (mut io_ctx, mut table, rep) = pending_pollable();
-    let mut io = wasmtime_wasi::IoData {
-        table: &mut table,
-        io_ctx: &mut io_ctx,
-    };
-    let mut wait = Box::pin(wait_tcp_connect(
-        NativeIoWait::new(sources.borrow()),
-        HostPollable::block(&mut io, Resource::new_borrow(rep)),
-    ));
-    let std::task::Poll::Ready(result) = futures::poll!(wait.as_mut()) else {
-        panic!("published lifecycle stop must be ready");
-    };
-    assert_eq!(
-        result.unwrap_err().downcast_ref::<InterruptKind>(),
-        Some(&expected)
-    );
-}
-
-async fn check_connect(source: Source, order: Order) {
-    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
-        for loading in [false, true] {
-            let sources = Sources::new(mode, loading);
-            let (_, mut io_ctx, mut table) = crate::wasi_host::create_context(
-                &[] as &[&str],
-                std::io::empty(),
-                std::io::empty(),
-                std::io::empty(),
-                |duration| wasmtime::Error::from(crate::durable_host::SuspendForSleep(duration)),
-                None,
-                None,
-            )
-            .unwrap();
-            let observed = Arc::new(ReadinessObserved::default());
-            let (ready, receive) = tokio::sync::oneshot::channel();
-            let native = table
-                .push(ControlledReadiness {
-                    ready: receive,
-                    observed: observed.clone(),
-                })
-                .unwrap();
-            let native_rep = native.rep();
-            let pollable = wasmtime_wasi::subscribe(
-                &mut table,
-                Resource::<ControlledReadiness>::new_borrow(native_rep),
-                None,
-            )
-            .unwrap();
-            let borrowed = sources.borrow();
-            let mut expected = None;
-            if matches!(order, Order::BeforeSubscription) {
-                assert_eq!(sources.signal.receiver_count(), 0);
-                expected = sources.trigger(source);
-            }
-            let mut io = wasmtime_wasi::IoData {
-                table: &mut table,
-                io_ctx: &mut io_ctx,
-            };
-            let mut wait = Box::pin(wait_tcp_connect(
-                NativeIoWait::new(borrowed),
-                HostPollable::block(&mut io, Resource::new_borrow(pollable.rep())),
-            ));
-            let result = match order {
-                Order::BeforeSubscription => {
-                    let std::task::Poll::Ready(result) = futures::poll!(wait.as_mut()) else {
-                        panic!("native connect missed cancellation before subscription");
-                    };
-                    result
-                }
-                Order::DuringWait | Order::CompletionFirst => {
-                    assert!(futures::poll!(wait.as_mut()).is_pending());
-                    assert!(observed.pending.load(Ordering::SeqCst) > 0);
-                    assert_eq!(observed.completed.load(Ordering::SeqCst), 0);
-                    assert_eq!(observed.dropped.load(Ordering::SeqCst), 0);
-                    if matches!(order, Order::CompletionFirst) {
-                        ready.send(()).unwrap();
-                    } else {
-                        expected = sources.trigger(source);
-                    }
-                    let std::task::Poll::Ready(result) = futures::poll!(wait.as_mut()) else {
-                        panic!("native connect did not observe its selected event");
-                    };
-                    result
-                }
-            };
-            drop(wait);
-            if matches!(order, Order::CompletionFirst) {
-                result.unwrap();
-                assert_eq!(observed.completed.load(Ordering::SeqCst), 1);
-                sources.trigger(source);
-            } else {
-                let error = result.unwrap_err();
-                if matches!(order, Order::DuringWait)
-                    || matches!(source, Source::Lifecycle | Source::EntityCancellation)
-                {
-                    if let Some(expected) = expected {
-                        assert_eq!(error.downcast_ref::<InterruptKind>(), Some(&expected));
-                    } else {
-                        assert_interrupt(Err(error));
-                    }
-                } else {
-                    assert_interrupt(Err(error));
-                }
-                assert_eq!(observed.completed.load(Ordering::SeqCst), 0);
-            }
-            if !matches!(source, Source::Lifecycle) {
-                assert!(matches!(
-                    &*sources.status.read().unwrap(),
-                    ExecutionStatus::Running { .. } | ExecutionStatus::Loading { .. }
-                ));
-            }
-            if observed.pending.load(Ordering::SeqCst) > 0 {
-                assert_eq!(observed.dropped.load(Ordering::SeqCst), 1);
-            }
-            assert!(matches!(
-                io.table
-                    .delete(Resource::<ControlledReadiness>::new_own(native_rep)),
-                Err(wasmtime::component::ResourceTableError::HasChildren)
-            ));
-            HostPollable::drop(&mut io, Resource::new_own(pollable.rep())).unwrap();
-            table
-                .delete(Resource::<ControlledReadiness>::new_own(native_rep))
-                .unwrap();
-        }
-    }
-}
-
-#[test]
-async fn native_connect_observes_entity_cancellation_before_subscription() {
-    check_connect(Source::EntityCancellation, Order::BeforeSubscription).await;
-}
-
-#[test]
-async fn native_connect_interrupts_pending_entity_cancellation() {
-    check_connect(Source::EntityCancellation, Order::DuringWait).await;
-}
-
-#[test]
-async fn native_connect_interrupts_pending_deadline() {
-    check_connect(Source::InvocationDeadline, Order::DuringWait).await;
-}
-
-#[test]
-async fn native_connect_observes_tail_deadline_before_subscription() {
-    check_connect(Source::TailDeadline, Order::BeforeSubscription).await;
-}
-
-#[test]
-async fn native_connect_observes_lifecycle_stop_before_subscription() {
-    check_connect(Source::Lifecycle, Order::BeforeSubscription).await;
-}
-
-#[test]
-async fn native_connect_interrupts_actual_native_pending() {
-    check_connect(Source::Lifecycle, Order::DuringWait).await;
-}
-
-#[test]
-async fn native_connect_completion_precedes_later_stop() {
-    for source in [
-        Source::InvocationDeadline,
-        Source::TailDeadline,
-        Source::EntityCancellation,
-        Source::Lifecycle,
-    ] {
-        check_connect(source, Order::CompletionFirst).await;
-    }
 }
 
 async fn observe_input(

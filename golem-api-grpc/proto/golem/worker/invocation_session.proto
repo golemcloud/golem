@@ -54,6 +54,10 @@ message InvocationStart {
   // runs. Required when the request may create the agent: a key target, an ID target
   // with `constructor`, or an `external_tool` with `fresh_owner`.
   optional golem.component.ComponentId component_id = 22;
+  // Schema-independent method carrier. Mutually exclusive with input.
+  optional bytes captured_method_input = 24;
+  // Logical method API capability; independent of Await and this RPC's transport.
+  bool allow_streams = 25;
 }
 
 message ExternalToolInvocation {
@@ -244,6 +248,8 @@ message InvocationAccepted {
   // Requested output cursors verified against durable history to already name a terminal.
   // No suffix or repeated terminal is sent for these streams on this attachment.
   repeated golem.common.UUID terminal_cursor_stream_ids = 14;
+  // Original method carrier, so a resumed public adapter can restore provisional references.
+  optional bytes captured_method_input = 15;
 }
 
 message InvocationSessionResult {
@@ -260,6 +266,9 @@ message InvocationSessionResult {
   optional uint64 oplog_index = 8;
   optional golem.common.UUID agent_fingerprint = 9;
   repeated DurableStreamMapping new_stream_mappings = 10;
+  // Set by a result lookup when the agent gave up during the background work of the invocation,
+  // after it recorded the result: `previous_invocation_failed` or `previous_invocation_exited`.
+  optional golem.worker.v1.WorkerExecutionError background_failure = 12;
 }
 
 enum InvocationRejectionReason {
@@ -335,5 +344,7 @@ message InvocationResponse {
     InputStreamAck input_ack = 7;
     AttachmentRevoked attachment_revoked = 9;
     InvocationSessionCompletion finished = 10;
+    // Selected revision and bindings, after a queued acceptance without a revision.
+    InvocationAccepted ready = 11;
   }
 }

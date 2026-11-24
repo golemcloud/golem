@@ -21,7 +21,8 @@ use test_r::{inherit_test_dep, test, timeout};
 inherit_test_dep!(Tracing);
 
 /// A Go agent reads the caller of each invocation from its context: the CLI's account for a
-/// call from the CLI, the calling agent for a call over RPC.
+/// call from the CLI. A call over RPC keeps the CLI's account as the original caller and has the
+/// calling agent as the immediate one.
 #[test]
 #[timeout("15 minutes")]
 async fn test_go_principal() {
@@ -88,8 +89,8 @@ async fn test_go_principal() {
     let direct = invoke("LedgerAgent(\"direct\")", "whoami", &[]).await;
     assert!(direct.contains("method=account agent=account"), "{direct}");
 
-    // A relay creates the second ledger over RPC: both principals are the relay, named by its
-    // agent ID.
+    // A relay creates the second ledger over RPC: the relay is the immediate caller and the
+    // CLI's account stays the original one.
     let created = invoke("RelayAgent(\"r\")", "ask", &["\"created\""]).await;
     let relay = ctx
         .cli([
@@ -108,14 +109,73 @@ async fn test_go_principal() {
         .find_map(|document| document["metadata"]["agentId"].as_str().map(str::to_string))
         .expect("agent get prints the agent ID");
     assert!(
-        created.contains(&format!("method=agent:{relay_id} agent=agent:{relay_id}")),
+        created.contains(&format!("method=agent:{relay_id} agent=account")),
         "{created}"
     );
 
-    // Calling the CLI's ledger through the relay makes the relay the caller, in both roles.
+    // Calling the CLI's ledger through the relay makes the relay the immediate caller; the
+    // original caller is still the CLI's account.
     let relayed = invoke("RelayAgent(\"r\")", "ask", &["\"direct\""]).await;
     assert!(
-        relayed.contains(&format!("method=agent:{relay_id} agent=golem-user")),
+        relayed.contains(&format!("method=agent:{relay_id} agent=account")),
         "{relayed}"
     );
+
+    // The oplog of the CLI's ledger shows the roles of each invocation: the CLI's account in
+    // both roles for its own call, and the account with the relay as the immediate caller for
+    // the relayed one.
+    let oplog = ctx
+        .cli([cmd::AGENT, "oplog", "LedgerAgent(\"direct\")"])
+        .await;
+    assert!(oplog.success_or_dump());
+    let text = oplog.stdout_text();
+    for expected in [
+        "original caller:   account (",
+        "immediate caller:  account (",
+        "immediate caller:  agent (",
+        "tokens:            none",
+    ] {
+        assert!(text.contains(expected), "{expected} in {text}");
+    }
+    // No agent is the original caller: a relayed call keeps the caller that started the chain.
+    assert!(!text.contains("original caller:   agent ("), "{text}");
+    assert!(!text.contains("claims:"), "{text}");
+
+    let json = ctx
+        .cli([
+            cmd::AGENT,
+            "oplog",
+            "LedgerAgent(\"direct\")",
+            flag::FORMAT,
+            "json",
+        ])
+        .await;
+    assert!(json.success_or_dump());
+    let callers = json
+        .stdout_json::<serde_json::Value>()
+        .into_iter()
+        .filter_map(|entry| entry["entry"]["invocation"].get("caller").cloned())
+        .collect::<Vec<_>>();
+    assert!(
+        callers
+            .iter()
+            .any(|caller| caller["original"]["kind"] == "account"),
+        "{callers:?}"
+    );
+    for caller in &callers {
+        assert_eq!(caller["tokens"], serde_json::json!([]), "{caller}");
+        assert!(caller["original"].get("claims").is_none(), "{caller}");
+    }
+
+    // Account and agent callers have no claims, also when the reader asks for them.
+    let with_claims = ctx
+        .cli([
+            cmd::AGENT,
+            "oplog",
+            "LedgerAgent(\"direct\")",
+            "--show-claims",
+        ])
+        .await;
+    assert!(with_claims.success_or_dump());
+    assert!(!with_claims.stdout_text().contains("claims:"));
 }

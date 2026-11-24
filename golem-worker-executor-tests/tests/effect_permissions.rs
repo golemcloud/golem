@@ -201,6 +201,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
         &self,
         target: &ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -214,6 +215,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
             .prepare(
                 target,
                 method_name,
+                invocation,
                 caller_agent_id,
                 caller_env,
                 caller_stack,
@@ -333,6 +335,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
         target_revision: ComponentRevision,
         mode: UpdateMode,
         disable_wakeup: bool,
+        requester: golem_common::model::caller::Caller,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         self.inner
@@ -341,6 +344,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
                 target_revision,
                 mode,
                 disable_wakeup,
+                requester,
                 auth_ctx,
             )
             .await
@@ -414,11 +418,11 @@ impl WorkerProxy for LoopbackCardTransferProxy {
         target: &golem_common::model::OwnedAgentId,
         key: golem_common::model::InvocationId,
         receipt: golem_common::model::agent::ScheduleId,
-        owner: &AgentId,
+        canceller: &golem_common::model::caller::Principal,
         auth: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         self.inner
-            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
             .await
     }
 
@@ -447,6 +451,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
         first_entry_index: OplogIndex,
         entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
         auth_ctx: &AuthCtx,
+        caller: &golem_common::model::caller::Caller,
     ) -> Result<(), WorkerProxyError> {
         self.inner
             .process_oplog_entries(
@@ -461,6 +466,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
                 first_entry_index,
                 entries,
                 auth_ctx,
+                caller,
             )
             .await
     }

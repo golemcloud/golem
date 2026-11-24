@@ -281,6 +281,10 @@ Path|Method|Protected
 ---|---|---
 `/v1/runtime/envs/{environment_id}/agents/{agent_id}/oplog`|GET|Yes
 
+Each recorded invocation shows its caller: the principal that started the chain, the
+principal that made the call, and the tokens presented at the entry point. With
+`include=claims`, the users among the callers also show their verified claims.
+
 **Query Parameters**
 
 Name|Type|Required|Description
@@ -289,6 +293,7 @@ from|integer|No|-
 count|integer|Yes|-
 cursor|#/components/schemas/OplogCursor|No|-
 query|string|No|-
+include|#/components/schemas/OplogInclude|No|-
 expectedFingerprint|string|No|-
 to|integer|No|The inclusive last index of a range read. Requires `from` and no `query`.
 scanEntries|integer|No|The remaining entry allowance of a range read. Goes with `scanMillis`.
@@ -426,13 +431,15 @@ Path|Method|Protected
 Oplog pages omit entries whose encoded form is larger than a server limit, and describe
 them by their type, timestamp, size and component revision. This endpoint returns such an
 entry in full. Pass the component revision of the description to save the server from
-scanning the oplog for it.
+scanning the oplog for it. With `include=claims`, the users among the callers also show
+their verified claims.
 
 **Query Parameters**
 
 Name|Type|Required|Description
 ---|---|---|---
 component_revision|integer|No|-
+include|#/components/schemas/OplogInclude|No|-
 expectedFingerprint|string|No|-
 
 **Example Response JSON**
@@ -723,29 +730,6 @@ expectedFingerprint|string|No|-
 ```json copy
 {
   "agentId": "bc309ecf-5f66-4057-93c5-6611cc9cb7b2"
-}
-```
-
-## Cancels a pending invocation if it has not started yet
-
-Path|Method|Protected
----|---|---
-`/v1/runtime/envs/{environment_id}/agents/{agent_id}/invocations/{idempotency_key}`|DELETE|Yes
-
-The invocation to be cancelled is identified by the idempotency key returned when the
-invoke API accepted it.
-
-**Query Parameters**
-
-Name|Type|Required|Description
----|---|---|---
-expectedFingerprint|string|No|-
-
-**Example Response JSON**
-
-```json copy
-{
-  "canceled": true
 }
 ```
 

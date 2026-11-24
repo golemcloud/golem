@@ -19,6 +19,7 @@ mod custom_api;
 mod fork;
 mod gol40_chunk_g_environment_resolution_acceptance;
 mod invocation_context;
+mod invocations;
 mod otlp_plugin;
 mod owner_environment_resolution;
 mod permissions;
@@ -26,6 +27,13 @@ mod plugins;
 mod quota;
 mod rich_types;
 mod worker;
+
+#[cfg(unix)]
+#[path = "platform/unix.rs"]
+mod platform;
+#[cfg(not(unix))]
+#[path = "platform/non_unix.rs"]
+mod platform;
 
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 #[allow(unused_imports)]
@@ -105,10 +113,7 @@ static TRACING_INIT: Once = Once::new();
 impl Tracing {
     pub fn init() -> Self {
         TRACING_INIT.call_once(|| {
-            #[cfg(unix)]
-            unsafe {
-                backtrace_on_stack_overflow::enable()
-            };
+            platform::enable_stack_overflow_backtrace();
             init_tracing_with_default_debug_env_filter(
                 &TracingConfig::test_pretty_without_time("integration-tests").with_env_overrides(),
             );

@@ -53,7 +53,7 @@ use crate::worker::{
     StartupFailure, UnloadReason, UnloadRequest, Worker, WorkerCommand, WorkerDeletionHook,
     WorkerTrace,
 };
-use crate::workerctx::{PublicWorkerIo, UpdateManagement, WorkerCtx};
+use crate::workerctx::{PublicWorkerIo, ResultRecordedAt, UpdateManagement, WorkerCtx};
 use async_lock::Mutex;
 use futures::FutureExt;
 use futures::channel::oneshot::{self, Sender};
@@ -1118,11 +1118,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     let decision = interrupt.retry_decision();
                                     debug!(%agent_id, ?decision, "Invocation queue loop interrupted during delayed retry");
                                     if !matches!(kind, InterruptKind::Restart) {
-                                        let current_idempotency_key = self
-                                            .parent
-                                            .get_last_known_status()
-                                            .await
-                                            .current_idempotency_key;
+                                        let status = self.parent.get_last_known_status().await;
                                         let recorded = match kind {
                                             InterruptKind::EntityCancellation => unreachable!("entity cancellation cannot interrupt the owner"),
                                             InterruptKind::Suspend(_) => {
@@ -1142,7 +1138,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             break 'outer;
                                         }
                                         if matches!(kind, InterruptKind::Interrupt(_))
-                                            && let Some(key) = current_idempotency_key
+                                            && let Some(key) = status.current_idempotency_key().copied()
                                         {
                                             self.parent
                                                 .store_invocation_failure(
@@ -1155,6 +1151,18 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                                 &key,
                                                 retry_was_live,
                                             );
+                                        } else if matches!(kind, InterruptKind::Interrupt(_))
+                                            && status.settling_invocation.is_some()
+                                        {
+                                            // Like an interrupt of the running drain, this fails
+                                            // the queued invocations and keeps the recorded
+                                            // result, which is no longer the current invocation.
+                                            self.parent
+                                                .store_queued_invocation_failures(
+                                                    status.settling_invocation.as_ref(),
+                                                    &TrapType::Interrupt(kind),
+                                                )
+                                                .await;
                                         }
                                     }
                                     match decision {

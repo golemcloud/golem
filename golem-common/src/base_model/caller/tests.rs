@@ -477,3 +477,37 @@ fn recorded_callers_are_equal_only_when_every_field_is_the_same_record() {
     assert!(!Principal::Anonymous.equals(&Principal::Anonymous));
     assert_eq!(Caller::anonymous(), Caller::anonymous());
 }
+
+#[test]
+fn caller_propagation_keeps_the_original_and_the_tokens() {
+    use super::Caller;
+    use super::test_support::{
+        agent_principal, original_claims_json, sample_caller, tool_principal, user_principal,
+    };
+
+    let user = Caller {
+        original: user_principal(),
+        immediate: user_principal(),
+        tokens: sample_caller().tokens,
+    };
+
+    let by_agent = user.propagate(agent_principal());
+    assert!(by_agent.original.same_record(&user.original));
+    assert_eq!(original_claims_json(&by_agent), original_claims_json(&user));
+    assert!(by_agent.immediate.same_record(&agent_principal()));
+    assert_eq!(by_agent.tokens, user.tokens);
+
+    let by_tool = by_agent.propagate(tool_principal());
+    assert!(by_tool.original.same_record(&user.original));
+    assert_eq!(original_claims_json(&by_tool), original_claims_json(&user));
+    assert!(by_tool.immediate.same_record(&tool_principal()));
+    assert_eq!(by_tool.tokens, user.tokens);
+
+    // The caller that propagates is left as it was.
+    assert!(by_agent.immediate.same_record(&agent_principal()));
+
+    // Both roles survive the stored form.
+    let bytes = desert_rust::serialize_to_byte_vec(&by_tool).unwrap();
+    let decoded: Caller = desert_rust::deserialize(&bytes).unwrap();
+    assert_eq!(decoded, by_tool);
+}

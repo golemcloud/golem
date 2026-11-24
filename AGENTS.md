@@ -194,6 +194,7 @@ Load these skills for guided workflows on complex tasks:
 | `golem-skill-harness` | Developing, testing, and running Golem skill tests with the skill test harness |
 | `managing-docs-versions` | Cutting a new docs version, backporting fixes to older releases, and managing versioned content under `docs/src/content/` |
 | `pre-pr-checklist` | Final checks before submitting a pull request |
+| `verifying-merged-branches` | Checking a merge or rebase for reverted changes and building every project it touched |
 
 ## Before Submitting a PR
 
@@ -202,6 +203,14 @@ Validate the smallest dependency and behavior scope that fully covers the change
 When changing SDK code generation, guest bridge generation, canonical ABI wrappers, runtime retention, or release profiles, run `cargo make component-size-report` (add `--optimize` for the per-core `wasm-opt` comparison, which needs Binaryen). It runs the `report` subcommand of `golem-size-analysis`, which builds representative fixtures, checks the export and reflection retention contracts, and writes `tmp/component-size-report/report.md` plus machine-readable details. Compare reports only when the toolchain, lockfile, Cargo configuration, and environment are identical. This is a local analysis capability, not a CI size gate. To measure one component and its Rule 2 breakdown, use `cargo run -p golem-size-analysis -- collect`; see `test-components/size-analysis/README.md`.
 
 Do not run `cargo make fix` by default. It mutates the entire root and `dev-tools` workspaces and does not validate the separately built SDKs. Use scoped auto-fix commands only when needed, and inspect their diff afterward.
+
+Clippy's `--all-targets` covers Cargo targets, not operating systems. Before accepting an
+unused-import or dead-code fix, inspect references behind `#[cfg]`, including test modules.
+When an item is used only on another platform, gate its import or definition to match its callers
+instead of deleting it or suppressing the lint. Review auto-fix deletions for this case. Changes
+to platform-specific code require compilation on the affected platform before landing; a passing
+host build is not evidence for code excluded on that host. If the user skips checks or the platform
+is unavailable, report that coverage gap explicitly.
 
 Pull requests to `main` run no tests. The continuous `Main validation` workflow validates the latest main commit after merge. Maintenance branches retain full CI.
 

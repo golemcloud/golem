@@ -709,6 +709,7 @@ fn renewal_interval_for(expires_at: Option<Instant>, now: Instant) -> RenewalDel
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ShardManagerService for GrpcShardManagerService {
     fn renew_now(&self) {
         self.renew_now.notify_one();
@@ -793,6 +794,7 @@ impl ShardManagerService for GrpcShardManagerService {
 pub struct ShardManagerServiceSingleShard;
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ShardManagerService for ShardManagerServiceSingleShard {
     async fn register(
         &self,

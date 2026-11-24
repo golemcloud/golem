@@ -284,54 +284,59 @@ fn find_exec_runs_isolated_child_commands() {
     });
 }
 
-#[test]
 #[cfg(unix)]
-fn find_follows_symlinks_only_when_asked_and_detects_loops() {
-    run(async {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("L");
-        std::fs::create_dir_all(root.join("a")).unwrap();
-        std::fs::write(root.join("a/f"), "x").unwrap();
-        std::os::unix::fs::symlink("..", root.join("a/loop")).unwrap();
-        std::os::unix::fs::symlink("../nonexist", root.join("broken")).unwrap();
-        std::os::unix::fs::symlink("a", root.join("tolink")).unwrap();
-        let mut shell = Session::new().await.unwrap();
-        let cd = format!("cd '{}'", dir.path().display());
-        let physical = shell.run(&format!("{cd}; find L -type l | sort")).await;
-        assert_eq!(physical.stdout, b"L/a/loop\nL/broken\nL/tolink\n");
-        let xtype = shell.run(&format!("{cd}; find L -xtype l")).await;
-        assert_eq!(xtype.stdout, b"L/broken\n");
-        let kinds = shell
-            .run(&format!(
-                "{cd}; find L -mindepth 1 -maxdepth 1 -printf '%p %y %Y %l\\n' | sort"
-            ))
-            .await;
-        assert_eq!(
-            String::from_utf8_lossy(&kinds.stdout),
-            "L/a d d \nL/broken l N ../nonexist\nL/tolink l d a\n"
-        );
-        let logical = shell.run(&format!("{cd}; find -L L | sort")).await;
-        let status = shell
-            .run(&format!("{cd}; find -L L >/dev/null 2>&1; echo $?"))
-            .await;
-        assert_eq!(status.stdout, b"1\n");
-        assert_eq!(
-            String::from_utf8_lossy(&logical.stdout),
-            "L\nL/a\nL/a/f\nL/broken\nL/tolink\nL/tolink/f\n"
-        );
-        assert_eq!(
-            String::from_utf8_lossy(&logical.stderr),
-            "find: File system loop detected; \u{2018}L/a/loop\u{2019} is part of the same file \
+mod unix {
+    use super::{Session, run};
+    use std::os::unix::fs::symlink;
+
+    #[test]
+    fn find_follows_symlinks_only_when_asked_and_detects_loops() {
+        run(async {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("L");
+            std::fs::create_dir_all(root.join("a")).unwrap();
+            std::fs::write(root.join("a/f"), "x").unwrap();
+            symlink("..", root.join("a/loop")).unwrap();
+            symlink("../nonexist", root.join("broken")).unwrap();
+            symlink("a", root.join("tolink")).unwrap();
+            let mut shell = Session::new().await.unwrap();
+            let cd = format!("cd '{}'", dir.path().display());
+            let physical = shell.run(&format!("{cd}; find L -type l | sort")).await;
+            assert_eq!(physical.stdout, b"L/a/loop\nL/broken\nL/tolink\n");
+            let xtype = shell.run(&format!("{cd}; find L -xtype l")).await;
+            assert_eq!(xtype.stdout, b"L/broken\n");
+            let kinds = shell
+                .run(&format!(
+                    "{cd}; find L -mindepth 1 -maxdepth 1 -printf '%p %y %Y %l\\n' | sort"
+                ))
+                .await;
+            assert_eq!(
+                String::from_utf8_lossy(&kinds.stdout),
+                "L/a d d \nL/broken l N ../nonexist\nL/tolink l d a\n"
+            );
+            let logical = shell.run(&format!("{cd}; find -L L | sort")).await;
+            let status = shell
+                .run(&format!("{cd}; find -L L >/dev/null 2>&1; echo $?"))
+                .await;
+            assert_eq!(status.stdout, b"1\n");
+            assert_eq!(
+                String::from_utf8_lossy(&logical.stdout),
+                "L\nL/a\nL/a/f\nL/broken\nL/tolink\nL/tolink/f\n"
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&logical.stderr),
+                "find: File system loop detected; \u{2018}L/a/loop\u{2019} is part of the same file \
              system loop as \u{2018}L\u{2019}.\nfind: File system loop detected; \
              \u{2018}L/tolink/loop\u{2019} is part of the same file system loop as \
              \u{2018}L\u{2019}.\n"
-        );
-        let command_line = shell.run(&format!("{cd}; find -H L/tolink | sort")).await;
-        assert_eq!(
-            command_line.stdout,
-            b"L/tolink\nL/tolink/f\nL/tolink/loop\n"
-        );
-    });
+            );
+            let command_line = shell.run(&format!("{cd}; find -H L/tolink | sort")).await;
+            assert_eq!(
+                command_line.stdout,
+                b"L/tolink\nL/tolink/f\nL/tolink/loop\n"
+            );
+        });
+    }
 }
 
 #[test]

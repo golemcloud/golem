@@ -357,12 +357,13 @@ impl<Ctx: WorkerCtx> DurableInputLiveAdmission<Ctx> {
     pub(super) async fn run(self, accessor: &Accessor<Ctx>) -> wasmtime::Result<()> {
         let outcome = async {
             loop {
-                let (operation, rejected) = accessor.with(|mut access| {
+                let (operation, rejected, park) = accessor.with(|mut access| {
                     let ctx = access.get().durable_ctx_mut();
                     (
                         ctx.entity_tool_operation(),
                         ctx.rejects_live_continuation_at_replay_tail()
                             .then(|| ctx.state.replay_state.replay_target().next()),
+                        ctx.await_cancelled_body_abort(),
                     )
                 });
                 if let Some(operation) = operation {
@@ -371,6 +372,7 @@ impl<Ctx: WorkerCtx> DurableInputLiveAdmission<Ctx> {
                         .await?;
                 }
                 if let Some(end_of_history) = rejected {
+                    park.await?;
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
                         end_of_history,
                         "end of the recorded consumer journal during completed entity replay",
@@ -434,13 +436,27 @@ impl DurableInputReceiveAdmission {
                             return Ok(None);
                         }
                         if ctx.rejects_live_continuation_at_replay_tail() {
-                            return Err(WorkerExecutorError::unexpected_oplog_entry(ctx.state.replay_state.replay_target().next(), "end of the recorded consumer journal during completed entity replay", format!("durable input observation {}", self.ordinal),
+                            return Err((
+                                ctx.state.replay_state.replay_target().next(),
+                                ctx.await_cancelled_body_abort(),
                             ));
                         }
-                        Ok(Some((ctx.state.replay_state.clone(), ctx.tail_work_tracker().activity())))
-                    })?;
-                    let Some((replay, activity)) = state else {
-                        break;
+                        Ok(Some((
+                            ctx.state.replay_state.clone(),
+                            ctx.tail_work_tracker().activity(),
+                        )))
+                    });
+                    let (replay, activity) = match state {
+                        Ok(Some(state)) => state,
+                        Ok(None) => break,
+                        Err((end_of_history, park)) => {
+                            park.await?;
+                            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                                end_of_history,
+                                "end of the recorded consumer journal during completed entity replay",
+                                format!("durable input observation {}", self.ordinal),
+                            ));
+                        }
                     };
                     replay.await_natural_tail_end(Some(&activity)).await?;
                     let (transition, primary) = accessor.with(|mut access| {

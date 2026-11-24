@@ -1,0 +1,54 @@
+{
+  "tier": "pr",
+  "description": "Several sibling tool calls in one script, through the in-process `probe-tool` fixture.\n\n`probe-tool delay` answers after 100 ms, `fail` at once with status 7. The oracle has no such\ntool, so every case here is a fixture: what bash would do given a command with that behaviour.",
+  "cases": [
+    {
+      "name": "siblings: concurrent calls keep their own statuses",
+      "script": "probe-tool delay >/tmp/d & a=$!; probe-tool fail 2>/tmp/f & b=$!; wait $a; echo a=$?; wait $b; echo b=$?; cat /tmp/d /tmp/f",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "a=0\nb=7\ncompleted:peer=false\nnamed fixture error\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "probe-tool is a fixture of the cooperative example; the oracle has no such command"
+      }
+    },
+    {
+      "name": "siblings: wait -n reports the first call to finish",
+      "script": "probe-tool delay >/dev/null & probe-tool fail 2>/dev/null & wait -n; echo first=$?; wait; echo all=$?",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "first=7\nall=0\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "probe-tool is a fixture of the cooperative example; the oracle has no such command"
+      }
+    },
+    {
+      "name": "siblings: kill cancels one pending call and the other completes",
+      "script": "probe-tool delay >/tmp/k & k=$!; probe-tool delay >/tmp/o & o=$!; kill $k; wait $k; echo killed=$?; wait $o; echo other=$?; cat /tmp/o; cat /tmp/k 2>/dev/null; echo end",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "killed=143\nother=0\ncompleted:peer=false\nend\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "probe-tool is a fixture of the cooperative example; the oracle has no such command"
+      }
+    }
+  ]
+}

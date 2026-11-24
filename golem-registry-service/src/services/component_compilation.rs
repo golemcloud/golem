@@ -88,6 +88,7 @@ impl Debug for GrpcComponentCompilationService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentCompilationService for GrpcComponentCompilationService {
     async fn enqueue_compilation(
         &self,
@@ -161,6 +162,7 @@ impl Debug for DisabledComponentCompilationService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentCompilationService for DisabledComponentCompilationService {
     async fn enqueue_compilation(
         &self,
@@ -193,6 +195,7 @@ mod tests {
     struct CompilationServer;
 
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl GrpcService for CompilationServer {
         async fn enqueue_compilation(
             &self,

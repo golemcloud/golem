@@ -867,6 +867,7 @@ pub struct Application {
     components:
         BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
     agents: BTreeMap<AgentTypeName, WithSource<app_raw::Agent>>,
+    pub(crate) package_agent_defaults: BTreeMap<AgentTypeName, WithSource<app_raw::Agent>>,
     tool_declarations: BTreeMap<ToolName, WithSource<app_raw::ToolDeclaration>>,
     // Kept apart from `tool_declarations`: a build does not see the default tools.
     default_tools: BTreeMap<ToolName, DefaultTool>,
@@ -1436,6 +1437,10 @@ impl Application {
                         .layer_properties()
                         .config
                         .clone(),
+                    files: self
+                        .component(component_name)
+                        .layer_properties()
+                        .provision_files(),
                 },
                 source: self.component(component_name).source().to_path_buf(),
             })
@@ -1446,6 +1451,23 @@ impl Application {
                     base_component_id
                 )
             })?;
+
+        let base_id = if let Some(defaults) = self.package_agent_defaults.get(agent_type_name) {
+            let id = AgentLayerId::AgentPackage(agent_type_name.clone());
+            agent_layer_store
+                .add_layer(AgentLayer {
+                    id: id.clone(),
+                    parents: vec![base_component_id],
+                    source: defaults.source.clone(),
+                    properties: AgentLayerPropertiesKind::Common(Box::new(
+                        defaults.value.agent_layer_properties(),
+                    )),
+                })
+                .map_err(|err| anyhow!(err.to_string()))?;
+            id
+        } else {
+            base_component_id
+        };
 
         let target_id = if let Some(WithSource {
             value: agent,
@@ -1472,7 +1494,7 @@ impl Application {
                 &template_names,
             )?;
 
-            let mut latest_parent_id = base_component_id.clone();
+            let mut latest_parent_id = base_id;
             for template_name in template_names {
                 let template_layer_id =
                     ComponentLayerId::TemplateCustomPresets(template_name.clone());
@@ -1499,7 +1521,7 @@ impl Application {
                     plugins_merge_mode: None,
                     plugins: Some(template_layer_props.plugins.value().clone()),
                     files_merge_mode: None,
-                    files: Some(template_layer_props.files.value().clone()),
+                    files: None,
                     tools_merge_mode: None,
                     tools: None,
                 };
@@ -1514,6 +1536,7 @@ impl Application {
                         properties: AgentLayerPropertiesKind::ComponentTemplate {
                             properties: Box::new(template_agent_props),
                             tool_bindings: template_layer_props.tool_bindings.clone(),
+                            files: template_layer_props.provision_files(),
                             config: template_layer_props.config,
                         },
                     })
@@ -1581,7 +1604,7 @@ impl Application {
 
             custom_id
         } else {
-            base_component_id
+            base_id
         };
 
         let resolved = AgentLayerProperties::from_store(
@@ -2005,6 +2028,14 @@ impl Application {
         environment: &EnvironmentName,
     ) -> Option<&BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>> {
         self.mcp_deployments.get(environment)
+    }
+
+    pub(crate) fn http_api_deployment_domains(&self) -> impl Iterator<Item = &Domain> {
+        self.http_api_deployments.values().flat_map(BTreeMap::keys)
+    }
+
+    pub(crate) fn mcp_deployment_domains(&self) -> impl Iterator<Item = &Domain> {
+        self.mcp_deployments.values().flat_map(BTreeMap::keys)
     }
 
     pub fn mcp_imports(&self, environment: &EnvironmentName) -> Option<&Vec<app_raw::McpImport>> {
@@ -2773,7 +2804,7 @@ impl<'a> Agent<'a> {
         &self.resolved.properties.plugins
     }
 
-    pub fn files(&self) -> &[app_raw::InitialComponentFile] {
+    pub fn files(&self) -> &[ProvisionFile] {
         &self.resolved.properties.files
     }
 
@@ -2924,7 +2955,7 @@ impl<'a> Component<'a> {
             plugins_merge_mode: None,
             plugins: Some(self.layer_properties().plugins.value().clone()),
             files_merge_mode: None,
-            files: Some(self.layer_properties().files.value().clone()),
+            files: None,
             tools_merge_mode: None,
             tools: None,
         }
@@ -3176,7 +3207,7 @@ enum ToolLayerPropertiesKind {
 #[derive(Debug, Clone, Serialize)]
 struct ToolLayerInput {
     properties: app_raw::ToolLayerProperties,
-    files: Vec<ToolProvisionFile>,
+    files: Vec<ProvisionFile>,
 }
 
 impl ToolLayerInput {
@@ -3186,7 +3217,7 @@ impl ToolLayerInput {
             .take()
             .unwrap_or_default()
             .into_iter()
-            .map(|file| ToolProvisionFile {
+            .map(|file| ProvisionFile {
                 source: source.to_path_buf(),
                 file,
             })
@@ -3205,10 +3236,6 @@ impl ToolLayerInput {
     }
 
     fn from_component_properties(properties: &ComponentLayerProperties) -> Self {
-        debug_assert_eq!(
-            properties.files.value().len(),
-            properties.file_sources.value().len()
-        );
         Self {
             properties: app_raw::ToolLayerProperties {
                 config: properties.config.value().clone(),
@@ -3219,15 +3246,21 @@ impl ToolLayerInput {
                 files_merge_mode: None,
                 files: None,
             },
-            files: properties
-                .files
-                .value()
-                .iter()
-                .cloned()
-                .zip(properties.file_sources.value().iter().cloned())
-                .map(|(file, source)| ToolProvisionFile { source, file })
-                .collect(),
+            files: properties.provision_files(),
         }
+    }
+}
+
+impl ComponentLayerProperties {
+    fn provision_files(&self) -> Vec<ProvisionFile> {
+        debug_assert_eq!(self.files.value().len(), self.file_sources.value().len());
+        self.files
+            .value()
+            .iter()
+            .cloned()
+            .zip(self.file_sources.value().iter().cloned())
+            .map(|(file, source)| ProvisionFile { source, file })
+            .collect()
     }
 }
 
@@ -3344,7 +3377,7 @@ pub struct ToolLayerProperties {
     config: JsonProperty<ToolLayer>,
     env: MapProperty<ToolLayer, String, String>,
     plugins: VecProperty<ToolLayer, app_raw::PluginInstallation>,
-    files: VecProperty<ToolLayer, ToolProvisionFile>,
+    files: VecProperty<ToolLayer, ProvisionFile>,
 }
 
 impl ToolLayerProperties {
@@ -3384,12 +3417,12 @@ pub struct ToolProvisionProperties {
     pub config: Option<JsonValue>,
     pub env: BTreeMap<String, String>,
     pub plugins: Vec<app_raw::PluginInstallation>,
-    pub files: Vec<ToolProvisionFile>,
+    pub files: Vec<ProvisionFile>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ToolProvisionFile {
+pub struct ProvisionFile {
     pub source: PathBuf,
     pub file: app_raw::InitialComponentFile,
 }
@@ -3421,6 +3454,7 @@ pub struct ResolvedToolProvision {
 #[serde(rename_all = "camelCase")]
 pub enum AgentLayerId {
     Component(ComponentName),
+    AgentPackage(AgentTypeName),
     AgentTemplate(AgentTypeName, String),
     AgentCommon(AgentTypeName),
     AgentEnvironmentPresets(AgentTypeName),
@@ -3432,6 +3466,9 @@ impl Display for AgentLayerId {
         match self {
             AgentLayerId::Component(component_name) => {
                 write!(f, "component:{component_name}")
+            }
+            AgentLayerId::AgentPackage(agent_type_name) => {
+                write!(f, "agent:{}:package", agent_type_name.0)
             }
             AgentLayerId::AgentTemplate(agent_type_name, template_name) => {
                 write!(f, "agent:{}:template:{}", agent_type_name.0, template_name)
@@ -3475,11 +3512,13 @@ enum AgentLayerPropertiesKind {
         properties: Box<app_raw::AgentLayerProperties>,
         tool_bindings: ToolBindingsProperty<AgentLayer>,
         config: JsonProperty<ComponentLayer>,
+        files: Vec<ProvisionFile>,
     },
     ComponentTemplate {
         properties: Box<app_raw::AgentLayerProperties>,
         tool_bindings: ToolBindingsProperty<ComponentLayer>,
         config: JsonProperty<ComponentLayer>,
+        files: Vec<ProvisionFile>,
     },
     Common(Box<app_raw::AgentLayerProperties>),
     Presets {
@@ -3613,7 +3652,22 @@ impl Layer for AgentLayer {
                 selection,
                 (
                     properties.files_merge_mode.unwrap_or_default(),
-                    properties.files.clone().unwrap_or_default(),
+                    match &self.properties {
+                        AgentLayerPropertiesKind::ComponentBase { files, .. }
+                        | AgentLayerPropertiesKind::ComponentTemplate { files, .. } => {
+                            files.clone()
+                        }
+                        _ => properties
+                            .files
+                            .iter()
+                            .flatten()
+                            .cloned()
+                            .map(|file| ProvisionFile {
+                                source: self.source.clone(),
+                                file,
+                            })
+                            .collect(),
+                    },
                 ),
             );
             value.tool_bindings.apply_layer(
@@ -3642,7 +3696,7 @@ pub struct AgentLayerProperties {
     pub initial_card: OptionalProperty<AgentLayer, app_raw::ManifestInitialCard>,
     pub env: MapProperty<AgentLayer, String, String>,
     pub plugins: VecProperty<AgentLayer, app_raw::PluginInstallation>,
-    pub files: VecProperty<AgentLayer, app_raw::InitialComponentFile>,
+    pub files: VecProperty<AgentLayer, ProvisionFile>,
     pub tool_bindings: ToolBindingsProperty<AgentLayer>,
 }
 
@@ -3698,7 +3752,7 @@ pub struct AgentProperties {
     pub initial_card: Option<app_raw::ManifestInitialCard>,
     pub env: BTreeMap<String, String>,
     pub plugins: Vec<app_raw::PluginInstallation>,
-    pub files: Vec<app_raw::InitialComponentFile>,
+    pub files: Vec<ProvisionFile>,
     pub tool_bindings: BTreeMap<String, ToolBindingState>,
 }
 
@@ -4712,6 +4766,7 @@ mod app_builder {
                 all_sources: builder.all_sources,
                 components: builder.components,
                 agents: builder.agents,
+                package_agent_defaults: BTreeMap::new(),
                 tool_declarations: builder.tool_declarations,
                 default_tools: builder.default_tools,
                 tool_middleware_declarations: builder.tool_middleware_declarations,
@@ -6832,6 +6887,10 @@ mod test {
                 raw_apps,
             )
             .into_product();
+            let errors: Vec<String> = errors
+                .into_iter()
+                .map(strip_ansi_escapes::strip_str)
+                .collect();
             assert_eq!(errors.len(), 1, "{errors:#?}");
             for expected in [
                 "templates.yaml",
@@ -7720,9 +7779,10 @@ mod test {
 
         let (app, _tmp_dir) = load_app_for_env(source, "local", &[]);
         let err = resolve_agents_for(&app, "app:main", "FooAgent").unwrap_err();
+        let err = strip_ansi_escapes::strip_str(format!("{err:#}"));
 
         assert!(
-            format!("{err:#}").contains(
+            err.contains(
                 "Template base is inherited by agent FooAgent through multiple paths: \
                  base and derived -> base"
             ),
@@ -7762,9 +7822,10 @@ mod test {
                 &parse_component_name("app:main"),
             )
             .unwrap_err();
+        let err = strip_ansi_escapes::strip_str(format!("{err:#}"));
 
         assert!(
-            format!("{err:#}").contains(
+            err.contains(
                 "Template base is inherited by tool grep through multiple paths: \
                  base and derived -> base"
             ),
@@ -10098,7 +10159,7 @@ bridge:
         let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
 
         let err = resolve_agents_for(&app, "app:main", "test-agent").unwrap_err();
-        let message = format!("{err:#}");
+        let message = strip_ansi_escapes::strip_str(format!("{err:#}"));
         assert!(
             message.contains(
                 "Template shared-template is inherited by agent test-agent through multiple paths"
@@ -11003,6 +11064,9 @@ bridge:
         .into_product();
         assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
         errors
+            .into_iter()
+            .map(strip_ansi_escapes::strip_str)
+            .collect()
     }
 
     fn with_resolved_agent<T>(

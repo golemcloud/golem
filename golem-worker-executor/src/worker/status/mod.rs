@@ -15,10 +15,11 @@ use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     AgentFingerprint, AgentResourceDescription, AgentStatus, AgentStatusRecord, AssistedSelection,
     AuthoritativeSnapshot, AuthoritativeSnapshotKind, AutomaticSnapshot, DurableStreamSessionIndex,
-    ExportForkAdmissions, FailedUpdateRecord, InvocationResultMembership, InvocationResultPosition,
-    OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
-    PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
-    RetryConfig, RetryPolicyState, SnapshotFiles, SuccessfulUpdateRecord, Timestamp,
+    ExportForkAdmissions, FailedUpdateRecord, InvocationEnd, InvocationRequestRef,
+    InvocationResultMembership, InvocationResultPosition, OplogProcessorCheckpointState,
+    OwnedAgentId, PendingCardEventRef, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
+    ReceivedCardTransferIndex, ReceivedCardTransferState, RetryConfig, RetryPolicyState,
+    RunningInvocation, SettlingInvocation, SnapshotFiles, SuccessfulUpdateRecord, Timestamp,
     UsableAutomaticSnapshot,
 };
 use golem_common::serialization::try_deserialize;
@@ -33,7 +34,8 @@ pub(crate) mod update_queue;
 pub(crate) use regions::{
     RegionFold, deleted_regions, fold_regions_from, revert_validation_regions, skipped_regions,
 };
-use update_queue::{UpdateStep, manual_update_target_revision_of};
+use update_queue::UpdateStep;
+pub(crate) use update_queue::request_operation;
 
 #[cfg(test)]
 pub(crate) use entity_replay::calculate_entity_replay_progress;
@@ -266,18 +268,25 @@ fn update_status_with_precomputed_regions(
     let skipped_regions = &skipped;
     let active_plugins = last_known.active_plugins.clone();
     let requests = InvocationRequests::of_status(&last_known);
-    let (status, last_error_kind, current_retry_state, current_retry_at, overridden_retry_config) =
-        calculate_latest_worker_status(
-            last_known.status,
-            last_known.last_error_kind,
-            last_known.current_retry_state,
-            last_known.current_retry_at,
-            last_known.overridden_retry_config,
-            default_retry_policy,
-            skipped_regions,
-            deleted_regions,
-            &new_entries,
-        );
+    let (
+        status,
+        last_error_kind,
+        current_retry_state,
+        current_retry_at,
+        overridden_retry_config,
+        settling_invocation,
+    ) = calculate_latest_worker_status(
+        last_known.status,
+        last_known.last_error_kind,
+        last_known.current_retry_state,
+        last_known.current_retry_at,
+        last_known.overridden_retry_config,
+        last_known.settling_invocation,
+        default_retry_policy,
+        skipped_regions,
+        deleted_regions,
+        &new_entries,
+    );
 
     let pending_invocations =
         calculate_pending_invocations(last_known.pending_invocations, steps, &new_entries);
@@ -450,8 +459,10 @@ fn update_status_with_precomputed_regions(
         ephemeral_execution_begun,
         never_live,
         pending_durable_stream_cancellations,
-        current_idempotency_key: requests.current,
-        current_invocation_started_at: requests.current_started_at,
+        running: requests.current,
+        withdrawn_again: requests.withdrawn_again,
+        settling_invocation,
+        settling_result: requests.settling,
         component_revision,
         component_size,
         owned_resources,

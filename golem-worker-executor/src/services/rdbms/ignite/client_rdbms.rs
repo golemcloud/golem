@@ -241,6 +241,7 @@ impl IgniteResultStream {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl DbResultStream<IgniteType> for IgniteResultStream {
     async fn get_columns(&self) -> Result<Vec<DbColumn>, RdbmsError> {
         Ok(self.columns.clone())
@@ -304,6 +305,7 @@ impl IgniteDbTransaction {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl DbTransaction<IgniteType> for IgniteDbTransaction {
     fn transaction_id(&self) -> TransactionId {
         self.transaction_id.clone()
@@ -464,6 +466,7 @@ impl IgniteRdbms {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Rdbms<IgniteType> for IgniteRdbms {
     async fn create(&self, address: &str, worker_id: &AgentId) -> Result<RdbmsPoolKey, RdbmsError> {
         let key = RdbmsPoolKey::from(address).map_err(RdbmsError::ConnectionFailure)?;

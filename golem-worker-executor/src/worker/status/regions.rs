@@ -84,7 +84,7 @@ pub(crate) fn revert_validation_regions(
 
 /// The skipped regions after `entries` from an empty status, without the regions that
 /// [`fold`] leaves out for `ignored`. No skipped region depends on the manual admissions or on
-/// the update steps, so the fold neither decodes the invocation payloads nor keeps the steps.
+/// the update steps, so the fold does not keep the steps.
 fn fold_skipped_regions(
     entries: &BTreeMap<OplogIndex, OplogEntry>,
     ignored: Option<&OplogRegion>,

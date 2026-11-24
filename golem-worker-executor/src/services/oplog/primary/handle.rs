@@ -80,6 +80,7 @@ impl PrimaryOplog {
             pending_uploads: Vec::new(),
             durable_stream_sessions: crate::services::oplog::raw_session::RawSessionCache::default(
             ),
+            owned_starts: Default::default(),
         };
         let owned_agent_id = state.owned_agent_id.clone();
         let agent_mode = state.agent_mode;
@@ -416,6 +417,7 @@ impl Debug for PrimaryOplog {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Oplog for PrimaryOplog {
     fn executor_shutdown_handle(&self) -> crate::services::oplog::OplogShutdownHandle {
         let jobs = self.jobs.clone();

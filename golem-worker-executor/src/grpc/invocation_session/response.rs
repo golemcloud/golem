@@ -151,7 +151,8 @@ pub(super) fn pre_acceptance_rejection_reason(
         }
         WorkerExecutorError::ParamTypeMismatch { .. }
         | WorkerExecutorError::NoValueInMessage
-        | WorkerExecutorError::ValueMismatch { .. } => InvocationRejectionReason::Validation,
+        | WorkerExecutorError::ValueMismatch { .. }
+        | WorkerExecutorError::InvocationCancelled => InvocationRejectionReason::Validation,
         WorkerExecutorError::AgentNotFound { .. }
         | WorkerExecutorError::ComponentNotFound { .. }
         | WorkerExecutorError::PromiseNotFound { .. } => InvocationRejectionReason::NotFound,

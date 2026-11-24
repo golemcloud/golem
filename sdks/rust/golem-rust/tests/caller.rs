@@ -95,10 +95,7 @@ fn account() -> wit::Principal {
 fn agent() -> wit::Principal {
     wit::Principal::Agent(wit::AgentPrincipal {
         pair: pair("https://golem.example", "agent:2/3"),
-        agent_id: wire::AgentId {
-            component_id: wire::ComponentId { uuid: uuid(2) },
-            agent_id: "Relay(\"r\")".to_string(),
-        },
+        agent_id: wire::AgentId { uuid: uuid(2) },
         agent_type: "Relay".to_string(),
         environment_id: wire::EnvironmentId { uuid: uuid(4) },
     })
@@ -147,7 +144,7 @@ fn every_principal_kind_reads_its_details_and_prints_without_claims() {
         panic!("an agent");
     };
     assert_eq!(details.agent_type(), "Relay");
-    assert_eq!(details.agent_id().agent_id, "Relay(\"r\")");
+    assert_eq!(details.agent_id().uuid.as_u64_pair(), (2, 7));
 
     let tool = Principal::from(tool());
     assert_eq!(tool.kind(), PrincipalKind::Tool);

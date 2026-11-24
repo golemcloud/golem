@@ -67,6 +67,7 @@ impl<Repo: OAuth2TokenRepo> LoggedOAuth2TokenRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: OAuth2TokenRepo> OAuth2TokenRepo for LoggedOAuth2TokenRepo<Repo> {
     async fn create_or_update(&self, token: OAuth2TokenRecord) -> RepoResult<OAuth2TokenRecord> {
         let span = Self::span_oath2_token(&token);
@@ -132,6 +133,7 @@ impl<DBP: Pool> DbOAuth2TokenRepo<DBP> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OAuth2TokenRepo for DbOAuth2TokenRepo<PostgresPool> {
     async fn create_or_update(&self, token: OAuth2TokenRecord) -> RepoResult<OAuth2TokenRecord> {
         self.with_rw("create_or_update")

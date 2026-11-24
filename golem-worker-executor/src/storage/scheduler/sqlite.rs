@@ -64,6 +64,7 @@ impl SqliteSchedulerStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerStorage for SqliteSchedulerStorage {
     async fn insert(
         &self,
@@ -220,15 +221,19 @@ impl SchedulerStorage for SqliteSchedulerStorage {
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
         lease_until: DateTime<Utc>,
+        now: DateTime<Utc>,
     ) -> Result<bool, SchedulerStorageError> {
         let lease_until_ms = datetime_to_millis(lease_until);
         let query = sqlx::query(
-            "UPDATE scheduled_actions SET lease_until_ms = ?, available_at_ms = ? WHERE schedule_id = ? AND lease_owner = ?;",
+            "UPDATE scheduled_actions SET lease_until_ms = MAX(lease_until_ms, ?), available_at_ms = MAX(lease_until_ms, ?) WHERE schedule_id = ? AND lease_owner = ? AND lease_until_ms > ? AND ? > ?;",
         )
         .bind(lease_until_ms)
         .bind(lease_until_ms)
         .bind(schedule_id.id.to_string())
-        .bind(lease_owner.to_string());
+        .bind(lease_owner.to_string())
+        .bind(datetime_to_millis(now))
+        .bind(lease_until_ms)
+        .bind(datetime_to_millis(now));
 
         self.pool
             .with_rw("scheduler_storage", "extend_lease")
@@ -242,11 +247,13 @@ impl SchedulerStorage for SqliteSchedulerStorage {
         &self,
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
+        now: DateTime<Utc>,
     ) -> Result<bool, SchedulerStorageError> {
         let query =
-            sqlx::query("DELETE FROM scheduled_actions WHERE schedule_id = ? AND lease_owner = ?;")
+            sqlx::query("DELETE FROM scheduled_actions WHERE schedule_id = ? AND lease_owner = ? AND lease_until_ms > ?;")
                 .bind(schedule_id.id.to_string())
-                .bind(lease_owner.to_string());
+                .bind(lease_owner.to_string())
+                .bind(datetime_to_millis(now));
 
         self.pool
             .with_rw("scheduler_storage", "ack")

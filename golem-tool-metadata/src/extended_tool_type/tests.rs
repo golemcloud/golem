@@ -353,7 +353,8 @@ fn extended_and_native_canonical_input_schemas_match_optional_carriers() {
     body.positionals.fixed[0].required = false;
     let extended = tool.canonical_input_model(1).unwrap();
     let native = tool
-        .canonical_projection()
+        .build_native_tool()
+        .unwrap()
         .canonical_input_model(1)
         .unwrap();
     assert_eq!(extended.record_schema, native.record_schema);

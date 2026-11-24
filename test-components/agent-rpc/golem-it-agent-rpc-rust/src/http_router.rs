@@ -114,8 +114,30 @@ impl HttpRouter for RawHttpRouterImpl {
             header("set-cookie", b"first=one"),
             header("set-cookie", b"second=\x80"),
         ];
+        if let Some(key) = request
+            .headers
+            .iter()
+            .find(|h| h.name.eq_ignore_ascii_case("Idempotency-Key"))
+        {
+            headers.push(header("x-echo-idempotency-key", &key.value));
+        }
         let local_path = request.path.strip_prefix("/raw").unwrap_or(&request.path);
         let (status, body) = match local_path {
+            "/count-effect" => {
+                let url = request
+                    .headers
+                    .iter()
+                    .find(|h| h.name.eq_ignore_ascii_case("x-counter-url"))
+                    .unwrap();
+                let counter_request =
+                    golem_rust::http::Request::post(std::str::from_utf8(&url.value).unwrap())
+                        .body(Vec::new())
+                        .unwrap();
+                let response = golem_rust::http::send(counter_request).await.unwrap();
+                let bytes = golem_rust::http::response_bytes(response).await.unwrap();
+                (200, stream(vec![bytes.to_vec()]))
+            }
+            "/400" => (400, stream(vec![b"guest-error".to_vec()])),
             "/cache-public" | "/cache-no-store" => {
                 headers.push(header(
                     "cache-control",

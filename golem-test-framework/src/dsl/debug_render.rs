@@ -58,6 +58,9 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             if let Some(parent) = params.parent_start_index {
                 let _ = writeln!(result, "{pad}parent start index: {parent}");
             }
+            if let Some(driver) = params.driver {
+                let _ = writeln!(result, "{pad}driver:            {driver}");
+            }
             if let Some(request) = &params.request {
                 let _ = writeln!(
                     result,
@@ -153,7 +156,12 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 PublicAgentInvocation::ManualUpdate(inner) => {
                     let _ = writeln!(result, "{pad}type:              manual update");
                     let _ = writeln!(result, "{pad}target revision:   {}", inner.target_revision,);
+                    write_requester(&mut result, pad, &inner.requester);
                 }
+            }
+            if let Some(caller) = params.invocation.caller() {
+                let _ = writeln!(result, "{pad}original caller:   {}", caller.original);
+                let _ = writeln!(result, "{pad}immediate caller:  {}", caller.immediate);
             }
             let wallet_id_hash = params
                 .wallet_pin
@@ -185,6 +193,12 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}invocation id:     {}", params.invocation_id);
             let _ = writeln!(result, "{pad}start index:       {}", params.start_index);
             let _ = writeln!(result, "{pad}error:             {}", params.error);
+        }
+        PublicOplogEntry::AgentInvocationSettled(params) => {
+            let _ = writeln!(result, "AGENT INVOCATION SETTLED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(result, "{pad}invocation id:     {}", params.invocation_id);
+            let _ = writeln!(result, "{pad}consumed fuel:     {}", params.consumed_fuel);
         }
         PublicOplogEntry::Suspend(params) => {
             let _ = writeln!(result, "SUSPEND");
@@ -224,61 +238,68 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "EXITED");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
         }
-        PublicOplogEntry::PendingAgentInvocation(params) => match &params.invocation {
-            PublicAgentInvocation::AgentInitialization(inner_params) => {
-                let _ = writeln!(result, "ENQUEUED AGENT INITIALIZATION");
-                let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-                let _ = writeln!(
-                    result,
-                    "{pad}invocation id:     {}",
-                    inner_params.invocation_id,
-                );
+        PublicOplogEntry::PendingAgentInvocation(params) => {
+            match &params.invocation {
+                PublicAgentInvocation::AgentInitialization(inner_params) => {
+                    let _ = writeln!(result, "ENQUEUED AGENT INITIALIZATION");
+                    let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+                    let _ = writeln!(
+                        result,
+                        "{pad}invocation id:     {}",
+                        inner_params.invocation_id,
+                    );
+                }
+                PublicAgentInvocation::AgentMethodInvocation(inner_params) => {
+                    let _ = writeln!(result, "ENQUEUED INVOCATION {}", inner_params.method_name,);
+                    let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+                    let _ = writeln!(
+                        result,
+                        "{pad}invocation id:     {}",
+                        inner_params.invocation_id,
+                    );
+                }
+                PublicAgentInvocation::ExternalTool(inner_params) => {
+                    let _ = writeln!(result, "ENQUEUED EXTERNAL TOOL {}", inner_params.tool_name);
+                    let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+                    let _ = writeln!(
+                        result,
+                        "{pad}path:              {}",
+                        inner_params.command_path.join("/")
+                    );
+                    let _ = writeln!(
+                        result,
+                        "{pad}invocation id:     {}",
+                        inner_params.invocation_id
+                    );
+                }
+                PublicAgentInvocation::SaveSnapshot(_) => {
+                    let _ = writeln!(result, "ENQUEUED SAVE SNAPSHOT");
+                    let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+                }
+                PublicAgentInvocation::LoadSnapshot(_) => {
+                    let _ = writeln!(result, "ENQUEUED LOAD SNAPSHOT");
+                    let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+                }
+                PublicAgentInvocation::ProcessOplogEntries(_) => {
+                    let _ = writeln!(result, "ENQUEUED PROCESS OPLOG ENTRIES");
+                    let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+                }
+                PublicAgentInvocation::ManualUpdate(inner_params) => {
+                    let _ = writeln!(result, "ENQUEUED MANUAL UPDATE");
+                    let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+                    let _ = writeln!(
+                        result,
+                        "{pad}target revision: {}",
+                        inner_params.target_revision,
+                    );
+                    write_requester(&mut result, pad, &inner_params.requester);
+                }
             }
-            PublicAgentInvocation::AgentMethodInvocation(inner_params) => {
-                let _ = writeln!(result, "ENQUEUED INVOCATION {}", inner_params.method_name,);
-                let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-                let _ = writeln!(
-                    result,
-                    "{pad}invocation id:     {}",
-                    inner_params.invocation_id,
-                );
+            if let Some(caller) = params.invocation.caller() {
+                let _ = writeln!(result, "{pad}original caller:   {}", caller.original);
+                let _ = writeln!(result, "{pad}immediate caller:  {}", caller.immediate);
             }
-            PublicAgentInvocation::ExternalTool(inner_params) => {
-                let _ = writeln!(result, "ENQUEUED EXTERNAL TOOL {}", inner_params.tool_name);
-                let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-                let _ = writeln!(
-                    result,
-                    "{pad}path:              {}",
-                    inner_params.command_path.join("/")
-                );
-                let _ = writeln!(
-                    result,
-                    "{pad}invocation id:     {}",
-                    inner_params.invocation_id
-                );
-            }
-            PublicAgentInvocation::SaveSnapshot(_) => {
-                let _ = writeln!(result, "ENQUEUED SAVE SNAPSHOT");
-                let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-            }
-            PublicAgentInvocation::LoadSnapshot(_) => {
-                let _ = writeln!(result, "ENQUEUED LOAD SNAPSHOT");
-                let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-            }
-            PublicAgentInvocation::ProcessOplogEntries(_) => {
-                let _ = writeln!(result, "ENQUEUED PROCESS OPLOG ENTRIES");
-                let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-            }
-            PublicAgentInvocation::ManualUpdate(inner_params) => {
-                let _ = writeln!(result, "ENQUEUED MANUAL UPDATE");
-                let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-                let _ = writeln!(
-                    result,
-                    "{pad}target revision: {}",
-                    inner_params.target_revision,
-                );
-            }
-        },
+        }
         PublicOplogEntry::PendingUpdate(params) => {
             let _ = writeln!(result, "ENQUEUED UPDATE");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
@@ -300,6 +321,7 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                     }
                 }
             }
+            write_requester(&mut result, pad, &params.requester);
         }
         PublicOplogEntry::SuccessfulUpdate(params) => {
             let _ = writeln!(result, "SUCCESSFUL UPDATE");
@@ -699,6 +721,16 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
     }
 
     result
+}
+
+/// Who requested an update, in both roles.
+fn write_requester(
+    output: &mut String,
+    pad: &str,
+    requester: &golem_common::model::caller::PublicCaller,
+) {
+    let _ = writeln!(output, "{pad}original requester:  {}", requester.original);
+    let _ = writeln!(output, "{pad}immediate requester: {}", requester.immediate);
 }
 
 fn log_plugin_description(output: &mut String, pad: &str, value: &PluginInstallationDescription) {

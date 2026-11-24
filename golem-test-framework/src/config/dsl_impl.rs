@@ -26,8 +26,8 @@ use futures::stream::SplitStream;
 use futures::{SinkExt, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_client::api::{
-    AgentClient, RegistryServiceClient, RegistryServiceClientLive, WorkerClient, WorkerClientLive,
-    WorkerError,
+    AgentClient, InvocationClient, RegistryServiceClient, RegistryServiceClientLive, WorkerClient,
+    WorkerClientLive, WorkerError,
 };
 use golem_client::model::{
     AgentKeyRequest, CompleteParameters, CreateAgentRequest, UpdateWorkerRequest,
@@ -57,7 +57,7 @@ use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, Dep
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
 };
-use golem_common::model::oplog::{PublicOplogEntryWithIndex, PublicOplogPageEntry};
+use golem_common::model::oplog::{OplogInclude, PublicOplogEntryWithIndex, PublicOplogPageEntry};
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_common::model::tool::ToolName;
 use golem_common::model::tool_middleware::ToolMiddlewareName;
@@ -632,13 +632,11 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .await?;
 
         let agent_id = OwnedAgentId::new(component.environment_id, &AgentId(result.agent_id));
-        match result.result {
-            Some(typed_output) => {
-                let (_graph, value) = typed_output.into_inner().into_parts();
-                Ok(AgentResult::new(Some(value), agent_id))
-            }
-            None => Ok(AgentResult::new(None, agent_id)),
-        }
+        let background_failure = result.background_failure.map(|failure| failure.error);
+        let value = result
+            .result
+            .map(|typed_output| typed_output.into_inner().into_parts().1);
+        Ok(AgentResult::new(value, agent_id).with_background_failure(background_failure))
     }
 
     async fn revert(
@@ -672,35 +670,20 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .worker_service()
             .worker_http_client(&self.token)
             .await;
+        read_full_oplog(&client, agent_id, from, None).await
+    }
 
-        let mut result = Vec::new();
-        let mut cursor: Option<golem_client::model::OplogCursor> = None;
-
-        loop {
-            let response = client
-                .get_oplog(
-                    &agent_id.environment_id.0,
-                    &agent_id.agent_id.0,
-                    Some(from.as_u64()),
-                    100,
-                    cursor.as_ref(),
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                )
-                .await
-                .map_err(|e| anyhow!("get_oplog failed for agent {agent_id}: {e}"))?;
-
-            result.extend(full_oplog_entries(&client, agent_id, response.entries).await?);
-            match response.next {
-                None => break,
-                Some(next_cursor) => cursor = Some(next_cursor),
-            }
-        }
-
-        Ok(result)
+    async fn get_oplog_with_claims(
+        &self,
+        agent_id: &OwnedAgentId,
+        from: OplogIndex,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        read_full_oplog(&client, agent_id, from, Some(&OplogInclude::Claims)).await
     }
 
     async fn get_oplog_last_index(&self, agent_id: &OwnedAgentId) -> anyhow::Result<u64> {
@@ -716,6 +699,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &agent_id.agent_id.0,
                 Some(OplogIndex::INITIAL.as_u64()),
                 1,
+                None,
                 None,
                 None,
                 None,
@@ -756,13 +740,14 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     None,
                     None,
                     None,
+                    None,
                 )
                 .await
                 .map_err(|e| {
                     anyhow!("search_oplog failed for agent {agent_id}, query={query}: {e}")
                 })?;
 
-            result.extend(full_oplog_entries(&client, agent_id, response.entries).await?);
+            result.extend(full_oplog_entries(&client, agent_id, response.entries, None).await?);
             match response.next {
                 None => break,
                 Some(next_cursor) => cursor = Some(next_cursor),
@@ -921,6 +906,20 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         Ok(())
     }
 
+    async fn update_worker_as_caller(
+        &self,
+        _agent_id: &OwnedAgentId,
+        _mode: AgentUpdateMode,
+        _target_revision: ComponentRevision,
+        _disable_wakeup: bool,
+        _caller: golem_common::model::caller::Caller,
+    ) -> anyhow::Result<OplogIndex> {
+        anyhow::bail!(
+            "HTTP update DSL does not support overriding the caller; the requester is the \
+             account of the request's token. Use the worker-executor gRPC test DSL instead"
+        )
+    }
+
     async fn delete_worker(&self, agent_id: &OwnedAgentId) -> anyhow::Result<()> {
         let client = self
             .deps
@@ -990,17 +989,14 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         let client = self
             .deps
             .worker_service()
-            .worker_http_client(&self.token)
+            .invocation_http_client(&self.token)
             .await;
-        let result = client
-            .cancel_invocation(
-                &agent_id.environment_id.0,
-                &agent_id.agent_id.0,
-                &idempotency_key.to_string(),
-                None,
-            )
+        let invocation_id =
+            golem_common::model::OwnedInvocationId::new(agent_id.agent_id, *idempotency_key);
+        let invocation = client
+            .cancel_invocation(&agent_id.environment_id.0, &invocation_id.to_string())
             .await?;
-        Ok(result.canceled)
+        Ok(invocation.state == golem_client::model::InvocationState::Cancelled)
     }
 
     async fn get_file_system_node(
@@ -1322,12 +1318,51 @@ impl WorkerLogEventStream for HttpWorkerLogEventStream {
     }
 }
 
+/// Reads the whole oplog from `from` page by page, with each omitted entry read in full.
+async fn read_full_oplog(
+    client: &impl WorkerClient,
+    agent_id: &OwnedAgentId,
+    from: OplogIndex,
+    include: Option<&OplogInclude>,
+) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+    let mut result = Vec::new();
+    let mut cursor: Option<golem_client::model::OplogCursor> = None;
+
+    loop {
+        let response = client
+            .get_oplog(
+                &agent_id.environment_id.0,
+                &agent_id.agent_id.0,
+                Some(from.as_u64()),
+                100,
+                cursor.as_ref(),
+                None,
+                include,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .map_err(|e| anyhow!("get_oplog failed for agent {agent_id}: {e}"))?;
+
+        result.extend(full_oplog_entries(client, agent_id, response.entries, include).await?);
+        match response.next {
+            None => break,
+            Some(next_cursor) => cursor = Some(next_cursor),
+        }
+    }
+
+    Ok(result)
+}
+
 /// Reads each entry that an oplog page omitted in full. Tests then see the full oplog, like
 /// `golem agent oplog` without `--omit-payloads`.
 async fn full_oplog_entries(
     client: &impl WorkerClient,
     agent_id: &OwnedAgentId,
     page_entries: Vec<PublicOplogPageEntry>,
+    include: Option<&OplogInclude>,
 ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
     let mut result = Vec::with_capacity(page_entries.len());
     for page_entry in page_entries {
@@ -1340,6 +1375,7 @@ async fn full_oplog_entries(
                         &agent_id.agent_id.0,
                         omitted.oplog_index.as_u64(),
                         Some(omitted.component_revision.into()),
+                        include,
                         None,
                     )
                     .await

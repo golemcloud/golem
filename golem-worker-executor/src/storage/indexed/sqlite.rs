@@ -348,6 +348,7 @@ impl SqliteIndexedStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl IndexedStorage for SqliteIndexedStorage {
     async fn number_of_replicas(
         &self,

@@ -33,6 +33,7 @@ use wasmtime_wasi::p2::bindings::clocks::monotonic_clock::Host as WasiMonotonicC
 struct TimerDeadline(std::time::Instant);
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl wasmtime_wasi::Pollable for TimerDeadline {
     async fn ready(&mut self) {
         if self.0 > std::time::Instant::now() {

@@ -12,12 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(target_os = "linux")]
 fn main() -> anyhow::Result<()> {
     golem_xfs_quotad::run(std::env::args_os().skip(1))
-}
-
-#[cfg(not(target_os = "linux"))]
-fn main() -> anyhow::Result<()> {
-    anyhow::bail!("xfs-quotad manages XFS project quotas, which only Linux has")
 }

@@ -637,7 +637,9 @@ pub struct DeploymentDisplayHttpMount {
     pub webhook: Option<String>,
     pub phantom_agent: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub phantom_id_binding: Option<golem_common::model::agent::PhantomIdBinding>,
+    pub agent_id_binding: Option<golem_common::model::agent::AgentIdBinding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub create_route: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_required: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -737,7 +739,7 @@ pub struct DeploymentDisplayRemoteTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata_digest: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub provision: Option<golem_common::model::tool::ToolProvisionConfig>,
+    pub provision: Option<diff::ToolProvision>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub bindings: BTreeMap<String, diff::EffectiveToolBinding>,
 }
@@ -1173,7 +1175,8 @@ fn display_http_mount(http_mount: &HttpMountDetails) -> DeploymentDisplayHttpMou
         webhook: (!http_mount.webhook_suffix.is_empty())
             .then(|| render_path(&http_mount.webhook_suffix)),
         phantom_agent: http_mount.phantom_agent,
-        phantom_id_binding: http_mount.phantom_id_binding.clone(),
+        agent_id_binding: http_mount.agent_id_binding.clone(),
+        create_route: http_mount.create_route.as_deref().map(render_path),
         auth_required: http_mount.auth_details.as_ref().map(|auth| auth.required),
         cors: http_mount.cors_options.allowed_patterns.clone(),
     }

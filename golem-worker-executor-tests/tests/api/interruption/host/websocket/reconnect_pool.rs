@@ -12,7 +12,7 @@ pub(super) enum Path {
 
 macro_rules! reconnect_case {
     ($name:ident, Storage, $path:ident) => {
-        reconnect_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $path);
+        reconnect_case!(#[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $path);
     };
     ($(#[$attr:meta])* $name:ident, $resource:ident, $path:ident) => {
         $(#[$attr])*
@@ -46,11 +46,22 @@ reconnect_case!(
     Compute,
     Accessor
 );
-reconnect_case!(
-    durable_websocket_reconnect_pool_receive_managed_xfs_storage_quota,
-    Storage,
-    Accessor
-);
+#[cfg(target_os = "linux")]
+mod storage {
+    use super::*;
+    use test_r::test;
+
+    reconnect_case!(
+        durable_websocket_reconnect_pool_receive_managed_xfs_storage_quota,
+        Storage,
+        Accessor
+    );
+    reconnect_case!(
+        durable_websocket_reconnect_pool_close_managed_xfs_storage_quota,
+        Storage,
+        Direct
+    );
+}
 reconnect_case!(
     durable_websocket_reconnect_pool_close_memory_quota,
     Memory,
@@ -59,11 +70,6 @@ reconnect_case!(
 reconnect_case!(
     durable_websocket_reconnect_pool_close_compute_quota_prepaid,
     Compute,
-    Direct
-);
-reconnect_case!(
-    durable_websocket_reconnect_pool_close_managed_xfs_storage_quota,
-    Storage,
     Direct
 );
 
@@ -257,9 +263,10 @@ async fn pending_reconnect(
         &InvocationContextStack::fresh(),
         callers::anonymous(),
         golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
-        golem_worker_executor::worker::CreateIntent::Invocation {
+        golem_worker_executor::worker::CreateIntent::Create {
             owner: golem_worker_executor::worker::NewOwner::keyed(component.id, name.clone()),
             idempotency_key: None,
+            exclusive: false,
         },
     )
     .await?;

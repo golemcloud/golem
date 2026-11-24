@@ -15,6 +15,7 @@
 use super::*;
 use crate::filesystem::blocking::BlockingTaskError;
 use crate::filesystem::errors::OperationContext;
+use std::path::Path;
 use test_r::test;
 
 #[test]

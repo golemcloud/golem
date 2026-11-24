@@ -1230,10 +1230,13 @@ describe('RPC client', () => {
       tag: 'record',
       fields: [
         { tag: 'string', value: 'acme' },
-        { tag: 'record', fields: [
-          { tag: 'string', value: 'https://login.example' },
-          { tag: 'string', value: 'u-1' },
-        ] },
+        {
+          tag: 'record',
+          fields: [
+            { tag: 'string', value: 'https://login.example' },
+            { tag: 'string', value: 'u-1' },
+          ],
+        },
       ],
     });
   });

@@ -683,6 +683,67 @@ async fn oplog_export_hides_customer_data() {
     // Document order.
     let documents = export_json(&ctx, PROBE, &[]).await;
     assert_eq!(documents[0]["$type"], "agent.oplog-export-header");
+
+    // The agent IDs are in clear: the root with its agent type, other agents without one.
+    let metadata = ctx
+        .cli([cmd::AGENT, cmd::GET, PROBE, flag::FORMAT, "json"])
+        .await;
+    assert!(metadata.success_or_dump());
+    let metadata = metadata
+        .stdout_json::<Value>()
+        .into_iter()
+        .find(|document| document["$type"] == "agent.get")
+        .unwrap()["metadata"]
+        .clone();
+    let root_id = metadata["agentId"].as_str().unwrap().to_string();
+    let root = &documents[0]["root"];
+    assert_eq!(root["agentId"], root_id.as_str(), "{root}");
+    assert_eq!(root["agentType"], "ExportProbe", "{root}");
+    let create = documents_of_type(&documents, "agent.oplog-export-entry")
+        .into_iter()
+        .find(|document| document["kind"] == "Create")
+        .unwrap();
+    assert_eq!(
+        report_field(create, "agentId").unwrap(),
+        &serde_json::json!({
+            "kind": "agent",
+            "agentId": root_id,
+            "agentType": "ExportProbe",
+        })
+    );
+    assert_eq!(report_field(create, "instanceId").unwrap()["kind"], "text");
+    assert_eq!(
+        report_field(create, "instanceId").unwrap()["value"],
+        metadata["fingerprint"]
+    );
+    let agent_nodes = objects(&serde_json::to_value(&documents).unwrap())
+        .into_iter()
+        .filter(|object| object.get("kind") == Some(&Value::from("agent")))
+        .map(|object| Value::Object(object.clone()))
+        .collect::<Vec<_>>();
+    assert!(
+        agent_nodes
+            .iter()
+            .any(|node| node["agentId"] != root_id.as_str() && node.get("agentType").is_none()),
+        "no RPC target reference in {agent_nodes:?}"
+    );
+    assert!(
+        agent_nodes
+            .iter()
+            .all(|node| node["agentId"] == root_id.as_str() || node.get("agentType").is_none()),
+        "{agent_nodes:?}"
+    );
+    let label = format!("ExportProbe[{root_id}]");
+    let text_output = export(&ctx, PROBE, &[flag::FORMAT, "text"]).await;
+    assert!(
+        text_output.stdout_text().contains(&label),
+        "{}",
+        text_output.stdout_text()
+    );
+    let label_page = ctx.cwd_path_join("report/label.html");
+    export(&ctx, PROBE, &["--html", label_page.to_str().unwrap()]).await;
+    let page = fs::read_to_string(&label_page).unwrap();
+    assert!(page.contains(&format!("<title>Golem oplog · {label}</title>")));
     assert_eq!(
         documents.last().unwrap()["$type"],
         "agent.oplog-export-coverage"
@@ -694,6 +755,28 @@ async fn oplog_export_hides_customer_data() {
     // --keep-scalars and --keep-shape at the arguments of `record`.
     let record_index = invocation_indices(&plain, "record")[0];
     let default_record = entry_at(&documents, record_index);
+
+    // The caller of `record`: the kinds stay, the issuer and the subject are tokens.
+    let plain_record = plain
+        .iter()
+        .find(|document| document["index"] == record_index)
+        .unwrap();
+    let original = &plain_record["entry"]["invocation"]["caller"]["original"];
+    assert_eq!(original["kind"], "account", "{plain_record}");
+    let exported_record = serde_json::to_string(default_record).unwrap();
+    for pair_text in [&original["pair"]["issuer"], &original["pair"]["subject"]] {
+        let pair_text = pair_text.as_str().unwrap();
+        assert!(
+            !exported_record.contains(pair_text),
+            "{pair_text} in {exported_record}"
+        );
+    }
+    assert!(
+        objects(default_record)
+            .iter()
+            .any(|object| object.get("case") == Some(&Value::from("account"))),
+        "{default_record}"
+    );
     assert!(
         !serde_json::to_string(&documents)
             .unwrap()

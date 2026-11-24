@@ -440,11 +440,55 @@ impl RouteMatch {
         {
             return Err("MountPrefix cannot contain a catch-all".into());
         }
+        if let RouteBehaviour::CallAgent(call) = behavior {
+            call.constructor_input.validate()?;
+            call.method_input.validate()?;
+            call.expected_agent_response.validate()?;
+            call.agent_selection
+                .validate(path, &call.constructor_parameters)?;
+            if let AgentSelection::Query { name } = &call.agent_selection {
+                if call.method_parameters.iter().any(|parameter| matches!(parameter,
+                    MethodParameter::Query { query_parameter_name, .. } if query_parameter_name == name)) {
+                    return Err("Agent ID query cannot also bind a method parameter".into());
+                }
+            }
+        }
+        if let RouteBehaviour::CreateAgent(create) = behavior {
+            if !matches!(
+                self,
+                Self::Method {
+                    method: HttpMethod::Method(golem_schema::http::HttpMethod::Post(_)),
+                    ..
+                }
+            ) || path
+                .iter()
+                .any(|segment| !matches!(segment, PathSegment::Literal { .. }))
+            {
+                return Err("CreateAgent requires an exact literal POST route".into());
+            }
+            create.agent.validate(&create.location)?;
+            let captures = capture_count(&create.location);
+            match &create.agent.agent_selection {
+                AgentSelection::Path { index } if captures == 1 && usize::from(*index) == 0 => {}
+                AgentSelection::Query { .. } if captures == 0 => {}
+                _ => return Err("CreateAgent location must bind only the agent ID".into()),
+            }
+            if create
+                .location
+                .iter()
+                .any(|segment| matches!(segment, PathSegment::CatchAll { .. }))
+            {
+                return Err("CreateAgent location cannot contain a catch-all".into());
+            }
+        }
         if let RouteBehaviour::Mount(mount) = behavior {
-            mount.files.agent().constructor_input.validate()?;
+            mount.files.agent().validate(path)?;
             for target in mount.handler.iter().chain(mount.openapi_provider.iter()) {
                 let MountTarget::AgentMethod(target) = target;
-                target.agent.constructor_input.validate()?;
+                target.agent.validate(path)?;
+                if !matches!(target.agent.agent_selection, AgentSelection::Key) {
+                    return Err("Router methods require Key selection".into());
+                }
                 target.method.input.validate()?;
                 target.method.output.validate()?;
                 if target.method.method_name.is_empty() {
@@ -469,6 +513,9 @@ impl RouteMatch {
             .map_err(|error| error.to_string())?;
             match &mount.files {
                 MountFileSource::Router { file_index, .. } => {
+                    if !matches!(mount.files.agent().agent_selection, AgentSelection::Key) {
+                        return Err("HttpRouter mount requires Key selection".into());
+                    }
                     if path
                         .iter()
                         .any(|segment| !matches!(segment, PathSegment::Literal { .. }))
@@ -497,6 +544,9 @@ impl RouteMatch {
                     }
                 }
                 MountFileSource::Live { agent } => {
+                    if matches!(agent.agent_selection, AgentSelection::Fresh) {
+                        return Err("Filesystem mount cannot use Fresh selection".into());
+                    }
                     let captures = path
                         .iter()
                         .filter(|segment| matches!(segment, PathSegment::Variable { .. }))
@@ -530,6 +580,15 @@ pub enum RouteBehaviour {
     WebhookCallback(WebhookCallbackBehaviour),
     OpenApiSpec(OpenApiSpecBehaviour),
     Mount(MountBehaviour),
+    CreateAgent(CreateAgentBehaviour),
+}
+
+#[derive(Debug, BinaryCodec)]
+#[desert(evolution())]
+pub struct CreateAgentBehaviour {
+    pub agent: MountAgent,
+    /// Full compiled mount path used to render the created agent's Location.
+    pub location: Vec<PathSegment>,
 }
 
 #[derive(Debug, BinaryCodec)]
@@ -564,6 +623,15 @@ pub struct MountAgent {
     pub agent_type: AgentTypeName,
     pub constructor_input: CompiledInputSchema,
     pub constructor_parameters: Vec<ConstructorParameter>,
+    pub agent_selection: AgentSelection,
+}
+
+impl MountAgent {
+    fn validate(&self, path: &[PathSegment]) -> Result<(), String> {
+        self.constructor_input.validate()?;
+        self.agent_selection
+            .validate(path, &self.constructor_parameters)
+    }
 }
 
 #[derive(Debug, BinaryCodec)]
@@ -619,7 +687,7 @@ pub struct CallAgentBehaviour {
     /// parameters.
     pub constructor_input: CompiledInputSchema,
     pub constructor_parameters: Vec<ConstructorParameter>,
-    pub phantom_selection: PhantomSelection,
+    pub agent_selection: AgentSelection,
     pub method_name: String,
     /// Self-contained schema of the agent method input. Used by the runtime to
     /// reconstruct the full positional `SchemaValue::Record` from the bound
@@ -640,11 +708,68 @@ pub struct CallAgentBehaviour {
 
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
-pub enum PhantomSelection {
-    Policy { phantom: bool },
-    Original,
-    Path { index: SafeIndex },
-    Query { name: String, optional: bool },
+pub enum AgentSelection {
+    Key,
+    Fresh,
+    /// Zero-based capture index, not the segment's position in the full path.
+    Path {
+        index: SafeIndex,
+    },
+    Query {
+        name: String,
+    },
+}
+
+fn capture_count(path: &[PathSegment]) -> usize {
+    path.iter()
+        .filter(|segment| !matches!(segment, PathSegment::Literal { .. }))
+        .count()
+}
+
+impl AgentSelection {
+    fn validate(
+        &self,
+        path: &[PathSegment],
+        parameters: &[ConstructorParameter],
+    ) -> Result<(), String> {
+        let captures = capture_count(path);
+        match self {
+            Self::Key | Self::Fresh => {
+                let mut bound = BTreeSet::new();
+                for ConstructorParameter::Path {
+                    path_segment_index, ..
+                } in parameters
+                {
+                    let index = usize::from(*path_segment_index);
+                    if index >= captures || !bound.insert(index) {
+                        return Err(
+                            "Constructor parameters must bind distinct path captures".into()
+                        );
+                    }
+                }
+            }
+            Self::Path { index } => {
+                if !parameters.is_empty() || usize::from(*index) >= captures {
+                    return Err(
+                        "Agent ID path requires a valid capture and no constructor parameters"
+                            .into(),
+                    );
+                }
+            }
+            Self::Query { name } => {
+                if !parameters.is_empty()
+                    || name.is_empty()
+                    || name.trim() != name
+                    || name.chars().any(char::is_control)
+                {
+                    return Err(
+                        "Agent ID query requires a valid name and no constructor parameters".into(),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]

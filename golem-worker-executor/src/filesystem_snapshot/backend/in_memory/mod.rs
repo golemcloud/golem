@@ -267,6 +267,7 @@ impl InMemorySnapshotStore {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl FilesystemSnapshotStore for InMemorySnapshotStore {
     async fn save(
         &self,

@@ -22,6 +22,7 @@ use crate::command::card::CardSubcommand;
 use crate::command::component::ComponentSubcommand;
 use crate::command::environment::EnvironmentSubcommand;
 use crate::command::exec::ExecSubcommand;
+use crate::command::invocation::InvocationSubcommand;
 use crate::command::mcp::McpSubcommand;
 use crate::command::plugin::PluginSubcommand;
 use crate::command::profile::ProfileSubcommand;
@@ -704,7 +705,7 @@ pub enum GolemCliSubcommand {
         /// Path to the package archive
         file: PathBuf,
     },
-    /// Preview a package's OCI manifest digest without contacting a server
+    /// Preview a package's OCI manifest digest and omitted exports without contacting a server
     Publish {
         /// Compute the digest locally without saving an archive or publishing it
         #[arg(long, required = true)]
@@ -957,6 +958,11 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: AgentSubcommand,
     },
+    /// Inspect and cancel agent invocations
+    Invocation {
+        #[clap(subcommand)]
+        subcommand: InvocationSubcommand,
+    },
     /// Manage deployed agent types
     AgentType {
         #[clap(subcommand)]
@@ -1042,6 +1048,8 @@ pub enum GolemCliSubcommand {
 #[derive(clap::Subcommand, Debug, Clone)]
 pub enum PackageSubcommand {
     /// Pack the application's built components into a local OCI archive
+    ///
+    /// HTTP API and MCP deployments are omitted and reported by kind and domain.
     Pack {
         /// Destination tar file
         #[arg(short, long, default_value = "golem-package.tar")]
@@ -1151,7 +1159,9 @@ pub mod shared_args {
     pub struct OplogExportArgs {
         /// Export an obfuscated report: customer values become tokens. Tokens are equal only inside
         /// one export, because each CLI process draws a new random key. The report is for reading,
-        /// not for replay.
+        /// not for replay. Agent IDs, the agent type name of the exported agent and fingerprints
+        /// are shown in clear. A reader who knows the environment ID can test a guessed key of a
+        /// keyed agent against its agent ID.
         #[arg(long)]
         pub obfuscate: bool,
         /// Show numbers, bools, datetimes, durations and the mantissa, scale and unit of quantities
@@ -1947,6 +1957,11 @@ pub mod worker {
             /// response. By default the CLI reads each omitted entry in full.
             #[arg(long, conflicts_with = "obfuscate")]
             omit_payloads: bool,
+            /// Show the verified claims of the users among the callers of each invocation. The
+            /// server shows them only to a reader who may read the oplog. An obfuscated export
+            /// never shows claims.
+            #[arg(long, conflicts_with = "obfuscate")]
+            show_claims: bool,
             /// Read one page of at most the HTTP batch size (50) entries and print it as one
             /// `agent.oplog-page` document, with the `cursor` of the next page when the oplog has
             /// entries after the page. A search page ends early when the server's scan budget ends
@@ -1987,14 +2002,6 @@ pub mod worker {
                 required_unless_present = "last_oplog_index"
             )]
             number_of_invocations: Option<u64>,
-        },
-        /// Cancels an enqueued invocation if it has not started yet
-        #[command(after_help = crate::command_examples::AGENT_CANCEL_INVOCATION)]
-        CancelInvocation {
-            #[command(flatten)]
-            agent_id: AgentIdArgs,
-            /// Idempotency key of the invocation to be cancelled
-            idempotency_key: IdempotencyKey,
         },
         /// List files in an agent's directory.
         ///
@@ -2692,6 +2699,116 @@ pub mod resource_definition {
         /// List quota resource definitions in the environment
         #[command(after_help = crate::command_examples::RESOURCE_LIST)]
         List,
+    }
+}
+
+pub mod invocation {
+    use crate::model::agent::RawAgentId;
+    use chrono::{DateTime, Utc};
+    use clap::{Args, Subcommand, ValueEnum};
+
+    #[derive(Debug, Subcommand)]
+    pub enum InvocationSubcommand {
+        /// Show an invocation, its state and its result
+        ///
+        /// Select the invocation by its ID, or by its agent and idempotency key. Exits with code
+        /// 130 when the invocation was cancelled.
+        #[command(after_help = crate::command_examples::INVOCATION_GET)]
+        Get {
+            #[command(flatten)]
+            selector: InvocationSelector,
+        },
+        /// List the invocations of an agent, newest change first
+        #[command(after_help = crate::command_examples::INVOCATION_LIST)]
+        List {
+            /// The agent whose invocations are listed
+            #[arg(
+                long,
+                help = crate::command_glossary::AGENT_ID_SHORT,
+                long_help = crate::command_glossary::AGENT_ID_LONG,
+                verbatim_doc_comment,
+            )]
+            agent: RawAgentId,
+            /// Only invocations of this method name, or of `tool:<tool>/<command path>`
+            #[arg(long)]
+            operation: Option<String>,
+            /// Only invocations in one of these states; can be repeated
+            #[arg(long, value_enum)]
+            status: Vec<InvocationStateArg>,
+            /// Only invocations of this kind
+            #[arg(long, value_enum)]
+            kind: Option<InvocationKindArg>,
+            /// Only invocations whose last change is at or after this time (RFC 3339)
+            #[arg(long)]
+            since: Option<DateTime<Utc>>,
+            /// Only invocations whose last change is at or before this time (RFC 3339)
+            #[arg(long)]
+            until: Option<DateTime<Utc>>,
+            /// Invocations per page, at most 1000; the server default is 100
+            #[arg(long)]
+            page_size: Option<u32>,
+            /// Continue from the cursor printed by an earlier page
+            #[arg(long)]
+            cursor: Option<String>,
+        },
+        /// Cancel a pending or scheduled invocation
+        ///
+        /// Select the invocation by its ID, or by its agent and idempotency key. A running
+        /// invocation cannot be cancelled. Prints the invocation's state after the cancel.
+        #[command(after_help = crate::command_examples::INVOCATION_CANCEL)]
+        Cancel {
+            #[command(flatten)]
+            selector: InvocationSelector,
+        },
+    }
+
+    #[derive(Debug, Args)]
+    pub struct InvocationSelector {
+        /// Invocation ID, `<agent ID>.<UUID>`, as listed by
+        /// `invocation list`. It is resolved in the current environment; select another one with
+        /// `--environment`. Mutually exclusive with `--agent` and `--idempotency-key`.
+        #[arg(
+            required_unless_present = "agent",
+            conflicts_with_all = ["agent", "idempotency_key", "method"]
+        )]
+        pub invocation_id: Option<String>,
+        /// The agent that received the invocation; requires `--idempotency-key`
+        #[arg(
+            long,
+            requires = "idempotency_key",
+            help = crate::command_glossary::AGENT_ID_SHORT,
+            long_help = crate::command_glossary::AGENT_ID_LONG,
+            verbatim_doc_comment,
+        )]
+        pub agent: Option<RawAgentId>,
+        /// The idempotency key the invocation was made with; requires `--agent`
+        #[arg(long, requires = "agent")]
+        pub idempotency_key: Option<String>,
+        /// The method or `tool:<tool>/<command path>`, when the same key was used for more than
+        /// one operation on the agent
+        #[arg(long, requires = "idempotency_key")]
+        pub method: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+    pub enum InvocationStateArg {
+        Scheduled,
+        Pending,
+        Running,
+        Waiting,
+        Retrying,
+        Interrupted,
+        Completed,
+        BackgroundFailed,
+        Failed,
+        Cancelled,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+    pub enum InvocationKindArg {
+        Method,
+        Constructor,
+        Tool,
     }
 }
 
@@ -3515,6 +3632,24 @@ mod test {
                 "{flag}"
             );
             assert!(parse_oplog(&[flag]).is_ok(), "{flag}");
+        }
+    }
+
+    #[test]
+    fn oplog_show_claims_conflicts_only_with_obfuscate() {
+        // An obfuscated export never shows claims.
+        let error = parse_oplog(&["--show-claims", "--obfuscate"]).unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+        // Every other output of the oplog takes the flag: the text and structured output, one
+        // page, a search, the HTML export and the live viewer.
+        for allowed in [
+            vec!["--show-claims"],
+            vec!["--show-claims", "--page"],
+            vec!["--show-claims", "--query", "error"],
+            vec!["--show-claims", "--html", "report.html"],
+            vec!["--show-claims", "--serve"],
+        ] {
+            assert!(parse_oplog(&allowed).is_ok(), "{allowed:?}");
         }
     }
 

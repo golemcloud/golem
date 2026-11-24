@@ -323,6 +323,7 @@ impl<Repo: DeploymentRepo> LoggedDeploymentRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
     async fn list_environment_type_ids(
         &self,
@@ -865,6 +866,7 @@ impl DbDeploymentRepo<PostgresPool> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
     async fn list_environment_type_ids(
         &self,
@@ -2546,6 +2548,7 @@ trait DeploymentRepoInternal: DeploymentRepo {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Api = <PostgresPool as Pool>::LabelledApi;

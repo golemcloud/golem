@@ -118,7 +118,7 @@ pub fn validate_snapshot_update_boundaries(
     deleted_regions: &DeletedRegions,
 ) -> Result<(), RevertUpdateBoundaryError> {
     // A manual update invocation changes only the manual admissions, and no queue element ends
-    // through one, so the check does not decode the invocation payloads.
+    // through one, so the check leaves the invocation entries out.
     entries
         .iter()
         .filter(|(_, entry)| !matches!(entry, OplogEntry::PendingAgentInvocation { .. }))
@@ -164,6 +164,41 @@ impl Display for SpanningConstruct {
                 "an open remote transaction (begun at oplog index {begin_index}, referenced at {reference_index})"
             ),
         }
+    }
+}
+
+/// The cut point that drops the last `number_of_invocations` invocations of an oplog whose last
+/// entry is at `last_index`: the index just before the `number_of_invocations`-th
+/// `AgentInvocationStarted`, counted back from `last_index`. Invocations in the region that a
+/// `Revert` entry dropped are not counted: the walk continues before that region. `None` when the
+/// oplog holds fewer invocations. A failed `read` ends the walk with its error.
+pub async fn cut_before_last_invocations<Read, ReadFut, E>(
+    read: Read,
+    last_index: OplogIndex,
+    number_of_invocations: u64,
+) -> Result<Option<OplogIndex>, E>
+where
+    Read: Fn(OplogIndex) -> ReadFut,
+    ReadFut: Future<Output = Result<OplogEntry, E>>,
+{
+    let mut current = last_index;
+    let mut found = 0;
+    loop {
+        let continue_before = match read(current).await? {
+            OplogEntry::AgentInvocationStarted { .. } => {
+                found += 1;
+                if found == number_of_invocations {
+                    return Ok(Some(current.previous()));
+                }
+                current
+            }
+            OplogEntry::Revert { dropped_region, .. } => dropped_region.start.min(current),
+            _ => current,
+        };
+        if continue_before == OplogIndex::INITIAL {
+            return Ok(None);
+        }
+        current = continue_before.previous();
     }
 }
 
@@ -221,6 +256,7 @@ where
             | OplogEntry::CompletionDelivered { .. }
             | OplogEntry::AgentInvocationStarted { .. }
             | OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::AgentInvocationSettled { .. }
             | OplogEntry::AgentInvocationFailed { .. }
             | OplogEntry::Suspend { .. }
             | OplogEntry::Error { .. }

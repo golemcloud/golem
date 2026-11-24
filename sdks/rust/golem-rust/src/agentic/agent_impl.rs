@@ -322,8 +322,8 @@ impl SaveSnapshotGuest for AgentRuntime {
 #[cfg(test)]
 mod tests {
     use super::{
-        RestoreIdentity, agent_id_from_env, decode_snapshot, encode_json_snapshot,
-        golem_env_var_not_readable, load_agent_snapshot,
+        BINARY_SNAPSHOT_VERSION, RestoreIdentity, agent_id_from_env, decode_snapshot,
+        encode_json_snapshot, golem_env_var_not_readable, load_agent_snapshot,
     };
     use crate::agentic::{
         AgentInitiator, AgentInvocationResult, BaseAgent, InvocationContext, ResolvedAgent,
@@ -394,9 +394,7 @@ mod tests {
                 return Err("expected bytes".to_string());
             };
             RESTORE_CALLS.fetch_add(1, Ordering::SeqCst);
-            if context.agent_type != "RestoreTest"
-                || context.agent_id != restore_test_agent_id()
-            {
+            if context.agent_type != "RestoreTest" || context.agent_id != restore_test_agent_id() {
                 return Err("unexpected restore context".to_string());
             }
             let mut parameters = crate::agentic::DirectAgentInput::new(context.parameters)

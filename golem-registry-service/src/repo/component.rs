@@ -166,6 +166,7 @@ impl<Repo: ComponentRepo> LoggedComponentRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
     async fn create(
         &self,
@@ -367,6 +368,7 @@ impl<DBP: Pool> DbComponentRepo<DBP> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentRepo for DbComponentRepo<PostgresPool> {
     async fn create(
         &self,
@@ -1182,6 +1184,7 @@ trait ComponentRepoInternal: ComponentRepo {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
