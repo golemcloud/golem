@@ -539,7 +539,9 @@ fn refuses_unsafe_or_duplicate_entries_and_missing_index() {
         ("index.json", tar::EntryType::Regular, "", true),
         ("oci-layout", tar::EntryType::Regular, "", false),
     ] {
-        let name = if path == "oci-layout" {
+        let name = if repeat {
+            "Duplicate tar entry"
+        } else if path == "oci-layout" {
             "index.json"
         } else {
             path
@@ -549,6 +551,50 @@ fn refuses_unsafe_or_duplicate_entries_and_missing_index() {
         assert!(error.contains(name), "{error}");
         let error = verify_manifest_digest(std::io::Cursor::new(&tar), &digest).unwrap_err();
         assert!(format!("{error:#}").contains(name));
+    }
+}
+
+#[test]
+fn rejects_inconsistent_or_unreferenced_oci_layers() {
+    let (config, layers) = sample();
+    let (digest, archive) = pack(&config, &layers).unwrap();
+    let original = archive_entries(archive.as_slice()).unwrap();
+    for expected in [
+        "Unexpected package entry",
+        "Size mismatch",
+        "Layer count mismatch",
+    ] {
+        let mut entries = original.clone();
+        let mut digest = digest.clone();
+        if expected == "Unexpected package entry" {
+            let bytes = b"unreferenced";
+            entries.insert(
+                blob_path(&describe(WASM, bytes).digest).unwrap(),
+                bytes.to_vec(),
+            );
+        } else {
+            let mut index: OciIndex = parse(&entries["index.json"], "index.json").unwrap();
+            let path = blob_path(&digest).unwrap();
+            let mut manifest = parse_manifest(&entries.remove(&path).unwrap(), &path).unwrap();
+            if expected == "Size mismatch" {
+                manifest.layers[0].size += 1;
+            } else {
+                manifest.layers.pop();
+            }
+            let bytes = canonical_json(&manifest).unwrap();
+            let descriptor = describe(MANIFEST, &bytes);
+            digest.clone_from(&descriptor.digest);
+            index.manifests[0] = descriptor;
+            entries.insert(blob_path(&digest).unwrap(), bytes);
+            entries.insert("index.json".into(), canonical_json(&index).unwrap());
+        }
+        let broken = write_tar(&entries).unwrap();
+        let read_error = read(broken.as_slice()).unwrap_err();
+        let stream_error =
+            verify_manifest_digest(std::io::Cursor::new(&broken), &digest).unwrap_err();
+        for error in [read_error, stream_error] {
+            assert!(format!("{error:#}").contains(expected), "{error:#}");
+        }
     }
 }
 
@@ -596,6 +642,47 @@ fn refuses_noncanonical_json_with_duplicate_keys() {
     let broken = write_tar(&entries).unwrap();
     let error = format!("{:#}", read(&broken[..]).unwrap_err());
     assert!(error.contains("oci-layout"), "{error}");
+}
+
+#[test]
+fn streaming_verifier_scans_shared_initial_files_once() {
+    struct Counted<R>(R, usize);
+    impl<R: Read> Read for Counted<R> {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            let count = self.0.read(bytes)?;
+            self.1 += count;
+            Ok(count)
+        }
+    }
+    impl<R: Seek> Seek for Counted<R> {
+        fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+            self.0.seek(position)
+        }
+    }
+    let (mut config, mut blobs) = sample();
+    let nested = write_tar(&BTreeMap::from([("00000000".into(), vec![7; 1024 * 1024])])).unwrap();
+    let digest = add_blob(&mut blobs, INITIAL_FILES, nested).digest;
+    for (name, component) in &mut config.components {
+        component.provision.files = Some(PackageInitialFiles {
+            layer: digest.clone(),
+            entries: BTreeMap::from([(
+                "00000000".into(),
+                PackageInitialFile {
+                    target: AgentFilePath::from_abs_str(&format!("/{}", name.0)).unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                },
+            )]),
+        });
+    }
+    let (manifest, archive) = pack(&config, &blobs).unwrap();
+    let mut input = Counted(std::io::Cursor::new(&archive), 0);
+    verify_manifest_digest(&mut input, &manifest).unwrap();
+    assert!(
+        input.1 < archive.len() * 5 / 2,
+        "read {} bytes from a {}-byte archive",
+        input.1,
+        archive.len()
+    );
 }
 
 #[test]

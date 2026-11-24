@@ -513,6 +513,7 @@ fn package_test_config(wasm: String) -> golem_package::PackageConfig {
         package: PackageIdentity {
             name: "my-package".into(),
             version: "2.4.1".into(),
+            calls: Default::default(),
         },
         components: [(
             ComponentName("example".into()),

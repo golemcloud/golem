@@ -40,6 +40,7 @@ impl<'a> IncrementalBlob<'a> {
     fn open(
         handle: &'a mut sqlx::sqlite::LockedSqliteHandle<'_>,
         rowid: i64,
+        published: bool,
         writable: bool,
     ) -> Result<Self, Error> {
         let mut raw = std::ptr::null_mut();
@@ -49,7 +50,12 @@ impl<'a> IncrementalBlob<'a> {
             libsqlite3_sys::sqlite3_blob_open(
                 handle.as_raw_handle().as_ptr(),
                 c"main".as_ptr(),
-                c"blob_storage".as_ptr(),
+                if published {
+                    c"published_blob_values"
+                } else {
+                    c"blob_storage"
+                }
+                .as_ptr(),
                 c"value".as_ptr(),
                 rowid,
                 i32::from(writable),
@@ -144,6 +150,10 @@ impl SqliteBlobStorage {
                     PRIMARY KEY (namespace, parent, name, is_directory)   -- A blob and a directory can hold one path
                 );
                 "#)).await?;
+        // SQLite expands a zeroblob during record construction if a column follows it.
+        self.pool.with_rw("blob_storage", "init").execute(sqlx::query(
+            "CREATE TABLE IF NOT EXISTS published_blob_values (name TEXT NOT NULL UNIQUE, value BLOB NOT NULL)"
+        )).await?;
         self.pool
             .with_rw("blob_storage", "init")
             .execute(sqlx::query(
@@ -215,23 +225,25 @@ impl BlobStorageBackend for SqliteBlobStorage {
             let mut file = file.reopen()?;
             let size = i32::try_from(file.metadata()?.len())?;
             let mut tx = runtime.block_on(connection.begin_with("BEGIN IMMEDIATE"))?;
-            let rowid: Option<(i64,)> = runtime.block_on(
+            let inserted: Option<(i64,)> = runtime.block_on(
                 sqlx::query_as(
-                    "INSERT INTO blob_storage (namespace, parent, name, value, size, is_directory)
-                 VALUES (?, ?, ?, zeroblob(?), ?, FALSE)
+                    "INSERT INTO blob_storage (namespace, parent, name, size, is_directory)
+                 VALUES (?, ?, ?, ?, FALSE)
                  ON CONFLICT(namespace, parent, name, is_directory) DO NOTHING RETURNING rowid",
                 )
                 .bind(namespace)
                 .bind(parent)
-                .bind(name)
-                .bind(size)
+                .bind(&name)
                 .bind(size)
                 .fetch_optional(&mut *tx),
             )?;
-            if let Some((rowid,)) = rowid {
+            if inserted.is_some() {
+                let (rowid,): (i64,) = runtime.block_on(sqlx::query_as(
+                    "INSERT INTO published_blob_values (name, value) VALUES (?, zeroblob(?)) RETURNING rowid",
+                ).bind(name).bind(size).fetch_one(&mut *tx))?;
                 if size > 0 {
                     let mut handle = runtime.block_on(tx.lock_handle())?;
-                    let mut blob = IncrementalBlob::open(&mut handle, rowid, true)?;
+                    let mut blob = IncrementalBlob::open(&mut handle, rowid, true, true)?;
                     let mut chunk = vec![0; BLOB_STREAM_CHUNK_SIZE];
                     let mut offset = 0;
                     while offset < size {
@@ -287,7 +299,12 @@ impl BlobStorageBackend for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> Result<Option<Vec<u8>>, Error> {
-        let query = sqlx::query_as("SELECT value FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? AND is_directory = FALSE;")
+        let sql = if namespace == BlobStorageNamespace::PublishedBlobs {
+            "SELECT p.value FROM blob_storage b JOIN published_blob_values p ON p.name = b.name WHERE b.namespace = ? AND b.parent = ? AND b.name = ? AND b.is_directory = FALSE"
+        } else {
+            "SELECT value FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? AND is_directory = FALSE"
+        };
+        let query = sqlx::query_as(sql)
             .bind(Self::namespace(namespace))
             .bind(path.parent_text()?)
             .bind(path.file_name_text()?);
@@ -311,6 +328,7 @@ impl BlobStorageBackend for SqliteBlobStorage {
         offset: u64,
         length: u64,
     ) -> Result<Option<BlobRangeStream>, Error> {
+        let published = namespace == BlobStorageNamespace::PublishedBlobs;
         let namespace = Self::namespace(namespace);
         let parent = path.parent_text()?;
         let name = path.file_name_text()?;
@@ -323,16 +341,25 @@ impl BlobStorageBackend for SqliteBlobStorage {
             let mut ready = Some(ready);
             let result = (|| -> Result<(), Error> {
                 let mut transaction = runtime.block_on(connection.begin())?;
-                let rowid: Option<(i64,)> = runtime.block_on(sqlx::query_as(
+                let sql = if published {
+                    "SELECT p.rowid FROM blob_storage b JOIN published_blob_values p ON p.name = b.name WHERE b.namespace = ? AND b.parent = ? AND b.name = ? AND b.is_directory = FALSE"
+                } else {
                     "SELECT rowid FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? AND is_directory = FALSE"
-                ).bind(namespace).bind(parent).bind(name).fetch_optional(&mut *transaction))?;
+                };
+                let rowid: Option<(i64,)> = runtime.block_on(
+                    sqlx::query_as(sql)
+                        .bind(namespace)
+                        .bind(parent)
+                        .bind(name)
+                        .fetch_optional(&mut *transaction),
+                )?;
                 let Some((rowid,)) = rowid else {
                     let _ = ready.take().unwrap().send(Ok(None));
                     return Ok(());
                 };
                 // Keep one read snapshot from rowid lookup through the last chunk.
                 let mut handle = runtime.block_on(transaction.lock_handle())?;
-                let mut blob = IncrementalBlob::open(&mut handle, rowid, false)?;
+                let mut blob = IncrementalBlob::open(&mut handle, rowid, published, false)?;
                 let total_size = blob.size();
                 validate_range(offset, length, total_size)?;
                 if ready.take().unwrap().send(Ok(Some(total_size))).is_err() {
@@ -448,7 +475,7 @@ impl BlobStorageBackend for SqliteBlobStorage {
         let query = sqlx::query(
             r#"
                 INSERT INTO blob_storage (namespace, parent, name, value, size, is_directory)
-                SELECT ?, ?, ?, value, size, FALSE FROM blob_storage
+                SELECT ?, ?, ?, COALESCE(value, (SELECT value FROM published_blob_values WHERE name = blob_storage.name AND namespace = 'published_blobs')), size, FALSE FROM blob_storage
                 WHERE namespace = ? AND parent = ? AND name = ? AND is_directory = FALSE
                 ON CONFLICT(namespace, parent, name, is_directory) DO UPDATE SET value = excluded.value, size = excluded.size, last_modified_at = CURRENT_TIMESTAMP;
             "#,

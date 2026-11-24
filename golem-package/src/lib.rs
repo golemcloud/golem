@@ -1019,7 +1019,17 @@ fn package_root(index: &OciIndex, layout: Value) -> anyhow::Result<&Descriptor> 
 }
 
 fn parse_manifest(bytes: &[u8], manifest_path: &str) -> anyhow::Result<OciManifest> {
-    let manifest: OciManifest = parse(bytes, manifest_path)?;
+    // Reject malformed descriptor shapes before constructing a JSON value tree.
+    ensure!(
+        bytes.len() as u64 <= metadata_limit(manifest_path),
+        "Package metadata size limit exceeded at {manifest_path}"
+    );
+    let manifest: OciManifest = serde_json::from_slice(bytes)
+        .with_context(|| format!("Invalid package entry {manifest_path}"))?;
+    ensure!(
+        canonical_json(&manifest)? == bytes,
+        "Non-canonical JSON in package entry {manifest_path}"
+    );
     ensure!(
         manifest.schema_version == 2
             && manifest.media_type == MANIFEST
@@ -1074,10 +1084,12 @@ fn check_nested_layers(
     config: &PackageConfig,
     mut names: impl FnMut(&str) -> anyhow::Result<BTreeSet<String>>,
 ) -> anyhow::Result<()> {
+    let mut nested = BTreeMap::new();
     for layer in &manifest.layers {
         if layer.media_type == FILE_DIRECTORY {
-            names(&blob_path(&layer.digest)?)
-                .with_context(|| format!("Invalid File directory layer {}", layer.digest))?;
+            nested
+                .entry(blob_path(&layer.digest)?)
+                .or_insert_with(Vec::new);
         }
     }
     for component in config.components.values() {
@@ -1087,7 +1099,31 @@ fn check_nested_layers(
             .chain(component.tool_middlewares.values())
             .filter_map(|provision| provision.files.as_ref())
         {
-            let path = blob_path(&files.layer)?;
+            nested
+                .entry(blob_path(&files.layer)?)
+                .or_default()
+                .push(files);
+        }
+    }
+    // Group references so each tar is scanned once and only one set of names is live.
+    for (path, provisions) in nested {
+        let contents = names(&path).with_context(|| {
+            if provisions.is_empty() {
+                format!("Invalid File directory layer {path}")
+            } else {
+                format!("Invalid initial-file layer {path}")
+            }
+        })?;
+        if !provisions.is_empty() {
+            ensure!(
+                contents
+                    .iter()
+                    .enumerate()
+                    .all(|(index, key)| *key == format!("{index:08}")),
+                "Initial-file entries do not match config in {path}"
+            );
+        }
+        for files in provisions {
             let mut targets = BTreeSet::new();
             for file in files.entries.values() {
                 ensure!(
@@ -1096,14 +1132,8 @@ fn check_nested_layers(
                     file.target.as_abs_str()
                 );
             }
-            let contents =
-                names(&path).with_context(|| format!("Invalid initial-file layer {path}"))?;
             ensure!(
-                contents.iter().eq(files.entries.keys())
-                    && contents
-                        .iter()
-                        .enumerate()
-                        .all(|(index, key)| *key == format!("{index:08}")),
+                contents.iter().eq(files.entries.keys()),
                 "Initial-file entries do not match config in {path}"
             );
         }

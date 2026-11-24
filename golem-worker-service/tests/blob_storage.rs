@@ -682,6 +682,33 @@ async fn sqlite_range_native_memory_is_bounded() {
         .execute(&pool)
         .await
         .unwrap();
+    let block = Bytes::from(vec![42; BLOB_STREAM_CHUNK_SIZE]);
+    let blocks = total as usize / block.len();
+    let mut hash = Sha256::new();
+    for _ in 0..blocks {
+        hash.update(&block);
+    }
+    let digest = format!("sha256:{:x}", hash.finalize());
+    // SAFETY: This test runs alone with process-global SQLite allocator counters.
+    let baseline = unsafe {
+        libsqlite3_sys::sqlite3_memory_highwater(1);
+        libsqlite3_sys::sqlite3_memory_used()
+    };
+    let input = futures::stream::iter((0..blocks).map(|_| Ok(block.clone()))).boxed();
+    let (_, outcome) = storage.store_published_blob(&digest, input).await.unwrap();
+    assert_eq!(outcome, PutIfAbsent::Written);
+    let mut output = storage.read_published_blob(&digest).await.unwrap().unwrap();
+    let mut hash = Sha256::new();
+    while let Some(chunk) = output.try_next().await.unwrap() {
+        assert!(chunk.len() <= BLOB_STREAM_CHUNK_SIZE);
+        hash.update(chunk);
+    }
+    assert_eq!(format!("sha256:{:x}", hash.finalize()), digest);
+    let growth = unsafe { libsqlite3_sys::sqlite3_memory_highwater(0) } - baseline;
+    assert!(
+        growth < 4 * 1024 * 1024,
+        "SQLite allocated {growth} bytes for a {total}-byte published blob"
+    );
     sqlx::query("INSERT INTO blob_storage (namespace, parent, name, value, size) VALUES (?, '', 'large', zeroblob(?), ?)")
         .bind(format!("initial_agent_files-{environment_id}")).bind(total).bind(total).execute(&pool).await.unwrap();
     for (offset, length) in [(total as u64 - 19, 13), (0, total as u64)] {
@@ -898,6 +925,30 @@ async fn published_package_blob_is_verified_and_created_once(
         "The backend returned the entire object as one chunk"
     );
     assert_eq!(format!("sha256:{:x}", hash.finalize()), digest);
+    let source = Path::new(digest.strip_prefix("sha256:").unwrap());
+    let destination = BlobStorageNamespace::Components {
+        environment_id: EnvironmentId::new(),
+    };
+    let path = Path::new("copied-package");
+    storage
+        .copy_between(
+            "test",
+            "copy",
+            BlobStorageNamespace::PublishedBlobs,
+            source,
+            destination.clone(),
+            path,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .get_raw("test", "get", destination, path)
+            .await
+            .unwrap()
+            .unwrap(),
+        bytes
+    );
 }
 
 #[test]
