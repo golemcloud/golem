@@ -95,8 +95,9 @@ const usageModeRefusals: Readonly<Record<string, UsageModeChange>> = {
 }
 
 /**
- * A failed registry call. It carries no request URL or response body: the URL of
- * `POST /v1/login/oauth2` holds the GitHub access token.
+ * A failed registry call. It carries no request or response: the request body of
+ * `POST /v1/login/oauth2` holds the GitHub access token, and its response body holds the
+ * secret of the Golem token.
  */
 export class RegistryError extends Data.TaggedError("RegistryError")<{
   readonly operation: string

@@ -12,8 +12,9 @@ use golem_common::model::Empty;
 use golem_common::model::login::OAuth2WebflowStateId;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
-use poem::http::StatusCode;
+use poem::http::{Method, StatusCode, Uri};
 use poem::test::TestClient;
+use poem::{Endpoint, IntoEndpoint, Request};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 use test_r::{test, timeout};
@@ -146,5 +147,52 @@ async fn login_oauth2_refuses_an_access_token_in_the_query() {
         .await;
 
     response.assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert!(fixture.github.access_tokens.lock().unwrap().is_empty());
+}
+
+/// Sends the body to the login endpoint and returns the error of the endpoint. The tracing
+/// middleware records the message of this error.
+async fn login_error(fixture: &Fixture, body: &'static str) -> poem::Error {
+    let endpoint = make_open_api_service(&fixture.services).into_endpoint();
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri(Uri::from_static("/v1/login/oauth2"))
+        .content_type("application/json")
+        .body(body);
+    match endpoint.call(request).await {
+        Ok(_) => panic!("the endpoint accepted the body"),
+        Err(error) => error,
+    }
+}
+
+#[test]
+#[timeout("120s")]
+async fn login_oauth2_leaves_a_wrongly_typed_access_token_out_of_the_error() {
+    let fixture = fixture().await;
+
+    let error = login_error(
+        &fixture,
+        r#"{"provider":"github","accessToken":["gho_typed_token"]}"#,
+    )
+    .await;
+
+    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+    assert!(!error.to_string().contains("gho_typed_token"), "{error}");
+    assert!(fixture.github.access_tokens.lock().unwrap().is_empty());
+}
+
+#[test]
+#[timeout("120s")]
+async fn login_oauth2_leaves_a_top_level_array_out_of_the_error() {
+    let fixture = fixture().await;
+
+    let error = login_error(
+        &fixture,
+        r#"[{"provider":"github","accessToken":"gho_array_token"}]"#,
+    )
+    .await;
+
+    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+    assert!(!error.to_string().contains("gho_array_token"), "{error}");
     assert!(fixture.github.access_tokens.lock().unwrap().is_empty());
 }

@@ -25,10 +25,53 @@ use golem_common::model::login::{
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
+use poem::{Request, RequestBody};
+use poem_openapi::error::ParseRequestPayloadError;
 use poem_openapi::param::Query;
-use poem_openapi::payload::Json;
+use poem_openapi::payload::{Json, ParsePayload, Payload};
+use poem_openapi::registry::{MetaSchemaRef, Registry};
 use poem_openapi::*;
 use tracing::Instrument;
+
+/// The JSON body of `POST /v1/login/oauth2`.
+///
+/// The parse error of [`Json`] quotes the JSON value that it refused, and that value can hold the
+/// access token. The tracing middleware records error messages, so a body that does not parse
+/// gets a fixed message instead.
+struct OAuth2LoginBody(OAuth2Login);
+
+impl Payload for OAuth2LoginBody {
+    const CONTENT_TYPE: &'static str = <Json<OAuth2Login> as Payload>::CONTENT_TYPE;
+
+    fn check_content_type(content_type: &str) -> bool {
+        <Json<OAuth2Login> as Payload>::check_content_type(content_type)
+    }
+
+    fn schema_ref() -> MetaSchemaRef {
+        <Json<OAuth2Login> as Payload>::schema_ref()
+    }
+
+    fn register(registry: &mut Registry) {
+        <Json<OAuth2Login> as Payload>::register(registry)
+    }
+}
+
+impl ParsePayload for OAuth2LoginBody {
+    const IS_REQUIRED: bool = <Json<OAuth2Login> as ParsePayload>::IS_REQUIRED;
+
+    async fn from_request(request: &Request, body: &mut RequestBody) -> poem::Result<Self> {
+        match <Json<OAuth2Login> as ParsePayload>::from_request(request, body).await {
+            Ok(Json(login)) => Ok(Self(login)),
+            Err(error) if error.is::<ParseRequestPayloadError>() => Err(ParseRequestPayloadError {
+                reason: "the body is not a valid OAuth2Login object".to_string(),
+            }
+            .into()),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+poem_openapi::impl_apirequest_for_payload!(OAuth2LoginBody);
 
 pub struct LoginApi {
     login_system: LoginSystem,
@@ -54,7 +97,7 @@ impl LoginApi {
     /// - `secret` is the secret key to be sent in the Authorization header as a bearer token for all the other endpoints
     ///
     #[oai(path = "/oauth2", method = "post", operation_id = "login_oauth2")]
-    async fn oauth2(&self, request: Json<OAuth2Login>) -> ApiResult<Json<TokenWithSecret>> {
+    async fn oauth2(&self, request: OAuth2LoginBody) -> ApiResult<Json<TokenWithSecret>> {
         let record = recorded_http_api_request!("login_oauth2",);
         let response = self
             .oauth2_internal(request.0)
