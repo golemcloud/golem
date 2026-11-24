@@ -188,16 +188,16 @@ async fn constructor_self_schedule_survives_restart_but_self_call_is_rejected(
             continue;
         }
         let mut stdout = String::new();
-        let promise_index = loop {
+        let (promise_index, output_invocation_id) = loop {
             tokio::select! {
                 biased;
                 response = &mut create => anyhow::bail!("constructor returned before gate: {response:?}"),
                 event = events.recv() => {
                     let event = event.ok_or_else(|| anyhow::anyhow!("constructor output closed"))?;
-                    if let AgentEvent::StdOut { bytes, .. } = AgentEvent::try_from(event).map_err(anyhow::Error::msg)? {
+                    if let AgentEvent::StdOut { bytes, invocation_id, .. } = AgentEvent::try_from(event).map_err(anyhow::Error::msg)? {
                         stdout.push_str(&String::from_utf8(bytes)?);
                         if let Some(index) = stdout.lines().find_map(|line| line.strip_prefix("constructor-calls:promise:").and_then(|s| s.parse::<u64>().ok())) {
-                            break index;
+                            break (index, invocation_id);
                         }
                     }
                 }
@@ -205,6 +205,11 @@ async fn constructor_self_schedule_survives_restart_but_self_call_is_rejected(
         };
         let history = executor.stored_oplog(&id.agent_id).await;
         let constructor_id = assert_constructor_identity(&history);
+        assert_eq!(
+            output_invocation_id,
+            Some(constructor_id),
+            "constructor stdout carries its invocation ID"
+        );
         let scheduled = history
             .iter()
             .filter_map(|entry| match entry {
@@ -337,6 +342,47 @@ async fn constructor_self_schedule_survives_restart_but_self_call_is_rejected(
             terminals[0] < settlements[0] && settlements[0] < starts[0],
             "scheduled method starts after constructor result and settlement"
         );
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn recreated_constructor_performs_its_own_downstream_effect(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    let stored = executor
+        .component_dep(&context.default_environment_id, component)
+        .store()
+        .await?;
+    let name = "constructor-recreation".to_string();
+    let key = agent_key!("ConstructorEffect", name.clone());
+    let id = crate::agent::keyed_agent_id(stored.environment_id, &key);
+    let effect = agent_key!("Counter", format!("{name}-constructor-effect"));
+
+    for expected in 1..=2 {
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&stored, &key, "observed", data_value!())
+                .await?
+                .into_typed::<u32>()?,
+            expected
+        );
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&stored, &effect, "count", data_value!())
+                .await?
+                .into_typed::<u32>()?,
+            expected,
+            "each constructor incarnation performs its own downstream increment"
+        );
+        if expected == 1 {
+            executor.delete_worker(&id).await?;
+        }
     }
     Ok(())
 }

@@ -1418,7 +1418,7 @@ Create admission is caller-specific even when construction is shared. After cons
 
 Constructor validation is independent of keyed addressing. `ParsedAgentKey::canonical_constructor` validates typed parameters against the implementing schema without a length limit; only constructing an `AgentKey` enforces the 512-byte canonical key limit. Unkeyed and ephemeral targets serialize and decode the constructor directly, including remote dispatch. An ephemeral RPC proxy has a domain-separated logical identity derived from its constructor; that identity never addresses an instance. Each invocation still derives its actual target from its invocation owner key.
 
-The constructor is an invocation. `InvocationId::constructor` derives UUIDv5 with the persisted `AgentFingerprint` as namespace and the exact UTF-8 bytes `constructor` as name. Creation, joining and reconstruction share that ID; deleting and recreating a keyed agent changes it. During private worker preparation, derive from the local metadata, not the unresolved `Worker`. The guest invocation context exposes the owner-qualified ID and preserves the recorded creator as caller. Initialization has no attached scope card. Snapshot save/load, component bootstrap and oplog processing still expose no invocation ID. Ordinary invocation get/list include constructors. A constructor can bind itself and schedule without awaiting the scheduled method; the serial loop runs the method after construction returns. Awaited self-calls remain rejected. Tests: `invocation_context`, `invocation_reads`, and `worker_initialization::constructor_self_schedule_survives_restart_but_self_call_is_rejected`.
+The constructor is an invocation. `InvocationId::constructor` derives UUIDv5 with the persisted `AgentFingerprint` as namespace and the exact UTF-8 bytes `constructor` as name. Creation, joining and reconstruction share that ID; deleting and recreating a keyed agent changes it. During private worker preparation, derive from the local metadata, not the unresolved `Worker`. The guest invocation context exposes the owner-qualified ID and preserves the recorded creator as caller. Initialization has no attached scope card. Snapshot save/load, component bootstrap and oplog processing still expose no invocation ID. Ordinary invocation get/list include constructors. A constructor can bind itself and schedule without awaiting the scheduled method; the serial loop runs the method after the constructor invocation settles, not merely after the constructor returns. Awaited self-calls remain rejected. Tests: `invocation_context`, `invocation_reads`, and `worker_initialization::constructor_self_schedule_survives_restart_but_self_call_is_rejected`.
 
 After admission, executor create and REST create await `Worker::await_initialization`, not
 `WorkerLoaded`. Subscribe before reading the authoritative constructor result index by its typed
@@ -2540,9 +2540,9 @@ Guests read their identity and caller through `golem:agent/invocation-context`
 (`durable_host/golem/agent_invocation_context.rs`). `invocation-id()` and `caller()` read what the
 invocation start recorded, so they are not durable calls. An entity Store answers for its
 enclosing invocation (`entity_context.rs::current_invocation_id`). Outside an invocation
-(initialization, snapshot save and load) `invocation-id()` is none. The export functions take no
+(component bootstrap, snapshot save and load) `invocation-id()` is none. Constructors run as invocations and expose their constructor invocation ID. The export functions take no
 `caller` parameter; the guest reads the caller from the host. Agent events (`StdOut`, `StdErr`, `Log`) carry the invocation UUID of the
-writing Store, and `InvocationStarted`/`InvocationFinished` carry the key's `to_uuid()`.
+writing Store, including the constructor invocation ID for constructor output; component bootstrap and snapshot save/load output remain outside an invocation. `InvocationStarted`/`InvocationFinished` carry the key's `to_uuid()`.
 
 ## Invocation attribution and per-invocation state
 

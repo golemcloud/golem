@@ -666,6 +666,30 @@ impl ConstructorCalls for ConstructorCallsImpl {
     }
 }
 
+#[agent_definition]
+trait ConstructorEffect {
+    async fn new(name: String) -> Self;
+    fn observed(&self) -> u32;
+}
+
+struct ConstructorEffectImpl {
+    observed: u32,
+}
+
+#[agent_implementation]
+impl ConstructorEffect for ConstructorEffectImpl {
+    async fn new(name: String) -> Self {
+        let mut effect = CounterClient::upsert(format!("{name}-constructor-effect"));
+        Self {
+            observed: effect.increment().await,
+        }
+    }
+
+    fn observed(&self) -> u32 {
+        self.observed
+    }
+}
+
 mod constructor_probe {
     use golem_rust::agentic::{
         AgentInitiator, AgentInvocationResult, AgentParameterProbe, AgentParameterSchema,
