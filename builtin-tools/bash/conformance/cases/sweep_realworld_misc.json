@@ -1,0 +1,2776 @@
+{
+  "tier": "sweep",
+  "description": "Real-world usage: tldr-pages examples for printf, seq, expr, factor, numfmt, date, env, sleep,\nyes, xargs, tee, jq, sh and bash.\n\nSource: tldr-pages (https://github.com/tldr-pages/tldr, CC BY 4.0), pages/common and pages/linux\nat commit 8cf22035e60b167ebf224c1c527b27e0b5dca24d; see ../NOTICE. Each example runs with its\nplaceholders bound, then over the argument shapes its command meets: edge numbers, empty input,\nmissing operands, bad values. Clocks are pinned (`date -d`, TZ=UTC), sleeps are short, and random\noutput (shuf, mktemp) is only checked for its shape.",
+  "cases": [
+    {
+      "name": "real tldr printf: text message",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"%s\\n\" \"Hello world\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: text message with several arguments reuse the format",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"%s\\n\" \"a\" \"b c\" \"d\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: text message with no argument",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"%s\\n\" ",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: text message with an empty argument",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"%s\\n\" \"\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: text message with an argument with a backslash",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"%s\\n\" 'a\\nb'",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: text message with a multibyte argument",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"%s\\n\" 'héllo 日本'",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: integer in bold blue 42",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"\\e[1;34m%.3d\\e[0m\\n\" 42",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: integer in bold blue 7",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"\\e[1;34m%.3d\\e[0m\\n\" 7",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: integer in bold blue -5",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"\\e[1;34m%.3d\\e[0m\\n\" -5",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: integer in bold blue 1234",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"\\e[1;34m%.3d\\e[0m\\n\" 1234",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: integer in bold blue 0x1F",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"\\e[1;34m%.3d\\e[0m\\n\" 0x1F",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: integer in bold blue 010",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"\\e[1;34m%.3d\\e[0m\\n\" 010",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: integer in bold blue x",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"\\e[1;34m%.3d\\e[0m\\n\" x",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: float with the euro sign 123.4",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"\\u20AC %.2f\\n\" 123.4",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: float with the euro sign -1",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"\\u20AC %.2f\\n\" -1",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: float with the euro sign 1e3",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"\\u20AC %.2f\\n\" 1e3",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: float with the euro sign 2.675",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"\\u20AC %.2f\\n\" 2.675",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: float with the euro sign abc",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"\\u20AC %.2f\\n\" abc",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: float with the euro sign 1,5",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"\\u20AC %.2f\\n\" 1,5",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: environment variables",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nVAR1=one VAR2=\"two words\"\nprintf \"var1: %s\\tvar2: %s\\n\" \"$VAR1\" \"$VAR2\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: environment variables unset",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"var1: %s\\tvar2: %s\\n\" \"$VAR1\" \"$VAR2\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: environment variables one missing",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nVAR1=one\nprintf \"var1: %s\\tvar2: %s\\n\" \"$VAR1\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: store in a variable",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf -v myvar \"This is %s = %d\\n\" \"a year\" 2016; printf \"[%s]\" \"$myvar\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: store in a variable with a bad number",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf -v myvar \"This is %s = %d\\n\" \"a year\" 20x16; echo \"status=$?\"; printf \"[%s]\" \"$myvar\"",
+      "tags": [
+        "cmd.printf",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: store in an array element",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf -v arr[2] \"%s-%s\" a b; declare -p arr",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: store in an invalid name",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf -v 1bad \"%s\" x; echo \"status=$?\"",
+      "tags": [
+        "cmd.printf",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: hex octal scientific 0xFF 0377 100000",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"hex=%x octal=%o scientific=%e\\n\" 0xFF 0377 100000",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: hex octal scientific 255 255 1",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"hex=%x octal=%o scientific=%e\\n\" 255 255 1",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: hex octal scientific -1 8 0.000123",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"hex=%x octal=%o scientific=%e\\n\" -1 8 0.000123",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: hex octal scientific 0x7fffffffffffffff 0 1e300",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"hex=%x octal=%o scientific=%e\\n\" 0x7fffffffffffffff 0 1e300",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: hex octal scientific 'A' '\"B' -0",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"hex=%x octal=%o scientific=%e\\n\" 'A' '\"B' -0",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: width and precision from arguments",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"[%*s][%-*s][%.*f]\\n\" 5 ab 4 c 2 3.14159",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: shell-quoted and escaped",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"%q %b\\n\" \"a b'c\" \"x\\ty\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr printf: percent literal and character",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"100%% %c\\n\" hello",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: sequence 10",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq 10",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: sequence 10 20",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq 10 20",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: sequence 5 3 20",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq 5 3 20",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: sequence 0 0.5 2",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq 0 0.5 2",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: sequence 5 -1 1",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq 5 -1 1",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: sequence 5 1",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq 5 1",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: sequence -3 -1",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq -3 -1",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: sequence 1 0.1 1.3",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq 1 0.1 1.3",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: sequence 1e2 1e2",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq 1e2 1e2",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: sequence 3 x",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq 3 x",
+      "tags": [
+        "cmd.seq",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: separator -s",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq -s \" \" 5 3 20",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: separator --separator",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq --separator \" \" 5 3 20",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: empty separator",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq -s '' 1 5",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: format -f",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq -f \"%04g\" 5 3 20",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: format --format",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq --format \"%04g\" 5 3 20",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: format with a float",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq -f \"%.2f\" 0 0.25 1",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: format without a directive",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq -f \"x\" 1 2",
+      "tags": [
+        "cmd.seq",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: equal width -w",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq -w 5 3 20",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: equal width --equal-width",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq --equal-width 5 3 20",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: equal width with negatives",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq -w -5 5 10",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: equal width with decimals",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq -w 0.5 0.5 2",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: zero increment",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq 1 0 3",
+      "tags": [
+        "cmd.seq",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr seq: no operands",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nseq",
+      "tags": [
+        "cmd.seq",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: length of 'string'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr length \"string\"; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: length of ''",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr length \"\"; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: length of 'héllo'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr length \"héllo\"; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: length of 'a b'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr length \"a b\"; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: substr 2 3",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr substr \"string\" 2 3; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: substr 1 100",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr substr \"string\" 1 100; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: substr 0 2",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr substr \"string\" 0 2; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: substr 5 0",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr substr \"string\" 5 0; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: substr 3 x",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr substr \"string\" 3 x; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: match 'st.*'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr match \"string\" 'st.*'; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: match 'str'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr match \"string\" 'str'; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: match 'x'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr match \"string\" 'x'; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: match '\\(s.r\\)'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr match \"string\" '\\(s.r\\)'; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: match 's*'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr match \"string\" 's*'; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: match '\\(ab\\)*'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr match \"string\" '\\(ab\\)*'; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: index of 'ri'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr index \"string\" \"ri\"; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: index of 'g'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr index \"string\" \"g\"; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: index of 'xyz'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr index \"string\" \"xyz\"; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: index of ''",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr index \"string\" \"\"; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: arithmetic 7 + 3",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr 7 + 3; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: arithmetic -7 + 2",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr -7 + 2; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: arithmetic 7 + 0",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr 7 + 0; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: arithmetic 7 - 3",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr 7 - 3; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: arithmetic -7 - 2",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr -7 - 2; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: arithmetic 7 - 0",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr 7 - 0; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: arithmetic 7 \\* 3",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr 7 \\* 3; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: arithmetic -7 \\* 2",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr -7 \\* 2; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: arithmetic 7 \\* 0",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr 7 \\* 0; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: arithmetic 7 / 3",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr 7 / 3; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: arithmetic -7 / 2",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr -7 / 2; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: arithmetic 7 / 0",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr 7 / 0; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: arithmetic 7 % 3",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr 7 % 3; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: arithmetic -7 % 2",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr -7 % 2; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: arithmetic 7 % 0",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr 7 % 0; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: arithmetic overflow",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr 9223372036854775807 + 1; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: arithmetic on a non-integer",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr 1.5 + 1; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: or 5 7",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr 5 \\| 7; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: and 5 7",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr 5 \\& 7; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: or 0 7",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr 0 \\| 7; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: and 0 7",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr 0 \\& 7; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: or \"\" 0",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr \"\" \\| 0; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: and \"\" 0",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr \"\" \\& 0; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: or 0 0",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr 0 \\| 0; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: and 0 0",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr 0 \\& 0; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: comparison of strings and numbers",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr 10 \\< 9; expr a \\< b; expr 10 = 10.0; echo \"status=$?\"",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: colon match",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr 'abc123' : '[a-z]*'; expr 'abc123' : '[a-z]*\\([0-9]*\\)'",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr expr: parentheses",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexpr \\( 2 + 3 \\) \\* 4",
+      "tags": [
+        "cmd.expr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr factor: factorize 84",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nfactor 84; echo \"status=$?\"",
+      "tags": [
+        "cmd.factor"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr factor: factorize 1",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nfactor 1; echo \"status=$?\"",
+      "tags": [
+        "cmd.factor"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr factor: factorize 0",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nfactor 0; echo \"status=$?\"",
+      "tags": [
+        "cmd.factor"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr factor: factorize 97",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nfactor 97; echo \"status=$?\"",
+      "tags": [
+        "cmd.factor"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr factor: factorize 2305843009213693951",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nfactor 2305843009213693951; echo \"status=$?\"",
+      "tags": [
+        "cmd.factor"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr factor: factorize 18446744073709551615",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nfactor 18446744073709551615; echo \"status=$?\"",
+      "tags": [
+        "cmd.factor"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr factor: factorize 4294967297",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nfactor 4294967297; echo \"status=$?\"",
+      "tags": [
+        "cmd.factor"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr factor: factorize -6",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nfactor -6; echo \"status=$?\"",
+      "tags": [
+        "cmd.factor"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr factor: factorize 12 13 14",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nfactor 12 13 14; echo \"status=$?\"",
+      "tags": [
+        "cmd.factor"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr factor: factorize 08",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nfactor 08; echo \"status=$?\"",
+      "tags": [
+        "cmd.factor"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr factor: from stdin",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\necho 84 | factor",
+      "tags": [
+        "cmd.factor"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr factor: several from stdin",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf '6\\n  15 21\\n\\n' | factor",
+      "tags": [
+        "cmd.factor"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr factor: empty stdin",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf '' | factor; echo \"status=$?\"",
+      "tags": [
+        "cmd.factor"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: from si 1.5K",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nnumfmt --from si 1.5K; echo \"status=$?\"",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: from si 1K",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nnumfmt --from si 1K; echo \"status=$?\"",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: from si 1.5M",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nnumfmt --from si 1.5M; echo \"status=$?\"",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: from si 999",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nnumfmt --from si 999; echo \"status=$?\"",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: from si 1.5",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nnumfmt --from si 1.5; echo \"status=$?\"",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: to si 1500",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nnumfmt --to si 1500",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: to si 999",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nnumfmt --to si 999",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: to si 1000",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nnumfmt --to si 1000",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: to si 1001",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nnumfmt --to si 1001",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: to si 1234567",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nnumfmt --to si 1234567",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: to si 0",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nnumfmt --to si 0",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: to si -1500",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nnumfmt --to si -1500",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: to si 1.5",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nnumfmt --to si 1.5",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: from iec 1.5K",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nnumfmt --from iec 1.5K",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: from iec 1K",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nnumfmt --from iec 1K",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: from iec 3G",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nnumfmt --from iec 3G",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: from auto 1.5Ki",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nnumfmt --from auto 1.5Ki; echo \"status=$?\"",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: from auto 2Mi",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nnumfmt --from auto 2Mi; echo \"status=$?\"",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: from auto 1.5K",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nnumfmt --from auto 1.5K; echo \"status=$?\"",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: from auto 1.5",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nnumfmt --from auto 1.5; echo \"status=$?\"",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: field with a header to iec",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'name size\\na 1048576\\nb 2048\\nc 1536\\n' | numfmt --header=1 --field 2 --to iec",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: field with a header to iec from a listing",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'h1 h2 h3 h4 SIZE name\\n- 1 u g 4096 d\\n- 1 u g 123456789 f\\n' | numfmt --header=1 --field 5 --to iec",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: left aligned padded format",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf '2048\\ta\\n1536000\\tb\\n12\\tc\\n' | numfmt --to iec --format \"%-5f\"",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: padding",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nnumfmt --to iec --padding 8 1048576 1",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: suffix",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nnumfmt --to si --suffix B 1500",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr numfmt: invalid field",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\necho 1 2 | numfmt --field 3 --to si; echo \"status=$?\"",
+      "tags": [
+        "cmd.numfmt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: locale format of @1473305798",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=UTC date -d @1473305798 +%c",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: iso 8601 in utc of @1473305798",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ndate -u +%Y-%m-%dT%H:%M:%SZ -d @1473305798",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: default format of @1473305798",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=UTC date -d @1473305798",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: rfc 3339 seconds of @1473305798",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=UTC date --rfc-3339 seconds -d @1473305798",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: locale format of @0",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=UTC date -d @0 +%c",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: iso 8601 in utc of @0",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ndate -u +%Y-%m-%dT%H:%M:%SZ -d @0",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: default format of @0",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=UTC date -d @0",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: rfc 3339 seconds of @0",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=UTC date --rfc-3339 seconds -d @0",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: locale format of @-1",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=UTC date -d @-1 +%c",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: iso 8601 in utc of @-1",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ndate -u +%Y-%m-%dT%H:%M:%SZ -d @-1",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: default format of @-1",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=UTC date -d @-1",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: rfc 3339 seconds of @-1",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=UTC date --rfc-3339 seconds -d @-1",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: locale format of @2147483648",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=UTC date -d @2147483648 +%c",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: iso 8601 in utc of @2147483648",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ndate -u +%Y-%m-%dT%H:%M:%SZ -d @2147483648",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: default format of @2147483648",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=UTC date -d @2147483648",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: rfc 3339 seconds of @2147483648",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=UTC date --rfc-3339 seconds -d @2147483648",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: locale format of @1700000000.5",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=UTC date -d @1700000000.5 +%c",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: iso 8601 in utc of @1700000000.5",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ndate -u +%Y-%m-%dT%H:%M:%SZ -d @1700000000.5",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: default format of @1700000000.5",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=UTC date -d @1700000000.5",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: rfc 3339 seconds of @1700000000.5",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=UTC date --rfc-3339 seconds -d @1700000000.5",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: utc (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ndate --utc +%Y-%m-%dT%H:%M:%SZ --date @1473305798",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: unix timestamp of a date",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ndate -d \"2018-09-01 00:00\" +%s -u",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: unix timestamp of a date (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ndate --date \"2018-09-01 00:00\" +%s --utc",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: unix timestamp of '2018-09-01'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ndate -u -d \"2018-09-01\" +%s; echo \"status=$?\"",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: unix timestamp of '2018-09-01T12:34:56Z'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ndate -u -d \"2018-09-01T12:34:56Z\" +%s; echo \"status=$?\"",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: unix timestamp of '2018-09-01 12:34:56 +0200'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ndate -u -d \"2018-09-01 12:34:56 +0200\" +%s; echo \"status=$?\"",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: unix timestamp of 'Sep 1 2018'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ndate -u -d \"Sep 1 2018\" +%s; echo \"status=$?\"",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: unix timestamp of '1 Sep 2018 10:00'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ndate -u -d \"1 Sep 2018 10:00\" +%s; echo \"status=$?\"",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: unix timestamp of '2020-02-29 +1 year'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ndate -u -d \"2020-02-29 +1 year\" +%s; echo \"status=$?\"",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: unix timestamp of '2024-01-31 +1 month'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ndate -u -d \"2024-01-31 +1 month\" +%s; echo \"status=$?\"",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: unix timestamp of '2018-09-01 next day'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ndate -u -d \"2018-09-01 next day\" +%s; echo \"status=$?\"",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: rfc 3339 date",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=UTC date --rfc-3339 date -d @1473305798",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: rfc 3339 ns",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=UTC date --rfc-3339 ns -d @1473305798",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: rfc 3339 with a bad precision",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ndate --rfc-3339 minutes -d @0",
+      "tags": [
+        "cmd.date",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: iso week number of 2021-01-03",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ndate -u -d 2021-01-03 +%V",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: iso week number of 2021-01-04",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ndate -u -d 2021-01-04 +%V",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: iso week number of 2020-12-31",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ndate -u -d 2020-12-31 +%V",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: iso week number of 2026-06-15",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ndate -u -d 2026-06-15 +%V",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: iso 8601 option",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=UTC date -I -d @1473305798; TZ=UTC date --iso-8601=seconds -d @1473305798",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: rfc email option",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=UTC date -R -d @1473305798",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: many format directives",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=UTC date -d @1473305798 '+%a %A %b %B %d %e %H %I %j %m %M %p %S %u %w %y %Y %Z %z %%'",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: padding modifiers",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=UTC date -d @1473305798 '+%-d %_m %05Y %^a %#b'",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: another time zone",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=EST5EDT,M3.2.0,M11.1.0 date -d @1473305798 '+%F %T %Z'",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: a fixed offset time zone",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nTZ=UTC-3 date -d @1473305798 '+%F %T %z'",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr date: file modification time",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\ntouch -d '2020-05-06 07:08:09' f && TZ=UTC date -r f '+%F %T'",
+      "tags": [
+        "cmd.date"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr env: show the environment's golem variables",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nenv | grep '^GOLEM_' | sort",
+      "tags": [
+        "cmd.env"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr env: run a program",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nenv echo hello",
+      "tags": [
+        "cmd.env"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr env: run a missing program",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nenv nosuchprogram",
+      "tags": [
+        "cmd.env",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr env: clear the environment",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nenv -i env; echo \"status=$?\"",
+      "tags": [
+        "cmd.env"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr env: clear the environment (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nX=1 env --ignore-environment bash -c 'echo \"[${X-unset}]\"'",
+      "tags": [
+        "cmd.env"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr env: clear the environment and set one variable",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nenv -i Y=2 env",
+      "tags": [
+        "cmd.env"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr env: unset a variable",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nX=1 env -u X bash -c 'echo \"[${X-unset}]\"'",
+      "tags": [
+        "cmd.env"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr env: unset a variable (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nexport X=1; env --unset X bash -c 'echo \"[${X-unset}]\"'",
+      "tags": [
+        "cmd.env"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr env: set a variable",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nenv GREETING=hi bash -c 'echo $GREETING'",
+      "tags": [
+        "cmd.env"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr env: set several variables",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nenv A=1 B=2 C=3 bash -c 'echo $A$B$C'",
+      "tags": [
+        "cmd.env"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr env: set a variable with an equals sign in its value",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nenv V=a=b bash -c 'echo $V'",
+      "tags": [
+        "cmd.env"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr env: run under a different name",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nenv -a custom bash -c 'echo $0'",
+      "tags": [
+        "cmd.env"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr env: run under a different name (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nenv --argv0 custom bash -c 'echo $0'",
+      "tags": [
+        "cmd.env"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr env: change directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/sub && env -C /tmp/w/sub pwd",
+      "tags": [
+        "cmd.env"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr env: null-terminated output",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nenv -i A=1 B=2 env -0 | od -c",
+      "tags": [
+        "cmd.env"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr sleep: delay 0.1",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nsleep 0.1 && echo done",
+      "tags": [
+        "cmd.sleep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr sleep: delay 0",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nsleep 0 && echo done",
+      "tags": [
+        "cmd.sleep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr sleep: delay .05",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nsleep .05 && echo done",
+      "tags": [
+        "cmd.sleep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr sleep: delay 1e-2",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nsleep 1e-2 && echo done",
+      "tags": [
+        "cmd.sleep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr sleep: delay 0.001m",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nsleep 0.001m && echo done",
+      "tags": [
+        "cmd.sleep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr sleep: delay 0.00001h",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nsleep 0.00001h && echo done",
+      "tags": [
+        "cmd.sleep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr sleep: delay 0.000001d",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nsleep 0.000001d && echo done",
+      "tags": [
+        "cmd.sleep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr sleep: delay 0.05s",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nsleep 0.05s && echo done",
+      "tags": [
+        "cmd.sleep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr sleep: delay 0.01 0.02",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nsleep 0.01 0.02 && echo done",
+      "tags": [
+        "cmd.sleep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr sleep: invalid delay '-1'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nsleep -1; echo \"status=$?\"",
+      "tags": [
+        "cmd.sleep",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr sleep: invalid delay ''",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nsleep ; echo \"status=$?\"",
+      "tags": [
+        "cmd.sleep",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr sleep: then a command",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nsleep 0.1 && echo 'after delay'",
+      "tags": [
+        "cmd.sleep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr yes: repeat y",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nyes | head -n 3",
+      "tags": [
+        "cmd.yes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr yes: repeat a value",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nyes value | head -n 2",
+      "tags": [
+        "cmd.yes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr yes: repeat several words",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nyes a b | head -n 2",
+      "tags": [
+        "cmd.yes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr yes: repeat an empty line",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nyes '' | head -n 3 | od -c",
+      "tags": [
+        "cmd.yes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr yes: accept prompts of a reader",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nyes | { read a; read b; echo \"$a$b\"; }",
+      "tags": [
+        "cmd.yes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr yes: bytes",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nyes abc | head -c 10",
+      "tags": [
+        "cmd.yes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr yes: status in a pipeline",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nyes | head -n 1; echo \"${PIPESTATUS[@]}\"",
+      "tags": [
+        "cmd.yes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: use input as arguments with words",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'a b\\nc\\n' | xargs echo; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: one argument per command with words",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'a b\\nc\\n' | xargs -n 1 echo; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: placeholder with words",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'a b\\nc\\n' | xargs -I _ echo '[_]' extra; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: use input as arguments with empty input",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf '' | xargs echo; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: one argument per command with empty input",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf '' | xargs -n 1 echo; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: placeholder with empty input",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf '' | xargs -I _ echo '[_]' extra; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: use input as arguments with quoted input",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf '\"x y\" z\\n' | xargs echo; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: one argument per command with quoted input",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf '\"x y\" z\\n' | xargs -n 1 echo; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: placeholder with quoted input",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf '\"x y\" z\\n' | xargs -I _ echo '[_]' extra; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: use input as arguments with blank lines and spaces",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n\\n  two  \\n' | xargs echo; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: one argument per command with blank lines and spaces",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n\\n  two  \\n' | xargs -n 1 echo; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: placeholder with blank lines and spaces",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n\\n  two  \\n' | xargs -I _ echo '[_]' extra; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: use input as arguments with an unmatched quote",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"it's\\n\" | xargs echo; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: one argument per command with an unmatched quote",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"it's\\n\" | xargs -n 1 echo; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: placeholder with an unmatched quote",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf \"it's\\n\" | xargs -I _ echo '[_]' extra; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: use input as arguments with an escaped space",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\\\ b c\\n' | xargs echo; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: one argument per command with an escaped space",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\\\ b c\\n' | xargs -n 1 echo; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: placeholder with an escaped space",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\\\ b c\\n' | xargs -I _ echo '[_]' extra; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: chained commands in sh -c",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\nb\\n' | xargs sh -c \"echo start && echo \\$0 \\$@ | tr a-z A-Z\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: chained commands in sh -c with a placeholder name",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\nb\\n' | xargs sh -c 'echo \"$0|$*\"' _",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: one argument per command (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'a b c\\n' | xargs --max-args 1 echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: two arguments per command",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'a b c\\n' | xargs -n 2 echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: parallel",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf '1 2 3 4\\n' | xargs -P 10 -n 1 echo | sort",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: parallel (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf '1 2 3\\n' | xargs --max-procs 2 --max-args 1 echo | sort",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: parallel with failures",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf '1 2 3\\n' | xargs -P 3 -n 1 sh -c 'exit $0'; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: placeholder several times",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\nb\\n' | xargs -I {} echo {}-{}",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: read arguments from a file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'f1\\nf2\\n' >list && xargs -a list echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: read arguments from a file (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'f1\\nf2\\n' >list && xargs --arg-file list echo got",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: read arguments from a missing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nxargs -a nosuchlist echo",
+      "tags": [
+        "cmd.xargs",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: null-delimited input",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'a b\\0c\\0' | xargs -0 -n 1 echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: delimiter",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'a,b,c' | xargs -d , -n 1 echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: no run if empty",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf '' | xargs -r echo ran; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: a command that fails",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\n' | xargs false; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: a command that is missing",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\n' | xargs nosuchcmd; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: a command that exits 255",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\nb\\n' | xargs -n 1 sh -c 'exit 255'; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: default command",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'a b\\n' | xargs",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: max chars",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'aa bb cc dd\\n' | xargs -s 12 echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: lines at a time",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'a b\\nc\\nd e\\n' | xargs -L 2 echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr xargs: trace commands",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'a b\\n' | xargs -t echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr tee: copy stdin to a file and stdout",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\necho \"example\" | tee f && cat f",
+      "tags": [
+        "cmd.tee"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr tee: copy stdin to several files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\necho \"example\" | tee f g >/dev/null && cat f g",
+      "tags": [
+        "cmd.tee"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr tee: overwrite an existing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\necho old >f && echo \"example\" | tee f && cat f",
+      "tags": [
+        "cmd.tee"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr tee: append",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\necho old >f && echo \"example\" | tee -a f && cat f",
+      "tags": [
+        "cmd.tee"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr tee: append (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\necho old >f && echo \"example\" | tee --append f >/dev/null && cat f",
+      "tags": [
+        "cmd.tee"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr tee: into a missing directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\necho \"example\" | tee nodir/f; echo \"status=$?\"",
+      "tags": [
+        "cmd.tee",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr tee: into a directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir d && echo \"example\" | tee d; echo \"status=$?\"",
+      "tags": [
+        "cmd.tee",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr tee: to stderr and another program",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\necho \"example\" | tee /dev/stderr | xargs printf \"[%s]\"",
+      "tags": [
+        "cmd.tee"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr tee: to process substitutions",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\necho \"example\" | tee >(xargs mkdir) >(wc -c) | sort; sleep 0.2; ls -d example",
+      "tags": [
+        "cmd.tee"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr tee: empty input",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '' | tee f; wc -c f",
+      "tags": [
+        "cmd.tee"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: pretty print an object",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '{\"key1\": \"value1\", \"key2\": {\"nestedKey\": 2}, \"list\": [1, 2, 3]}' >file.json\njq '.' file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: compact an object",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '{\"key1\": \"value1\", \"key2\": {\"nestedKey\": 2}, \"list\": [1, 2, 3]}' >file.json\njq -c . file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: pretty print a compact object",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '{\"a\":1,\"b\":[true,false,null]}' >file.json\njq '.' file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: compact a compact object",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '{\"a\":1,\"b\":[true,false,null]}' >file.json\njq -c . file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: pretty print unicode strings",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '{\"s\": \"caf\\u00e9 \\u65e5\\u672c\", \"e\": \"\\ud83d\\ude00\", \"raw\": \"日本\"}' >file.json\njq '.' file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: compact unicode strings",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '{\"s\": \"caf\\u00e9 \\u65e5\\u672c\", \"e\": \"\\ud83d\\ude00\", \"raw\": \"日本\"}' >file.json\njq -c . file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: pretty print control characters",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '{\"s\": \"tab\\there\\nnew \\u0001 \\u007f \\\\ \\\"q\\\"\"}' >file.json\njq '.' file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: compact control characters",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '{\"s\": \"tab\\there\\nnew \\u0001 \\u007f \\\\ \\\"q\\\"\"}' >file.json\njq -c . file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: pretty print integers",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '[0, -0, 1, -1, 123456789012, 9007199254740993, 100000000000000000000]' >file.json\njq '.' file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: compact integers",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '[0, -0, 1, -1, 123456789012, 9007199254740993, 100000000000000000000]' >file.json\njq -c . file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: pretty print floats",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '[1.0, 1.5, -2.25, 0.1, 1e3, 1E-3, 1.5e300, 3.0e0]' >file.json\njq '.' file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: compact floats",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '[1.0, 1.5, -2.25, 0.1, 1e3, 1E-3, 1.5e300, 3.0e0]' >file.json\njq -c . file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: pretty print huge numbers",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '[1e1000, -1e1000, 1e-400]' >file.json\njq '.' file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: compact huge numbers",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '[1e1000, -1e1000, 1e-400]' >file.json\njq -c . file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: pretty print nested empties",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '{\"a\": {}, \"b\": [], \"c\": [[]], \"d\": {\"e\": {}}}' >file.json\njq '.' file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: compact nested empties",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '{\"a\": {}, \"b\": [], \"c\": [[]], \"d\": {\"e\": {}}}' >file.json\njq -c . file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: pretty print several documents",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '1 \"two\" [3] {\"four\": 4}' >file.json\njq '.' file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: compact several documents",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '1 \"two\" [3] {\"four\": 4}' >file.json\njq -c . file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: pretty print an empty input",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '' >file.json\njq '.' file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: compact an empty input",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '' >file.json\njq -c . file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: pretty print only whitespace",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '  \n\t ' >file.json\njq '.' file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: compact only whitespace",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '  \n\t ' >file.json\njq -c . file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: pretty print duplicate keys",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '{\"a\": 1, \"a\": 2}' >file.json\njq '.' file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: compact duplicate keys",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '{\"a\": 1, \"a\": 2}' >file.json\njq -c . file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: pretty print a top-level string",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '\"just text\"' >file.json\njq '.' file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: compact a top-level string",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '\"just text\"' >file.json\njq -c . file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: pretty print deep nesting",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '[[[[[[[[[[1]]]]]]]]]]' >file.json\njq '.' file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: compact deep nesting",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '[[[[[[[[[[1]]]]]]]]]]' >file.json\njq -c . file.json",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: execute a script file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '{\"key1\": \"value1\", \"key2\": {\"nestedKey\": 2}}' >file.json\nprintf '.key2 | .nestedKey * 10\\n' >script.jq && cat file.json | jq -f script.jq",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: execute a script file (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '{\"key1\": \"value1\", \"key2\": {\"nestedKey\": 2}}' >file.json\nprintf '{k: .key1}\\n' >script.jq && cat file.json | jq --from-file script.jq",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: execute a missing script file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '{\"key1\": \"value1\", \"key2\": {\"nestedKey\": 2}}' >file.json\ncat file.json | jq -f nosuch.jq; echo \"status=$?\"",
+      "tags": [
+        "cmd.jq",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: pass named arguments",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '{\"key1\": \"value1\", \"key2\": {\"nestedKey\": 2}}' >file.json\ncat file.json | jq --arg \"name1\" \"value1\" --arg \"name2\" \"value2\" '. + $ARGS.named'",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: pass named arguments with json",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '{\"key1\": \"value1\", \"key2\": {\"nestedKey\": 2}}' >file.json\ncat file.json | jq -c --argjson n 5 --arg s 5 '$ARGS.named'",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: pass positional arguments",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\njq -n -c '$ARGS' --args a b",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: new object from several files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '{\"key1\": 1, \"key2\": {\"nestedKey\": \"a\"}}\\n' >multiple_json_file_1.json && printf '{\"key1\": 2, \"key2\": {}}\\n' >multiple_json_file_2.json && cat multiple_json_file_*.json | jq '{newKey1: .key1, newKey2: .key2.nestedKey}'",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: specific array items",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '[{\"key1\": \"value1\", \"key2\": \"value2\"}, {\"key1\": \"value1\", \"key2\": \"x\"}, {\"key1\": \"y\", \"key2\": \"value2\"}]' >file.json\ncat file.json | jq '.[0], .[2]'",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: array items out of range",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '[{\"key1\": \"value1\", \"key2\": \"value2\"}, {\"key1\": \"value1\", \"key2\": \"x\"}, {\"key1\": \"y\", \"key2\": \"value2\"}]' >file.json\ncat file.json | jq -c '.[5], .[-1]'",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: all array values",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '[{\"key1\": \"value1\", \"key2\": \"value2\"}, {\"key1\": \"value1\", \"key2\": \"x\"}, {\"key1\": \"y\", \"key2\": \"value2\"}]' >file.json\ncat file.json | jq -c '.[]'",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: all object values",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '{\"key1\": \"value1\", \"key2\": {\"nestedKey\": 2}}' >file.json\ncat file.json | jq '.[]'",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: two-condition filter",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '[{\"key1\": \"value1\", \"key2\": \"value2\"}, {\"key1\": \"value1\", \"key2\": \"x\"}, {\"key1\": \"y\", \"key2\": \"value2\"}]' >file.json\ncat file.json | jq '.[] | select((.key1==\"value1\") and .key2==\"value2\")'",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: two-condition filter with or",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '[{\"key1\": \"value1\", \"key2\": \"value2\"}, {\"key1\": \"value1\", \"key2\": \"x\"}, {\"key1\": \"y\", \"key2\": \"value2\"}]' >file.json\ncat file.json | jq -c '.[] | select(.key1==\"y\" or .key2==\"x\")'",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: add keys",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '{\"key1\": \"value1\", \"key2\": {\"nestedKey\": 2}}' >file.json\ncat file.json | jq '. + {\"key1\": \"new\", \"key3\": \"value3\"}'",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: remove keys with del",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '{\"key1\": \"value1\", \"key2\": {\"nestedKey\": 2}}' >file.json\ncat file.json | jq -c 'del(.key1)'",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: remove array elements",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\necho '[1,2,3,2]' | jq -c '. - [2]'",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: raw output",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%s\\n' '[{\"key1\": \"value1\", \"key2\": \"value2\"}, {\"key1\": \"value1\", \"key2\": \"x\"}, {\"key1\": \"y\", \"key2\": \"value2\"}]' >file.json\ncat file.json | jq -r '.[].key1'",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: sort keys",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\necho '{\"b\":1,\"a\":{\"d\":2,\"c\":3}}' | jq -S .",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: tab indentation",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\necho '{\"a\":[1]}' | jq --tab .",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: indent 1",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\necho '{\"a\":[1]}' | jq --indent 1 .",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: null input",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\njq -n '1 + 1'",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: exit status",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\necho 'null' | jq -e .; echo \"status=$?\"; echo 'false' | jq -e .; echo \"status=$?\"",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: join output",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\necho '[\"a\",\"b\"]' | jq -j '.[]'; echo",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr jq: ascii output",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\necho '\"caf\\u00e9 \\ud83d\\ude00\"' | jq -a .",
+      "tags": [
+        "cmd.jq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr sh: execute a command",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nsh -c \"echo hello from sh\"",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr sh: execute a command with arguments",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nsh -c 'echo \"$0 $1 $#\"' name one two",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr sh: execute a command that fails",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nsh -c 'exit 3'; echo \"status=$?\"",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr sh: execute a command with a syntax error",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nsh -c 'if then'; echo \"status=$?\"",
+      "tags": [
+        "cmd.sh",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr sh: execute a command with no command string",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nsh -c; echo \"status=$?\"",
+      "tags": [
+        "cmd.sh",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr sh: read commands from stdin",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\necho 'echo from stdin' | sh -s",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr sh: read commands from stdin with arguments",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\necho 'echo \"$1-$2\"' | sh -s a b",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr sh: read commands from stdin with no -s",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'echo one\\necho two\\n' | sh",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr bash: execute commands",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nbash -c \"echo 'bash is executed'\"",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr bash: execute commands from stdin",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\necho \"echo 'bash is executed'\" | bash",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr bash: execute commands from stdin without rc files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\necho \"echo 'norc'\" | bash --norc",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr bash: execute commands from stdin that fail",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'echo a\\nfalse\\n' | bash; echo \"status=$?\"",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr bash: execute commands and print them",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nbash -x -c 'a=1; echo $a'",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr bash: execute commands and stop at the first error",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nbash -e -c 'echo one; false; echo two'; echo \"status=$?\"",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr bash: execute commands with a syntax error",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nbash -c 'echo ok; fi'; echo \"status=$?\"",
+      "tags": [
+        "cmd.bash",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr bash: execute commands with an unset variable check",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nbash -u -c 'echo $nope'; echo \"status=$?\"",
+      "tags": [
+        "cmd.bash",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr bash: execute commands with pipefail",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nbash -o pipefail -c 'false | true'; echo \"status=$?\"",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr bash: execute commands with an exit status",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nbash -c 'exit 42'; echo \"status=$?\"",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr bash: execute commands with arguments",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nbash -c 'printf \"<%s>\" \"$@\"; echo' b0 'x y' z",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr bash: nested execute commands",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nbash -c \"bash -c 'echo nested \\$0' inner\"",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr bash: execute commands with a heredoc on stdin",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nbash <<'EOF'\nx=5\necho \"x is $x\"\nEOF",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    }
+  ]
+}

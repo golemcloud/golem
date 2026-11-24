@@ -245,27 +245,24 @@ pub(super) async fn begin(
     from: &AgentSnapshots,
     flight: Flight,
 ) -> Result<ForkCopy, ForkStopped> {
-    let attempts = futures::stream::unfold(Some(false), |state| {
-        let flight = flight.clone();
-        async move {
-            let waited = state?;
-            let mut changed = core.registry.subscribe();
-            if core.shutdown.is_cancelled() {
-                return Some((Some(Err(ForkStopped)), None));
-            }
-            if core
-                .registry
-                .apply(|state| transitions::fork_began(state, from, &flight))
-            {
-                return Some((Some(Ok(waited)), None));
-            }
-            tokio::select! {
-                changed = changed.changed() => match changed {
-                    Ok(()) => Some((None, Some(true))),
-                    Err(_) => Some((Some(Err(ForkStopped)), None)),
-                },
-                () = core.shutdown.cancelled() => Some((Some(Err(ForkStopped)), None)),
-            }
+    let attempts = futures::stream::unfold(Some(false), |state| async move {
+        let waited = state?;
+        let mut changed = core.registry.subscribe();
+        if core.shutdown.is_cancelled() {
+            return Some((Some(Err(ForkStopped)), None));
+        }
+        if core
+            .registry
+            .apply(|state| transitions::fork_began(state, from, &flight))
+        {
+            return Some((Some(Ok(waited)), None));
+        }
+        tokio::select! {
+            changed = changed.changed() => match changed {
+                Ok(()) => Some((None, Some(true))),
+                Err(_) => Some((Some(Err(ForkStopped)), None)),
+            },
+            () = core.shutdown.cancelled() => Some((Some(Err(ForkStopped)), None)),
         }
     });
     let waited = futures::StreamExt::next(&mut std::pin::pin!(futures::StreamExt::filter_map(
@@ -312,5 +309,5 @@ pub(super) async fn missing(
 
 /// The flight of a fork request: its target and the hash of the request.
 pub(crate) fn flight(target: &AgentId, request_hash: [u8; 32]) -> Flight {
-    (target.clone(), request_hash)
+    (*target, request_hash)
 }

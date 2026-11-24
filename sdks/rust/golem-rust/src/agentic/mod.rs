@@ -34,11 +34,12 @@ pub use errors::*;
 pub use exports::Component;
 pub use extended_agent_type::*;
 pub use extended_tool_type::*;
-pub use golem_tool_metadata::{WireToolSchema, WireTypeRef};
+pub use golem_tool_metadata::{WireCanonicalInputModel, WireToolSchema, WireTypeRef};
 pub use http::*;
 #[doc(hidden)]
 pub use identity::{
-    __agent_proxy, __agent_proxy_or_panic, __bind_self, __connect_agent, __connect_agent_or_panic,
+    __agent_id, __bind_self, __create_agent, __get_agent_by_id, __upsert_agent,
+    __upsert_agent_or_panic,
 };
 pub use multimodal::*;
 pub use resolved_agent::*;

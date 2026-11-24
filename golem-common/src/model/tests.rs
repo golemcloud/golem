@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::agent::TypedAgentConfigEntry;
+use crate::model::agent::{AgentTypeName, TypedAgentConfigEntry};
 use crate::model::component::{CanonicalFilePath, ComponentRevision};
 use crate::model::durable_stream::{
     AttachmentId, AttemptId, SessionStreamRole, StreamExportForkInitializedRecord,
@@ -47,10 +47,7 @@ fn invocation_id(value: u128) -> InvocationId {
 fn durable_stream_test_session_key(key: u128) -> StreamInvocationId {
     StreamInvocationId {
         callee_environment_id: EnvironmentId::new(),
-        callee: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "agent".to_string(),
-        },
+        callee: AgentId::from_parts(7, 1),
         callee_fingerprint: AgentFingerprint(Uuid::new_v4()),
         idempotency_key: invocation_id(key),
     }
@@ -411,7 +408,7 @@ fn durable_stream_forwarding_records_roundtrip_and_validate() {
             format_version: 1,
             stream_id: StreamId(Uuid::new_v4()),
             producer_environment_id: invocation.callee_environment_id,
-            producer: invocation.callee.clone(),
+            producer: invocation.callee,
             expected_producer_fingerprint: invocation.callee_fingerprint,
             producer_generation: OplogIndex::from_u64(4),
             source_invocation: invocation.clone(),
@@ -686,15 +683,25 @@ fn durable_stream_session_index_serialization_stays_bounded() {
     );
 }
 
+fn stream_acceptance(key: InvocationId) -> crate::model::durable_stream::StreamSessionAcceptance {
+    crate::model::durable_stream::StreamSessionAcceptance {
+        public_session_id: key.to_string(),
+        route_scope: None,
+        expiry_policy: crate::model::durable_stream::StreamSessionExpiryPolicy::None,
+        expiry_deadline_millis: None,
+        effective_identity: Vec::new(),
+        execution_config: Vec::new(),
+        live_join_buffer_events: 1,
+        transport_stream_ids: Vec::new(),
+    }
+}
+
 #[test]
 fn durable_stream_initial_attachment_requires_exact_pending_evidence() {
     let key = invocation_id(14);
     let session_key = StreamInvocationId {
         callee_environment_id: EnvironmentId::new(),
-        callee: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "agent".to_string(),
-        },
+        callee: AgentId::from_parts(7, 1),
         callee_fingerprint: AgentFingerprint(Uuid::new_v4()),
         idempotency_key: key,
     };
@@ -705,20 +712,15 @@ fn durable_stream_initial_attachment_requires_exact_pending_evidence() {
         &session_key.idempotency_key,
     )
     .unwrap();
-    let pending = OplogIndex::from_u64(12);
-    let mut status = DurableStreamSessionStatus {
-        first_prepared: Some(OplogIndex::from_u64(10)),
-        prepared: Some(OplogIndex::from_u64(10)),
-        session_key: Some(session_key.idempotency_key),
-        prepared_attempt_id: Some(attempt),
-        ..Default::default()
-    };
+    let pending = OplogIndex::from_u64(9);
+    let mut status = DurableStreamSessionStatus::default();
     status.apply_pending_invocation(pending, &key);
     status.apply_record(
         OplogIndex::from_u64(13),
         &StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
             session_key: session_key.idempotency_key,
+            acceptance: stream_acceptance(key),
             attachment_id,
             attempt_id: attempt,
             epoch: 1,
@@ -727,6 +729,53 @@ fn durable_stream_initial_attachment_requires_exact_pending_evidence() {
     );
     assert_eq!(status.validated_initial_pending_invocation, Some(pending));
     assert_eq!(status.lifecycle_error, None);
+    assert_eq!(status.prepared, None);
+    assert_eq!(status.attachment_epoch, Some(1));
+    assert_eq!(status.attachment_attempt_id, Some(attempt));
+    assert_eq!(status.attachment_attached, Some(true));
+    use crate::model::durable_stream::{
+        PersistedInvocationTarget, PersistedStreamInvocationDescriptor, StartAttemptDescriptor,
+        StreamSessionPreparedRecord,
+    };
+    status.apply_record(
+        OplogIndex::from_u64(14),
+        &StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
+            format_version: 1,
+            public_session_id: key.to_string(),
+            route_scope: None,
+            session_key: key,
+            expiry_policy: StreamSessionExpiryPolicy::None,
+            expiry_deadline_millis: None,
+            attempt: StartAttemptDescriptor {
+                format_version: 1,
+                session_key: session_key.clone(),
+                attachment_id,
+                expected_callee_fingerprint: session_key.callee_fingerprint,
+                attempt_id: attempt,
+                invocation: PersistedStreamInvocationDescriptor {
+                    format_version: 1,
+                    session_key,
+                    target_component_revision: ComponentRevision::INITIAL,
+                    target: PersistedInvocationTarget::AgentMethod {
+                        method_name: "test".into(),
+                    },
+                    invocation_value: Vec::new(),
+                    stream_handles: Vec::new(),
+                    execution_config: Vec::new(),
+                    effective_identity: Vec::new(),
+                },
+                effective_identity: Vec::new(),
+                live_join_buffer_events: 1,
+            },
+            stream_mappings: Vec::new(),
+        }),
+    );
+    assert_eq!(status.prepared, Some(OplogIndex::from_u64(14)));
+    assert_eq!(status.validated_initial_pending_invocation, Some(pending));
+    assert_eq!(status.attachment_epoch, Some(1));
+    assert_eq!(status.attachment_attempt_id, Some(attempt));
+    assert_eq!(status.attachment_attached, Some(true));
+    assert_eq!(status.lifecycle_error, None);
 }
 
 #[test]
@@ -734,10 +783,7 @@ fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
     let key = invocation_id(15);
     let session_key = StreamInvocationId {
         callee_environment_id: EnvironmentId::new(),
-        callee: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "agent".to_string(),
-        },
+        callee: AgentId::from_parts(7, 1),
         callee_fingerprint: AgentFingerprint(Uuid::new_v4()),
         idempotency_key: key,
     };
@@ -760,6 +806,7 @@ fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
         &StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
             session_key: session_key.idempotency_key,
+            acceptance: stream_acceptance(key),
             attachment_id,
             attempt_id: attempt,
             epoch: 1,
@@ -771,7 +818,6 @@ fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
 
     for pending in [
         OplogIndex::NONE,
-        OplogIndex::from_u64(9),
         OplogIndex::from_u64(13),
         OplogIndex::from_u64(14),
     ] {
@@ -786,6 +832,7 @@ fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
         let mut attached = match StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
             session_key: invalid.session_key.unwrap(),
+            acceptance: stream_acceptance(key),
             attachment_id: AttachmentId::primary(
                 session_key.callee_environment_id,
                 &session_key.callee,
@@ -828,7 +875,34 @@ fn result_at(terminal: u64) -> InvocationResultPosition {
     InvocationResultPosition {
         terminal: OplogIndex::from_u64(terminal),
         request: Some(OplogIndex::from_u64(terminal - 1)),
+        end: golem_common::model::InvocationEnd::Completed,
+        operation: None,
+        accepted_at: None,
+        changed_at: golem_common::model::Timestamp::from(0),
     }
+}
+
+#[test]
+fn long_operations_switch_the_membership_to_its_bounded_form_sooner() {
+    let fill = |operation: &str| {
+        let mut membership = InvocationResultMembership::new(1, 8 * 1024, 3);
+        for terminal in 1..=5 {
+            membership.insert(
+                InvocationId::new(),
+                InvocationResultPosition {
+                    operation: Some(crate::model::InvocationOperation::Method(
+                        operation.to_string(),
+                    )),
+                    ..result_at(terminal + 1)
+                },
+            );
+        }
+        membership
+    };
+
+    // With a 1 KiB Bloom filter, five entries stay exact only while their operations are small.
+    assert!(fill("m").is_exact_complete());
+    assert!(!fill(&"m".repeat(400)).is_exact_complete());
 }
 
 #[test]
@@ -997,8 +1071,8 @@ fn account_id_json_serialization() {
 #[test]
 fn worker_filter_parse() {
     assert_eq!(
-        AgentFilter::from_str(" name =  worker-1").unwrap(),
-        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+        AgentFilter::from_str(" key =  worker-1").unwrap(),
+        AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string())
     );
 
     assert_eq!(
@@ -1027,16 +1101,16 @@ fn worker_filter_parse() {
 #[test]
 fn worker_filter_parse_agent_ids_without_quotes() {
     assert_eq!(
-        AgentFilter::from_str(r#"name == CounterAgent("a b", 2)"#).unwrap(),
-        AgentFilter::new_name(
+        AgentFilter::from_str(r#"key == CounterAgent("a b", 2)"#).unwrap(),
+        AgentFilter::new_key(
             StringFilterComparator::Equal,
             r#"CounterAgent("a b", 2)"#.to_string()
         )
     );
     assert_eq!(
-        AgentFilter::from_str(r#"(name == Chat("x") or status == Failed)"#).unwrap(),
+        AgentFilter::from_str(r#"(key == Chat("x") or status == Failed)"#).unwrap(),
         AgentFilter::new_or(vec![
-            AgentFilter::new_name(StringFilterComparator::Equal, r#"Chat("x")"#.to_string()),
+            AgentFilter::new_key(StringFilterComparator::Equal, r#"Chat("x")"#.to_string()),
             AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Failed),
         ])
     );
@@ -1044,22 +1118,22 @@ fn worker_filter_parse_agent_ids_without_quotes() {
 
 #[test]
 fn worker_filter_parse_precedence_and_keywords() {
-    let name = |v: &str| AgentFilter::new_name(StringFilterComparator::Equal, v.to_string());
+    let name = |v: &str| AgentFilter::new_key(StringFilterComparator::Equal, v.to_string());
     assert_eq!(
-        AgentFilter::from_str("name == a or name == b AND not name == c").unwrap(),
+        AgentFilter::from_str("key == a or key == b AND not key == c").unwrap(),
         AgentFilter::new_or(vec![
             name("a"),
             AgentFilter::new_and(vec![name("b"), name("c").not()]),
         ])
     );
     assert_eq!(
-        AgentFilter::from_str("(name == a or name == b) and name == c").unwrap(),
+        AgentFilter::from_str("(key == a or key == b) and key == c").unwrap(),
         AgentFilter::new_and(vec![
             AgentFilter::new_or(vec![name("a"), name("b")]),
             name("c"),
         ])
     );
-    assert_eq!(AgentFilter::from_str("name == and").unwrap(), name("and"));
+    assert_eq!(AgentFilter::from_str("key == and").unwrap(), name("and"));
     assert_eq!(
         AgentFilter::from_str("TRUE or false").unwrap(),
         AgentFilter::new_or(vec![
@@ -1072,8 +1146,8 @@ fn worker_filter_parse_precedence_and_keywords() {
 #[test]
 fn worker_filter_parse_quoted_values_and_keys() {
     assert_eq!(
-        AgentFilter::from_str(r#"name startswith "Type(""#).unwrap(),
-        AgentFilter::new_name(StringFilterComparator::StartsWith, "Type(".to_string())
+        AgentFilter::from_str(r#"key startswith "Type(""#).unwrap(),
+        AgentFilter::new_key(StringFilterComparator::StartsWith, "Type(".to_string())
     );
     assert_eq!(
         AgentFilter::from_str(r#"env."my key" == "a \"b\" \\ c""#).unwrap(),
@@ -1095,13 +1169,13 @@ fn worker_filter_parse_quoted_values_and_keys() {
 
 #[test]
 fn worker_filter_parse_brackets_in_values() {
-    let name = |v: &str| AgentFilter::new_name(StringFilterComparator::Equal, v.to_string());
+    let name = |v: &str| AgentFilter::new_key(StringFilterComparator::Equal, v.to_string());
     for (input, value) in [
-        ("name == a(())()", "a(())()"),
-        (r#"name == a(")")"#, r#"a(")")"#),
-        (r#"name == ")()(""#, ")()("),
-        (r#"name == "(())()""#, "(())()"),
-        ("((name == a))", "a"),
+        ("key == a(())()", "a(())()"),
+        (r#"key == a(")")"#, r#"a(")")"#),
+        (r#"key == ")()(""#, ")()("),
+        (r#"key == "(())()""#, "(())()"),
+        ("((key == a))", "a"),
     ] {
         assert_eq!(
             AgentFilter::from_str(input).unwrap(),
@@ -1181,9 +1255,9 @@ fn worker_filter_parse_brackets_in_env_and_config_keys() {
 fn worker_filter_parse_limits_nesting() {
     use crate::model::MAX_AGENT_FILTER_DEPTH as MAX;
 
-    let name = AgentFilter::new_name(StringFilterComparator::Equal, "a".to_string());
-    let nots = |n: usize| format!("{}name == a", "not ".repeat(n));
-    let parens = |n: usize| format!("{}name == a{}", "(".repeat(n), ")".repeat(n));
+    let name = AgentFilter::new_key(StringFilterComparator::Equal, "a".to_string());
+    let nots = |n: usize| format!("{}key == a", "not ".repeat(n));
+    let parens = |n: usize| format!("{}key == a{}", "(".repeat(n), ")".repeat(n));
     let and_chain = |depth: usize| {
         (1..depth).fold(name.clone(), |filter, _| {
             AgentFilter::new_and(vec![filter, name.clone()])
@@ -1218,7 +1292,7 @@ fn worker_filter_parse_limits_nesting() {
     }
     // Several `--filter` values join under one `And`, which is a level too.
     assert!(
-        AgentFilter::from(vec![nots(MAX - 1), "name == b".to_string()])
+        AgentFilter::from(vec![nots(MAX - 1), "key == b".to_string()])
             .unwrap_err()
             .contains(&depth_error)
     );
@@ -1226,7 +1300,7 @@ fn worker_filter_parse_limits_nesting() {
 
 #[test]
 fn worker_filter_canonical_form() {
-    let name = |v: &str| AgentFilter::new_name(StringFilterComparator::Equal, v.to_string());
+    let name = |v: &str| AgentFilter::new_key(StringFilterComparator::Equal, v.to_string());
 
     assert_eq!(
         AgentFilter::new_or(vec![AgentFilter::new_and(vec![AgentFilter::new_not(
@@ -1265,7 +1339,7 @@ fn worker_filter_canonical_form() {
 
     // One `--filter` is its filter, not an `And` around it; none is the empty `And`.
     assert_eq!(
-        AgentFilter::from(vec!["name == a".to_string()]).unwrap(),
+        AgentFilter::from(vec!["key == a".to_string()]).unwrap(),
         name("a")
     );
     assert_eq!(
@@ -1277,24 +1351,24 @@ fn worker_filter_canonical_form() {
 #[test]
 fn worker_filter_parse_rejects_malformed_filters() {
     for invalid in [
-        "name startswith Type(",
-        r#"name == "abc"#,
-        "(name == a",
-        "name == a)",
+        "key startswith Type(",
+        r#"key == "abc"#,
+        "(key == a",
+        "key == a)",
         ")()(",
         "(())()",
         "()",
-        "((name == a)",
-        "(name == a))",
+        "((key == a)",
+        "(key == a))",
         ")name == a(",
-        "name == )()(",
-        "name == (())()",
-        "name == a)(",
-        "name == a(()",
-        "name == a())",
-        r#"name == a(")"#,
-        "name ==",
-        "name == a name == b",
+        "key == )()(",
+        "key == (())()",
+        "key == a)(",
+        "key == a(()",
+        "key == a())",
+        r#"key == a(")"#,
+        "key ==",
+        "key == a key == b",
         "env. == a",
         "unknown == a",
         "not",
@@ -1347,7 +1421,9 @@ fn agent_filter_strategy() -> impl proptest::strategy::Strategy<Value = AgentFil
     let mode = prop_oneof![Just(AgentMode::Durable), Just(AgentMode::Ephemeral)];
 
     let leaf = prop_oneof![
-        (string_comparator.clone(), text.clone()).prop_map(|(c, v)| AgentFilter::new_name(c, v)),
+        (string_comparator.clone(), text.clone()).prop_map(|(c, v)| AgentFilter::new_key(c, v)),
+        (comparator.clone(), any::<u128>())
+            .prop_map(|(c, v)| AgentFilter::new_id(c, AgentId(Uuid::from_u128(v)))),
         (comparator.clone(), status).prop_map(|(c, v)| AgentFilter::new_status(c, v)),
         (comparator.clone(), 0u64..1_000_000).prop_map(|(c, v)| {
             AgentFilter::new_revision(c, ComponentRevision::new(v).unwrap())
@@ -1389,25 +1465,25 @@ mod worker_filter_syntax {
 #[test]
 fn worker_filter_combination() {
     assert_eq!(
-        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()).not(),
-        AgentFilter::new_not(AgentFilter::new_name(
+        AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string()).not(),
+        AgentFilter::new_not(AgentFilter::new_key(
             StringFilterComparator::Equal,
             "worker-1".to_string(),
         ))
     );
 
     assert_eq!(
-        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()).and(
+        AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string()).and(
             AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running)
         ),
         AgentFilter::new_and(vec![
-            AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+            AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string()),
             AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running),
         ])
     );
 
     assert_eq!(
-        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+        AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string())
             .and(AgentFilter::new_status(
                 FilterComparator::Equal,
                 AgentStatus::Running,
@@ -1417,24 +1493,24 @@ fn worker_filter_combination() {
                 ComponentRevision::new(1).unwrap()
             )),
         AgentFilter::new_and(vec![
-            AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+            AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string()),
             AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running),
             AgentFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
         ])
     );
 
     assert_eq!(
-        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()).or(
+        AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string()).or(
             AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running)
         ),
         AgentFilter::new_or(vec![
-            AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+            AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string()),
             AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running),
         ])
     );
 
     assert_eq!(
-        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+        AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string())
             .or(AgentFilter::new_status(
                 FilterComparator::NotEqual,
                 AgentStatus::Running,
@@ -1444,14 +1520,14 @@ fn worker_filter_combination() {
                 ComponentRevision::new(1).unwrap()
             )),
         AgentFilter::new_or(vec![
-            AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+            AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string()),
             AgentFilter::new_status(FilterComparator::NotEqual, AgentStatus::Running),
             AgentFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
         ])
     );
 
     assert_eq!(
-        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+        AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string())
             .and(AgentFilter::new_status(
                 FilterComparator::NotEqual,
                 AgentStatus::Running,
@@ -1462,7 +1538,7 @@ fn worker_filter_combination() {
             )),
         AgentFilter::new_or(vec![
             AgentFilter::new_and(vec![
-                AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+                AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string()),
                 AgentFilter::new_status(FilterComparator::NotEqual, AgentStatus::Running),
             ]),
             AgentFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
@@ -1470,7 +1546,7 @@ fn worker_filter_combination() {
     );
 
     assert_eq!(
-        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+        AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string())
             .or(AgentFilter::new_status(
                 FilterComparator::NotEqual,
                 AgentStatus::Running,
@@ -1481,7 +1557,7 @@ fn worker_filter_combination() {
             )),
         AgentFilter::new_and(vec![
             AgentFilter::new_or(vec![
-                AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+                AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string()),
                 AgentFilter::new_status(FilterComparator::NotEqual, AgentStatus::Running),
             ]),
             AgentFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
@@ -1495,12 +1571,10 @@ fn worker_filter_matches() {
     let worker_metadata = AgentMetadata {
         owner_kind: crate::model::agent::OwnerKind::ComponentAgent,
         component_id,
-        agent_type_name: None,
-        canonical_key: None,
-        agent_id: AgentId {
-            agent_id: "worker-1".to_string(),
-            component_id,
-        },
+        agent_type_name: Some(AgentTypeName("Worker".to_string())),
+        canonical_key: Some("worker-1".to_string()),
+        constructor_parameters: Some("".to_string()),
+        agent_id: AgentId::from_parts(7, 1),
         env: vec![
             ("env1".to_string(), "value1".to_string()),
             ("env2".to_string(), "value2".to_string()),
@@ -1521,7 +1595,6 @@ fn worker_filter_matches() {
             component_revision: ComponentRevision::new(1).unwrap(),
             ..AgentStatusRecord::default()
         },
-        original_phantom_id: None,
         fingerprint: AgentFingerprint(Uuid::now_v7()),
         agent_mode: AgentMode::Durable,
         create_request: crate::model::oplog::CreateRequest::new(
@@ -1533,13 +1606,37 @@ fn worker_filter_matches() {
     };
 
     assert!(
-        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+        AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string())
             .and(AgentFilter::new_status(
                 FilterComparator::Equal,
                 AgentStatus::Idle,
             ))
             .matches(&worker_metadata)
     );
+
+    assert!(
+        AgentFilter::new_id(FilterComparator::Equal, AgentId::from_parts(7, 1))
+            .matches(&worker_metadata)
+    );
+    assert!(
+        !AgentFilter::new_id(FilterComparator::Equal, AgentId::from_parts(8, 1))
+            .matches(&worker_metadata)
+    );
+
+    let unkeyed = AgentMetadata {
+        canonical_key: None,
+        ..worker_metadata.clone()
+    };
+    for comparator in [
+        StringFilterComparator::Equal,
+        StringFilterComparator::NotEqual,
+        StringFilterComparator::NotLike,
+    ] {
+        assert!(
+            !AgentFilter::new_key(comparator, "other".to_string()).matches(&unkeyed),
+            "a key filter never matches an agent without a key"
+        );
+    }
 
     assert!(
         AgentFilter::new_env(
@@ -1570,7 +1667,7 @@ fn worker_filter_matches() {
     );
 
     assert!(
-        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+        AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string())
             .and(AgentFilter::new_revision(
                 FilterComparator::Equal,
                 ComponentRevision::new(1).unwrap()
@@ -1579,7 +1676,7 @@ fn worker_filter_matches() {
     );
 
     assert!(
-        AgentFilter::new_name(StringFilterComparator::Equal, "worker-2".to_string())
+        AgentFilter::new_key(StringFilterComparator::Equal, "worker-2".to_string())
             .or(AgentFilter::new_revision(
                 FilterComparator::Equal,
                 ComponentRevision::new(1).unwrap()
@@ -1596,7 +1693,7 @@ fn worker_filter_matches() {
             FilterComparator::Less,
             ComponentRevision::new(2).unwrap()
         ))
-        .or(AgentFilter::new_name(
+        .or(AgentFilter::new_key(
             StringFilterComparator::Equal,
             "worker-2".to_string(),
         ))
@@ -1663,11 +1760,11 @@ fn worker_filter_matches() {
         ("false", false),
         ("not true", false),
         ("not false", true),
-        ("name == worker-1 and true", true),
-        ("name == worker-1 and false", false),
-        ("name == worker-2 or true", true),
-        ("name == worker-2 or false", false),
-        ("name == worker-1 or false", true),
+        ("key == worker-1 and true", true),
+        ("key == worker-1 and false", false),
+        ("key == worker-2 or true", true),
+        ("key == worker-2 or false", false),
+        ("key == worker-1 or false", true),
         ("status == Idle and not false", true),
     ] {
         assert_eq!(
@@ -1687,11 +1784,9 @@ fn sandbox_metadata(never_live: bool, status: AgentStatus) -> AgentMetadata {
         component_id,
         agent_type_name: None,
         canonical_key: None,
+        constructor_parameters: None,
         owner_kind: crate::model::agent::OwnerKind::ComponentAgent,
-        agent_id: AgentId {
-            agent_id: "sandbox-1".to_string(),
-            component_id,
-        },
+        agent_id: AgentId::from_parts(1, 1),
         env: vec![],
         environment_id: EnvironmentId::new(),
         created_by: AccountId(uuid!("f935056f-e2f0-4183-a40f-d8ef3011f0bc")),
@@ -1704,7 +1799,6 @@ fn sandbox_metadata(never_live: bool, status: AgentStatus) -> AgentMetadata {
             never_live,
             ..AgentStatusRecord::default()
         },
-        original_phantom_id: None,
         fingerprint: AgentFingerprint(Uuid::now_v7()),
         agent_mode: AgentMode::Durable,
         create_request: crate::model::oplog::CreateRequest::new(
@@ -1788,10 +1882,10 @@ fn agent_metadata_dto_keeps_the_underlying_status_through_the_proto() {
     use golem_api_grpc::proto::golem::worker::AgentMetadata as ProtoAgentMetadata;
 
     let dto = |status: AgentStatus, underlying_status: Option<AgentStatus>| AgentMetadataDto {
-        agent_id: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "sandbox-1".to_string(),
-        },
+        agent_id: AgentId::from_parts(1, 1),
+        agent_type_name: None,
+        canonical_key: None,
+        constructor_parameters: None,
         owner_kind: crate::model::agent::OwnerKind::ComponentAgent,
         environment_id: EnvironmentId::new(),
         created_by: AccountId::new(),
@@ -1842,6 +1936,7 @@ fn agent_status_record_has_pending_work_for_pending_invocations() {
         oplog_index: OplogIndex::INITIAL,
         idempotency_key: None,
         manual_update_target_revision: Some(ComponentRevision::INITIAL),
+        operation: None,
     });
 
     assert!(status.has_pending_work(Timestamp::now_utc()));
@@ -1857,6 +1952,7 @@ fn scheduled_invocations_become_pending_work_only_when_due() {
             oplog_index: OplogIndex::INITIAL,
             idempotency_key: Some(InvocationId::new()),
             manual_update_target_revision: None,
+            operation: None,
         }],
         ..Default::default()
     };
@@ -1957,7 +2053,7 @@ fn agent_filter_mode_protobuf_round_trip() {
     let recovered: AgentFilter = proto.try_into().unwrap();
     assert_eq!(original_ephemeral, recovered);
 
-    let composite = AgentFilter::new_name(StringFilterComparator::Equal, "w1".to_string()).and(
+    let composite = AgentFilter::new_key(StringFilterComparator::Equal, "w1".to_string()).and(
         AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Ephemeral),
     );
     let proto: ProtoAgentFilter = composite.clone().into();
@@ -2001,6 +2097,7 @@ fn agent_status_record_agent_mode_is_not_serialized() {
             updated_millis: 1200,
             credit_millis: Some(900),
         },
+        settling_invocation: Some(invocation_id(11)),
         agent_mode: AgentMode::Ephemeral,
         ..AgentStatusRecord::default()
     };
@@ -2079,9 +2176,12 @@ fn agent_invocation_payload_round_trip_preserves_scope_card() {
     let invocation = AgentInvocation::AgentMethod {
         idempotency_key: InvocationId::new(),
         method_name: "run".to_string(),
+        allow_streams: false,
         input: SchemaValue::Tuple {
             elements: Vec::new(),
-        },
+        }
+        .try_into()
+        .unwrap(),
         invocation_context: InvocationContextStack::fresh(),
         caller: sample_caller(),
         scope_card: Some(scope_card.clone()),
@@ -2105,6 +2205,46 @@ fn agent_invocation_payload_round_trip_preserves_scope_card() {
         original_claims_json(&caller),
         original_claims_json(&sample_caller())
     );
+}
+
+/// A queued manual update keeps its requester, both roles and the exact claims, from the
+/// invocation to its payload, through the binary codec and back. The requester is not the
+/// invocation's caller.
+#[test]
+fn manual_update_payload_round_trips_the_requester() {
+    use crate::base_model::caller::test_support::{original_claims_json, sample_caller};
+    use crate::model::{AgentInvocation, AgentInvocationPayload};
+    use crate::serialization::{deserialize, serialize};
+
+    let target_revision = ComponentRevision::new(3).unwrap();
+    let invocation = AgentInvocation::ManualUpdate {
+        target_revision,
+        requester: sample_caller(),
+    };
+    assert_eq!(invocation.caller(), None);
+
+    let (idempotency_key, payload, invocation_context) = invocation.clone().into_parts();
+    assert_eq!(
+        payload,
+        AgentInvocationPayload::ManualUpdate {
+            target_revision,
+            requester: sample_caller(),
+        }
+    );
+    let decoded: AgentInvocationPayload = deserialize(&serialize(&payload).unwrap()).unwrap();
+    assert_eq!(decoded, payload);
+    let AgentInvocationPayload::ManualUpdate { requester, .. } = &decoded else {
+        panic!("expected a manual update payload, got {decoded:?}");
+    };
+    assert_eq!(
+        original_claims_json(requester),
+        original_claims_json(&sample_caller())
+    );
+
+    let rebuilt = AgentInvocation::from_parts(idempotency_key, decoded, invocation_context);
+    assert_eq!(rebuilt, invocation);
+    let decoded: AgentInvocation = deserialize(&serialize(&invocation).unwrap()).unwrap();
+    assert_eq!(decoded, invocation);
 }
 
 #[test]

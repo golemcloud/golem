@@ -24,8 +24,8 @@
  */
 export * as Agent from "./Agent.js"
 
-/** Parsed environment-scoped agent identities. @since 1.6.0 @category modules */
-export * as AgentIdentity from "./AgentIdentity.js"
+/** Typed agent IDs: UUIDs that Golem issues. @since 1.6.0 @category modules */
+export * as AgentId from "./AgentId.js"
 
 /**
  * Effect-typed wrappers around the agent-management subset of
@@ -108,7 +108,7 @@ export * as Durability from "./Durability.js"
 /** External Durable Streams readers and producers. @since 1.6.0 @category modules */
 export * as DurableStreams from "./DurableStreams.js"
 
-/** Schema-value RPC for callers that only have an agent identity. @since 1.6.0 @category modules */
+/** Schema-value RPC for callers that only have an agent ID. @since 1.6.0 @category modules */
 export * as DynamicClient from "./DynamicClient.js"
 
 /**

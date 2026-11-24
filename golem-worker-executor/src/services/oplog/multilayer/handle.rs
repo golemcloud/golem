@@ -104,10 +104,8 @@ impl MultiLayerOplog {
             close_fn: Mutex::new(Some(close)),
         });
         let result_oplog: Arc<dyn Oplog> = result.clone();
-        multi_layer_oplog_service.register_transfer(
-            result.owned_agent_id.agent_id.clone(),
-            &result.transfer_fiber,
-        );
+        multi_layer_oplog_service
+            .register_transfer(result.owned_agent_id.agent_id, &result.transfer_fiber);
         let (start_tx, start_rx) = tokio::sync::oneshot::channel();
         let transfer_service = multi_layer_oplog_service.clone();
         let transfer_fiber = tokio::spawn(async move {
@@ -420,16 +418,17 @@ impl Debug for MultiLayerOplog {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Oplog for MultiLayerOplog {
     fn executor_shutdown_handle(&self) -> crate::services::oplog::OplogShutdownHandle {
         let retired = self.retired.clone();
         let service = self.multi_layer_oplog_service.clone();
-        let agent_id = self.owned_agent_id.agent_id.clone();
+        let agent_id = self.owned_agent_id.agent_id;
         let transfer_fiber = self.transfer_fiber.clone();
         let inner = self.primary.executor_shutdown_handle();
         let close_retired = retired.clone();
         let close_service = service.clone();
-        let close_agent_id = agent_id.clone();
+        let close_agent_id = agent_id;
         let close_transfer_fiber = transfer_fiber.clone();
         let close_inner = inner.clone();
         let closed = self.closed();
@@ -443,7 +442,7 @@ impl Oplog for MultiLayerOplog {
             move || {
                 let retired = close_retired.clone();
                 let service = close_service.clone();
-                let agent_id = close_agent_id.clone();
+                let agent_id = close_agent_id;
                 let transfer_fiber = close_transfer_fiber.clone();
                 let closed = closed.clone();
                 let inner = close_inner.clone();

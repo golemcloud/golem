@@ -3,18 +3,10 @@
 // `run * 100_000 + seq`, for `seq` in 1..=count.
 
 ///|
-/// The schema shape of `golem:core/types@2.0.0` component-id.
-#derive.golem_schema
-pub(all) struct GateComponentId {
-  uuid : @schema.Uuid
-}
-
-///|
 /// The schema shape of `golem:core/types@2.0.0` agent-id.
 #derive.golem_schema
 pub(all) struct GateAgentId {
-  component_id : GateComponentId
-  agent_id : String
+  uuid : @schema.Uuid
 }
 
 ///|
@@ -29,12 +21,7 @@ pub(all) struct Gate {
 ///|
 fn Gate::from_host(id : @types.PromiseId) -> Gate {
   {
-    agent_id: {
-      component_id: {
-        uuid: @schema.Uuid::from_wit(id.agent_id.component_id.uuid),
-      },
-      agent_id: id.agent_id.agent_id,
-    },
+    agent_id: { uuid: @schema.Uuid::from_wit(id.agent_id.uuid) },
     fingerprint: @schema.Uuid::from_wit(id.fingerprint),
     oplog_idx: id.oplog_idx,
   }
@@ -43,10 +30,7 @@ fn Gate::from_host(id : @types.PromiseId) -> Gate {
 ///|
 fn Gate::to_host(self : Gate) -> @types.PromiseId {
   {
-    agent_id: {
-      component_id: { uuid: self.agent_id.component_id.uuid.to_wit(), },
-      agent_id: self.agent_id.agent_id,
-    },
+    agent_id: { uuid: self.agent_id.uuid.to_wit() },
     fingerprint: self.fingerprint.to_wit(),
     oplog_idx: self.oplog_idx,
   }
@@ -174,7 +158,7 @@ pub async fn FaultMatrixFixture::pipe(
   keep : UInt32,
 ) -> Array[UInt32] {
   let _ = self
-  FaultMatrixFixtureClient::scoped(target, async fn(client) {
+  FaultMatrixFixtureClient::scoped_upsert(target, async fn(client) {
     let input = records_stream(records(run, count))
     if keep >= count {
       client.consume(input)
@@ -194,7 +178,7 @@ pub async fn FaultMatrixFixture::read_remote(
   gate : Gate,
 ) -> Array[UInt32] {
   let _ = self
-  FaultMatrixFixtureClient::scoped(target, async fn(client) {
+  FaultMatrixFixtureClient::scoped_upsert(target, async fn(client) {
     collect(client.produce(run, count, pause_after, gate), unbounded)
   })
 }

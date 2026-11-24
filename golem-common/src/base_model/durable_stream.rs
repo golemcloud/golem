@@ -91,21 +91,14 @@ impl StreamId {
         producer: &AgentId,
         expected_producer_fingerprint: AgentFingerprint,
         registration_oplog_index: OplogIndex,
-    ) -> Result<Self, DurableStreamIdentityError> {
-        let agent_name = producer.agent_id.as_bytes();
-        let name_length: u32 = agent_name
-            .len()
-            .try_into()
-            .map_err(|_| DurableStreamIdentityError::AgentNameTooLong)?;
-        let mut name = Vec::with_capacity(53 + agent_name.len());
+    ) -> Self {
+        let mut name = Vec::with_capacity(57);
         name.push(DURABLE_STREAM_FORMAT_VERSION);
         name.extend_from_slice(environment_id.0.as_bytes());
-        name.extend_from_slice(producer.component_id.0.as_bytes());
-        name.extend_from_slice(&name_length.to_be_bytes());
-        name.extend_from_slice(agent_name);
+        name.extend_from_slice(producer.as_uuid().as_bytes());
         name.extend_from_slice(expected_producer_fingerprint.0.as_bytes());
         name.extend_from_slice(&registration_oplog_index.as_u64().to_be_bytes());
-        Ok(Self(Uuid::new_v5(&STREAM_ID_NAMESPACE_V1, &name)))
+        Self(Uuid::new_v5(&STREAM_ID_NAMESPACE_V1, &name))
     }
 }
 
@@ -141,23 +134,16 @@ impl AttachmentId {
         callee: &AgentId,
         invocation_key: &InvocationId,
     ) -> Result<Self, DurableStreamIdentityError> {
-        let agent_name = callee.agent_id.as_bytes();
-        let agent_name_length: u32 = agent_name
-            .len()
-            .try_into()
-            .map_err(|_| DurableStreamIdentityError::AgentNameTooLong)?;
         let invocation_key = invocation_key.to_string();
         let invocation_key = invocation_key.as_bytes();
         let invocation_key_length: u32 = invocation_key
             .len()
             .try_into()
             .map_err(|_| DurableStreamIdentityError::InvocationKeyTooLong)?;
-        let mut name = Vec::with_capacity(45 + agent_name.len() + invocation_key.len());
+        let mut name = Vec::with_capacity(41 + invocation_key.len());
         name.push(DURABLE_STREAM_FORMAT_VERSION);
         name.extend_from_slice(callee_environment_id.0.as_bytes());
-        name.extend_from_slice(callee.component_id.0.as_bytes());
-        name.extend_from_slice(&agent_name_length.to_be_bytes());
-        name.extend_from_slice(agent_name);
+        name.extend_from_slice(callee.as_uuid().as_bytes());
         name.extend_from_slice(&invocation_key_length.to_be_bytes());
         name.extend_from_slice(invocation_key);
         name.extend_from_slice(&0u32.to_be_bytes());
@@ -332,8 +318,6 @@ pub enum StreamOffsetError {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum DurableStreamIdentityError {
-    #[error("agent name is too long for a durable stream identity")]
-    AgentNameTooLong,
     #[error("idempotency key is too long for a durable stream identity")]
     InvocationKeyTooLong,
 }
@@ -505,7 +489,7 @@ impl StreamRegistrationInvocation {
         match self {
             Self::Local(idempotency_key) => StreamSessionKey {
                 callee_environment_id: owner_environment_id,
-                callee: owner.clone(),
+                callee: *owner,
                 callee_fingerprint: owner_fingerprint,
                 idempotency_key: *idempotency_key,
             },
@@ -1109,6 +1093,43 @@ pub struct StreamSessionAttachedRecord {
     pub attempt_id: AttemptId,
     pub epoch: u64,
     pub pending_invocation_oplog_index: OplogIndex,
+    pub acceptance: StreamSessionAcceptance,
+}
+
+/// Schema-independent attachment identity retained before execution chooses a revision.
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamSessionAcceptance {
+    pub public_session_id: String,
+    pub route_scope: Option<String>,
+    pub expiry_policy: StreamSessionExpiryPolicy,
+    pub expiry_deadline_millis: Option<u64>,
+    pub effective_identity: Vec<u8>,
+    pub execution_config: Vec<u8>,
+    pub live_join_buffer_events: u32,
+    /// Native request ordinal to transport stream ID. Foreign identities remain in Pending.
+    pub transport_stream_ids: Vec<u64>,
+}
+
+impl StreamSessionPreparedRecord {
+    pub fn acceptance(&self) -> StreamSessionAcceptance {
+        StreamSessionAcceptance {
+            public_session_id: self.public_session_id.clone(),
+            route_scope: self.route_scope.clone(),
+            expiry_policy: self.expiry_policy,
+            expiry_deadline_millis: self.expiry_deadline_millis,
+            effective_identity: self.attempt.effective_identity.clone(),
+            execution_config: self.attempt.invocation.execution_config.clone(),
+            live_join_buffer_events: self.attempt.live_join_buffer_events,
+            transport_stream_ids: self
+                .stream_mappings
+                .iter()
+                .filter(|binding| binding.role.direction() == SessionStreamRole::Input)
+                .map(|binding| binding.transport_stream_id)
+                .collect(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
@@ -1967,7 +1988,7 @@ mod tests {
         StreamSessionInvocationResultRecord, StreamSessionPreparedRecord, StreamSessionRecord,
         StreamTerminal, StreamTerminalAuthor, StreamTerminalOrigin, StreamTerminalRecord,
     };
-    use crate::base_model::component::{ComponentId, ComponentRevision};
+    use crate::base_model::component::ComponentRevision;
     use crate::base_model::environment::EnvironmentId;
     use crate::base_model::{AgentFingerprint, AgentId, InvocationId, OplogIndex};
     use golem_schema::schema::{FromSchema, IntoSchema, IntoTypedSchemaValue, SchemaFingerprintV1};
@@ -2222,12 +2243,7 @@ mod tests {
     fn stream_and_attachment_id_golden_vectors() {
         let environment_id =
             EnvironmentId(Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap());
-        let agent_id = AgentId {
-            component_id: ComponentId(
-                Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap(),
-            ),
-            agent_id: "cart(42)".to_string(),
-        };
+        let agent_id = AgentId::from_parts(7, 1);
         let fingerprint =
             AgentFingerprint(Uuid::parse_str("00000000-0000-0000-0000-000000000003").unwrap());
         assert_eq!(
@@ -2237,9 +2253,8 @@ mod tests {
                 fingerprint,
                 OplogIndex::from_u64(42),
             )
-            .unwrap()
             .to_string(),
-            "d750525f-cc5d-5409-9576-46b1da257fbc"
+            "8b8ee808-5fab-5ca7-8b5d-ca23e4bf053e"
         );
         assert_eq!(
             AttachmentId::primary(
@@ -2249,7 +2264,7 @@ mod tests {
             )
             .unwrap()
             .to_string(),
-            "59dee39e-df8f-59e5-ba06-4e5e04b5181f"
+            "313e6251-d3ad-53f0-9661-2a968e543014"
         );
         let attempt_id = AttemptId::fresh();
         assert_eq!(attempt_id.0.get_version(), Some(uuid::Version::Random));
@@ -2348,10 +2363,7 @@ mod tests {
         let environment_id = EnvironmentId(Uuid::from_u128(1));
         let session_key = StreamInvocationId {
             callee_environment_id: environment_id,
-            callee: AgentId {
-                component_id: ComponentId(Uuid::from_u128(2)),
-                agent_id: "consumer".to_string(),
-            },
+            callee: AgentId::from_parts(7, 2),
             callee_fingerprint: AgentFingerprint(Uuid::from_u128(3)),
             idempotency_key: InvocationId(Uuid::from_u128(0x0123456789abcdef_fedcba9876543210)),
         };
@@ -2388,31 +2400,22 @@ mod tests {
     #[test]
     fn attachment_identity_uses_session_authority_independently_of_consumer_identity() {
         let producer_environment_id = EnvironmentId(Uuid::from_u128(1));
-        let producer = AgentId {
-            component_id: ComponentId(Uuid::from_u128(2)),
-            agent_id: "producer-c".to_string(),
-        };
+        let producer = AgentId::from_parts(7, 3);
         let producer_fingerprint = AgentFingerprint(Uuid::from_u128(3));
         let session_environment_id = EnvironmentId(Uuid::from_u128(11));
-        let session_authority = AgentId {
-            component_id: ComponentId(Uuid::from_u128(12)),
-            agent_id: "session-b".to_string(),
-        };
+        let session_authority = AgentId::from_parts(7, 4);
         let session_key = StreamInvocationId {
             callee_environment_id: session_environment_id,
-            callee: session_authority.clone(),
+            callee: session_authority,
             callee_fingerprint: AgentFingerprint(Uuid::from_u128(13)),
             idempotency_key: InvocationId(Uuid::from_u128(0x0123456789abcdef_fedcba9876543211)),
         };
         let consumer_environment_id = EnvironmentId(Uuid::from_u128(21));
-        let consumer = AgentId {
-            component_id: ComponentId(Uuid::from_u128(22)),
-            agent_id: "consumer-a".to_string(),
-        };
+        let consumer = AgentId::from_parts(7, 5);
         let consumer_fingerprint = AgentFingerprint(Uuid::from_u128(23));
         let consumer_invocation = StreamInvocationId {
             callee_environment_id: consumer_environment_id,
-            callee: consumer.clone(),
+            callee: consumer,
             callee_fingerprint: consumer_fingerprint,
             idempotency_key: InvocationId(Uuid::from_u128(0x0123456789abcdef_fedcba9876543212)),
         };
@@ -2431,7 +2434,7 @@ mod tests {
             producer,
             expected_producer_fingerprint: producer_fingerprint,
             consumer_environment_id,
-            consumer: consumer.clone(),
+            consumer,
             expected_consumer_fingerprint: consumer_fingerprint,
             consumer_invocation,
         };
@@ -2462,15 +2465,12 @@ mod tests {
     #[test]
     fn prepared_record_rejects_unsupported_invocation_handle_version() {
         let environment_id = EnvironmentId(Uuid::from_u128(1));
-        let agent_id = AgentId {
-            component_id: ComponentId(Uuid::from_u128(2)),
-            agent_id: "agent".to_string(),
-        };
+        let agent_id = AgentId::from_parts(7, 6);
         let fingerprint = AgentFingerprint(Uuid::from_u128(3));
         let idempotency_key = InvocationId(Uuid::from_u128(0x0123456789abcdef_fedcba9876543210));
         let session_key = StreamInvocationId {
             callee_environment_id: environment_id,
-            callee: agent_id.clone(),
+            callee: agent_id,
             callee_fingerprint: fingerprint,
             idempotency_key,
         };
@@ -2478,7 +2478,7 @@ mod tests {
             format_version: 2,
             stream_id: StreamId(Uuid::from_u128(4)),
             producer_environment_id: environment_id,
-            producer: agent_id.clone(),
+            producer: agent_id,
             expected_producer_fingerprint: fingerprint,
             producer_generation: OplogIndex::NONE,
             source_invocation: session_key.clone(),
@@ -2525,14 +2525,11 @@ mod tests {
     #[test]
     fn prepared_record_validates_input_handles_and_allows_early_outputs_for_any_target() {
         let environment_id = EnvironmentId(Uuid::from_u128(1));
-        let agent_id = AgentId {
-            component_id: ComponentId(Uuid::from_u128(2)),
-            agent_id: "tool-host".to_string(),
-        };
+        let agent_id = AgentId::from_parts(7, 7);
         let fingerprint = AgentFingerprint(Uuid::from_u128(3));
         let session_key = StreamInvocationId {
             callee_environment_id: environment_id,
-            callee: agent_id.clone(),
+            callee: agent_id,
             callee_fingerprint: fingerprint,
             idempotency_key: InvocationId(Uuid::from_u128(0x0123456789abcdef_fedcba9876543214)),
         };
@@ -2543,7 +2540,7 @@ mod tests {
             stream_id: StreamId(Uuid::from_u128(id)),
             producer_generation: OplogIndex::NONE,
             producer_environment_id: environment_id,
-            producer: agent_id.clone(),
+            producer: agent_id,
             expected_producer_fingerprint: fingerprint,
             source_invocation: session_key.clone(),
             component_revision: ComponentRevision::INITIAL,

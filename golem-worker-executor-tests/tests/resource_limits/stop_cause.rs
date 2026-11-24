@@ -20,30 +20,33 @@ async fn deletion_cancels_initial_wait_without_acquiring_a_permit(
         .store()
         .await?;
     let seed_id = executor
-        .start_agent(&component.id, agent_id!("Counter", "delete-wait-seed"))
+        .start_agent(&component.id, agent_key!("Counter", "delete-wait-seed"))
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id)
         .await
         .unwrap()
         .primary();
     let held = executor
-        .acquire_account_concurrent_agent_permit(seed_id)
+        .acquire_account_concurrent_agent_permit(seed_id.agent_id)
         .await;
-    let name = agent_id!("Counter", "delete-initial-wait");
-    let id = golem_common::model::AgentId {
-        component_id: component.id,
-        agent_id: name.to_string(),
-    };
-    let worker = Worker::get_or_create_suspended(
+    let name = agent_key!("Counter", "delete-initial-wait");
+    let id = executor.keyed_agent_id(context.default_environment_id, &name)?;
+    let worker = Worker::get_or_create_suspended_with_freshness(
         seed.all(),
-        &OwnedAgentId::new(context.default_environment_id, &id),
+        &id,
         None,
         vec![],
         None,
         None,
         &InvocationContextStack::fresh(),
         callers::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        golem_worker_executor::worker::CreateIntent::Create {
+            owner: golem_worker_executor::worker::NewOwner::keyed(component.id, name.clone()),
+            idempotency_key: None,
+            exclusive: false,
+        },
     )
     .await?;
     Worker::start_if_needed(worker.clone()).await?;
@@ -52,7 +55,9 @@ async fn deletion_cancels_initial_wait_without_acquiring_a_permit(
     assert!(!worker.is_loading());
     assert!(!worker.is_loaded().await);
     drop(held);
-    let permit = executor.acquire_account_concurrent_agent_permit(id).await;
+    let permit = executor
+        .acquire_account_concurrent_agent_permit(id.agent_id)
+        .await;
     drop(permit);
     Ok(())
 }

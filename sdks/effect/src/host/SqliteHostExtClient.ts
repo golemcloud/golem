@@ -18,7 +18,7 @@
  * {@link ../agent.dispatchLoadSnapshot} can keep their structure: the
  * dispatcher reads the impl out of the user runtime layer once at the
  * top via `Effect.runPromise`, then calls the methods directly inside
- * the synchronous loop. Mirrors the `parseAgentId` / `getSelfMetadata`
+ * the synchronous loop. Mirrors the `getSelfMetadata`
  * pattern on {@link AgentHostClient}.
  *
  * @internal — not re-exported from `src/index.ts`.

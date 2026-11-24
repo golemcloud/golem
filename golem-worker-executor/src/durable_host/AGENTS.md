@@ -54,9 +54,10 @@ name, owner, optional request payload). *Observe* is the guest reading the resul
 
 ## Identity on the replay path
 
-Any value replay must reproduce (idempotency keys, phantom ids, scope discriminators, span ids
+Any value replay must reproduce (idempotency keys, agent IDs, scope discriminators, span ids
 that reach the guest) derives from oplog indices or recorded data — `derive_idempotency_key`,
-`ephemeral_invocation_phantom_id` (UUIDv5 of the key). Fresh randomness or clock reads are
+`AgentId::allocated` (from the `Start` index), `AgentId::keyed` (from a recorded agent type),
+`AgentId::ephemeral_invocation` (from the owner key). Fresh randomness or clock reads are
 allowed only when appended and committed before the guest can observe them and read back on
 replay (as `caller_attempt_id` does); unrecorded guest-observable randomness is a bug.
 
@@ -76,7 +77,8 @@ Decide child authorization and protocol readiness before publishing live. Termin
 abandons replay for failure (`authoritative_replay_failure`); it must not publish over sibling
 history. A typed-loss `End` belongs to the original `Start`. Never rewind or discard another
 task's history to make repair possible. HTTP without a safe resend reports
-`http-response-incomplete`, RDBMS reports `resource-lost`, and TCP reports `connection-broken`.
+`http-response-incomplete`, RDBMS reports `resource-lost`, and TCP reports `connection-broken`
+(P2 TCP reports `connection-reset`, because P2 has no `connection-broken` code).
 UDP `ReadRemote` re-executes receive after rebind rather than manufacturing connection loss.
 
 Preview 2 HTTP is removed. Preview 3 send keeps request-body intake running while awaiting
@@ -249,11 +251,44 @@ Failure to load a manual-update snapshot is terminal and retains the underlying 
 Tasks spawned on the store (`tail_work.rs`) may park across invocation settlement at guest-driven
 waits, passive markerless-completion replay-tail waits after durable finalization, or a destructor's
 passive wait for sibling history. A recorded-marker wait also parks its passive progress wait
-while an `AgentInvocationFinished` lies between the cursor and the marker: a reader retained across
+while an invocation boundary (a terminal, an `AgentInvocationSettled` or another invocation's
+`AgentInvocationStarted`) lies between the cursor and the marker: a reader retained across
 invocations is consumed in a later invocation, which cannot replay until this one settles. Cursor
 operations and waits for a marker in the current invocation remain active.
-A destructor whose terminal is missing can repair only after the natural replay-to-live transition;
-if recovery returns before its Store task resumes, the next invocation can drive that repair.
+A destructor whose terminal is missing can repair only after the natural replay-to-live transition,
+and only while an invocation that the recorded history has not closed drives the primary Store
+(`ReplayState::await_driving_invocation`); otherwise the next invocation drives that repair.
 The task becomes active before performing effects or appending a terminal, and settlement waits
-for it before finishing that invocation. Work that must survive a restart belongs in the oplog,
-not in a task.
+for it before settling that invocation: before `AgentInvocationSettled` for an invocation that
+records its result at the export's return, before `AgentInvocationFinished` for the others. Work
+that must survive a restart belongs in the oplog, not in a task.
+A resumed task counts on the invocation the loop runs when it resumes, not on its spawner. Every
+`Start` that code not attributed to the loop's invocation records (a resumed task of an earlier
+invocation, or agent-level work) carries `driver` = the `AgentInvocationStarted` of the loop's
+invocation (`PrivateDurableWorkerState::recording_driver`); the loop's own calls and snapshotting
+record none. Every replayed claim checks the recorded `driver` against the claiming call's; a
+mismatch is a `ReplayDivergence` whose mismatched field is `driver`.
+
+## Invocation anchors and the authority cut-off
+
+The result of a successful constructor and of an agent method that uses no streams is recorded
+when the guest calls `task.return`; the invocation's background work drains after it. Replay mirrors this: the
+invocation's replay anchor opens at its `AgentInvocationStarted`, replay consumes its terminal at
+the return, and the anchor closes at its `AgentInvocationSettled` or at the replay tail, where
+the Store settles it live. The invocation's `Start`/`End` entries may follow its terminal, so
+abandoned-`Start` checks and the closed-anchor rule run when the anchor closes, never at the
+terminal.
+
+The return also ends the invocation's lent authority. The export call's return signal marks the
+invocation's `ExportReturned` inside `task.return`, and the Store's `CallingHost` hook applies the
+final outcome before the next host call. From then on the authority view (`authority()`) hides
+the lent scope card: a call made after the return sees no lent card, and refuses a handle to that
+card, or to a card derived from it, for lending or as a derivation parent. Cards the agent
+derived from its own wallet stay usable. A call made before the return keeps its admitted
+authority after its awaits: read authority only through the view, and run every synchronous
+Store access of an accessor's host code that can follow an await through `with_import_access`,
+so store tasks it spawns capture the same cut-off state
+(`CapturedAttribution`). Attribution is not cut off: `invocation-id()` and the invocation key of
+background work stay the method's, and the scope card stays installed until the drain ends.
+Code that must see the installed card regardless of the caller, such as replay application of
+root cards, uses the admitted card explicitly.

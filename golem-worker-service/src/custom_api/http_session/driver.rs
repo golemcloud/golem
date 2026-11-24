@@ -22,7 +22,8 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_response, stream_error, stream_terminal,
 };
 use golem_common::model::durable_stream::{StreamError, StreamTerminal};
-use golem_common::model::{AgentId, InvocationId, InvocationRequestKey};
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::{AgentId, InvocationId, InvocationRequestKey, OwnedAgentId};
 use prost::Message;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -49,7 +50,7 @@ pub(super) async fn run_session(
     mut controls: mpsc::Receiver<Command>,
     events: SessionOutput,
     completed: Arc<AtomicBool>,
-    cleanup_identity: Arc<OnceLock<(AgentId, InvocationId)>>,
+    cleanup_identity: Arc<OnceLock<(OwnedAgentId, InvocationId)>>,
     cancelled: CancellationToken,
 ) {
     let mut input = InputProgress::default();
@@ -195,7 +196,7 @@ pub(super) async fn run_session(
             send_error(&events, HttpSessionError::Protocol(error)).await;
             return;
         }
-        let current = match decision.response.unwrap() {
+        let mut current = match decision.response.unwrap() {
             invocation_response::Response::Accepted(current) => current,
             invocation_response::Response::Rejected(rejected)
                 if accepted.is_some()
@@ -235,6 +236,49 @@ pub(super) async fn run_session(
             }
             _ => unreachable!(),
         };
+        if accepted.is_none() && current.component_revision.is_none() {
+            if current.agent_id.as_ref() != start.target_agent_id()
+                || current.method_name != start.method_name
+            {
+                send_error(
+                    &events,
+                    HttpSessionError::Protocol("acceptance changed target".into()),
+                )
+                .await;
+                return;
+            }
+            if !send_event(
+                &events,
+                &cancelled,
+                HttpSessionEvent::QueuedAccepted(current.clone()),
+            )
+            .await
+            {
+                cancelled.cancel();
+                return;
+            }
+        }
+        while current.component_revision.is_none() {
+            let response = tokio::select! {
+                _ = cancelled.cancelled() => return,
+                response = responses.next() => response,
+            };
+            let Some(Ok(response)) = response else {
+                send_error(&events, HttpSessionError::TransportUnavailable).await;
+                return;
+            };
+            if let Err(error) = protocol.validate_response(&response) {
+                send_error(&events, HttpSessionError::Protocol(error)).await;
+                return;
+            }
+            match response.response {
+                Some(invocation_response::Response::Ready(ready)) => current = ready,
+                _ => {
+                    send_error(&events, HttpSessionError::Rejected).await;
+                    return;
+                }
+            }
+        }
         if let Some(expected) = accepted.as_ref() {
             if current.agent_id != expected.accepted.agent_id
                 || current.component_revision != expected.accepted.component_revision
@@ -250,7 +294,9 @@ pub(super) async fn run_session(
                 .await;
                 return;
             }
-        } else if current.agent_id != start.agent_id || current.method_name != start.method_name {
+        } else if current.agent_id.as_ref() != start.target_agent_id()
+            || current.method_name != start.method_name
+        {
             send_error(
                 &events,
                 HttpSessionError::Protocol("acceptance changed target".into()),
@@ -260,9 +306,11 @@ pub(super) async fn run_session(
         } else {
             match accepted_identity(current.clone()) {
                 Ok(identity) => {
-                    let agent = current.agent_id.clone().unwrap().try_into().unwrap();
+                    let agent: AgentId = current.agent_id.unwrap().try_into().unwrap();
+                    let environment_id: EnvironmentId =
+                        current.environment_id.unwrap().try_into().unwrap();
                     let key = current.idempotency_key.unwrap().into();
-                    let _ = cleanup_identity.set((agent, key));
+                    let _ = cleanup_identity.set((OwnedAgentId::new(environment_id, &agent), key));
                     accepted = Some(identity);
                 }
                 Err(error) => {
@@ -335,12 +383,15 @@ pub(super) async fn run_session(
                 return;
             }
             if request_tx.send(request).await.is_err() {
-                continue 'attempts;
+                break;
             }
         }
         // Output disposal is durable only once its terminal response is observed. Reissue any
         // still-pending controls after every accepted attachment.
         for stream_id in output.pending_disposals.iter().copied().collect::<Vec<_>>() {
+            if request_tx.is_closed() {
+                break;
+            }
             let Some(&durable_id) = output.controls.get(&stream_id) else {
                 continue;
             };
@@ -353,12 +404,18 @@ pub(super) async fn run_session(
                 return;
             }
             if request_tx.send(request).await.is_err() {
-                continue 'attempts;
+                break;
             }
         }
 
         loop {
-            if input.disposal_pending && !input.terminal && input.retained.is_empty() {
+            // The executor may close its request side before delivering its final responses.
+            // Keep draining them; only response loss requires another attachment.
+            if !request_tx.is_closed()
+                && input.disposal_pending
+                && !input.terminal
+                && input.retained.is_empty()
+            {
                 let request = cancel_request(
                     INPUT_STREAM_ID,
                     input.next_sequence,
@@ -376,7 +433,10 @@ pub(super) async fn run_session(
                     return;
                 }
                 if request_tx.send(request).await.is_err() {
-                    continue 'attempts;
+                    debug!(
+                        reason = "input_disposal_send_closed",
+                        "HTTP session drains remaining responses"
+                    );
                 }
             }
             let can_read_input = input.can_read(&limits);
@@ -404,8 +464,17 @@ pub(super) async fn run_session(
                     (permit, responses.next().await)
                 } => {
                     let (permit, response) = response;
-                    let Some(response) = response else { continue 'attempts };
-                    let response = match response { Ok(response) => response, Err(_) => continue 'attempts };
+                    let Some(response) = response else {
+                        debug!(reason = "response_eof", "HTTP session requires reattachment");
+                        continue 'attempts;
+                    };
+                    let response = match response {
+                        Ok(response) => response,
+                        Err(error) => {
+                            debug!(reason = "response_error", error = %error, "HTTP session requires reattachment");
+                            continue 'attempts;
+                        }
+                    };
                     if response.encoded_len() > limits.max_event_bytes {
                         send_error(&events, HttpSessionError::RetainedInputLimit).await;
                         return;
@@ -488,8 +557,11 @@ pub(super) async fn run_session(
                             permit.send(HttpSessionEvent::Finished(finished));
                             return;
                         }
-                        invocation_response::Response::AttachmentRevoked(_) => continue 'attempts,
-                        invocation_response::Response::Accepted(_) | invocation_response::Response::Rejected(_) => unreachable!(),
+                        invocation_response::Response::AttachmentRevoked(_) => {
+                            debug!(reason = "attachment_revoked", "HTTP session requires reattachment");
+                            continue 'attempts;
+                        }
+                        invocation_response::Response::Accepted(_) | invocation_response::Response::Ready(_) | invocation_response::Response::Rejected(_) => unreachable!(),
                     }
                 }
                 command = async {
@@ -505,7 +577,7 @@ pub(super) async fn run_session(
                         },
                         else => std::future::pending().await,
                     }
-                } => {
+                }, if !request_tx.is_closed() => {
                     let Some(command) = command else {
                         continue;
                     };
@@ -526,7 +598,9 @@ pub(super) async fn run_session(
                         send_error(&events, error).await;
                         return;
                     }
-                    if request_tx.send(request).await.is_err() { continue 'attempts; }
+                    if request_tx.send(request).await.is_err() {
+                        debug!(reason = "command_send_closed", "HTTP session drains remaining responses");
+                    }
                 }
             }
         }
@@ -630,9 +704,9 @@ pub(super) fn validate_prepared_start(start: &InvocationStart) -> Result<(), Htt
     InvocationSessionState::default()
         .validate_trusted_request(&request)
         .map_err(HttpSessionError::InvalidStart)?;
-    if start.agent_id.is_none() {
+    if start.target_agent_id().is_none() {
         return Err(HttpSessionError::InvalidStart(
-            "prepared start is missing its agent".into(),
+            "prepared start does not name its agent by ID".into(),
         ));
     }
     let prepared = start.request_key.clone().ok_or_else(|| {
@@ -645,7 +719,6 @@ pub(super) fn validate_prepared_start(start: &InvocationStart) -> Result<(), Htt
 fn accepted_identity(accepted: InvocationAccepted) -> Result<AcceptedIdentity, HttpSessionError> {
     let _: AgentId = accepted
         .agent_id
-        .clone()
         .ok_or_else(|| HttpSessionError::Protocol("acceptance has no agent".into()))?
         .try_into()
         .map_err(HttpSessionError::Protocol)?;
@@ -688,7 +761,7 @@ fn make_resume(
     cursors.sort_by_key(|cursor| uuid_pair(cursor.stream_id.as_ref().unwrap()));
     ResumeAttach {
         idempotency_key: identity.accepted.idempotency_key,
-        agent_id: identity.accepted.agent_id.clone(),
+        agent_id: identity.accepted.agent_id,
         environment_id: identity.accepted.environment_id,
         attachment_id: identity.accepted.attachment_id,
         attempt_id: Some(uuid::Uuid::new_v4().into()),

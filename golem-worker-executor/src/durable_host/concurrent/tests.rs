@@ -294,6 +294,7 @@ async fn marker_record_over(oplog: Arc<InMemoryOplog>) -> CompletionMarkerRecord
             function_name: HostFunctionName::MonotonicClockNow,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 golem_common::model::oplog::HostRequestNoInput {},
             )))),
@@ -318,10 +319,7 @@ async fn marker_record_over(oplog: Arc<InMemoryOplog>) -> CompletionMarkerRecord
     let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: "completion-delivery-test".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 1),
         },
         seed_oplog_dyn.clone(),
         golem_common::model::regions::DeletedRegions::default(),
@@ -452,12 +450,9 @@ async fn completion_delivery_delivered_records_marker_via_drain() {
 /// agent resident on it - over one agent that another executor now owns.
 #[test]
 async fn a_fenced_completion_marker_is_reported_rather_than_panicked() {
-    let agent_id = golem_common::model::AgentId {
-        component_id: golem_common::model::component::ComponentId::new(),
-        agent_id: "fenced-completion-marker-test".to_string(),
-    };
+    let agent_id = golem_common::model::AgentId::from_parts(7, 2);
     let oplog = Arc::new(InMemoryOplog::fenced(crate::services::oplog::OplogFence {
-        agent_id: agent_id.clone(),
+        agent_id,
         expected_epoch: golem_common::model::ShardEpoch(3),
         actual_epoch: Some(golem_common::model::ShardEpoch(4)),
     }));
@@ -515,10 +510,7 @@ async fn completion_delivery_markers_preserve_handoff_order() {
     let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: "completion-marker-order-test".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 3),
         },
         seed_oplog_dyn.clone(),
         golem_common::model::regions::DeletedRegions::default(),
@@ -1097,6 +1089,7 @@ async fn tail_gated_token_over_crash_tail(
             parent_start_index: None,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             function_name: HostFunctionName::MonotonicClockNow,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 HostRequestNoInput {},
@@ -1129,10 +1122,7 @@ async fn tail_gated_token_over_crash_tail(
     let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: "tail-gated-token-test".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 4),
         },
         oplog_dyn.clone(),
         golem_common::model::regions::DeletedRegions::default(),
@@ -1375,6 +1365,7 @@ impl InMemoryOplog {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Oplog for InMemoryOplog {
     async fn add(
         &self,
@@ -1609,6 +1600,7 @@ async fn dropped_cancellable_call_records_cancelled_at_next_drain_point() {
             function_name: HostFunctionName::MonotonicClockNow,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 golem_common::model::oplog::HostRequestNoInput {},
             )))),
@@ -1736,6 +1728,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
             function_name: HostFunctionName::P3HttpClientConsumeBodyChunk,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 golem_common::model::oplog::HostRequestNoInput {},
             )))),
@@ -1772,10 +1765,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
     let persist_replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: "concurrent-test".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 5),
         },
         persist_oplog.clone(),
         golem_common::model::regions::DeletedRegions::default(),
@@ -2104,6 +2094,7 @@ impl RetryHostProbe {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl InFunctionRetryHost for RetryHostProbe {
     fn current_retry_point(&self) -> OplogIndex {
         self.current_retry_point
@@ -2410,6 +2401,7 @@ fn begun_execution_scope_uses_parent_scope_as_retry_from() {
     let begun = BegunCallExecutionScope {
         parent_start_index: Some(idx(10)),
         observational_owner: None,
+        driver: None,
         invocation_id: None,
         entity_parent_start_index: None,
         logical_key_position: None,
@@ -2427,6 +2419,7 @@ fn begun_execution_scope_uses_call_start_as_retry_from_when_unscoped() {
     let begun = BegunCallExecutionScope {
         parent_start_index: None,
         observational_owner: None,
+        driver: None,
         invocation_id: None,
         entity_parent_start_index: None,
         logical_key_position: None,
@@ -2444,6 +2437,7 @@ fn begun_observational_scope_uses_custom_owner_as_retry_from() {
     let begun = BegunCallExecutionScope {
         parent_start_index: Some(idx(10)),
         observational_owner: Some(idx(7)),
+        driver: None,
         invocation_id: None,
         entity_parent_start_index: None,
         logical_key_position: None,

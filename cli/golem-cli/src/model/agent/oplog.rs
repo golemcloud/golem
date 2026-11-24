@@ -18,7 +18,9 @@ use crate::model::text_format::*;
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use golem_common::model::Timestamp;
+use golem_common::model::caller::{PublicCaller, PublicPrincipal};
 use golem_common::model::oplog::public_oplog_entry::FailedUpdateParams;
+use golem_common::model::oplog::public_oplog_entry::PendingUpdateParams;
 use golem_common::model::oplog::{
     MultipartPartData, OmittedOplogEntry, PluginInstallationDescription, PublicAgentInvocation,
     PublicAgentInvocationResult, PublicEntityCallMode, PublicEntityInvocation,
@@ -32,9 +34,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use crate::agent_id_display::SourceLanguage;
 #[cfg(test)]
-use crate::model::agent::{
-    AgentGetView, AgentMetadataView, AgentsMetadataResponseView, RawAgentId,
-};
+use crate::model::agent::{AgentGetView, AgentMetadataView, AgentsMetadataResponseView};
 #[cfg(test)]
 use golem_common::model::AgentStatus;
 #[cfg(test)]
@@ -363,6 +363,9 @@ impl TextOutput for PublicOplogEntry {
                 if let Some(owner) = params.observational_owner {
                     logln(format!("{pad}observational owner: {}", owner));
                 }
+                if let Some(driver) = params.driver {
+                    logln(format!("{pad}driver:            {}", driver));
+                }
                 if let Some(request) = &params.request {
                     logln(format!(
                         "{pad}input:             {}",
@@ -527,6 +530,18 @@ impl TextOutput for PublicOplogEntry {
                     format_error(&params.error)
                 ));
             }
+            PublicOplogEntry::AgentInvocationSettled(params) => {
+                logln(format_message_highlight("INVOKE SETTLED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}invocation id:     {}",
+                    format_id(&params.invocation_id)
+                ));
+                logln(format!("{pad}consumed fuel:     {}", params.consumed_fuel));
+            }
             PublicOplogEntry::Suspend(params) => {
                 logln(format_message_highlight("SUSPEND"));
                 logln(format!(
@@ -611,44 +626,8 @@ impl TextOutput for PublicOplogEntry {
             }
             PublicOplogEntry::PendingUpdate(params) => {
                 logln(format_message_highlight("ENQUEUED UPDATE"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}target revision:   {}",
-                    format_id(&params.target_revision),
-                ));
-                logln(format!(
-                    "{pad}update attempt:    {}",
-                    format_id(&params.update_attempt_index),
-                ));
-                match &params.description {
-                    PublicUpdateDescription::Automatic(_) => {
-                        logln(format!(
-                            "{pad}type:              {}",
-                            format_id("automatic")
-                        ));
-                    }
-                    PublicUpdateDescription::SnapshotAssistedAutomatic(_) => {
-                        logln(format!(
-                            "{pad}type:              {}",
-                            format_id("snapshot assisted automatic")
-                        ));
-                    }
-                    PublicUpdateDescription::SnapshotBased(inner_params) => {
-                        logln(format!(
-                            "{pad}type:              {}",
-                            format_id("snapshot based")
-                        ));
-                        logln(format!(
-                            "{pad}snapshot:          {}",
-                            BASE64_STANDARD.encode(&inner_params.payload),
-                        ));
-                        if let Some(name) = &inner_params.filesystem_snapshot {
-                            logln(format!("{pad}filesystem:        {}", format_id(name)));
-                        }
-                    }
+                for line in render_pending_update_lines(pad, params) {
+                    logln(line);
                 }
             }
             PublicOplogEntry::SuccessfulUpdate(params) => {
@@ -1290,6 +1269,7 @@ fn render_agent_invocation(
                 "{pad}invocation id:     {}",
                 format_id(&params.invocation_id)
             ));
+            lines.extend(render_caller_lines(pad, &params.caller));
             lines.push(format!("{pad}input:"));
             lines.push(render_typed_schema_value_line(
                 pad,
@@ -1301,6 +1281,7 @@ fn render_agent_invocation(
                 "{pad}invocation id:     {}",
                 format_id(&params.invocation_id)
             ));
+            lines.extend(render_caller_lines(pad, &params.caller));
             lines.push(format!("{pad}input:"));
             lines.push(render_typed_schema_value_line(pad, &params.function_input));
         }
@@ -1314,11 +1295,15 @@ fn render_agent_invocation(
                 "{pad}invocation id:     {}",
                 format_id(&params.invocation_id)
             ));
+            lines.extend(render_caller_lines(pad, &params.caller));
             lines.push(format!("{pad}input:"));
             lines.push(render_typed_schema_value_line(pad, &params.input));
         }
-        PublicAgentInvocation::SaveSnapshot(_) => {}
+        PublicAgentInvocation::SaveSnapshot(params) => {
+            lines.extend(render_caller_lines(pad, &params.caller));
+        }
         PublicAgentInvocation::LoadSnapshot(params) => {
+            lines.extend(render_caller_lines(pad, &params.caller));
             lines.extend(render_snapshot_data_lines(pad, &params.snapshot));
         }
         PublicAgentInvocation::ProcessOplogEntries(params) => {
@@ -1326,16 +1311,113 @@ fn render_agent_invocation(
                 "{pad}invocation id:     {}",
                 format_id(&params.invocation_id)
             ));
+            lines.extend(render_caller_lines(pad, &params.caller));
         }
         PublicAgentInvocation::ManualUpdate(params) => {
             lines.push(format!(
                 "{pad}target revision:   {}",
                 format_id(&params.target_revision)
             ));
+            lines.extend(render_requester_lines(pad, &params.requester));
         }
     }
 
     lines
+}
+
+/// The lines of a `PendingUpdate` entry below its title: the update, and who requested it.
+fn render_pending_update_lines(pad: &str, params: &PendingUpdateParams) -> Vec<String> {
+    let mut lines = vec![
+        format!("{pad}at:                {}", format_id(&params.timestamp)),
+        format!(
+            "{pad}target revision:   {}",
+            format_id(&params.target_revision)
+        ),
+        format!(
+            "{pad}update attempt:    {}",
+            format_id(&params.update_attempt_index)
+        ),
+    ];
+    match &params.description {
+        PublicUpdateDescription::Automatic(_) => {
+            lines.push(format!(
+                "{pad}type:              {}",
+                format_id("automatic")
+            ));
+        }
+        PublicUpdateDescription::SnapshotAssistedAutomatic(_) => {
+            lines.push(format!(
+                "{pad}type:              {}",
+                format_id("snapshot assisted automatic")
+            ));
+        }
+        PublicUpdateDescription::SnapshotBased(inner_params) => {
+            lines.push(format!(
+                "{pad}type:              {}",
+                format_id("snapshot based")
+            ));
+            lines.push(format!(
+                "{pad}snapshot:          {}",
+                BASE64_STANDARD.encode(&inner_params.payload),
+            ));
+            if let Some(name) = &inner_params.filesystem_snapshot {
+                lines.push(format!("{pad}filesystem:        {}", format_id(name)));
+            }
+        }
+    }
+    lines.extend(render_requester_lines(pad, &params.requester));
+    lines
+}
+
+/// The requester of an update: the caller of the update request, with its role and token lines.
+fn render_requester_lines(pad: &str, requester: &PublicCaller) -> Vec<String> {
+    let mut lines = vec![format!("{pad}requested by:")];
+    lines.extend(render_caller_lines(&format!("{pad}  "), requester));
+    lines
+}
+
+/// The role lines of a caller, its tokens, and the claims of its users when the entry holds them
+/// (only for a reader that asked for them). The claims of an immediate caller that is the same
+/// principal as the original one show once.
+fn render_caller_lines(pad: &str, caller: &PublicCaller) -> Vec<String> {
+    let mut lines = vec![format!(
+        "{pad}original caller:   {}",
+        format_id(&caller.original)
+    )];
+    lines.extend(render_claims_line(pad, &caller.original));
+    lines.push(format!(
+        "{pad}immediate caller:  {}",
+        format_id(&caller.immediate)
+    ));
+    if caller.immediate == caller.original {
+        if caller.immediate.claims().is_some() {
+            lines.push(format!("{pad}claims:            same as original"));
+        }
+    } else {
+        lines.extend(render_claims_line(pad, &caller.immediate));
+    }
+    if caller.tokens.is_empty() {
+        lines.push(format!("{pad}tokens:            none"));
+    } else {
+        lines.push(format!("{pad}tokens:"));
+        for token in &caller.tokens {
+            match &token.maker {
+                Some(maker) => lines.push(format!(
+                    "{pad}  - {} made by {}",
+                    format_id(&token.id),
+                    format_id(maker)
+                )),
+                None => lines.push(format!("{pad}  - {} (no maker)", format_id(&token.id))),
+            }
+        }
+    }
+    lines
+}
+
+fn render_claims_line(pad: &str, principal: &PublicPrincipal) -> Option<String> {
+    principal
+        .claims()
+        .map(|claims| format!("{pad}claims:            {claims}"))
 }
 
 fn render_agent_invocation_header(
@@ -1498,13 +1580,91 @@ fn render_snapshot_data_lines(pad: &str, snapshot: &PublicSnapshotData) -> Vec<S
     }
 }
 
+/// Test support for the output surfaces of the oplog: the text and structured output, the MCP
+/// tool, the HTML export and the live viewer.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::{AgentOplogEntryContent, AgentOplogEntryView};
+    use golem_common::model::caller::{
+        Pair, PublicCaller, PublicClaims, PublicPrincipal, PublicUserPrincipal,
+    };
+    use golem_common::model::card::{PublicInvocationWalletPin, WalletVersionToken};
+    use golem_common::model::invocation_context::TraceId;
+    use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
+    use golem_common::model::oplog::{
+        AgentMethodInvocationParameters, PublicAgentInvocation, PublicOplogEntry,
+        PublicOplogEntryAttribution,
+    };
+    use golem_common::model::{InvocationId, Timestamp};
+    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+
+    /// The claims of [`entry_of_a_signed_in_user`], as the identity provider gave them.
+    pub(crate) const CLAIMS: &str =
+        r#"{"sub":"bob","email":"bob@mail.example","groups":["dev","ops"],"level":3}"#;
+
+    /// The JSON pointer of the claims of the original caller in an `agent.oplog` document.
+    pub(crate) const CLAIMS_POINTER: &str = "/entry/invocation/caller/original/claims";
+
+    /// A method invocation at index 2 that the user `bob` started. The entry holds the claims of
+    /// the user only when the reader asked for them (`with_claims`), as the server gives it.
+    pub(crate) fn entry_of_a_signed_in_user(with_claims: bool) -> AgentOplogEntryView {
+        entry_of_a_user_with(with_claims.then_some(CLAIMS))
+    }
+
+    /// The entry of [`entry_of_a_signed_in_user`], with `claims` as the claims of the user.
+    pub(crate) fn entry_of_a_user_with(claims: Option<&str>) -> AgentOplogEntryView {
+        let bob = PublicPrincipal::User(PublicUserPrincipal {
+            pair: Pair::new("http://test-idp.com", "bob"),
+            authenticated_at: Timestamp::from(0),
+            claims: claims.map(|claims| PublicClaims::from_json(claims.to_string()).unwrap()),
+        });
+        let entry = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+            timestamp: Timestamp::from(0),
+            invocation: PublicAgentInvocation::AgentMethodInvocation(
+                AgentMethodInvocationParameters {
+                    invocation_id: InvocationId(uuid::Uuid::from_u128(2)),
+                    method_name: "increment".to_string(),
+                    function_input: TypedSchemaValue::new(
+                        SchemaGraph::anonymous(SchemaType::string()),
+                        SchemaValue::String("input".to_string()),
+                    ),
+                    trace_id: TraceId::generate(),
+                    trace_states: vec![],
+                    invocation_context: vec![],
+                    caller: PublicCaller {
+                        original: bob.clone(),
+                        immediate: bob,
+                        tokens: vec![],
+                    },
+                },
+            ),
+            wallet_pin: PublicInvocationWalletPin {
+                wallet_token: WalletVersionToken {
+                    wallet_id_hash: [0; 32],
+                    generation: 1,
+                },
+                scope_card_id: None,
+            },
+        });
+        AgentOplogEntryView {
+            index: 2,
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: AgentOplogEntryContent::Full(entry),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use comfy_table::{Cell, Table as ComfyTable};
     use golem_common::model::InvocationId;
+    use golem_common::model::caller::{
+        Pair, PublicAgentPrincipal, PublicTokenProvenance, PublicUserPrincipal,
+    };
     use golem_common::model::component::ComponentRevision;
     use golem_common::model::invocation_context::TraceId;
+    use golem_common::model::oplog::SaveSnapshotParameters;
     use golem_common::model::oplog::payload::types::{SecretRevealAudit, SerializableDateTime};
     use golem_common::model::oplog::{
         AgentInitializationParameters, AgentMethodInvocationParameters, HostRequestSecretReveal,
@@ -1524,6 +1684,48 @@ mod tests {
         Timestamp::from(0)
     }
 
+    fn bob(claims: Option<golem_common::model::caller::PublicClaims>) -> PublicPrincipal {
+        PublicPrincipal::User(PublicUserPrincipal {
+            pair: Pair::new("http://test-idp.com", "bob"),
+            authenticated_at: Timestamp::from(0),
+            claims,
+        })
+    }
+
+    /// A user at the root, an agent as the immediate caller, and two tokens, one without a maker.
+    fn caller() -> PublicCaller {
+        PublicCaller {
+            original: bob(None),
+            immediate: PublicPrincipal::Agent(PublicAgentPrincipal {
+                pair: Pair::new("https://golem.example", "agent:relay"),
+                agent_id: golem_common::model::AgentId::from_parts(7, 0xc0),
+                agent_type: "Relay".to_string(),
+                environment_id: golem_common::model::environment::EnvironmentId(
+                    uuid::Uuid::from_u128(0xe0),
+                ),
+            }),
+            tokens: vec![
+                PublicTokenProvenance {
+                    id: uuid::Uuid::from_u128(0x70c1),
+                    maker: Some(Pair::new("https://golem.example", "account:1")),
+                },
+                PublicTokenProvenance {
+                    id: uuid::Uuid::from_u128(0x70c2),
+                    maker: None,
+                },
+            ],
+        }
+    }
+
+    /// The role and token lines of [`caller`].
+    const CALLER_LINES: [&str; 5] = [
+        r#"original caller:   user ("http://test-idp.com","bob")"#,
+        r#"immediate caller:  agent ("https://golem.example","agent:relay")"#,
+        "tokens:",
+        r#"- 00000000-0000-0000-0000-0000000070c1 made by ("https://golem.example","account:1")"#,
+        "- 00000000-0000-0000-0000-0000000070c2 (no maker)",
+    ];
+
     /// A failed update shows its class, and a divergence shows its index, both steps, the
     /// mismatched fields and the known requests; the JSON form keeps the same fields.
     #[test]
@@ -1538,6 +1740,7 @@ mod tests {
             parent_start_index: None,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             carries_request: true,
             request: request
                 .map(|request| Box::new(request.to_string().into_typed_schema_value().unwrap())),
@@ -1593,10 +1796,15 @@ mod tests {
         assert_eq!(json["divergence"]["mismatched"][0], "function-name");
     }
 
-    fn agent_metadata(agent_id: &str) -> AgentMetadataView {
+    fn agent_metadata(agent_key: &str) -> AgentMetadataView {
         AgentMetadataView {
             component_name: ComponentName("shop:cart".to_string()),
-            agent_id: RawAgentId(agent_id.to_string()),
+            agent_id: golem_common::model::AgentId::from_parts(7, 1),
+            agent_type: agent_key.split_once('(').map(|(agent_type, _)| {
+                golem_common::model::agent::AgentTypeName(agent_type.to_string())
+            }),
+            agent_key: Some(agent_key.to_string()),
+            fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::nil()),
             created_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
             environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
             env: HashMap::new(),
@@ -1737,6 +1945,7 @@ mod tests {
             trace_id: TraceId::generate(),
             trace_states: vec!["trace-state".to_string()],
             invocation_context: vec![],
+            caller: caller(),
         })
     }
 
@@ -1748,11 +1957,12 @@ mod tests {
             trace_id: TraceId::generate(),
             trace_states: vec!["trace-state".to_string()],
             invocation_context: vec![],
+            caller: caller(),
         })
     }
 
     fn save_snapshot() -> PublicAgentInvocation {
-        PublicAgentInvocation::SaveSnapshot(Empty {})
+        PublicAgentInvocation::SaveSnapshot(SaveSnapshotParameters { caller: caller() })
     }
 
     fn load_snapshot() -> PublicAgentInvocation {
@@ -1761,18 +1971,21 @@ mod tests {
                 data: vec![1, 2, 3],
                 mime_type: "application/octet-stream".to_string(),
             }),
+            caller: caller(),
         })
     }
 
     fn process_oplog_entries() -> PublicAgentInvocation {
         PublicAgentInvocation::ProcessOplogEntries(ProcessOplogEntriesParameters {
             invocation_id: InvocationId(uuid::Uuid::from_u128(3)),
+            caller: caller(),
         })
     }
 
     fn manual_update() -> PublicAgentInvocation {
         PublicAgentInvocation::ManualUpdate(ManualUpdateParameters {
             target_revision: ComponentRevision::new(5).unwrap(),
+            requester: caller(),
         })
     }
 
@@ -1792,6 +2005,19 @@ mod tests {
                 "expected rendered output to contain {expected:?}, got:\n{rendered}"
             );
         }
+    }
+
+    /// Every invocation with a caller shows both roles and the tokens, and no claims line when the
+    /// entry holds no claims. A manual update has no caller: it shows the same lines for its
+    /// requester, under `requested by:`.
+    fn assert_caller_lines(invocation: &PublicAgentInvocation, rendered: &str) {
+        assert_contains_all(rendered, &CALLER_LINES);
+        assert_eq!(
+            rendered.contains("requested by:"),
+            invocation.caller().is_none(),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("claims:"), "{rendered}");
     }
 
     fn assert_debug_noise_absent(rendered: &str) {
@@ -1975,10 +2201,7 @@ mod tests {
             },
             result: Ok(()),
             audit: SecretRevealAudit {
-                calling_agent: golem_common::model::AgentId {
-                    component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
-                    agent_id: "secret-reveal-auditor".to_string(),
-                },
+                calling_agent: golem_common::model::AgentId::from_parts(7, 1),
                 config_key: Some(vec!["database".to_string(), "password".to_string()]),
                 timestamp: SerializableDateTime {
                     seconds: 1_700_000_005,
@@ -1998,7 +2221,7 @@ mod tests {
             &rendered,
             &[
                 &secret_id.to_string(),
-                "secret-reveal-auditor",
+                &golem_common::model::AgentId::from_parts(7, 1).to_string(),
                 "database",
                 "password",
                 "1700000004",
@@ -2055,6 +2278,7 @@ mod tests {
         for (invocation, expected) in cases {
             let rendered = render_for_test(AgentInvocationRenderKind::Started, &invocation);
             assert_contains_all(&rendered, &expected);
+            assert_caller_lines(&invocation, &rendered);
             assert_debug_noise_absent(&rendered);
             assert!(
                 !rendered.contains("entries:"),
@@ -2109,11 +2333,103 @@ mod tests {
         for (invocation, expected) in cases {
             let rendered = render_for_test(AgentInvocationRenderKind::Pending, &invocation);
             assert_contains_all(&rendered, &expected);
+            assert_caller_lines(&invocation, &rendered);
             assert_debug_noise_absent(&rendered);
             assert!(
                 !rendered.contains("entries:"),
                 "process-oplog-entry count must not be rendered without a public count field:\n{rendered}"
             );
         }
+    }
+
+    #[test]
+    fn pending_update_renders_its_requester_under_requested_by() {
+        let params = PendingUpdateParams {
+            timestamp: timestamp(),
+            target_revision: ComponentRevision::new(3).unwrap(),
+            description: PublicUpdateDescription::Automatic(golem_schema::Empty {}),
+            update_attempt_index: golem_common::model::OplogIndex::from_u64(12),
+            requester: caller(),
+        };
+        let rendered =
+            strip_ansi_escapes::strip_str(render_pending_update_lines("    ", &params).join("\n"));
+        let at = format!("    at:                {}", timestamp());
+        assert_eq!(
+            rendered,
+            [
+                at.as_str(),
+                "    target revision:   3",
+                "    update attempt:    12",
+                "    type:              automatic",
+                "    requested by:",
+                r#"      original caller:   user ("http://test-idp.com","bob")"#,
+                r#"      immediate caller:  agent ("https://golem.example","agent:relay")"#,
+                "      tokens:",
+                r#"        - 00000000-0000-0000-0000-0000000070c1 made by ("https://golem.example","account:1")"#,
+                "        - 00000000-0000-0000-0000-0000000070c2 (no maker)",
+            ]
+            .join("\n")
+        );
+
+        // The claims of a requester show only when the entry holds them.
+        let claims = golem_common::model::caller::PublicClaims::from_json(
+            r#"{"email":"bob@mail.example"}"#.to_string(),
+        )
+        .unwrap();
+        let mut with_claims = params;
+        with_claims.requester.original = bob(Some(claims));
+        let rendered = strip_ansi_escapes::strip_str(
+            render_pending_update_lines("    ", &with_claims).join("\n"),
+        );
+        assert!(
+            rendered.contains(r#"      claims:            {"email":"bob@mail.example"}"#),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn caller_claims_render_only_when_the_entry_holds_them() {
+        let claims = golem_common::model::caller::PublicClaims::from_json(
+            r#"{"email":"bob@mail.example","sub":"bob"}"#.to_string(),
+        )
+        .unwrap();
+
+        // An entry caller: both roles are the same user, so the claims show once.
+        let entry_caller = PublicCaller {
+            original: bob(Some(claims.clone())),
+            immediate: bob(Some(claims.clone())),
+            tokens: Vec::new(),
+        };
+        let rendered =
+            strip_ansi_escapes::strip_str(render_caller_lines("    ", &entry_caller).join("\n"));
+        assert_eq!(
+            rendered,
+            [
+                r#"    original caller:   user ("http://test-idp.com","bob")"#,
+                r#"    claims:            {"email":"bob@mail.example","sub":"bob"}"#,
+                r#"    immediate caller:  user ("http://test-idp.com","bob")"#,
+                "    claims:            same as original",
+                "    tokens:            none",
+            ]
+            .join("\n")
+        );
+
+        // Without claims in the entry, there is no claims line.
+        let hidden = PublicCaller {
+            original: bob(None),
+            immediate: bob(None),
+            tokens: Vec::new(),
+        };
+        let rendered = render_caller_lines("    ", &hidden).join("\n");
+        assert!(!rendered.contains("claims:"), "{rendered}");
+
+        // Different roles show their own claims.
+        let mut relayed = caller();
+        relayed.original = bob(Some(claims));
+        let rendered =
+            strip_ansi_escapes::strip_str(render_caller_lines("    ", &relayed).join("\n"));
+        assert_eq!(rendered.matches("claims:").count(), 1, "{rendered}");
+        assert!(rendered.contains("bob@mail.example"), "{rendered}");
+        assert!(!rendered.contains("same as original"), "{rendered}");
     }
 }

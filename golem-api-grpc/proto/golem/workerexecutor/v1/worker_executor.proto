@@ -34,6 +34,7 @@ import "golem/worker/worker_metadata.proto";
 import "golem/worker/worker_status.proto";
 import "golem/schema/schema.proto";
 import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
 
 service WorkerExecutor {
   rpc CreateWorker(CreateWorkerRequest) returns (CreateWorkerResponse);
@@ -48,6 +49,8 @@ service WorkerExecutor {
   rpc RevokeShards(RevokeShardsRequest) returns (RevokeShardsResponse);
   rpc AssignShards(AssignShardsRequest) returns (AssignShardsResponse);
   rpc GetAgentMetadata(GetAgentMetadataRequest) returns (GetAgentMetadataResponse);
+  // Resolves a key to the keyed agent it selects. It never creates an agent.
+  rpc LookupAgent(LookupAgentRequest) returns (LookupAgentResponse);
   rpc ResumeWorker(ResumeWorkerRequest) returns (ResumeWorkerResponse);
   rpc GetRunningWorkersMetadata(GetRunningWorkersMetadataRequest) returns (GetRunningWorkersMetadataResponse);
   rpc GetWorkersMetadata(GetWorkersMetadataRequest) returns (GetWorkersMetadataResponse);
@@ -59,6 +62,9 @@ service WorkerExecutor {
   rpc ResolveRevertLastInvocations(ResolveRevertLastInvocationsRequest) returns (ResolveRevertLastInvocationsResponse);
   rpc RevertWorker(RevertWorkerRequest) returns (RevertWorkerResponse);
   rpc CancelInvocation(CancelInvocationRequest) returns (CancelInvocationResponse);
+  rpc GetInvocation(GetInvocationRequest) returns (GetInvocationResponse);
+  rpc ListInvocations(ListInvocationsRequest) returns (ListInvocationsResponse);
+  rpc LookupInvocations(LookupInvocationsRequest) returns (LookupInvocationsResponse);
 
   rpc GetFileSystemNode(GetFileSystemNodeRequest) returns (GetFileSystemNodeResponse);
   rpc GetAgentWallet(GetAgentWalletRequest) returns (GetAgentWalletResponse);
@@ -88,8 +94,9 @@ message ForkWorkerRequest {
   golem.auth.AuthCtx auth_ctx = 6;
   reserved 7;
   reserved "principal";
-  golem.component.Caller caller = 9;
+  golem.component.Caller caller = 10;
   string component_owner_account_email = 8;
+  optional golem.common.UUID expected_fingerprint = 9;
 }
 
 message ForkWorkerResponse {
@@ -105,7 +112,8 @@ message DeleteWorkerRequest {
   golem.auth.AuthCtx auth_ctx = 3;
   reserved 4;
   reserved "principal";
-  golem.component.Caller caller = 5;
+  golem.component.Caller caller = 6;
+  golem.common.UUID expected_fingerprint = 5;
 }
 
 message DeleteWorkerResponse {
@@ -141,7 +149,13 @@ message InterruptWorkerResponse {
 }
 
 message CreateWorkerRequest {
-  golem.worker.AgentId agent_id = 1;
+  // The type and constructor parameters of the agent to create.
+  golem.worker.AgentKey constructor = 1;
+  // Unset: the keyed agent of `constructor`. Set: an agent without a key at this
+  // pre-allocated ID, so a repeated request reaches the agent the first one created.
+  optional golem.worker.AgentId unkeyed_id = 12;
+  // The component that implements the agent type.
+  golem.component.ComponentId component_id = 13;
   map<string, string> env = 2;
   repeated golem.worker.AgentConfigEntryDto config = 3;
   // Account the component belongs to
@@ -152,16 +166,20 @@ message CreateWorkerRequest {
   golem.auth.AuthCtx auth_ctx = 7;
   reserved 8;
   reserved "principal";
-  golem.component.Caller caller = 12;
+  golem.component.Caller caller = 14;
   optional golem.worker.InvocationContext invocation_context = 9;
-  // Owner key of the invocation that demands the agent; a KnownFresh ephemeral phantom is
+  // Owner key of the invocation that demands the agent; a KnownFresh ephemeral instance is
   // checked against it.
   optional golem.worker.IdempotencyKey idempotency_key = 10;
   golem.worker.InvocationFreshnessDisposition freshness_disposition = 11;
+  // For invocation-driven creation, validate this request against the creation component before
+  // writing Create. Existing owners still validate when execution selects their component.
+  optional golem.worker.InvocationStart invocation = 15;
 }
 
 message CreateWorkerSuccessResponse {
   golem.common.UUID instance_id = 1;
+  golem.worker.AgentId agent_id = 2;
 }
 
 message CreateWorkerResponse {
@@ -191,7 +209,8 @@ message InterruptWorkerRequest {
   golem.auth.AuthCtx auth_ctx = 4;
   reserved 5;
   reserved "principal";
-  golem.component.Caller caller = 6;
+  golem.component.Caller caller = 7;
+  golem.common.UUID expected_fingerprint = 6;
 }
 
 message RevokeShardsRequest {
@@ -248,6 +267,31 @@ message GetAgentMetadataResponse {
   }
 }
 
+message LookupAgentRequest {
+  golem.worker.AgentKey key = 1;
+  // The component that implements the agent type.
+  golem.component.ComponentId component_id = 2;
+  golem.common.EnvironmentId environment_id = 3;
+  golem.auth.AuthCtx auth_ctx = 4;
+}
+
+message LookupAgentSuccessResponse {
+  // Absent when no current agent has the key.
+  optional LookedUpAgent agent = 1;
+}
+
+message LookedUpAgent {
+  golem.worker.AgentId agent_id = 1;
+  golem.common.UUID agent_fingerprint = 2;
+}
+
+message LookupAgentResponse {
+  oneof result {
+    LookupAgentSuccessResponse success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
 message ResumeWorkerRequest {
   golem.worker.AgentId agent_id = 1;
   optional bool force = 2;
@@ -255,7 +299,8 @@ message ResumeWorkerRequest {
   golem.auth.AuthCtx auth_ctx = 4;
   reserved 5;
   reserved "principal";
-  golem.component.Caller caller = 6;
+  golem.component.Caller caller = 7;
+  golem.common.UUID expected_fingerprint = 6;
 }
 
 message ResumeWorkerResponse {
@@ -266,9 +311,11 @@ message ResumeWorkerResponse {
 }
 
 message GetRunningWorkersMetadataRequest {
-  golem.component.ComponentId component_id = 1;
+  // The type ID of the agent type to list.
+  uint32 type_id = 1;
   golem.worker.AgentFilter filter = 2;
   golem.auth.AuthCtx auth_ctx = 3;
+  golem.common.EnvironmentId environment_id = 4;
 }
 
 
@@ -284,7 +331,8 @@ message GetRunningWorkersMetadataSuccessResponse {
 }
 
 message GetWorkersMetadataRequest {
-  golem.component.ComponentId component_id = 1;
+  // The type ID of the agent type to list.
+  uint32 type_id = 1;
   golem.worker.AgentFilter filter = 2;
   golem.worker.Cursor cursor = 3;
   uint64 count = 4;
@@ -314,7 +362,9 @@ message UpdateWorkerRequest {
   bool disable_wakeup = 6;
   reserved 7;
   reserved "principal";
-  golem.component.Caller caller = 8;
+  // The caller of the request. The executor records it as the requester of the update.
+  golem.component.Caller caller = 9;
+  golem.common.UUID expected_fingerprint = 8;
 }
 
 message UpdateWorkerResponse {
@@ -324,6 +374,13 @@ message UpdateWorkerResponse {
   }
 }
 
+// Whether the public oplog of a read holds the users' verified claims. The worker service asks
+// for SHOWN only for a reader that asked for the claims and passed the oplog read check.
+enum ClaimVisibility {
+  CLAIM_VISIBILITY_HIDDEN = 0;
+  CLAIM_VISIBILITY_SHOWN = 1;
+}
+
 message GetOplogRequest {
   golem.worker.AgentId agent_id = 1;
   uint64 from_oplog_index = 3;
@@ -331,6 +388,14 @@ message GetOplogRequest {
   uint64 count = 5;
   golem.common.EnvironmentId environment_id = 6;
   golem.auth.AuthCtx auth_ctx = 7;
+  // The last oplog index of a range read, inclusive. A range read reads no entry after it, and
+  // the response accounts its scan.
+  optional uint64 to_oplog_index = 8;
+  // The scan allowance that a range read may still spend. Without it, the read gets the
+  // configured allowance of the executor. The executor clamps it to its configured allowance.
+  optional golem.worker.OplogScanAllowance scan_allowance = 9;
+  // Whether the callers in the entries hold the users' verified claims.
+  ClaimVisibility claims = 10;
 }
 
 message GetOplogResponse {
@@ -345,6 +410,8 @@ message GetOplogSuccessResponse {
   optional golem.worker.OplogCursor next = 2;
   uint64 first_index_in_chunk = 3;
   uint64 last_index = 5;
+  // The scan accounting of a range read; absent for other reads.
+  optional golem.worker.OplogScan scan = 6;
 }
 
 // Reads one oplog entry in full. The executor encodes the entry as a
@@ -358,6 +425,8 @@ message GetOplogEntryRequest {
   // The component revision to decode the entry with. Without it, the executor scans the oplog
   // up to the entry to find it.
   optional uint64 component_revision = 5;
+  // Whether the callers in the entries hold the users' verified claims.
+  ClaimVisibility claims = 6;
 }
 
 message GetOplogEntryResponse {
@@ -374,6 +443,8 @@ message SearchOplogRequest {
   uint64 count = 4;
   golem.common.EnvironmentId environment_id = 5;
   golem.auth.AuthCtx auth_ctx = 6;
+  // Whether the callers in the entries hold the users' verified claims.
+  ClaimVisibility claims = 7;
 }
 
 message SearchOplogResponse {
@@ -443,7 +514,7 @@ message GetAgentWalletSuccess {
 }
 
 message GetFileContentsRequest {
-  golem.worker.AgentId agent_id = 1;
+  golem.worker.AgentTarget target = 1;
   // Account the component belongs to
   golem.common.AccountId component_owner_account_id = 2;
   // Component's owner project
@@ -452,8 +523,9 @@ message GetFileContentsRequest {
   golem.auth.AuthCtx auth_ctx = 5;
   reserved 6;
   reserved "principal";
-  golem.component.Caller caller = 8;
+  golem.component.Caller caller = 9;
   golem.worker.FileByteSelection selection = 7;
+  optional golem.component.ComponentId component_id = 8;
 }
 
 message GetFileContentsResponse {
@@ -473,7 +545,8 @@ message ActivatePluginRequest {
   golem.auth.AuthCtx auth_ctx = 4;
   reserved 5;
   reserved "principal";
-  golem.component.Caller caller = 6;
+  golem.component.Caller caller = 7;
+  golem.common.UUID expected_fingerprint = 6;
 }
 
 message ActivatePluginResponse {
@@ -490,7 +563,8 @@ message DeactivatePluginRequest {
   golem.auth.AuthCtx auth_ctx = 4;
   reserved 5;
   reserved "principal";
-  golem.component.Caller caller = 6;
+  golem.component.Caller caller = 7;
+  golem.common.UUID expected_fingerprint = 6;
 }
 
 message DeactivatePluginResponse {
@@ -507,8 +581,9 @@ message RevertWorkerRequest {
   golem.auth.AuthCtx auth_ctx = 4;
   reserved 5;
   reserved "principal";
-  golem.component.Caller caller = 7;
+  golem.component.Caller caller = 8;
   optional golem.common.ResolvedRevert resolved_revert = 6;
+  golem.common.UUID expected_fingerprint = 7;
 }
 
 message ResolveRevertLastInvocationsRequest {
@@ -539,13 +614,119 @@ message CancelInvocationRequest {
   golem.auth.AuthCtx auth_ctx = 4;
   reserved 5;
   reserved "principal";
-  golem.component.Caller caller = 7;
+  golem.component.Caller caller = 8;
   optional golem.worker.ScheduledInvocationCancellation scheduled = 6;
+  golem.common.UUID expected_fingerprint = 7;
 }
 
 message CancelInvocationResponse {
   oneof result {
     bool success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+enum InvocationLifecycleState {
+  INVOCATION_LIFECYCLE_STATE_UNSPECIFIED = 0;
+  INVOCATION_LIFECYCLE_STATE_PENDING = 1;
+  INVOCATION_LIFECYCLE_STATE_SCHEDULED = 2;
+  INVOCATION_LIFECYCLE_STATE_RUNNING = 3;
+  INVOCATION_LIFECYCLE_STATE_WAITING = 4;
+  INVOCATION_LIFECYCLE_STATE_RETRYING = 5;
+  INVOCATION_LIFECYCLE_STATE_INTERRUPTED = 6;
+  INVOCATION_LIFECYCLE_STATE_COMPLETED = 7;
+  INVOCATION_LIFECYCLE_STATE_FAILED = 8;
+  INVOCATION_LIFECYCLE_STATE_CANCELLED = 9;
+  // The invocation recorded its result, then the agent gave up during its background work.
+  INVOCATION_LIFECYCLE_STATE_BACKGROUND_FAILED = 10;
+}
+
+enum InvocationKind {
+  INVOCATION_KIND_UNSPECIFIED = 0;
+  INVOCATION_KIND_METHOD = 1;
+  INVOCATION_KIND_CONSTRUCTOR = 2;
+  INVOCATION_KIND_TOOL = 3;
+}
+
+// One invocation of an agent. `kind` is unspecified, and `operation` absent, when the
+// invocation's request is not known.
+message InvocationSummary {
+  golem.common.UUID invocation_id = 1;
+  InvocationLifecycleState state = 2;
+  InvocationKind kind = 3;
+  // The method name, or `tool:<tool>/<command path>`. Absent for the constructor run.
+  optional string operation = 4;
+  optional google.protobuf.Timestamp accepted_at = 5;
+  google.protobuf.Timestamp changed_at = 6;
+}
+
+message GetInvocationRequest {
+  golem.worker.AgentId agent_id = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
+  golem.common.UUID invocation_id = 4;
+}
+
+// No `invocation` when the agent has no invocation with this ID.
+message GetInvocationSuccess {
+  optional InvocationSummary invocation = 1;
+}
+
+message GetInvocationResponse {
+  oneof result {
+    GetInvocationSuccess success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message ListInvocationsRequest {
+  golem.worker.AgentId agent_id = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
+  optional string operation = 4;
+  // Any of these states; all states when empty.
+  repeated InvocationLifecycleState states = 5;
+  optional InvocationKind kind = 6;
+  // Inclusive bounds on the last change of the invocation.
+  optional google.protobuf.Timestamp since = 7;
+  optional google.protobuf.Timestamp until = 8;
+  // 0 gives the default page size; larger values are capped.
+  uint32 page_size = 9;
+  // The opaque cursor of the previous page.
+  optional golem.worker.Cursor cursor = 10;
+}
+
+message ListInvocationsSuccess {
+  repeated InvocationSummary invocations = 1;
+  // Present when more invocations may follow.
+  optional golem.worker.Cursor next_cursor = 2;
+}
+
+message ListInvocationsResponse {
+  oneof result {
+    ListInvocationsSuccess success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+// Finds the invocations of an agent that the caller started with an idempotency key, in the
+// caller's idempotency scope. A caller without a scope finds none.
+message LookupInvocationsRequest {
+  golem.worker.AgentId agent_id = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
+  golem.worker.IdempotencyKey idempotency_key = 4;
+  // Only the invocation of this operation.
+  optional string operation = 5;
+}
+
+message LookupInvocationsSuccess {
+  repeated InvocationSummary invocations = 1;
+}
+
+message LookupInvocationsResponse {
+  oneof result {
+    LookupInvocationsSuccess success = 1;
     golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }
@@ -629,7 +810,7 @@ message CreateStreamSessionRequest {
 message CreateStreamSessionSuccess {
   string session = 1;
   bool replayed = 2;
-  uint64 component_revision = 3;
+  optional uint64 component_revision = 3;
   golem.common.UUID invocation_key = 4;
   StreamSessionExpiryPolicy expiry_policy = 5;
   optional uint64 expiry_deadline_millis = 6;
@@ -668,6 +849,7 @@ enum StreamSlotReadAdmission {
   STREAM_SLOT_READ_ADMISSION_TOUCHING_ORIGIN_GET = 1;
   STREAM_SLOT_READ_ADMISSION_HEAD = 2;
   STREAM_SLOT_READ_ADMISSION_CONTINUATION = 3;
+  STREAM_SLOT_READ_ADMISSION_WAIT_READY = 4;
 }
 
 message StreamSlotItem {
@@ -703,6 +885,7 @@ message ReadStreamSlotSuccess {
   golem.common.UUID invocation_key = 14;
   StreamSessionExpiryPolicy expiry_policy = 15;
   optional uint64 expiry_deadline_millis = 16;
+  bool queued = 17;
 }
 
 message ReadStreamSlotResponse {
@@ -839,6 +1022,9 @@ message ProcessOplogEntriesRequest {
   uint64 first_entry_index = 8;
   repeated golem.worker.RawOplogEntry entries = 9;
   golem.auth.AuthCtx auth_ctx = 10;
+  // The component of the oplog processor. It creates the processor when it is missing.
+  golem.component.ComponentId component_id = 11;
+  golem.component.Caller caller = 12;
 }
 
 message ProcessOplogEntriesResponse {

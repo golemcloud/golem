@@ -21,29 +21,35 @@ use crate::context::Context;
 use crate::error::service::{MapServiceError, ServiceError, ServiceErrorKind};
 use crate::fs;
 use crate::log::{LogColorize, log_action, log_warn};
+use crate::model::agent::RawAgentId;
 use crate::model::agent::oplog_export_view::{
     AgentOplogExportCoverageView, AgentOplogExportEntryView, AgentOplogExportHeaderView,
 };
 use crate::model::agent::oplog_html::OplogExportHtmlWriter;
 use crate::oplog_export::export::{
-    OplogExportError, OplogExportOptions, OplogExportSink, OplogPage, OplogReads, export_oplog,
+    OplogExportError, OplogExportOptions, OplogExportSink, OplogPage, OplogRange, OplogRangePage,
+    OplogReads, export_oplog, export_oplog_range,
 };
-use crate::oplog_export::model::{OplogExportCoverage, OplogExportHeader, ReportEntry};
+use crate::oplog_export::model::{
+    OplogExportCoverage, OplogExportHeader, OplogExportReport, ReportEntry,
+};
 use crate::oplog_export::obfuscator::{KeepFlags, TokenKey};
 use async_trait::async_trait;
 use chrono::Utc;
 use golem_client::api::WorkerClient;
+use golem_common::base_model::api::error_code;
+use golem_common::model::AgentId;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::oplog::{OplogCursor, PublicOplogEntryWithIndex};
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::oplog::{OplogCursor, OplogScanAllowance, PublicOplogEntryWithIndex};
 use std::path::PathBuf;
 use std::sync::Arc;
-use uuid::Uuid;
 
 /// The oplog reads of one agent through the worker service.
 pub struct RestOplogReads {
     pub ctx: Arc<Context>,
-    pub component_id: Uuid,
-    pub agent_name: String,
+    pub environment_id: EnvironmentId,
+    pub agent_id: AgentId,
 }
 
 #[async_trait]
@@ -59,12 +65,18 @@ impl OplogReads for RestOplogReads {
         let response = clients
             .worker
             .get_oplog(
-                &self.component_id,
-                &self.agent_name,
+                &self.environment_id.0,
+                &self.agent_id.0,
                 from,
                 count,
                 cursor,
                 query,
+                // An export never asks for claims.
+                None,
+                None,
+                None,
+                None,
+                None,
             )
             .await
             .map_service_error()
@@ -72,6 +84,43 @@ impl OplogReads for RestOplogReads {
         Ok(OplogPage {
             entries: response.entries,
             next: response.next,
+            last_index: response.last_index,
+        })
+    }
+
+    async fn read_range_page(
+        &self,
+        from: u64,
+        to: u64,
+        count: u64,
+        cursor: Option<&OplogCursor>,
+        allowance: Option<OplogScanAllowance>,
+    ) -> anyhow::Result<OplogRangePage> {
+        let clients = self.ctx.golem_clients().await.map_err(read_failed)?;
+        let response = clients
+            .worker_range_reads
+            .get_oplog(
+                &self.environment_id.0,
+                &self.agent_id.0,
+                Some(from),
+                count,
+                cursor,
+                None,
+                // An export never asks for claims.
+                None,
+                None,
+                Some(to),
+                allowance.map(|allowance| allowance.entries),
+                allowance.map(|allowance| allowance.millis),
+            )
+            .await
+            .map_service_error()
+            .map_err(read_failed)?;
+        let scan = response.scan.ok_or(OplogExportError::RangePageInvalid)?;
+        Ok(OplogRangePage {
+            entries: response.entries,
+            next: response.next,
+            scan,
         })
     }
 
@@ -84,10 +133,13 @@ impl OplogReads for RestOplogReads {
         Ok(clients
             .worker
             .get_oplog_entry(
-                &self.component_id,
-                &self.agent_name,
+                &self.environment_id.0,
+                &self.agent_id.0,
                 oplog_index,
                 Some(component_revision.into()),
+                // An export never asks for claims.
+                None,
+                None,
             )
             .await
             .map_service_error()
@@ -105,16 +157,18 @@ pub fn read_failed(error: impl Into<anyhow::Error>) -> anyhow::Error {
         error = format!("{error:#}"),
         "Failed to read the oplog for the export"
     );
-    let status = error
-        .downcast_ref::<ServiceError>()
-        .and_then(|error| match &error.kind {
-            ServiceErrorKind::ErrorResponse(response) => Some(response.status_code),
-            ServiceErrorKind::UnexpectedResponse { status_code, .. } => Some(*status_code),
-            ServiceErrorKind::ReqwestError(error) => error.status().map(|status| status.as_u16()),
-            ServiceErrorKind::MiddlewareError(_)
-            | ServiceErrorKind::ReqwestHeaderError(_)
-            | ServiceErrorKind::SerdeError(_) => None,
-        });
+    let service_error = error.downcast_ref::<ServiceError>();
+    if service_error.and_then(ServiceError::error_code) == Some(error_code::STALE_CURSOR) {
+        return OplogExportError::StaleCursor.into();
+    }
+    let status = service_error.and_then(|error| match &error.kind {
+        ServiceErrorKind::ErrorResponse(response) => Some(response.status_code),
+        ServiceErrorKind::UnexpectedResponse { status_code, .. } => Some(*status_code),
+        ServiceErrorKind::ReqwestError(error) => error.status().map(|status| status.as_u16()),
+        ServiceErrorKind::MiddlewareError(_)
+        | ServiceErrorKind::ReqwestHeaderError(_)
+        | ServiceErrorKind::SerdeError(_) => None,
+    });
     match status {
         Some(status) => OplogExportError::ReadFailed { status }.into(),
         None => OplogExportError::ReadFailedWithoutResponse.into(),
@@ -154,7 +208,7 @@ struct CliExportSink {
 impl OplogExportSink for CliExportSink {
     fn header(&mut self, header: &OplogExportHeader) -> anyhow::Result<()> {
         if let Some(path) = &self.html_path {
-            let mut writer = OplogExportHtmlWriter::create(path, &header.root.pseudonym())?;
+            let mut writer = OplogExportHtmlWriter::create(path, &header.root.label())?;
             writer.header(header)?;
             self.html = Some(writer);
         }
@@ -195,16 +249,16 @@ impl OplogExportSink for CliExportSink {
 /// Exports the obfuscated oplog of one agent to stdout and, with `--html`, to a viewer page.
 pub async fn cmd_oplog_export(
     ctx: Arc<Context>,
-    component_id: Uuid,
-    agent_name: String,
+    environment_id: EnvironmentId,
+    agent_id: AgentId,
     options: OplogExportOptions,
     viewer: OplogViewerArgs,
 ) -> anyhow::Result<()> {
     let print = viewer.html.is_none() || ctx.format().is_structured();
     let reads = RestOplogReads {
         ctx: ctx.clone(),
-        component_id,
-        agent_name,
+        environment_id,
+        agent_id,
     };
     let mut sink = CliExportSink {
         ctx: ctx.clone(),
@@ -236,6 +290,49 @@ pub async fn cmd_oplog_export(
         }
     }
     Ok(())
+}
+
+/// Builds one bounded obfuscated report of the range `range` of the oplog of `agent_id`, in
+/// memory. The report holds no state after the call: each call pins the root again and starts
+/// with the whole scan allowance of the server.
+pub async fn oplog_export_report(
+    ctx: Arc<Context>,
+    agent_id: RawAgentId,
+    keep: KeepFlags,
+    max_entry_bytes: u64,
+    range: OplogRange,
+    limit_bytes: usize,
+    document_bytes: impl Fn(&OplogExportReport) -> anyhow::Result<usize>,
+) -> anyhow::Result<OplogExportReport> {
+    ctx.silence_app_context_init().await;
+    let agent_handler = ctx.agent_handler();
+    let agent_id_match = agent_handler.match_agent_id(agent_id).await?;
+    let (component, agent_id) = agent_handler
+        .component_by_agent_id_match(&agent_id_match)
+        .await?;
+    let options = OplogExportOptions {
+        keep,
+        max_entry_bytes,
+        from: None,
+        query: None,
+        page_size: ctx.http_batch_size(),
+        cli_version: crate::version().to_string(),
+        generated_at: Utc::now().to_rfc3339(),
+    };
+    let reads = RestOplogReads {
+        ctx: ctx.clone(),
+        environment_id: component.environment_id,
+        agent_id,
+    };
+    export_oplog_range(
+        reads,
+        TokenKey::process(),
+        options,
+        range,
+        limit_bytes,
+        document_bytes,
+    )
+    .await
 }
 
 #[cfg(test)]

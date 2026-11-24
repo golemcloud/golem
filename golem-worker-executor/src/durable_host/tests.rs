@@ -59,10 +59,7 @@ fn a_payload_that_does_not_download_retries_an_assisted_attempt_only_when_its_st
             },
         })),
     };
-    let agent_id = AgentId {
-        component_id: golem_common::model::component::ComponentId::new(),
-        agent_id: "payload".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 1);
     let decide = |result: &SnapshotRecoveryResult| {
         start_outcome::decide(
             &start_outcome::BaselineRole::AssistedPending(Arc::new(head.clone())),
@@ -185,10 +182,7 @@ fn an_out_of_memory_trap_during_the_load_of_an_application_snapshot_retries_the_
         },
     )));
     let automatic = pending(PendingUpdateKind::Automatic);
-    let agent_id = AgentId {
-        component_id: golem_common::model::component::ComponentId::new(),
-        agent_id: "load".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 2);
     let out_of_memory = SnapshotRecoveryResult::Retry(
         retry(&failed(AgentError::OutOfMemory)).expect("an out-of-memory trap retries"),
     );
@@ -247,10 +241,7 @@ fn an_out_of_memory_trap_during_the_load_of_an_application_snapshot_retries_the_
 /// too; every other error is a failure to resume the agent.
 #[test]
 fn a_prepare_failure_keeps_an_interrupt_and_a_previous_invocation_failure() {
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "prepare".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 3);
     let interrupt = WorkerExecutorError::Interrupted {
         kind: InterruptKind::Restart,
     };
@@ -270,7 +261,7 @@ fn a_prepare_failure_keeps_an_interrupt_and_a_previous_invocation_failure() {
             interrupt,
             previous,
             WorkerExecutorError::PreviousInvocationExited,
-            WorkerExecutorError::failed_to_resume_worker(agent_id.clone(), runtime),
+            WorkerExecutorError::failed_to_resume_worker(agent_id, runtime),
         ]
     );
 }
@@ -355,10 +346,7 @@ fn a_winning_infrastructure_owner_failure_is_the_recovery_error() {
 #[test]
 fn replay_recovery_branch_selects_an_unreadable_oplog() {
     let result = Err(WorkerExecutorError::oplog_failed(
-        AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: "unreadable".to_string(),
-        },
+        AgentId::from_parts(7, 4),
         "corrupt oplog data from archive layer 1",
     ));
     assert_eq!(
@@ -380,14 +368,11 @@ fn a_refused_invocation_failure_takes_the_classification_of_its_agent_error() {
         OplogError, OplogFence, OplogReadError, OplogReadSource, UnreadableOplog,
     };
 
-    let agent_id = AgentId {
-        component_id: ComponentId(Uuid::new_v4()),
-        agent_id: "terminal-entry".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 5);
     assert!(matches!(
         terminal_entry_refusal(&OplogError::ArchiveWrite(
             crate::services::oplog::ArchiveWriteFailure {
-                agent_id: agent_id.clone(),
+                agent_id,
                 level: 0,
                 details: "injected archive failure".to_string(),
             }
@@ -396,7 +381,7 @@ fn a_refused_invocation_failure_takes_the_classification_of_its_agent_error() {
     ));
     assert!(matches!(
         terminal_entry_refusal(&OplogError::Unreadable(UnreadableOplog {
-            agent_id: agent_id.clone(),
+            agent_id,
             error: OplogReadError::Gap {
                 start: OplogIndex::INITIAL,
                 end: OplogIndex::from_u64(2),
@@ -406,7 +391,7 @@ fn a_refused_invocation_failure_takes_the_classification_of_its_agent_error() {
     ));
     assert!(matches!(
         terminal_entry_refusal(&OplogError::Unreadable(UnreadableOplog {
-            agent_id: agent_id.clone(),
+            agent_id,
             error: OplogReadError::source_unavailable(
                 OplogReadSource::Archive(0),
                 "injected archive outage",
@@ -476,6 +461,233 @@ fn ephemeral_restart_interrupts_become_invocation_failures() {
 }
 
 #[test]
+fn a_rejection_after_the_result_is_an_ordinary_trap_of_the_agent() {
+    let current = Some(golem_common::model::InvocationId::new());
+    let retry_from = OplogIndex::from_u64(11);
+    for error in [
+        AgentError::PermissionDenied("card-revoked".to_string()),
+        AgentError::InvalidRequest("invalid".to_string()),
+    ] {
+        let trap = TrapType::Error {
+            error,
+            retry_from,
+            semantic_trap_retry_override: None,
+            provenance: crate::model::FailureProvenance::Host,
+        };
+        assert_eq!(
+            failure_attribution(current, &trap, false),
+            FailureAttribution {
+                failed_invocation: current,
+                rejection: true,
+            },
+            "before the result, a rejection trap rejects its invocation"
+        );
+        assert_eq!(
+            failure_attribution(current, &trap, true),
+            FailureAttribution {
+                failed_invocation: None,
+                rejection: false,
+            },
+            "after the result, a rejection trap names and rejects no invocation"
+        );
+    }
+    // The status fold reads an `Invocation` permission denial as a rejection only when it names
+    // the invocation it rejects. After the result, the denial is an ordinary trap of the agent.
+    let denied = TrapType::Error {
+        error: AgentError::PermissionDenied("card-revoked".to_string()),
+        retry_from,
+        semantic_trap_retry_override: None,
+        provenance: crate::model::FailureProvenance::Host,
+    };
+    let folded_status = |after_result| {
+        let running = AgentStatusRecord {
+            status: AgentStatus::Running,
+            running: current.map(|key| golem_common::model::RunningInvocation {
+                key,
+                request: golem_common::model::InvocationRequestRef {
+                    index: OplogIndex::INITIAL,
+                    accepted_at: Timestamp::from(0),
+                    operation: None,
+                },
+                last_change: OplogIndex::INITIAL,
+                last_change_at: Timestamp::from(0),
+            }),
+            ..AgentStatusRecord::default()
+        };
+        let error = OplogEntry::error(
+            None,
+            OplogErrorKind::Invocation,
+            failure_attribution(current, &denied, after_result).failed_invocation,
+            AgentError::PermissionDenied("card-revoked".to_string()),
+            retry_from,
+            None,
+            None,
+            None,
+        );
+        crate::worker::status::update_status_with_new_entries(
+            AgentMode::Durable,
+            running,
+            std::collections::BTreeMap::from([(OplogIndex::from_u64(12), error)]),
+            &golem_common::model::RetryConfig::default(),
+        )
+        .expect("the status folds")
+        .expect("the status folds from the new entries")
+        .status
+    };
+    assert_eq!(folded_status(false), AgentStatus::Idle);
+    assert_eq!(folded_status(true), AgentStatus::Failed);
+    let trap = TrapType::Error {
+        error: AgentError::OutOfMemory,
+        retry_from,
+        semantic_trap_retry_override: None,
+        provenance: crate::model::FailureProvenance::Host,
+    };
+    assert_eq!(
+        failure_attribution(current, &trap, true),
+        FailureAttribution {
+            failed_invocation: None,
+            rejection: false,
+        }
+    );
+    assert_eq!(
+        failure_attribution(current, &trap, false),
+        FailureAttribution {
+            failed_invocation: current,
+            rejection: false,
+        }
+    );
+}
+
+/// A give-up after the result records an exhausted retry state, whatever the policy evaluation
+/// gave, so the status fold reads the `Error` as the background failure of the settling result.
+/// A retry, and a give-up before the result, keep the evaluated state.
+#[test]
+fn a_give_up_after_the_result_records_an_exhausted_retry_state() {
+    let counted = RetryPolicyState::Counter(2);
+    for evaluated in [
+        None,
+        Some(counted.clone()),
+        Some(RetryPolicyState::Terminal),
+    ] {
+        let recorded = drain_give_up_retry_state(true, &RetryDecision::None, evaluated.clone());
+        assert!(
+            recorded
+                .as_ref()
+                .is_some_and(RetryPolicyState::is_exhausted),
+            "a give-up after the result with {evaluated:?} records {recorded:?}"
+        );
+        assert_eq!(
+            drain_give_up_retry_state(false, &RetryDecision::None, evaluated.clone()),
+            evaluated
+        );
+        assert_eq!(
+            drain_give_up_retry_state(true, &RetryDecision::Immediate, evaluated.clone()),
+            evaluated
+        );
+    }
+    assert_eq!(
+        drain_give_up_retry_state(true, &RetryDecision::None, Some(RetryPolicyState::Terminal)),
+        Some(RetryPolicyState::Terminal),
+        "an exhausted state stays as it is"
+    );
+
+    let key = golem_common::model::InvocationId::new();
+    let index = OplogIndex::from_u64;
+    let give_up = OplogEntry::error(
+        None,
+        OplogErrorKind::Invocation,
+        failure_attribution(
+            Some(key),
+            &TrapType::Error {
+                error: AgentError::Unknown("trapped".to_string()),
+                retry_from: index(1),
+                semantic_trap_retry_override: None,
+                provenance: crate::model::FailureProvenance::TargetInstruction,
+            },
+            true,
+        )
+        .failed_invocation,
+        AgentError::Unknown("trapped".to_string()),
+        index(1),
+        drain_give_up_retry_state(true, &RetryDecision::None, None),
+        None,
+        None,
+    );
+    let settling = crate::worker::status::update_status_with_new_entries(
+        AgentMode::Durable,
+        AgentStatusRecord::default(),
+        std::collections::BTreeMap::from([
+            (
+                index(1),
+                OplogEntry::AgentInvocationStarted {
+                    timestamp: Timestamp::now_utc(),
+                    invocation_id: key,
+                    operation: Box::new(
+                        golem_common::model::InvocationRequestOperation::AgentMethod {
+                            method_name: "agent:method".to_string(),
+                        },
+                    ),
+                    payload: golem_common::model::oplog::OplogPayload::Inline(Box::new(
+                        golem_common::model::StoredAgentInvocationPayload::AgentMethod {
+                            input: golem_common::schema::SchemaValue::Record { fields: Vec::new() }
+                                .try_into()
+                                .unwrap(),
+                            allow_streams: false,
+                            caller: golem_common::model::caller::Caller::anonymous(),
+                            scope_card: None,
+                        },
+                    )),
+                    trace_id: golem_common::model::invocation_context::TraceId::generate(),
+                    trace_states: Vec::new(),
+                    invocation_context: Vec::new(),
+                    wallet_pin: Box::new(golem_common::model::card::InvocationWalletPin {
+                        wallet_token: golem_common::model::card::WalletVersionToken {
+                            wallet_id_hash: [0; 32],
+                            generation: 0,
+                        },
+                        pinned_card_ids: Vec::new(),
+                        scope_card_id: None,
+                    }),
+                },
+            ),
+            (
+                index(2),
+                OplogEntry::AgentInvocationFinished {
+                    timestamp: Timestamp::now_utc(),
+                    invocation_id: key,
+                    result: golem_common::model::oplog::OplogPayload::Inline(Box::new(
+                        golem_common::model::AgentInvocationResult::AgentInitialization,
+                    )),
+                    method_name: None,
+                    consumed_fuel: 0,
+                    component_revision: golem_common::model::component::ComponentRevision::INITIAL,
+                    awaits_settlement: true,
+                },
+            ),
+        ]),
+        &golem_common::model::RetryConfig::default(),
+    )
+    .expect("the status folds")
+    .expect("the status folds from the new entries");
+    let failed = crate::worker::status::update_status_with_new_entries(
+        AgentMode::Durable,
+        settling,
+        std::collections::BTreeMap::from([(index(3), give_up)]),
+        &golem_common::model::RetryConfig::default(),
+    )
+    .expect("the status folds")
+    .expect("the status folds from the new entries");
+    assert_eq!(failed.status, AgentStatus::Failed);
+    assert_eq!(
+        failed
+            .invocation_results
+            .position(&key)
+            .map(|position| position.end),
+        Some(golem_common::model::InvocationEnd::BackgroundFailed { failure: index(3) })
+    );
+}
+
+#[test]
 fn ephemeral_active_suspend_becomes_an_invocation_failure() {
     let start_index = OplogIndex::from_u64(37);
     let trap = TrapType::Interrupt(InterruptKind::Suspend(Timestamp::now_utc()));
@@ -540,7 +752,6 @@ fn ephemeral_replay_is_only_for_typed_owner_initialization() {
             SchemaGraph::anonymous(SchemaType::string()),
             SchemaValue::String("meaningful-constructor-input".to_string()),
         ),
-        None,
     )));
     assert!(should_replay_invocation(AgentMode::Ephemeral, &agent, 0));
     assert!(!should_replay_invocation(AgentMode::Ephemeral, &agent, 1));
@@ -1146,12 +1357,7 @@ fn permission_id_test_inputs() -> (OwnedAgentId, golem_common::model::Invocation
             environment_id: EnvironmentId(
                 Uuid::parse_str("00112233-4455-6677-8899-aabbccddeeff").unwrap(),
             ),
-            agent_id: AgentId {
-                component_id: ComponentId(
-                    Uuid::parse_str("ffeeddcc-bbaa-9988-7766-554433221100").unwrap(),
-                ),
-                agent_id: "cart/primary".to_string(),
-            },
+            agent_id: AgentId::from_parts(7, 6),
         },
         Uuid::from_u128(801).into(),
     )
@@ -1278,19 +1484,19 @@ fn permission_id_derivation_has_golden_vectors() {
 
     assert_eq!(
         card_id,
-        Uuid::parse_str("00000000-002a-7517-811a-f8ff9897ce5b").unwrap()
+        Uuid::parse_str("00000000-002a-7a73-a056-8031516646a3").unwrap()
     );
     assert_eq!(
         transfer_id,
-        Uuid::parse_str("00000000-002a-7125-abba-aa83c50adf19").unwrap()
+        Uuid::parse_str("00000000-002a-73ba-8e2a-d4e8ec86b89b").unwrap()
     );
     assert_eq!(
         installed_child_id,
-        Uuid::parse_str("00000000-002a-70fd-8321-769fffab2675").unwrap()
+        Uuid::parse_str("00000000-002a-74e1-a951-ac2862899c80").unwrap()
     );
     assert_eq!(
         scope_card_id,
-        Uuid::parse_str("00000000-002a-769f-bab5-c87f60c1800a").unwrap()
+        Uuid::parse_str("00000000-002a-7f55-a8fe-d69107e1aa10").unwrap()
     );
     assert_eq!(card_id.as_bytes()[6] >> 4, 7);
     assert_eq!(card_id.as_bytes()[8] >> 6, 2);
@@ -1401,28 +1607,20 @@ fn permission_ids_do_not_collide_across_workers() {
         ),
         ..base_agent.clone()
     };
-    let different_component = OwnedAgentId {
-        agent_id: AgentId {
-            component_id: ComponentId(
-                Uuid::parse_str("efeeddcc-bbaa-9988-7766-554433221100").unwrap(),
-            ),
-            ..base_agent.agent_id.clone()
-        },
+    let different_type = OwnedAgentId {
+        agent_id: AgentId::from_parts(8, 6),
         ..base_agent.clone()
     };
-    let different_name = OwnedAgentId {
-        agent_id: AgentId {
-            agent_id: "cart/secondary".to_string(),
-            ..base_agent.agent_id.clone()
-        },
+    let different_agent = OwnedAgentId {
+        agent_id: AgentId::from_parts(7, 1006),
         ..base_agent.clone()
     };
     let oplog_index = OplogIndex::from_u64(42);
     let ids = [
         base_agent,
         different_environment,
-        different_component,
-        different_name,
+        different_type,
+        different_agent,
     ]
     .map(|owned_agent_id| {
         derive_permission_uuid(
@@ -1508,7 +1706,10 @@ fn agent_permission_test_context() -> AgentPermissionMonomorphizationContext {
         application: ApplicationName::try_from("shop").unwrap(),
         environment: EnvironmentName::try_from("prod").unwrap(),
         component: ComponentName("cart-svc".to_string()),
-        agent_name: "Cart(alice)".to_string(),
+        agent: golem_common::model::card::owner::AgentOwnerLeaf {
+            agent_id: AgentId::from_parts(7, 1),
+            agent_type: Some(AgentTypeName("Cart".to_string())),
+        },
         owner: golem_common::model::card::recipient::RecipientOwnerContext::AgentType(
             AgentTypeName("Cart".to_string()),
         ),
@@ -1604,7 +1805,7 @@ fn wallet_cascade_removal_is_atomic_when_generation_is_exhausted() {
 
 #[test]
 fn wallet_cascade_preserves_independent_floor_releases_ceiling_and_replays_identically() {
-    let holder = "owner@example.com/shop/prod/cart-svc/Cart(alice)";
+    let holder = "owner@example.com/shop/prod/cart-svc/00000007-0000-8000-8000-000000000001";
     let recipient = "owner@example.com/shop/prod/cart-svc/Cart";
     let context = agent_permission_test_context();
     let view = agent_permission_target(holder, AgentVerb::View);
@@ -2085,12 +2286,10 @@ fn polymorphic_card(card_id: CardId) -> StoredCard {
 
 #[test]
 fn transfer_start_removes_only_concrete_card_from_matching_source_agent() {
-    let agent_id = AgentId {
-        component_id: ComponentId(Uuid::new_v4()),
-        agent_id: "source-agent".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 7);
     let source_holder = CardHolder::Agent(AgentCardHolder {
-        agent_id: agent_id.clone(),
+        environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
+        agent_id,
     });
     let concrete = concrete_card(CardId::new());
     let polymorphic = polymorphic_card(CardId::new());
@@ -2106,10 +2305,8 @@ fn transfer_start_removes_only_concrete_card_from_matching_source_agent() {
         &agent_id,
     ));
     let different_source = CardHolder::Agent(AgentCardHolder {
-        agent_id: AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: agent_id.agent_id.clone(),
-        },
+        environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
+        agent_id: AgentId::from_parts(8, 7),
     });
     assert!(!transfer_started_removes_source_membership(
         Some(&concrete),
@@ -2121,10 +2318,8 @@ fn transfer_start_removes_only_concrete_card_from_matching_source_agent() {
 #[test]
 fn pending_transfer_does_not_block_later_local_card_event() {
     let target_holder = CardHolder::Agent(AgentCardHolder {
-        agent_id: AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: "target-agent".to_string(),
-        },
+        environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
+        agent_id: AgentId::from_parts(7, 8),
     });
     let transfer_card = concrete_card(CardId::new());
     let revoked_card_id = CardId::new();
@@ -2235,6 +2430,7 @@ fn shard_assignment_recovery_restarts_idle_workers_with_pending_invocations() {
         oplog_index: OplogIndex::INITIAL,
         idempotency_key: None,
         manual_update_target_revision: Some(ComponentRevision::INITIAL),
+        operation: None,
     });
 
     assert!(should_restart_after_shard_assignment_change(&status));
@@ -2271,7 +2467,16 @@ fn shard_assignment_recovery_skips_suspended_workers_without_pending_work() {
 fn shard_assignment_recovery_preserves_explicit_interrupt_with_pending_work() {
     let mut status = AgentStatusRecord {
         status: AgentStatus::Interrupted,
-        current_idempotency_key: Some(Uuid::new_v4().into()),
+        running: Some(golem_common::model::RunningInvocation {
+            key: Uuid::new_v4().into(),
+            request: golem_common::model::InvocationRequestRef {
+                index: golem_common::model::OplogIndex::INITIAL,
+                accepted_at: golem_common::model::Timestamp::from(0),
+                operation: None,
+            },
+            last_change: golem_common::model::OplogIndex::INITIAL,
+            last_change_at: golem_common::model::Timestamp::from(0),
+        }),
         ..AgentStatusRecord::default()
     };
     assert!(!should_restart_after_shard_assignment_change(&status));
@@ -2282,6 +2487,7 @@ fn shard_assignment_recovery_preserves_explicit_interrupt_with_pending_work() {
         oplog_index: OplogIndex::INITIAL,
         idempotency_key: Some(Uuid::new_v4().into()),
         manual_update_target_revision: None,
+        operation: None,
     });
     status.pending_updates.push_back(PendingUpdateRef {
         timestamp: Timestamp::now_utc(),
@@ -2297,13 +2503,7 @@ fn shard_assignment_recovery_preserves_explicit_interrupt_with_pending_work() {
 }
 
 fn recovered_agent() -> OwnedAgentId {
-    OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: "recovered".to_string(),
-        },
-    )
+    OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 9))
 }
 
 #[test]
@@ -2425,7 +2625,7 @@ fn shard_assignment_recovery_skips_a_worker_whose_shard_left_the_assignment() {
         recovered_restart::<()>(
             &agent,
             Err(WorkerExecutorError::oplog_fenced(
-                agent.agent_id.clone(),
+                agent.agent_id,
                 2,
                 Some(3)
             ))

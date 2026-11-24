@@ -1,0 +1,510 @@
+{
+  "tier": "sweep",
+  "description": "Grammar sweep: the reduced case for each divergence the generated grammar sweep found, one\nper root cause, so each finding is pinned by the smallest script that shows it.",
+  "cases": [
+    {
+      "name": "gram minimal C2-01: expansion after a here-document operator on the same line",
+      "script": "f=/tmp/out.txt; cat <<EOF > \"${f}\"\nhello\nEOF\ncat /tmp/out.txt",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-02: recursive function thirty calls deep",
+      "script": "d() { if [ $1 -gt 0 ]; then d $(($1-1)); fi; }; d 30; echo ok",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-03: arithmetic command error continues the list",
+      "script": "((1/0)); echo \"after $?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-04: arithmetic constant too great for its base",
+      "script": "echo $((08))",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-05: associative element in arithmetic",
+      "script": "declare -A m=([k]=5); echo $((m[k] * 2))",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-06: quotes inside arithmetic",
+      "script": "a=7; echo $(( 'a' + 1 ))",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-07: legacy arithmetic with a subscript and a comparison",
+      "script": "a=(5 6); echo $[a[0] < 9]",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-08: subscript with an operator in an assignment word",
+      "script": "cd /tmp; x=3; b[x>2]=y; echo \"keys=${!b[@]}\"; echo *",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-09: nameref to an array element",
+      "script": "a=(x y); declare -n r='a[1]'; echo \"[$r]\"; r=z; echo \"${a[1]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-10: self-referencing nameref",
+      "script": "declare -n r=r; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-11: readonly array element assignment",
+      "script": "a=(x); readonly a; a[1]=y; echo \"status=$? ${a[*]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-12: readonly assignment in arithmetic",
+      "script": "readonly k=1; (( k = 2 )); echo \"after status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-13: unset of a quoted associative key",
+      "script": "declare -A m=([k]=v); unset \"m['k']\"; echo ${#m[@]}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-14: associative array key order",
+      "script": "declare -A m=([one]=1 [two]=2 [three]=3 [four]=4); echo ${!m[@]}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-15: unset of every element with an at subscript",
+      "script": "a=(x y); unset 'a[@]'; echo ${#a[@]}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-16: read into an array element",
+      "script": "read -r 'a[1]' <<< line; echo \"[${a[1]}]\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-17: exported array in a child shell",
+      "script": "export a=(x); bash -c 'echo \"[${a-unset}]\"'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-18: export of an expanded assignment",
+      "script": "v='x=1'; export $v; echo \"[${x-unset}]\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-19: key-value transform of an associative array",
+      "script": "declare -A m=([k]=v); echo ${m[@]@K}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-20: case toggle operator",
+      "script": "v=abC; echo ${v~~}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-21: bad substitution",
+      "script": "v=abcd; echo \"${v:}\"; echo after",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-22: shortest trim with a star",
+      "script": "v=abc; echo \"${v#*} ${v%*}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-23: ampersand in a pattern replacement",
+      "script": "v=abc; echo \"${v/b/[&]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-24: alternative of an empty array",
+      "script": "a=(); set -- \"${a[@]:+W}\"; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-25: assignment operator on a positional parameter",
+      "script": "set --; : ${1:=x}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-26: length of the status parameter",
+      "script": "false; echo \"${#?}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-27: prefix names include declared unset variables",
+      "script": "declare pre_x; pre_y=1; echo ${!pre*}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-28: indirection through an invalid name",
+      "script": "r='a b'; echo ${!r}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-29: character class against a non-ASCII letter",
+      "script": "v=éa; echo \"${v#[[:alpha:]]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-30: octal escape above 255",
+      "script": "x=$'\\777'; echo ${#x}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-31: escaped dollar inside backquotes",
+      "script": "v=V; echo `echo \\$v`",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-32: case statement inside command substitution",
+      "script": "echo $(case a in a) echo m;; esac)",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-33: function substitution",
+      "script": "x=${ echo hi; }; echo \"[$x]\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-34: letter sequence across punctuation",
+      "script": "echo {Z..a}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-35: read with an escaped IFS character",
+      "script": "IFS=: read x y <<< 'a\\:b:c'; echo \"$x|$y\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-36: mapfile callback",
+      "script": "mapfile -t -C 'echo cb' -c 1 a <<< x; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-37: exit with too many arguments",
+      "script": "exit 1 2; echo after",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-38: break with a zero count in nested loops",
+      "script": "for i in 1 2; do for j in a b; do break 0; done; echo $i; done; echo \"end $?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-39: break in a pipeline stage",
+      "script": "for i in 1 2; do echo x | break; echo $i; done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-40: kill of a subshell by BASHPID",
+      "script": "( kill -TERM $BASHPID; echo not ) 2>/dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-41: BASH_SUBSHELL in a pipeline stage",
+      "script": "echo $BASH_SUBSHELL | cat",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-42: nested subshell with a space",
+      "script": "( (echo spaced) )",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-43: failed redirection on a group",
+      "script": "{ echo in; } > /tmp/no/x; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-44: noclobber and the both-streams operator",
+      "script": "cd /tmp; echo old > f; set -C; echo new &> f; echo \"status=$?\"; cat f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-45: line continuation in a here-document",
+      "script": "cat <<EOF\na \\\nb\nEOF",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-46: alias ending in a space",
+      "script": "shopt -s expand_aliases\nalias run='echo run '\nalias w=word\nrun w",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-47: alias value with a lone quote",
+      "script": "alias z='echo it'\\''s'; alias",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-48: DEBUG trap before arithmetic and conditional commands",
+      "script": "trap 'echo \"> $BASH_COMMAND\"' DEBUG; (( 1 )); [[ x ]]; trap - DEBUG",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-49: RETURN trap after source",
+      "script": "echo 'echo body' > /tmp/s.sh; trap 'echo ret' RETURN; . /tmp/s.sh",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-50: ERR trap for a failing group",
+      "script": "trap 'echo err' ERR; { false; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-51: EXIT trap when killed by TERM",
+      "script": "trap 'echo cleanup' EXIT; kill -TERM $$; echo after",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-52: unset last background pid under nounset",
+      "script": "set -u; echo \"[$!]\"; echo after",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-53: PS4 expansion",
+      "script": "PS4='+$LINENO: '; set -x; echo a",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-54: empty TIMEFORMAT",
+      "script": "TIMEFORMAT=; time true",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-55: dot without a file name",
+      "script": ".; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-56: printed function with a here-document sourced back",
+      "script": "f() {\ncat <<EOF\nhi\nEOF\n}\ndeclare -f f > /tmp/f.sh; unset -f f; . /tmp/f.sh; f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-57: test with -o and -a precedence",
+      "script": "test x -o '' -a ''; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-58: GLOBIGNORE with a bracket pattern",
+      "script": "cd /tmp; : > a; : > b; : > c; GLOBIGNORE='[ab]'; echo *",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-59: globstar after a directory star",
+      "script": "cd /tmp; mkdir -p d; : > d/f; : > g; shopt -s globstar; echo */**",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-60: negated extglob against the empty string",
+      "script": "shopt -s extglob\n[[ \"\" == !(*) ]] && echo matched-empty",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-61: failglob inside a function",
+      "script": "shopt -s failglob; f() { echo nomatch*; echo in-f; }; f; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-62: for with an invalid variable name",
+      "script": "for 1x in a; do echo \"[$1x]\"; done; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-63: return in a pipeline stage",
+      "script": "f() { echo x | return 5; echo \"after $?\"; }; f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-64: caller in a command string",
+      "script": "f() { caller 0; }; g() { f; }\ng",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-65: export of a name without a value",
+      "script": "export ev; declare -p ev",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-66: test -ef on a missing file",
+      "script": "test x -ef x; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-67: redirection to an empty file name",
+      "script": "echo x > ''; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-68: kill -l of an exit status",
+      "script": "kill -l 130",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-69: close redirection followed by a word",
+      "script": "cd /tmp; echo x >&-1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-70: negation after a pipe",
+      "script": "! true | ! true",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-71: assignment with a failed redirection",
+      "script": "v=1 > /tmp/no/x; echo \"[${v-unset}] $?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-72: set dash turns off xtrace",
+      "script": "set -x; set -; echo quiet",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-73: USR1 trap",
+      "script": "trap 'echo usr1' USR1; kill -USR1 $$; echo after",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-74: here-document expansion side effect with cat",
+      "script": "n=0; cat <<EOF\n$((n+=1))\nEOF\necho \"n=$n\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-75: local nameref named like its target",
+      "script": "f() { local -n v=v; v=x; }; v=orig; f; echo \"$v\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-76: mapfile with an invalid array name",
+      "script": "mapfile 1bad <<< x; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-77: lowercase and uppercase attributes together",
+      "script": "declare -lu v=MiX; echo $v",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-78: status seen by a RETURN trap",
+      "script": "f() { trap 'echo \"ret $?\"' RETURN; return 4; }; f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-79: EXIT trap in a command substitution",
+      "script": "x=$(trap 'echo cs-exit' EXIT; echo in); echo \"[$x]\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-80: uppercasing sharp s",
+      "script": "v='élan ß'; echo \"${v^^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-81: empty associative key",
+      "script": "declare -A m; m['']=v; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-82: read of zero characters",
+      "script": "read -n 0 x <<< abc; echo \"[$x]\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-83: ANSI-C quote inside a double-quoted default",
+      "script": "unset u; x=\"${u:-$'a\\tb'}\"; echo \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram minimal C2-84: read with blanks around a non-blank IFS delimiter",
+      "script": "IFS=': ' read -r k v <<< 'key : value'; echo \"[$k] [$v]\"",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}

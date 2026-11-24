@@ -12,19 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{WorkerExecutorImpl, extract_owned_agent_id};
+use super::WorkerExecutorImpl;
 use crate::durable_host::durable_session::{
     StreamSession, durable_stream_mapping_from_proto, durable_stream_mapping_to_proto,
 };
 use crate::durable_host::durable_stream::{ProducerRegistrationRequest, SessionError};
-use crate::durable_host::stream_session::{
-    decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
-    encode_recursive_stream_value_with_schema,
-};
 use crate::grpc::invocation::from_proto_invocation_context;
 use crate::services::oplog::OplogError;
 use crate::services::{HasAll, HasComponentService, UsesAllDeps};
-use crate::worker::invocation::validate_agent_method_invocation;
 use crate::worker::{DurableStreamingInvocationRequest, Worker};
 use crate::workerctx::WorkerCtx;
 use chrono::{DateTime, Utc};
@@ -46,7 +41,8 @@ use golem_common::base_model::durable_stream::{
     StreamTerminalAuthor,
 };
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, InvocationFreshnessDisposition, ParsedAgentKey};
+use golem_common::model::agent::InvocationFreshnessDisposition;
+use golem_common::model::caller::Principal;
 use golem_common::model::card::ScopeCard;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::durable_stream::{
@@ -63,6 +59,10 @@ use golem_common::model::{
 use golem_common::schema::SchemaValue;
 use golem_common::schema::agent::FieldSource;
 use golem_common::schema::conversion::{FromSchema, IntoTypedSchemaValue};
+use golem_common::schema::streaming::{
+    decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
+    encode_recursive_stream_value_with_schema,
+};
 use golem_schema::schema::{
     NamedFieldType, SchemaGraph, SchemaType, SchemaValueStream, schema_fingerprint_v1,
 };
@@ -140,15 +140,30 @@ fn retained_response_stream(
 }
 
 struct AcceptedInvocation {
+    /// The agent that accepted the invocation, which a key target resolves to.
+    agent_id: AgentId,
     idempotency_key: golem_common::model::InvocationId,
     component_revision: Option<ComponentRevision>,
     durable_streams: Option<StreamSession>,
     prepared: Option<golem_common::model::durable_stream::StreamSessionPreparedRecord>,
     durable_replayed: bool,
     joined_origin_observer: bool,
+    queued: Option<(
+        golem_common::model::durable_stream::StreamSessionAttachedRecord,
+        futures::future::BoxFuture<
+            'static,
+            Result<
+                (
+                    golem_common::model::durable_stream::StreamSessionPreparedRecord,
+                    StreamSession,
+                ),
+                WorkerExecutorError,
+            >,
+        >,
+    )>,
 }
 
-struct TransportStreamId(u64);
+pub(crate) struct TransportStreamId(pub(crate) u64);
 
 mod admission;
 #[cfg(test)]
@@ -156,10 +171,12 @@ use admission::decode_invocation_freshness_disposition;
 use admission::{AcceptanceRace, publish_acceptance, race_invocation_acceptance};
 
 mod request;
-pub(crate) use request::{build_durable_streaming_request, decode_invocation_input};
+pub(crate) use request::{
+    build_durable_streaming_request, capture_method_input, capture_session_acceptance,
+    decode_invocation_input, resumed_input_schema, stream_element_schema,
+};
 use request::{
-    build_resume_attempt, request_agent_id, request_idempotency_key, resumed_input_schema,
-    route_durable_request,
+    build_resume_attempt, request_agent_id, request_idempotency_key, route_durable_request,
 };
 #[cfg(test)]
 use request::{effective_session_identity, require_expected_callee_fingerprint};

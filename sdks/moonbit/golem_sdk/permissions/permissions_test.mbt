@@ -34,11 +34,9 @@ extern "wasm" fn push_permission_host_buffer(ptr : Int32, size : Int32) = "golem
 extern "wasm" fn permission_host_stat(field : Int32) -> Int32 = "golem:test" "permission-host-stat"
 
 ///|
-extern "wasm" fn guest_malloc(size : Int32) -> Int32 =
-  #|(func (param i32) (result i32) (local i32)
-  #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
-  #| local.tee 1 i32.const 0 call $moonbit.init_array8
-  #| local.get 1)
+fn guest_malloc(size : Int32) -> Int32 {
+  @gen.mbt_ffi_cabi_realloc(0, 0, 1, size)
+}
 
 ///|
 const PERMISSION_CARD_DROPS : Int32 = 2
@@ -196,10 +194,9 @@ test "a failed revoke still moves the card" {
 test "install maps a recipient mismatch and moves the card" {
   fresh_host()
   let (concrete_card, card) = wallet_cards()
-  let target : @permissions.Holder = Agent({
-    component_id: { uuid: { high_bits: 1, low_bits: 2, }, },
-    agent_id: "Target(\"other\")",
-  })
+  let target : @permissions.Holder = Agent(
+    @schema.AgentId::from_uuid(@schema.Uuid::from_bits(1, 2)),
+  )
   let concrete_error = expect_error(() => concrete_card.install(target))
   assert_eq(concrete_error.kind(), "install-recipient-mismatch")
   assert_eq(permission_host_stat(3), 11)

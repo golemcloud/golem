@@ -2,9 +2,9 @@ use golem_rust::agentic::{AgentStream, create_webhook};
 use golem_rust::{ForkResult, agent_definition, agent_implementation, endpoint, fork};
 
 #[agent_definition(
-    mount = "/selected-query/{id}",
-    phantom_agent = true,
-    phantom_id(query = "instance", optional = true),
+    mount = "/selected-query",
+    agent_id(query = "instance"),
+    create_route = "/selected-query/create",
     webhook_suffix = "/callback"
 )]
 pub trait SelectedQueryAgent {
@@ -15,6 +15,12 @@ pub trait SelectedQueryAgent {
 
     #[endpoint(get = "/state")]
     fn state(&self) -> u32;
+
+    #[endpoint(get = "/query")]
+    fn query(&self, value: u32) -> u32;
+
+    #[endpoint(get = "/")]
+    fn constructor(&self) -> String;
 
     #[endpoint(post = "/fork/{value}")]
     fn fork_state(&mut self, value: u32) -> String;
@@ -28,12 +34,17 @@ pub trait SelectedQueryAgent {
 
 struct SelectedQueryAgentImpl {
     state: u32,
+    constructor: String,
 }
 
 #[agent_implementation]
 impl SelectedQueryAgent for SelectedQueryAgentImpl {
-    fn new(_id: String) -> Self {
-        Self { state: 0 }
+    fn new(id: String) -> Self {
+        assert!(id != "fail", "private initializer failure");
+        Self {
+            state: 0,
+            constructor: id,
+        }
     }
 
     fn set(&mut self, value: u32) {
@@ -44,6 +55,14 @@ impl SelectedQueryAgent for SelectedQueryAgentImpl {
         self.state
     }
 
+    fn query(&self, value: u32) -> u32 {
+        value
+    }
+
+    fn constructor(&self) -> String {
+        self.constructor.clone()
+    }
+
     fn fork_state(&mut self, value: u32) -> String {
         let details = match fork().expect("self fork is allowed") {
             ForkResult::Original(details) => details,
@@ -52,7 +71,7 @@ impl SelectedQueryAgent for SelectedQueryAgentImpl {
                 details
             }
         };
-        let uuid: golem_rust::Uuid = details.forked_phantom_id.into();
+        let uuid: golem_rust::Uuid = details.forked_agent_id.uuid.into();
         uuid.to_string()
     }
 
@@ -76,8 +95,8 @@ impl SelectedQueryAgent for SelectedQueryAgentImpl {
 }
 
 macro_rules! selector_counter {
-    ($agent:ident, $implementation:ident, $mount:tt, $($selector:tt)*) => {
-        #[agent_definition(mount = $mount, phantom_id($($selector)*))]
+    ($agent:ident, $implementation:ident, $mount:tt, $create:tt, $($selector:tt)*) => {
+        #[agent_definition(mount = $mount, create_route = $create, agent_id($($selector)*))]
         pub trait $agent {
             fn new(id: String) -> Self;
 
@@ -86,15 +105,22 @@ macro_rules! selector_counter {
 
             #[endpoint(get = "/state")]
             fn state(&self) -> u32;
+
+            #[endpoint(get = "/")]
+            fn constructor(&self) -> String;
         }
 
-        struct $implementation { state: u32 }
+        struct $implementation { state: u32, constructor: String }
 
         #[agent_implementation]
         impl $agent for $implementation {
-            fn new(_id: String) -> Self { Self { state: 0 } }
+            fn new(id: String) -> Self {
+                assert!(id != "fail", "private initializer failure");
+                Self { state: 0, constructor: id }
+            }
             fn set(&mut self, value: u32) { self.state = value; }
             fn state(&self) -> u32 { self.state }
+            fn constructor(&self) -> String { self.constructor.clone() }
         }
     };
 }
@@ -102,19 +128,21 @@ macro_rules! selector_counter {
 selector_counter!(
     SelectedRequiredQueryAgent,
     SelectedRequiredQueryAgentImpl,
-    "/selected-required-query/{id}",
+    "/selected-required-query",
+    "/selected-required-query/create",
     query = "instance"
 );
 selector_counter!(
     SelectedPathAgent,
     SelectedPathAgentImpl,
-    "/selected-path/{instance}/{id}",
-    path = "instance",
-    optional = true
+    "/selected-path/{instance}",
+    "/selected-path/create",
+    path = "instance"
 );
 selector_counter!(
     SelectedRequiredPathAgent,
     SelectedRequiredPathAgentImpl,
-    "/selected-required-path/{instance}/{id}",
+    "/selected-required-path/{instance}",
+    "/selected-required-path/create",
     path = "instance"
 );

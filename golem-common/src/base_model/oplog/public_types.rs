@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::caller::PublicCaller;
 use crate::base_model::card::{CardHolder, CardId, PublicCardHolder, StoredCard};
 use crate::base_model::component::{ComponentRevision, PluginPriority};
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -152,6 +153,19 @@ fn redact_typed_value(value: &mut TypedSchemaValue) {
 }
 
 impl PublicAgentInvocation {
+    /// The caller of the invocation. A manual update has none: it has a requester instead.
+    pub fn caller(&self) -> Option<&PublicCaller> {
+        match self {
+            Self::AgentInitialization(params) => Some(&params.caller),
+            Self::AgentMethodInvocation(params) => Some(&params.caller),
+            Self::ExternalTool(params) => Some(&params.caller),
+            Self::SaveSnapshot(params) => Some(&params.caller),
+            Self::LoadSnapshot(params) => Some(&params.caller),
+            Self::ProcessOplogEntries(params) => Some(&params.caller),
+            Self::ManualUpdate(_) => None,
+        }
+    }
+
     fn redact_host_managed_values_for_external(&mut self) {
         match self {
             Self::AgentInitialization(params) => {
@@ -379,6 +393,50 @@ impl Display for OplogCursor {
             self.next_oplog_index, self.current_component_revision, self.query_hash
         )
     }
+}
+
+/// The scan allowance of an oplog range read: the number of oplog entries that it may read, and
+/// how long it may read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct OplogScanAllowance {
+    pub entries: u64,
+    pub millis: u64,
+}
+
+impl OplogScanAllowance {
+    /// The allowance that is left of `self` after `scan` charged it.
+    pub fn after(self, scan: &OplogScan) -> Self {
+        Self {
+            entries: self.entries.saturating_sub(scan.charged_entries),
+            millis: self.millis.saturating_sub(scan.charged_millis),
+        }
+    }
+
+    pub fn is_spent(&self) -> bool {
+        self.entries == 0 || self.millis == 0
+    }
+}
+
+/// The scan accounting of an oplog range read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct OplogScan {
+    // The allowance that the read applied: the requested allowance, or the configured allowance
+    // of the server without one, clamped to the configured allowance.
+    pub limit: OplogScanAllowance,
+    /// The oplog entries that the read charged: the entries that it read to find the component
+    /// revision at the start of the range, and the entries that it read for the page, also those
+    /// that the byte limit of the page left out.
+    pub charged_entries: u64,
+    /// The time that the read charged, rounded up to a millisecond.
+    pub charged_millis: u64,
+    /// The read stopped before the end of the range because it spent the allowance.
+    pub exhausted: bool,
 }
 
 /// Parses the string form `<index>-<revision>-<query hash>` of `Display`.
@@ -780,6 +838,7 @@ pub struct AgentInitializationParameters {
     pub trace_id: TraceId,
     pub trace_states: Vec<String>,
     pub invocation_context: Vec<Vec<PublicSpanData>>,
+    pub caller: PublicCaller,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
@@ -789,10 +848,14 @@ pub struct AgentInitializationParameters {
 pub struct AgentMethodInvocationParameters {
     pub invocation_id: InvocationId,
     pub method_name: String,
+    /// Component-independent original-method-input diagnostic envelope, not the executed
+    /// method's input schema. Captured JSON fields include rejected values; native
+    /// host capabilities are redacted before encoding.
     pub function_input: TypedSchemaValue,
     pub trace_id: TraceId,
     pub trace_states: Vec<String>,
     pub invocation_context: Vec<Vec<PublicSpanData>>,
+    pub caller: PublicCaller,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
@@ -801,6 +864,15 @@ pub struct AgentMethodInvocationParameters {
 #[serde(rename_all = "camelCase")]
 pub struct LoadSnapshotParameters {
     pub snapshot: PublicSnapshotData,
+    pub caller: PublicCaller,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct SaveSnapshotParameters {
+    pub caller: PublicCaller,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
@@ -809,6 +881,7 @@ pub struct LoadSnapshotParameters {
 #[serde(rename_all = "camelCase")]
 pub struct ProcessOplogEntriesParameters {
     pub invocation_id: InvocationId,
+    pub caller: PublicCaller,
     // TODO
 }
 
@@ -818,6 +891,8 @@ pub struct ProcessOplogEntriesParameters {
 #[serde(rename_all = "camelCase")]
 pub struct ManualUpdateParameters {
     pub target_revision: ComponentRevision,
+    /// Who asked for the update. It is not the caller of the update's snapshot save.
+    pub requester: PublicCaller,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
@@ -832,6 +907,19 @@ pub struct ExternalToolInvocationParameters {
     pub trace_id: TraceId,
     pub trace_states: Vec<String>,
     pub invocation_context: Vec<Vec<PublicSpanData>>,
+    pub caller: PublicCaller,
+}
+
+/// What a reader of an oplog asks to include beyond the default public form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, derive_more::Display)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+#[display(rename_all = "camelCase")]
+pub enum OplogInclude {
+    /// The verified claims of the users among the callers. Only a reader that may read the oplog
+    /// gets them.
+    Claims,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
@@ -842,7 +930,7 @@ pub enum PublicAgentInvocation {
     AgentInitialization(AgentInitializationParameters),
     AgentMethodInvocation(AgentMethodInvocationParameters),
     ExternalTool(ExternalToolInvocationParameters),
-    SaveSnapshot(Empty),
+    SaveSnapshot(SaveSnapshotParameters),
     LoadSnapshot(LoadSnapshotParameters),
     ProcessOplogEntries(ProcessOplogEntriesParameters),
     ManualUpdate(ManualUpdateParameters),

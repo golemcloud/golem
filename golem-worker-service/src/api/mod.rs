@@ -14,23 +14,24 @@
 
 pub mod agents;
 pub mod common;
+pub mod invocation;
 mod invocation_session;
 mod worker;
 
 use crate::api::agents::AgentsApi;
+use crate::api::invocation::InvocationApi;
 use crate::api::worker::WorkerApi;
 use crate::bootstrap::Services;
 use golem_service_base::api::HealthcheckApi;
 use poem_openapi::OpenApiService;
 
-pub type Apis = (HealthcheckApi, WorkerApi, AgentsApi);
+pub type Apis = (HealthcheckApi, WorkerApi, AgentsApi, InvocationApi);
 
 pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
     OpenApiService::new(
         (
             HealthcheckApi,
             WorkerApi::new(
-                services.component_service.clone(),
                 services.worker_service.clone(),
                 services.auth_service.clone(),
                 services.connect_websocket.clone(),
@@ -40,6 +41,10 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                 services.auth_service.clone(),
                 services.invocation_session_token_keyring.clone(),
                 services.invocation_session_config.clone(),
+            ),
+            InvocationApi::new(
+                services.worker_service.clone(),
+                services.auth_service.clone(),
             ),
         ),
         "Golem API",

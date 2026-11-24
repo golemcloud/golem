@@ -76,14 +76,20 @@ pub fn save() -> Int32 {
 }
 
 ///|
+/// Snapshot `load` takes a snapshot and the constructor schema value tree,
+/// which flatten to seven core parameters.
 pub fn load(
   payload : Int32,
   _payload_length : Int32,
   mime : Int32,
   _mime_length : Int32,
+  value_nodes : Int32,
+  _value_nodes_length : Int32,
+  _root : Int32,
 ) -> Int32 {
   free(payload)
   free(mime)
+  free(value_nodes)
   let error = "Component defines no agents"
   let ptr = string_ptr(error)
   return_load(1, ptr, error.length())
@@ -111,9 +117,17 @@ extern "wasm" fn load32(ptr : Int32) -> Int32 =
   #|(func (param i32) (result i32) local.get 0 i32.load)
 
 ///|
-#owned(value)
-extern "wasm" fn string_ptr(value : String) -> Int32 =
-  #|(func (param i32) (result i32) local.get 0)
+fn string_ptr(value : String) -> Int32 {
+  let ptr = @gen.mbt_ffi_cabi_realloc(0, 0, 2, value.length() * 2)
+  for i in 0..<value.length() {
+    store16(ptr + i * 2, value[i].to_int())
+  }
+  ptr
+}
+
+///|
+extern "wasm" fn store16(ptr : Int32, value : Int32) =
+  #|(func (param i32 i32) local.get 0 local.get 1 i32.store16)
 
 ///|
 fn free(ptr : Int32) -> Unit {

@@ -75,6 +75,7 @@ type Call = (
 );
 struct ControlledInvoker(mpsc::UnboundedSender<Call>);
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ProviderInvoker for ControlledInvoker {
     async fn invoke(&self, call: &ProviderCall) -> Result<String, OpenApiError> {
         let (tx, rx) = oneshot::channel();
@@ -183,6 +184,7 @@ async fn worker_adapter_uses_derived_private_identity_and_canonical_input() {
             idempotency_key: None,
             oplog_index: None,
             agent_fingerprint: None,
+            background_failure: None,
         },
         AgentMode::Ephemeral,
         AgentConstructorSchema {
@@ -220,19 +222,20 @@ async fn worker_adapter_uses_derived_private_identity_and_canonical_input() {
     let call = prepare_call(&resolved.route).unwrap();
     let other = prepare_call(&resolved.route).unwrap();
     assert_ne!(call.key, other.key);
-    assert_ne!(call.agent_id, other.agent_id);
     let adapter = WorkerProviderInvoker(harness.worker_service.clone());
     assert_eq!(adapter.invoke(&call).await.unwrap(), document());
-    assert_eq!(harness.recorded_agent_id(), call.agent_id);
-    let phantom = call
-        .agent_id
-        .agent_id
-        .strip_suffix(']')
-        .unwrap()
-        .rsplit_once('[')
-        .unwrap()
-        .1;
-    assert!(uuid::Uuid::parse_str(phantom).is_ok());
+    assert_eq!(
+        harness.recorded_agent_id(),
+        golem_common::model::AgentId::ephemeral_invocation(
+            harness.environment_id,
+            harness.type_id,
+            &call.key.owner_key(&call.method),
+        )
+    );
+    assert_ne!(
+        call.key.owner_key(&call.method),
+        other.key.owner_key(&other.method)
+    );
     assert_eq!(
         harness.recorded_method_params(),
         SchemaValue::Record { fields: vec![] }

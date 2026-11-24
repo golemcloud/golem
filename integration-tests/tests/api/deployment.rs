@@ -18,7 +18,6 @@ use golem_client::api::{
 };
 use golem_client::model::AgentSecretCreation;
 use golem_client::model::DeploymentCreation;
-use golem_common::model::AgentId;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent_secret::{AgentSecretPath, CanonicalAgentSecretPath};
@@ -73,9 +72,10 @@ use golem_common::schema::tool::{
 };
 use golem_common::schema::validation::is_equivalent_cross_graph;
 use golem_common::schema::{ExternalSchemaValue, FromSchema, SchemaGraph, SchemaType, SchemaValue};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use integration_tests::agents::lookup_keyed_agent;
 use pretty_assertions::{assert_eq, assert_matches, assert_ne};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
@@ -215,12 +215,13 @@ fn remote_tool_hash_input(
         owner_account_email: grant.release_owner.email.clone(),
         metadata_version: grant.release.metadata_version.clone(),
         metadata_digest: grant.release.metadata_digest,
-        provision: ToolProvisionConfig {
+        provision: (&ToolProvisionConfig {
             config: NormalizedJsonValue::new(json!({"tenant": "consumer"})),
             env: BTreeMap::from([("LOG_LEVEL".to_string(), "debug".to_string())]),
             plugins: Vec::new(),
             files: Vec::new(),
-        },
+        })
+            .into(),
         component_bindings: BTreeMap::new(),
         bindings,
         environment_middleware_binding: None,
@@ -265,7 +266,7 @@ fn filesystem_remote_tool(
         owner_account_email: grant.release_owner.email.clone(),
         metadata_version: grant.release.metadata_version.clone(),
         metadata_digest: grant.release.metadata_digest,
-        provision: ToolProvisionConfig::default(),
+        provision: (&ToolProvisionConfig::default()).into(),
         component_bindings: BTreeMap::new(),
         bindings: BTreeMap::from([(
             agent_type.clone(),
@@ -733,6 +734,7 @@ async fn get_component_version_from_previous_deployment(
         .update_component(
             &component.id.0,
             &ComponentUpdate {
+                package_metadata: None,
                 current_revision: component.revision,
                 config_schema: None,
                 component_provision_config: None,
@@ -1017,6 +1019,7 @@ async fn filter_deployments_by_version(deps: &EnvBasedTestDependencies) -> anyho
         .update_component(
             &component.id.0,
             &ComponentUpdate {
+                package_metadata: None,
                 current_revision: component.revision,
                 config_schema: None,
                 component_provision_config: None,
@@ -1423,6 +1426,7 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
         .create_component(
             &publisher_env.id.0,
             &ComponentCreation {
+                package_metadata: None,
                 component_name: ComponentName::try_from("publisher-tools:search")
                     .map_err(anyhow::Error::msg)?,
                 config_schema: Default::default(),
@@ -1593,7 +1597,7 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
     assert_eq!(consumer_summary_v12.remote_tools.len(), 1);
     assert_eq!(consumer_summary_v12.remote_tools[0].hash, remote_v12_hash);
 
-    let initial_agent = agent_id!("GolemHostApi", "remote-search-1-2");
+    let initial_agent = agent_key!("GolemHostApi", "remote-search-1-2");
     consumer
         .start_agent(&consumer_component.id, initial_agent.clone())
         .await?;
@@ -1621,6 +1625,7 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
         .update_component(
             &publisher_component.id.0,
             &ComponentUpdate {
+                package_metadata: None,
                 current_revision: publisher_component.revision,
                 config_schema: None,
                 component_provision_config: None,
@@ -1745,7 +1750,7 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
             &EnvironmentToolGrantDeletion { automatic: false },
         )
         .await?;
-    let revoked_agent = agent_id!("GolemHostApi", "remote-search-revoked");
+    let revoked_agent = agent_key!("GolemHostApi", "remote-search-revoked");
     consumer
         .start_agent(&consumer_component.id, revoked_agent.clone())
         .await?;
@@ -1783,7 +1788,7 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
     assert_eq!(grants_after_depublication.len(), 1);
     assert_eq!(grants_after_depublication[0].release.id, release_v12.id);
 
-    let de_published_agent = agent_id!("GolemHostApi", "remote-search-de-published");
+    let de_published_agent = agent_key!("GolemHostApi", "remote-search-de-published");
     consumer
         .start_agent(&consumer_component.id, de_published_agent.clone())
         .await?;
@@ -1946,7 +1951,7 @@ async fn built_in_path_policy_can_wrap_only_a_selected_filesystem_tool(
     assert_eq!(summary.remote_tools.len(), 2);
     assert_eq!(summary.remote_tool_middlewares.len(), 1);
     assert_eq!(summary.universal_tool_middlewares.len(), 1);
-    let environment_agent = agent_id!("ToolStreamingCaller", "path-policy-environment-wide");
+    let environment_agent = agent_key!("ToolStreamingCaller", "path-policy-environment-wide");
     user.start_agent(&caller.id, environment_agent.clone())
         .await?;
     let stream_input = vec![0, 1, 255, 2, 3, 128, 4];
@@ -1964,8 +1969,7 @@ async fn built_in_path_policy_can_wrap_only_a_selected_filesystem_tool(
     assert_eq!(streamed.bytes_read, 7);
     assert!(!streamed.output_closed);
     assert_eq!(streamed.completion, "ok");
-    let environment_worker =
-        AgentId::from_agent_id(caller.id, &environment_agent).map_err(anyhow::Error::msg)?;
+    let environment_worker = lookup_keyed_agent(&user, &caller, &environment_agent).await?;
     let environment_oplog = user
         .get_oplog(&environment_worker, OplogIndex::INITIAL)
         .await?;
@@ -2013,7 +2017,7 @@ async fn built_in_path_policy_can_wrap_only_a_selected_filesystem_tool(
 
     let allowed_path = "workspace/path-policy/agent-a.txt";
     let content = "agent-a-content";
-    let agent_a = agent_id!("ToolStreamingCaller", "path-policy-a");
+    let agent_a = agent_key!("ToolStreamingCaller", "path-policy-a");
     user.start_agent(&caller.id, agent_a.clone()).await?;
     let allowed = user
         .invoke_and_await_agent(
@@ -2052,7 +2056,7 @@ async fn built_in_path_policy_can_wrap_only_a_selected_filesystem_tool(
     assert!(!streamed.output_closed);
     assert_eq!(streamed.completion, "ok");
 
-    let worker_a = AgentId::from_agent_id(caller.id, &agent_a).map_err(anyhow::Error::msg)?;
+    let worker_a = lookup_keyed_agent(&user, &caller, &agent_a).await?;
     let before_denial = user.get_oplog(&worker_a, OplogIndex::INITIAL).await?;
     let write_starts_before =
         entity_start_count(&before_denial, PublicAgentEntityKind::Tool, "write-file");
@@ -2112,7 +2116,7 @@ async fn built_in_path_policy_can_wrap_only_a_selected_filesystem_tool(
         middleware_starts_before + 1
     );
 
-    let agent_b = agent_id!("ToolStreamingCaller", "path-policy-b");
+    let agent_b = agent_key!("ToolStreamingCaller", "path-policy-b");
     user.start_agent(&caller.id, agent_b.clone()).await?;
     let isolated_read = user
         .invoke_and_await_agent(
@@ -2129,7 +2133,7 @@ async fn built_in_path_policy_can_wrap_only_a_selected_filesystem_tool(
             .is_err_and(|error| error.contains("not-found")),
         "a second agent must not see the first agent's allowed file: {isolated_read:?}"
     );
-    let worker_b = AgentId::from_agent_id(caller.id, &agent_b).map_err(anyhow::Error::msg)?;
+    let worker_b = lookup_keyed_agent(&user, &caller, &agent_b).await?;
     let agent_b_oplog = user.get_oplog(&worker_b, OplogIndex::INITIAL).await?;
     assert_eq!(
         entity_start_count(&agent_b_oplog, PublicAgentEntityKind::Tool, "read-file"),
@@ -2180,7 +2184,7 @@ async fn built_in_path_policy_can_wrap_only_a_selected_filesystem_tool(
         )
         .await?;
 
-    let agent_c = agent_id!("ToolStreamingCaller", "path-policy-no-filesystem");
+    let agent_c = agent_key!("ToolStreamingCaller", "path-policy-no-filesystem");
     user.start_agent(&caller.id, agent_c.clone()).await?;
     let missing_access = user
         .invoke_and_await_agent(
@@ -2200,7 +2204,7 @@ async fn built_in_path_policy_can_wrap_only_a_selected_filesystem_tool(
         }),
         "missing middleware filesystem access must return a structured policy denial: {missing_access:?}"
     );
-    let worker_c = AgentId::from_agent_id(caller.id, &agent_c).map_err(anyhow::Error::msg)?;
+    let worker_c = lookup_keyed_agent(&user, &caller, &agent_c).await?;
     let agent_c_oplog = user.get_oplog(&worker_c, OplogIndex::INITIAL).await?;
     assert_eq!(
         entity_start_count(&agent_c_oplog, PublicAgentEntityKind::Tool, "write-file"),
@@ -2341,6 +2345,7 @@ async fn deploy_counters_with_declarations(
         .update_component(
             &component.id.0,
             &ComponentUpdate {
+                package_metadata: None,
                 current_revision: component.revision,
                 config_schema: None,
                 component_provision_config: None,

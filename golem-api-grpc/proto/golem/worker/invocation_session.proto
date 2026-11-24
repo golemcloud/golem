@@ -8,6 +8,7 @@ import "golem/common/empty.proto";
 import "golem/common/environment.proto";
 import "golem/common/uuid.proto";
 import "golem/component/agent.proto";
+import "golem/component/component_id.proto";
 import "golem/schema/schema.proto";
 import "golem/worker/agent_config.proto";
 import "golem/worker/idempotency_key.proto";
@@ -20,7 +21,9 @@ import "golem/worker/worker_id.proto";
 import "google/protobuf/timestamp.proto";
 
 message InvocationStart {
-  golem.worker.AgentId agent_id = 1;
+  // A key target upserts the keyed agent. An ID target reaches an existing agent, or,
+  // with `constructor`, creates the agent at that pre-allocated ID when it is missing.
+  golem.worker.AgentTarget target = 1;
   optional string method_name = 2;
   golem.schema.SchemaValue input = 3;
   golem.worker.IdempotencyKey idempotency_key = 4;
@@ -28,7 +31,7 @@ message InvocationStart {
   golem.auth.AuthCtx auth_ctx = 6;
   reserved 7;
   reserved "principal";
-  golem.component.Caller caller = 21;
+  golem.component.Caller caller = 23;
   golem.common.EnvironmentId environment_id = 8;
   repeated golem.worker.AgentConfigEntryDto config = 9;
   golem.common.AccountId component_owner_account_id = 10;
@@ -44,6 +47,17 @@ message InvocationStart {
   StreamInvocationIdentity origin_invocation = 19;
   optional ExternalToolInvocation external_tool = 18;
   golem.worker.InvocationRequestKey request_key = 20;
+  // Only with an ID target: the type and constructor parameters of the agent to create
+  // at that ID, such as an ephemeral instance or an agent without a key.
+  optional golem.worker.AgentKey constructor = 21;
+  // The component that implements the agent type, or that a fresh external-tool owner
+  // runs. Required when the request may create the agent: a key target, an ID target
+  // with `constructor`, or an `external_tool` with `fresh_owner`.
+  optional golem.component.ComponentId component_id = 22;
+  // Schema-independent method carrier. Mutually exclusive with input.
+  optional bytes captured_method_input = 24;
+  // Logical method API capability; independent of Await and this RPC's transport.
+  bool allow_streams = 25;
 }
 
 message ExternalToolInvocation {
@@ -234,6 +248,8 @@ message InvocationAccepted {
   // Requested output cursors verified against durable history to already name a terminal.
   // No suffix or repeated terminal is sent for these streams on this attachment.
   repeated golem.common.UUID terminal_cursor_stream_ids = 14;
+  // Original method carrier, so a resumed public adapter can restore provisional references.
+  optional bytes captured_method_input = 15;
 }
 
 message InvocationSessionResult {
@@ -250,6 +266,9 @@ message InvocationSessionResult {
   optional uint64 oplog_index = 8;
   optional golem.common.UUID agent_fingerprint = 9;
   repeated DurableStreamMapping new_stream_mappings = 10;
+  // Set by a result lookup when the agent gave up during the background work of the invocation,
+  // after it recorded the result: `previous_invocation_failed` or `previous_invocation_exited`.
+  optional golem.worker.v1.WorkerExecutionError background_failure = 12;
 }
 
 enum InvocationRejectionReason {
@@ -325,5 +344,7 @@ message InvocationResponse {
     InputStreamAck input_ack = 7;
     AttachmentRevoked attachment_revoked = 9;
     InvocationSessionCompletion finished = 10;
+    // Selected revision and bindings, after a queued acceptance without a revision.
+    InvocationAccepted ready = 11;
   }
 }

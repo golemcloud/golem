@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::capacity::space_from_values;
 use super::*;
 use std::path::PathBuf;
 use test_r::test;
@@ -44,11 +45,7 @@ fn opening_directory_storage_does_not_provision_sandboxes_or_executor_directorie
 /// A synthetic copy-on-write volume for the rules that read only its mode.
 fn copy_on_write_volume() -> FilesystemVolume {
     let file = tempfile::NamedTempFile::new().unwrap();
-    FilesystemVolume::copy_on_write(
-        Arc::new(file.reopen().unwrap()),
-        #[cfg(target_os = "linux")]
-        FilesystemIdentity { device: 1 },
-    )
+    copy_on_write_volume_for_test(Arc::new(file.reopen().unwrap()))
 }
 
 #[test]
@@ -180,65 +177,74 @@ fn each_storage_mode_states_its_accounting_and_its_host_directory_check() {
 }
 
 #[cfg(not(target_os = "macos"))]
-#[test]
-fn apfs_startup_refuses_other_platforms_without_creating_the_root() {
-    let parent = tempfile::tempdir().unwrap();
-    let root = parent.path().join("agents").into_boxed_path();
-    let storage = FilesystemStorageMode::Apfs { root: root.clone() };
-    let error = FilesystemVolume::open(&storage, RetryConfig::default())
-        .err()
-        .unwrap();
-    assert!(
-        error
-            .to_string()
-            .contains("initialize APFS storage on a non-macOS platform")
-    );
-    assert!(!root.exists());
+mod non_macos {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn apfs_startup_refuses_other_platforms_without_creating_the_root() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("agents").into_boxed_path();
+        let storage = FilesystemStorageMode::Apfs { root: root.clone() };
+        let error = FilesystemVolume::open(&storage, RetryConfig::default())
+            .err()
+            .unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("initialize APFS storage on a non-macOS platform")
+        );
+        assert!(!root.exists());
+    }
 }
 
 #[cfg(target_os = "macos")]
-#[test]
-#[test_r::tag(native_apfs)]
-fn apfs_startup_refuses_a_file_as_its_root_with_a_clear_error() {
-    let parent = tempfile::tempdir().unwrap();
-    let root = parent.path().join("agents").into_boxed_path();
-    std::fs::write(&root, b"not a directory").unwrap();
-    let storage = FilesystemStorageMode::Apfs { root: root.clone() };
-    let error = FilesystemVolume::open(&storage, RetryConfig::default())
-        .err()
-        .unwrap();
-    assert!(error.to_string().contains("create APFS development root"));
-    assert!(error.to_string().contains(root.to_str().unwrap()));
-    assert_eq!(std::fs::read(&root).unwrap(), b"not a directory");
-}
+mod macos {
+    use super::*;
+    use test_r::test;
 
-#[cfg(target_os = "macos")]
-#[test]
-#[test_r::tag(native_apfs)]
-fn apfs_startup_makes_and_probes_a_development_root() {
-    let parent = tempfile::tempdir().unwrap();
-    let root = parent.path().join("agents").into_boxed_path();
-    let storage = FilesystemStorageMode::Apfs { root: root.clone() };
-    let provisioning = FilesystemVolume::open(&storage, RetryConfig::default())
-        .expect("APFS must start on the existing Mac volume");
+    #[test]
+    #[test_r::tag(native_apfs)]
+    fn apfs_startup_refuses_a_file_as_its_root_with_a_clear_error() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("agents").into_boxed_path();
+        std::fs::write(&root, b"not a directory").unwrap();
+        let storage = FilesystemStorageMode::Apfs { root: root.clone() };
+        let error = FilesystemVolume::open(&storage, RetryConfig::default())
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("create APFS development root"));
+        assert!(error.to_string().contains(root.to_str().unwrap()));
+        assert_eq!(std::fs::read(&root).unwrap(), b"not a directory");
+    }
 
-    assert!(root.is_dir());
-    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
-    assert_eq!(
-        provisioning.agent_accounting(),
-        AgentAccounting::Unaccounted
-    );
-    assert_eq!(
-        provisioning.state.host_directory_check,
-        HostDirectoryCheck::None
-    );
-    assert!(provisioning.copies_on_write());
-    assert!(matches!(
-        observe_space_blocking(&provisioning).unwrap(),
-        FilesystemSpace::Observed { total_bytes, available_bytes, .. }
-            if total_bytes > 0 && available_bytes > 0 && available_bytes <= total_bytes
-    ));
-    assert!(FilesystemVolume::open(&storage, RetryConfig::default()).is_ok());
+    #[test]
+    #[test_r::tag(native_apfs)]
+    fn apfs_startup_makes_and_probes_a_development_root() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("agents").into_boxed_path();
+        let storage = FilesystemStorageMode::Apfs { root: root.clone() };
+        let provisioning = FilesystemVolume::open(&storage, RetryConfig::default())
+            .expect("APFS must start on the existing Mac volume");
+
+        assert!(root.is_dir());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        assert_eq!(
+            provisioning.agent_accounting(),
+            AgentAccounting::Unaccounted
+        );
+        assert_eq!(
+            provisioning.state.host_directory_check,
+            HostDirectoryCheck::None
+        );
+        assert!(provisioning.copies_on_write());
+        assert!(matches!(
+            observe_space_blocking(&provisioning).unwrap(),
+            FilesystemSpace::Observed { total_bytes, available_bytes, .. }
+                if total_bytes > 0 && available_bytes > 0 && available_bytes <= total_bytes
+        ));
+        assert!(FilesystemVolume::open(&storage, RetryConfig::default()).is_ok());
+    }
 }
 
 #[test]

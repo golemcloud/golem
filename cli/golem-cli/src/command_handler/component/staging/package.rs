@@ -13,12 +13,13 @@
 // limitations under the License.
 
 use super::super::ComponentCommandHandler;
-use super::{ComponentStager, extract_local_component, resolve_ifs_entry, resolve_tool_ifs_entry};
+use super::{ComponentStager, extract_local_component, resolve_provision_file};
+use crate::app::context::ApplicationContext;
 use crate::command_handler::component::ifs::expand_package_files;
 use crate::model::app::{InitialComponentFile, ResolvedToolProvision};
 use crate::package::{
-    self, PackageComponent, PackageConfig, PackageFileDefault, PackageInitialFile,
-    PackageInitialFiles, PackageProvision,
+    self, ExportKind, OmittedExport, PackageComponent, PackageConfig, PackageDigest,
+    PackageFileDefault, PackageInitialFile, PackageInitialFiles, PackageProvision,
 };
 use anyhow::{Context, ensure};
 use golem_common::model::component::AgentFilePath;
@@ -31,14 +32,27 @@ use std::path::Path;
 use tokio::io::AsyncReadExt;
 
 impl ComponentCommandHandler {
-    pub(crate) async fn pack_application(&self) -> anyhow::Result<(String, Vec<u8>)> {
+    pub(crate) async fn pack_application(&self) -> anyhow::Result<(PackageDigest, Vec<u8>)> {
         let mut app_ctx = self.ctx.app_context_lock_mut().await?;
-        let app_ctx = app_ctx.some_or_err_mut()?;
+        self.pack_loaded_application(app_ctx.some_or_err_mut()?)
+            .await
+    }
+
+    async fn pack_loaded_application(
+        &self,
+        app_ctx: &ApplicationContext,
+    ) -> anyhow::Result<(PackageDigest, Vec<u8>)> {
         let app = app_ctx.application();
         let mut config = PackageConfig {
             application: app.application_name().to_string(),
+            package: app_ctx.publisher_package.clone().context(
+                "Declare package: { name, version } in the root golem.yaml before packing",
+            )?,
             components: BTreeMap::new(),
         };
+        for calls in app_ctx.installed_package_calls.values() {
+            config.package.calls.extend(calls.iter().cloned());
+        }
         let mut stage = PackageStage {
             blobs: BTreeMap::new(),
             root: &tokio::fs::canonicalize(app.app_root_dir()).await?,
@@ -126,7 +140,7 @@ impl ComponentCommandHandler {
                     let files = staged
                         .files
                         .iter()
-                        .map(|file| resolve_ifs_entry(file, &staged.files_source))
+                        .map(resolve_provision_file)
                         .collect::<anyhow::Result<Vec<_>>>()?;
                     stage
                         .provision(&mut provision, &files)
@@ -246,7 +260,29 @@ impl ComponentCommandHandler {
                 "Tool middleware {middleware} is declared but not exported by any component"
             );
         }
-        package::pack(&config, &stage.blobs)
+        let (digest, bytes) = package::pack(&config, &stage.blobs)?;
+        let http_domains = app.http_api_deployment_domains().collect::<BTreeSet<_>>();
+        let mcp_domains = app.mcp_deployment_domains().collect::<BTreeSet<_>>();
+        let omitted_exports = http_domains
+            .into_iter()
+            .map(|domain| (ExportKind::HttpApi, domain))
+            .chain(
+                mcp_domains
+                    .into_iter()
+                    .map(|domain| (ExportKind::Mcp, domain)),
+            )
+            .map(|(kind, domain)| OmittedExport {
+                kind,
+                name: domain.to_string(),
+            })
+            .collect();
+        Ok((
+            PackageDigest {
+                digest,
+                omitted_exports,
+            },
+            bytes,
+        ))
     }
 }
 
@@ -353,7 +389,7 @@ impl PackageStage<'_> {
             .properties
             .files
             .iter()
-            .map(resolve_tool_ifs_entry)
+            .map(resolve_provision_file)
             .collect::<anyhow::Result<Vec<_>>>()?;
         self.provision(&mut provision, &files).await?;
         Ok(provision)
@@ -436,4 +472,142 @@ async fn read_local_path(path: &Path) -> anyhow::Result<Vec<u8>> {
         "Package input must be a regular file"
     );
     read_local(tokio::fs::File::open(path).await?).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command::GolemCliCommand;
+    use crate::model::app::{Application, ApplicationPreload, ComponentPresetSelector};
+    use crate::model::app_raw::ApplicationWithSource;
+    use clap::Parser;
+    use golem_common::model::agent::{AgentTypeName, extraction::ExtractedComponentMetadata};
+    use golem_common::model::component::ComponentPackageMetadata;
+    use std::sync::Arc;
+    use test_r::test;
+
+    #[test]
+    async fn pack_reports_exports_without_changing_the_archive() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path();
+        let wasm_path = root.join("main.wasm");
+        std::fs::write(&wasm_path, wat::parse_str("(component)")?)?;
+        let command = GolemCliCommand::try_parse_from([
+            "golem",
+            "--disable-app-manifest-discovery",
+            "--config-dir",
+            root.join("config").to_str().unwrap(),
+            "package",
+            "pack",
+        ])?;
+        let ctx = crate::context::Context::new(command.global_flags, None).await?;
+        let handler = ComponentCommandHandler::new(Arc::new(ctx));
+        let manifest_path = root.join("golem.yaml");
+        let manifest = indoc::indoc! {"
+            app: publisher
+            environments:
+              local: { server: local }
+              other: { server: local }
+            components:
+              publisher:main:
+                componentWasm: main.wasm
+        "};
+        let load = |exports: &str| -> anyhow::Result<ApplicationContext> {
+            std::fs::write(&manifest_path, format!("{manifest}{exports}"))?;
+            let raw_apps = vec![ApplicationWithSource::from_yaml_file(&manifest_path)?];
+            let (preload, _, errors) = Application::preload_from_raw_apps(&raw_apps).into_product();
+            assert!(errors.is_empty(), "{errors:?}");
+            let ApplicationPreload {
+                application_name,
+                environments,
+                local_server,
+                ..
+            } = preload.unwrap();
+            let (app, _, errors) = Application::from_raw_apps(
+                root.to_path_buf(),
+                application_name,
+                environments,
+                local_server,
+                ComponentPresetSelector {
+                    environment: "local".parse().map_err(anyhow::Error::msg)?,
+                    presets: vec![],
+                },
+                raw_apps,
+            )
+            .into_product();
+            assert!(errors.is_empty(), "{errors:?}");
+            let mut app = ApplicationContext::for_test(app.unwrap());
+            app.publisher_package = Some(package::PackageIdentity {
+                name: "publisher".into(),
+                version: "1.0.0".into(),
+                calls: BTreeSet::from([AgentTypeName("SupportCall".into())]),
+            });
+            app.installed_package_calls.insert(
+                "fixture".into(),
+                BTreeSet::from([AgentTypeName("Escalation".into())]),
+            );
+            // Installed fixtures provide extracted metadata without a guest build.
+            app.installed_components.insert(
+                "publisher:main".try_into().map_err(anyhow::Error::msg)?,
+                package::InstalledComponent {
+                    wasm_path: wasm_path.clone(),
+                    metadata: ExtractedComponentMetadata {
+                        agent_types: vec![],
+                        tools: vec![],
+                        tool_middlewares: vec![],
+                    },
+                    package_metadata: ComponentPackageMetadata {
+                        source: "fixture.tar".into(),
+                        package_digest: "unused".into(),
+                        layer_digest: "unused".into(),
+                    },
+                },
+            );
+            Ok(app)
+        };
+
+        let (without_exports, baseline) = handler.pack_loaded_application(&load("")?).await?;
+        let app = load(indoc::indoc! {"
+            httpApi:
+              deployments:
+                local:
+                  - domain: publisher-http.example.com
+                    agents:
+                      CounterAgent: {}
+            mcp:
+              deployments:
+                other:
+                  - domain: publisher-mcp.example.com
+                    agents:
+                      CounterAgent: {}
+        "})?;
+        let (with_exports, archive) = handler.pack_loaded_application(&app).await?;
+        // Compare the whole archive so this covers both the OCI config and all layers.
+        assert!(
+            archive == baseline,
+            "Export declarations changed the archive"
+        );
+        assert_eq!(
+            serde_json::to_value(without_exports)?["omittedExports"],
+            json!([])
+        );
+        let report = serde_json::to_value(with_exports)?;
+        let unpacked = package::read(archive.as_slice())?;
+        assert_eq!(report["digest"], unpacked.digest());
+        assert_eq!(
+            unpacked.config().package.calls,
+            BTreeSet::from([
+                AgentTypeName("Escalation".into()),
+                AgentTypeName("SupportCall".into()),
+            ])
+        );
+        assert_eq!(
+            report["omittedExports"],
+            json!([
+                {"kind": "http-api", "name": "publisher-http.example.com"},
+                {"kind": "mcp", "name": "publisher-mcp.example.com"}
+            ])
+        );
+        Ok(())
+    }
 }

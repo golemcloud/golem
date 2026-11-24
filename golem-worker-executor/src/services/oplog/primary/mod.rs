@@ -43,9 +43,9 @@ use golem_common::model::RetryConfig;
 use golem_common::model::ShardEpoch;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
+use golem_common::model::type_id::TypeId;
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentMetadata, AgentStatusRecord, DurableStreamSessionStatus,
     OwnedAgentId, ScanCursor,
@@ -315,6 +315,7 @@ struct PrimaryOplogState {
     /// any buffered entries, so no committed entry can reference a not-yet-written blob.
     pending_uploads: Vec<PendingUpload>,
     durable_stream_sessions: super::raw_session::RawSessionCache,
+    owned_starts: super::owned_starts::OwnedStartCheck,
     /// The shard epoch this executor held for the agent's shard when the oplog was opened, and
     /// the one every append asserts.
     ///

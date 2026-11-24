@@ -54,14 +54,14 @@ use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 
-struct RegistryUser {
+pub(super) struct RegistryUser {
     account_id: AccountId,
     account_email: AccountEmail,
-    token: TokenSecret,
+    pub(super) token: TokenSecret,
     client: RegistryServiceClientLive,
 }
 
-fn registry_client(base_url: &Url, token: &str) -> RegistryServiceClientLive {
+pub(super) fn registry_client(base_url: &Url, token: &str) -> RegistryServiceClientLive {
     RegistryServiceClientLive {
         context: Context {
             client: ClientBuilder::new(reqwest::Client::new()).build(),
@@ -71,7 +71,7 @@ fn registry_client(base_url: &Url, token: &str) -> RegistryServiceClientLive {
     }
 }
 
-async fn create_registry_user(
+pub(super) async fn create_registry_user(
     admin: &RegistryServiceClientLive,
     base_url: &Url,
     label: &str,
@@ -103,7 +103,7 @@ async fn create_registry_user(
     })
 }
 
-async fn create_app_and_environment(
+pub(super) async fn create_app_and_environment(
     user: &RegistryUser,
     label: &str,
 ) -> anyhow::Result<(Application, Environment)> {
@@ -229,6 +229,7 @@ async fn remote_release_bridge_automatically_reconciles_its_environment_grant(
         .create_component(
             &publisher_environment.id.0,
             &ComponentCreation {
+                package_metadata: None,
                 config_schema: Default::default(),
                 component_provision_config: Default::default(),
                 component_name: ComponentName::try_from("publisher-tools:search")
@@ -737,6 +738,7 @@ async fn remote_middleware_release_is_pinned_across_accounts(
         .create_component(
             &publisher_environment.id.0,
             &ComponentCreation {
+                package_metadata: None,
                 config_schema: Default::default(),
                 component_provision_config: Default::default(),
                 component_name: ComponentName::try_from("publisher-middleware:audit")
@@ -921,6 +923,7 @@ environments:
         .update_component(
             &publisher_component.id.0,
             &ComponentUpdate {
+                package_metadata: None,
                 current_revision: publisher_component.revision,
                 config_schema: None,
                 component_provision_config: None,

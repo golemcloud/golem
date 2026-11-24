@@ -324,7 +324,7 @@ export class LanguageService {
   ): Array<{ name: string; signature: string }> | undefined {
     if (!isValidIdentifier(agentTypeName)) return;
 
-    const constructorMethod = this.getAgentTypePrimaryFactoryMethodName(agentTypeName);
+    const constructorMethod = 'upsert';
 
     // Use Awaited<> to unwrap Promise if constructor method is async
     const sourceText =
@@ -373,7 +373,7 @@ export class LanguageService {
   getAgentTypePrimaryFactoryMethodSignature(agentTypeName: string): string | undefined {
     if (!isValidIdentifier(agentTypeName)) return;
 
-    const constructorMethod = this.getAgentTypePrimaryFactoryMethodName(agentTypeName);
+    const constructorMethod = 'upsert';
 
     const sourceText =
       this.snippetImports + `const __agentType = ${agentTypeName};\n` + 'void __agentType;\n';
@@ -410,10 +410,6 @@ export class LanguageService {
       .join(', ');
 
     return `${agentTypeName}.${constructorMethod}(${parameters})`;
-  }
-
-  private getAgentTypePrimaryFactoryMethodName(agentTypeName: string): 'get' | 'newPhantom' {
-    return this.config.agents[agentTypeName]?.mode === 'ephemeral' ? 'newPhantom' : 'get';
   }
 
   private getSnippetPlaceholderCompletions(

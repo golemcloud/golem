@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::QuotaClass;
+use crate::durable_host::attribution::ExportReturned;
 use crate::durable_host::concurrent::{ReplayCallHandle, Resolution, ResolutionOutcome};
 use crate::services::oplog::{Oplog, OplogOps};
 use golem_common::model::card::{CardHolder, CardId, InvocationWalletPin, StoredCard};
@@ -20,14 +21,12 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    AtomicOplogIndex, DurableFunctionType, DurableInvocationId, EntityAttribution, HostResponse,
-    HostResponseGolemApiFork, LogLevel, OplogEntry, OplogIndex, OplogScopeProjection,
-    ReplayDivergence, ReplayHostCall, ReplayStep, StartIdentityField,
+    AtomicOplogIndex, DurableFunctionType, DurableInvocationId, EntityAttribution, LogLevel,
+    OplogEntry, OplogIndex, OplogScopeProjection, ReplayDivergence, ReplayHostCall, ReplayStep,
+    StartIdentityField,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::{
-    AgentInvocationPayload, AgentInvocationResult, ForkResult, OwnedAgentId, Timestamp,
-};
+use golem_common::model::{AgentInvocationPayload, AgentInvocationResult, OwnedAgentId, Timestamp};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use metrohash::MetroHash128;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -51,9 +50,6 @@ pub enum ReplayEvent {
     ReplayFinished,
     UpdateReplayed {
         new_revision: ComponentRevision,
-    },
-    ForkReplayed {
-        new_phantom_id: Uuid,
     },
     InvocationWalletPinned {
         oplog_index: OplogIndex,
@@ -189,6 +185,7 @@ impl BlockedOn {
 mod abandoned;
 mod claims;
 mod cursor;
+mod owners;
 mod resolution;
 mod starts;
 
@@ -323,8 +320,38 @@ type TransactionMarkers = HashMap<OplogIndex, std::collections::BTreeMap<OplogIn
 type StreamObservationPositions = std::collections::BTreeMap<OplogIndex, Option<OplogIndex>>;
 type StartsByInvocationId =
     HashMap<DurableInvocationId, std::collections::BTreeMap<OplogIndex, claims::RecordedStart>>;
-// Terminal index -> local-failure invocation anchor; successful terminals have no anchor.
-type InvocationFinishes = std::collections::BTreeMap<OplogIndex, Option<OplogIndex>>;
+type InvocationBoundaries = std::collections::BTreeMap<OplogIndex, RecordedBoundary>;
+
+/// An invocation boundary in [`InvocationBoundaries`]: its kind and the invocation it belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RecordedBoundary {
+    kind: BoundaryKind,
+    invocation_id: golem_common::model::InvocationId,
+}
+
+/// The kind of a [`RecordedBoundary`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoundaryKind {
+    /// An `AgentInvocationStarted`.
+    Started,
+    /// An `AgentInvocationFinished`.
+    Finished,
+    /// An `AgentInvocationFailed` that no entity body recorded.
+    LocalFailure,
+    /// An `AgentInvocationSettled`.
+    Settled,
+}
+
+/// Where [`ReplayState::close_invocation_anchor`] found the end of an invocation's background
+/// work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SettledAt {
+    /// The `AgentInvocationSettled` of the invocation is at this index.
+    Recorded(OplogIndex),
+    /// The replay range ends before the invocation's `AgentInvocationSettled`. The live run
+    /// appends it.
+    ReplayTail,
+}
 
 /// The recovery metadata that one scan of a visible oplog range collects.
 struct ScannedRecoveryMetadata {
@@ -332,7 +359,7 @@ struct ScannedRecoveryMetadata {
     stream_observations: StreamObservationPositions,
     transaction_markers: TransactionMarkers,
     start_invocation_ids: StartsByInvocationId,
-    invocation_finishes: InvocationFinishes,
+    invocation_boundaries: InvocationBoundaries,
 }
 
 /// The consuming invocation whose earlier retained Starts must be claimed before a native read
@@ -615,11 +642,14 @@ struct ReplayCursor {
     /// extended by the scan of exactly the newly visible range when the replay target grows. A
     /// claim of an identified call looks its `Start` up here instead of scanning the oplog.
     start_invocation_ids: std::sync::Mutex<StartsByInvocationId>,
-    /// The visible invocation terminal positions up to the replay target. Built and kept in
-    /// sync with the visible prefix by the same scans as the delivery markers; an entry in a
-    /// deleted region is not visible. A delivery wait looks up its invocation boundary here
-    /// instead of reading the oplog.
-    invocation_finishes: std::sync::Mutex<InvocationFinishes>,
+    /// The visible invocation boundaries up to the replay target, with their invocation ids: the
+    /// `AgentInvocationStarted` entries, the invocation terminals and the
+    /// `AgentInvocationSettled` entries. Built and kept in sync with the
+    /// visible prefix by the same scans as the delivery markers; an entry in a deleted region is
+    /// not visible. A delivery wait looks up its invocation boundary here instead of reading the
+    /// oplog, and the settlement walks find the `AgentInvocationSettled` entries the cursor passed
+    /// here.
+    invocation_boundaries: std::sync::Mutex<InvocationBoundaries>,
     /// Published physical and claimed positions. Lock-free reads; writes hold `state`.
     position: PublishedPosition,
     /// The oplog index replay runs up to. Read lock-free everywhere; set at phase boundaries via
@@ -860,12 +890,6 @@ struct CursorState {
     skip_hints_after_delivery: bool,
     /// Entries prefetched from the oplog, beginning at the next speculative cursor position.
     replay_buffer: VecDeque<(OplogIndex, OplogEntry)>,
-    /// `Start` entries for `GolemApiFork` whose matching `End` has not yet been replayed. When the
-    /// matching `End` is read, the response is decoded and a `ForkReplayed` event is emitted. The
-    /// sequential adapter only ever has at most one in flight at a time (it writes the matched
-    /// `End` immediately after the `Start`), but we use a set so that future concurrent recorders cannot
-    /// trip us up.
-    pending_fork_starts: HashSet<OplogIndex>,
     /// Retained Starts and claimed replay obligations, keyed by their Start index. All lifecycle
     /// mutations share the cursor lock: retention, ahead consumption, registration and terminal
     /// routing cannot race. Explicit unregistration outside a transaction re-acquires this lock.
@@ -878,6 +902,56 @@ struct CursorState {
     /// them again. The map stores every known member index for each root so nested descendants
     /// can be recognized by parent.
     custom_subtrees: HashMap<OplogIndex, HashSet<OplogIndex>>,
+    /// The lifecycle of every invocation the cursor started, and the owners of the committed
+    /// `Start`s.
+    owners: owners::OwnerMap,
+    /// The last committed `Start` whose owner a close dropped that a later `Start` named as its
+    /// parent or observational owner. A store task resumed after its spawner settled records
+    /// every request-body chunk under the same such `Start`, so this saves an oplog read per
+    /// chunk. A lowered replay target clears it.
+    pruned_start: Option<OplogIndex>,
+}
+
+/// Whether `entry` is the primary invocation terminal (`AgentInvocationFinished`, or an
+/// `AgentInvocationFailed` that no entity body recorded) of `invocation_id`.
+fn is_invocation_terminal_of(
+    entry: &OplogEntry,
+    invocation_id: &golem_common::model::InvocationId,
+) -> bool {
+    primary_invocation_terminal_id(entry) == Some(invocation_id)
+}
+
+fn primary_invocation_terminal_id(
+    entry: &OplogEntry,
+) -> Option<&golem_common::model::InvocationId> {
+    match entry {
+        OplogEntry::AgentInvocationFinished { invocation_id, .. }
+        | OplogEntry::AgentInvocationFailed {
+            entity_parent_start_index: None,
+            invocation_id,
+            ..
+        } => Some(invocation_id),
+        _ => None,
+    }
+}
+
+impl CursorState {
+    /// Whether `entry` is the primary invocation terminal of an open invocation that records its
+    /// result at the export's return, and whose export returned. Only the open-anchor reader
+    /// consumes such a terminal.
+    fn is_returned_open_invocation_terminal(&self, entry: &OplogEntry) -> bool {
+        primary_invocation_terminal_id(entry)
+            .and_then(|id| self.owners.open_invocation(id))
+            .is_some_and(|(_, open)| open.has_returned())
+    }
+
+    /// Whether the entry buffered at the cursor head is the primary invocation terminal of an
+    /// open invocation whose export returned.
+    fn returned_open_invocation_terminal_at_head(&self) -> bool {
+        self.replay_buffer
+            .front()
+            .is_some_and(|(_, entry)| self.is_returned_open_invocation_terminal(entry))
+    }
 }
 
 /// One retained entry of [`CursorState::starts`].
@@ -913,10 +987,6 @@ impl RetainedStartCounts {
         self.total.store(retained.total, Ordering::Release);
         self.http.store(retained.http, Ordering::Release);
         self.rpc.store(retained.rpc, Ordering::Release);
-    }
-
-    fn clear(&self) {
-        self.publish(&starts::RetainedSummary::default());
     }
 
     fn any(&self) -> bool {

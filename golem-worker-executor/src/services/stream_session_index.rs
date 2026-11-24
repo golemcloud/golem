@@ -743,7 +743,7 @@ impl StreamSessionIndexService {
         fingerprint: AgentFingerprint,
     ) -> KeyValueStorageNamespace {
         KeyValueStorageNamespace::AgentDurableStreamSessionIndex {
-            agent_id: id.agent_id.clone(),
+            owned_agent_id: id.clone(),
             fingerprint,
         }
     }
@@ -1158,8 +1158,8 @@ impl StreamSessionIndexService {
                         None
                     } else {
                         match record {
-                            StreamSessionRecord::Prepared(record) => {
-                                record.route_scope.as_ref().map(|scope| Self::public_binding_field(scope, &record.public_session_id))
+                            StreamSessionRecord::Attached(record) => {
+                                record.acceptance.route_scope.as_ref().map(|scope| Self::public_binding_field(scope, &record.acceptance.public_session_id))
                             }
                             StreamSessionRecord::ExportForkInitialized(record) => {
                                 Some(Self::public_binding_field(&record.route_scope, &record.public_session_id))
@@ -1202,7 +1202,7 @@ impl StreamSessionIndexService {
                         let field = stream_resume_index_field(
                             &StreamSessionKey {
                                 callee_environment_id: id.environment_id,
-                                callee: id.agent_id.clone(),
+                                callee: id.agent_id,
                                 callee_fingerprint: producer_fingerprint,
                                 idempotency_key: record.session_key,
                             },
@@ -1327,10 +1327,12 @@ impl StreamSessionIndexService {
                         }
                     }
                     if status.first_prepared.is_some()
+                        || status.initial_attachment_epoch.is_some()
                         || status.export_fork_initialized
                         || matches!(
                             record,
                             StreamSessionRecord::Prepared(_)
+                                | StreamSessionRecord::Attached(_)
                                 | StreamSessionRecord::ExportForkInitialized(_)
                         )
                     {
@@ -1344,7 +1346,7 @@ impl StreamSessionIndexService {
                 let mut fields: Vec<(String, Vec<u8>)> = updates
                     .into_iter()
                     .filter(|(_, value)| {
-                        value.first_prepared.is_some() || value.export_fork_initialized
+                        value.first_prepared.is_some() || value.initial_attachment_epoch.is_some() || value.export_fork_initialized
                     })
                     .map(|(key, value)| Ok((Self::field(&key), serialize(&value)?)))
                     .collect::<Result<_, SessionError>>()?;
@@ -1549,6 +1551,9 @@ impl StreamSessionIndexService {
                 value.export_source_invocation = None;
             }
         }
-        Ok((value.first_prepared.is_some() || value.export_fork_initialized).then_some(value))
+        Ok((value.first_prepared.is_some()
+            || value.initial_attachment_epoch.is_some()
+            || value.export_fork_initialized)
+            .then_some(value))
     }
 }

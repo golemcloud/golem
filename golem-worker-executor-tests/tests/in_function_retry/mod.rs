@@ -54,7 +54,7 @@ timeout_suite!(p3, "2 minutes");
 /// Helper: count oplog Error entries whose error message contains the given substring.
 pub(crate) async fn count_oplog_errors_containing(
     executor: &impl TestDsl,
-    worker_id: &golem_common::model::AgentId,
+    worker_id: &golem_common::model::OwnedAgentId,
     substring: &str,
 ) -> anyhow::Result<usize> {
     let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;

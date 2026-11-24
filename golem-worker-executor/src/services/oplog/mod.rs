@@ -31,7 +31,7 @@ use futures::future::{BoxFuture, Shared};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::card::InvocationWalletPin;
-use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::durable_stream::{
     StreamItemsRecord, StreamRegisteredRecord, StreamSessionRecord, StreamTerminalRecord,
 };
@@ -44,8 +44,9 @@ use golem_common::model::oplog::{
     UpdateDescription,
 };
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationResult, AgentMetadata, AgentStatusRecord,
-    DurableStreamSessionStatus, OwnedAgentId, ScanCursor, ShardEpoch, Timestamp,
+    AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, AgentMetadata,
+    AgentStatusRecord, DurableStreamSessionStatus, InvocationRequestOperation, OwnedAgentId,
+    ScanCursor, ShardEpoch, StoredAgentInvocationPayload, Timestamp,
 };
 use golem_common::read_only_lock;
 use golem_common::retries::get_delay;
@@ -82,6 +83,7 @@ mod reader;
 mod epoch;
 mod extensions;
 mod open;
+mod owned_starts;
 mod payload;
 mod scan;
 
@@ -388,10 +390,10 @@ pub trait OplogService: Debug + Send + Sync {
     ///
     /// Pages can be empty. This operation is slow and is not locking the oplog. `count` is a hint
     /// to the storage, which can examine more or fewer keys.
-    async fn scan_for_component(
+    async fn scan_for_type(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        type_id: golem_common::model::type_id::TypeId,
         modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,

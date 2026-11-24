@@ -18,11 +18,11 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use bytes::Bytes;
 use golem_client::api::RegistryServiceClient;
-use golem_common::model::agent::{AgentMode, OwnerKind};
+use golem_common::model::agent::{AgentMode, AgentTypeName, OwnedAgentId, OwnerKind};
 use golem_common::model::base64::Base64;
-use golem_common::model::component::ComponentId;
 use golem_common::model::component::{
-    PluginInstallation, PluginInstallationAction, PluginPriority, PluginUninstallation,
+    AgentTypeProvisionConfigUpdate, PluginInstallation, PluginInstallationAction,
+    PluginInstallationUpdate, PluginPriority, PluginUninstallation,
 };
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
 use golem_common::model::oplog::PublicOplogEntry;
@@ -32,8 +32,8 @@ use golem_common::model::permission_share::{
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
-use golem_common::model::{AgentStatus, OplogIndex, ScanCursor};
-use golem_common::{agent_id, data_value};
+use golem_common::model::{AgentStatus, OplogIndex};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::config::{
     EnvBasedTestDependencies, TestDependencies, WorkerExecutorClusterControl,
     WorkerExecutorClusterControlStub,
@@ -62,7 +62,7 @@ struct BatchCallback {
     #[allow(dead_code)]
     account_id: String,
     #[allow(dead_code)]
-    component_id: String,
+    agent_type: Option<String>,
     first_entry_index: u64,
     entry_count: u64,
     invocations: Vec<InvocationRecord>,
@@ -70,12 +70,40 @@ struct BatchCallback {
     /// plugin after calling `enrich-oplog-entries` on the batch
     #[serde(default)]
     durable_entries: Vec<DurableEntryRecord>,
+    /// The caller that the processor guest observes for this batch
+    caller: CallerRecord,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+struct CallerRecord {
+    original: PrincipalRecord,
+    immediate: PrincipalRecord,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+struct PrincipalRecord {
+    kind: String,
+    account_id: Option<String>,
+    agent_id: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
 struct InvocationRecord {
     oplog_index: u64,
     fn_name: String,
+    /// The principal that started the chain, when the start was in the same batch
+    #[serde(default)]
+    original_caller: Option<CallerRoleRecord>,
+    /// The principal that made the call, when the start was in the same batch
+    #[serde(default)]
+    immediate_caller: Option<CallerRoleRecord>,
+}
+
+/// One role of an invocation's caller, as the oplog processor saw it.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+struct CallerRoleRecord {
+    kind: String,
+    subject: Option<String>,
 }
 
 /// Post-enrichment evidence of a durable host-call entry, as observed by the
@@ -223,41 +251,39 @@ async fn start_callback_server_gated() -> (
     (callback_url, received_batches, enabled, http_server)
 }
 
-/// Finds all workers running on a given plugin component via worker enumeration.
-/// Returns their WorkerIds so they can be crashed individually.
+/// Finds the oplog processor agents that the plugin checkpoints of the user worker's oplog
+/// name as their targets, so they can be crashed individually.
 async fn find_plugin_workers(
     user: &(impl TestDsl + Send + Sync + ?Sized),
-    plugin_component_id: &ComponentId,
-) -> Vec<golem_common::model::AgentId> {
-    let mut all_workers = Vec::new();
-    let mut cursor = ScanCursor::default();
-    loop {
-        let (next_cursor, workers) = user
-            .get_workers_metadata(plugin_component_id, None, cursor, 50, true)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!("Failed to enumerate plugin workers: {e}");
-                (None, Vec::new())
-            });
-        for w in &workers {
-            all_workers.push(w.agent_id.clone());
-        }
-        match next_cursor {
-            Some(c) if !c.is_finished() => cursor = c,
-            _ => break,
+    user_worker_id: &OwnedAgentId,
+) -> Vec<OwnedAgentId> {
+    let oplog = user
+        .get_oplog(user_worker_id, OplogIndex::INITIAL)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("Failed to read the user worker oplog: {e}");
+            Vec::new()
+        });
+    let mut targets = Vec::new();
+    for entry in oplog {
+        if let PublicOplogEntry::OplogProcessorCheckpoint(checkpoint) = entry.entry {
+            let target =
+                OwnedAgentId::new(user_worker_id.environment_id, &checkpoint.target_agent_id);
+            if !targets.contains(&target) {
+                targets.push(target);
+            }
         }
     }
-    all_workers
+    targets
 }
 
 /// Crashes the user worker and all discovered plugin workers via simulated_crash.
 async fn crash_user_and_plugin_workers(
     user: &(impl TestDsl + Send + Sync + ?Sized),
-    user_worker_id: &golem_common::model::AgentId,
-    plugin_component_id: &ComponentId,
+    user_worker_id: &OwnedAgentId,
 ) {
     // Discover plugin workers first (before crashing anything)
-    let plugin_workers = find_plugin_workers(user, plugin_component_id).await;
+    let plugin_workers = find_plugin_workers(user, user_worker_id).await;
     tracing::info!(
         "Crashing user worker {user_worker_id} and {} plugin worker(s): {:?}",
         plugin_workers.len(),
@@ -346,7 +372,7 @@ async fn wait_for_invocations(
 /// callback count for diagnostics.
 async fn wait_for_oplog_completions(
     user: &(impl TestDsl + Send + Sync + ?Sized),
-    worker_id: &golem_common::model::AgentId,
+    worker_id: &OwnedAgentId,
     expected_count: usize,
     timeout: Duration,
     received: &Arc<Mutex<Vec<BatchCallback>>>,
@@ -444,7 +470,7 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
         .store()
         .await?;
 
-    let repo_id = agent_id!("Repository", "worker1");
+    let repo_id = agent_key!("Repository", "worker1");
     let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     user.invoke_and_await_agent(
@@ -493,13 +519,32 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
     assert_function_names(&batches, &["agent-initialization", "add", "add", "add"]);
     assert_unique_oplog_indices(&batches);
 
+    // The processor sees the calling account in both roles of the REST invocations.
+    let account = CallerRoleRecord {
+        kind: "account".to_string(),
+        subject: Some(format!("account:{}", user.account_id)),
+    };
+    let adds = batches
+        .iter()
+        .flat_map(|batch| batch.invocations.iter())
+        .filter(|invocation| invocation.fn_name == "add" && invocation.original_caller.is_some())
+        .collect::<Vec<_>>();
+    assert!(
+        !adds.is_empty(),
+        "no invocation with a caller in {batches:?}"
+    );
+    for invocation in adds {
+        assert_eq!(invocation.original_caller.as_ref(), Some(&account));
+        assert_eq!(invocation.immediate_caller.as_ref(), Some(&account));
+    }
+
     // E2: Verify oplog entries exist for the worker
     let oplog = user.get_oplog(&worker_id, OplogIndex::from_u64(0)).await?;
     assert!(!oplog.is_empty(), "Worker oplog should not be empty");
 
     // The first dispatch resolves a local target through the real per-executor plugin service.
     // Its persisted identity must be the processor owner, not an untyped component agent.
-    let targets = find_plugin_workers(&user, &plugin_component.id).await;
+    let targets = find_plugin_workers(&user, &worker_id).await;
     assert!(
         !targets.is_empty(),
         "the plugin must have a persisted target"
@@ -529,24 +574,209 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
             "processor dispatch must not run an agent constructor"
         );
     }
-    let checkpoint_targets: HashSet<_> = oplog
-        .iter()
-        .filter_map(|entry| match &entry.entry {
-            PublicOplogEntry::OplogProcessorCheckpoint(parameters) => {
-                Some(&parameters.target_agent_id)
-            }
-            _ => None,
-        })
-        .collect();
-    assert!(
-        !checkpoint_targets.is_empty(),
-        "the source must persist its delivery target"
+
+    Ok(())
+}
+
+// ============================================================================
+// The caller of a batch: the installing account and the processed agent
+// ============================================================================
+
+/// One account owns the environment and creates the agent. Another account installs the
+/// processor in that environment. Every batch runs with the installing account as the original
+/// caller and the processed agent as the immediate caller, as the processor guest observes it.
+#[test]
+#[tracing::instrument]
+async fn oplog_processor_runs_as_the_installer_and_the_processed_agent(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    assert_batches_run_as_the_installer(deps, false).await
+}
+
+/// The owner of the environment changes the priority and the parameters of a processor that
+/// another account installed. The installing account stays the installer: the component still
+/// names it, and every batch still runs with it as the original caller.
+#[test]
+#[tracing::instrument]
+async fn oplog_processor_keeps_its_installer_when_another_account_updates_it(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    assert_batches_run_as_the_installer(deps, true).await
+}
+
+/// The account `installer` installs the processor on a component of the account `owner`. With
+/// `owner_updates_the_installation`, the owner then changes the installation. The processor guest
+/// must observe the installer as the original caller of every batch.
+async fn assert_batches_run_as_the_installer(
+    deps: &EnvBasedTestDependencies,
+    owner_updates_the_installation: bool,
+) -> anyhow::Result<()> {
+    let owner = deps.user().await?;
+    let (_, env) = owner.app_and_env().await?;
+    let installer = deps.user().await?;
+    let installer_client = installer.registry_service_client().await;
+
+    let environment = format!(
+        "{}/{}/{}",
+        owner.account_email.as_str(),
+        env.application_name.0,
+        env.name.0
     );
-    assert!(
-        checkpoint_targets
-            .iter()
-            .all(|target| targets.contains(target))
-    );
+    let grantee = installer.account_email.as_str();
+    owner
+        .registry_service_client()
+        .await
+        .create_permission_share(
+            &owner.account_id.0,
+            &PermissionShareCreation {
+                target_account_email: installer.account_email.clone(),
+                name: PermissionShareName("plugin-installer-access".to_string()),
+                data: PermissionShareData {
+                    lower_positive: vec![
+                        format!("environment({environment}) @ {grantee} : view :"),
+                        format!("environment({environment}) @ {grantee} : view-deployment-plan :"),
+                        format!("environment({environment}) @ {grantee} : deploy :"),
+                        format!("component({environment}/*) @ {grantee} : create : *"),
+                        format!("component({environment}/*) @ {grantee} : view : *"),
+                        format!("component({environment}/*) @ {grantee} : update : *"),
+                        format!("environment.plugin-grant({environment}) @ {grantee} : create : *"),
+                        format!("environment.plugin-grant({environment}) @ {grantee} : view : *"),
+                    ],
+                    lower_negative: Vec::new(),
+                    upper_positive: Vec::new(),
+                    upper_negative: Vec::new(),
+                },
+            },
+        )
+        .await?;
+
+    let (callback_url, received_batches, _http_server) = start_callback_server().await;
+
+    let plugin_component = installer
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
+    let oplog_processor_plugin = installer_client
+        .create_plugin(
+            &installer.account_id.0,
+            &PluginRegistrationCreation {
+                name: "oplog-processor-caller".to_string(),
+                version: "v1".to_string(),
+                description: "A test".to_string(),
+                icon: Base64(Vec::new()),
+                homepage: "none".to_string(),
+                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                    component_id: plugin_component.id,
+                    component_revision: plugin_component.revision,
+                }),
+            },
+        )
+        .await?;
+    let oplog_processor_plugin_grant = installer_client
+        .create_environment_plugin_grant(
+            &env.id.0,
+            &EnvironmentPluginGrantCreation {
+                plugin_registration_id: oplog_processor_plugin.id,
+            },
+        )
+        .await?;
+
+    let mut plugin_params = BTreeMap::new();
+    plugin_params.insert("callback-url".to_string(), callback_url.clone());
+    let unplugged_component = owner
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+    let component = installer
+        .update_component_with(
+            &unplugged_component.id,
+            unplugged_component.revision,
+            None,
+            Some(BTreeMap::from([(
+                AgentTypeName("Repository".to_string()),
+                AgentTypeProvisionConfigUpdate {
+                    plugin_updates: vec![PluginInstallationAction::Install(PluginInstallation {
+                        environment_plugin_grant_id: oplog_processor_plugin_grant.id,
+                        priority: PluginPriority(0),
+                        parameters: plugin_params,
+                    })],
+                    ..Default::default()
+                },
+            )])),
+            Vec::new(),
+        )
+        .await?;
+
+    let component = if owner_updates_the_installation {
+        let updated = owner
+            .update_component_with(
+                &component.id,
+                component.revision,
+                None,
+                Some(BTreeMap::from([(
+                    AgentTypeName("Repository".to_string()),
+                    AgentTypeProvisionConfigUpdate {
+                        plugin_updates: vec![PluginInstallationAction::Update(
+                            PluginInstallationUpdate {
+                                environment_plugin_grant_id: oplog_processor_plugin_grant.id,
+                                new_priority: Some(PluginPriority(1)),
+                                new_parameters: Some(BTreeMap::from([
+                                    ("callback-url".to_string(), callback_url.clone()),
+                                    ("updated".to_string(), "yes".to_string()),
+                                ])),
+                            },
+                        )],
+                        ..Default::default()
+                    },
+                )])),
+                Vec::new(),
+            )
+            .await?;
+        // The update is in effect, and it did not change the installer.
+        let plugins = &updated.metadata.agent_type_provision_configs
+            [&AgentTypeName("Repository".to_string())]
+            .plugins;
+        assert_eq!(plugins.len(), 1, "{plugins:?}");
+        assert_eq!(plugins[0].priority, PluginPriority(1));
+        assert_eq!(
+            plugins[0].parameters.get("updated").map(String::as_str),
+            Some("yes")
+        );
+        assert_eq!(plugins[0].installed_by, installer.account_id);
+        updated
+    } else {
+        component
+    };
+
+    let repo_id = agent_key!("Repository", "installer-caller");
+    let worker_id = owner.start_agent(&component.id, repo_id.clone()).await?;
+    owner
+        .invoke_and_await_agent(
+            &component,
+            &repo_id,
+            "add",
+            data_value!("G1000", "Golem T-Shirt M"),
+        )
+        .await?;
+
+    let batches = wait_for_invocations(&received_batches, 2, Duration::from_secs(300)).await;
+    let expected = CallerRecord {
+        original: PrincipalRecord {
+            kind: "account".to_string(),
+            account_id: Some(installer.account_id.0.to_string()),
+            agent_id: None,
+        },
+        immediate: PrincipalRecord {
+            kind: "agent".to_string(),
+            account_id: None,
+            agent_id: Some(worker_id.agent_id.to_string()),
+        },
+    };
+    for batch in &batches {
+        assert_eq!(batch.source_worker_id, worker_id.agent_id.to_string());
+        assert_eq!(batch.caller, expected);
+    }
 
     Ok(())
 }
@@ -659,7 +889,7 @@ async fn oplog_processor_p3_entries(deps: &EnvBasedTestDependencies) -> anyhow::
     let mut worker_env = HashMap::new();
     worker_env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let http_agent_id = agent_id!("HttpClient2");
+    let http_agent_id = agent_key!("HttpClient2");
     let worker_id = user
         .start_agent_with(
             &component.id,
@@ -685,7 +915,7 @@ async fn oplog_processor_p3_entries(deps: &EnvBasedTestDependencies) -> anyhow::
     // A second worker cancels a pending non-idempotent P3 POST (a cancellable
     // `http::client::send` durable call), producing a durable-call `Cancelled`
     // oplog entry
-    let cancel_agent_id = agent_id!("HttpClient4");
+    let cancel_agent_id = agent_key!("HttpClient4");
     let cancel_worker_id = user
         .start_agent_with(
             &component.id,
@@ -817,12 +1047,12 @@ async fn oplog_processor_p3_entries(deps: &EnvBasedTestDependencies) -> anyhow::
     let all_batches = wait_for_invocations(&received_batches, 5, Duration::from_secs(300)).await;
     let batches: Vec<BatchCallback> = all_batches
         .iter()
-        .filter(|b| b.source_worker_id.contains("HttpClient2"))
+        .filter(|b| b.source_worker_id == worker_id.agent_id.to_string())
         .cloned()
         .collect();
     let cancel_batches: Vec<BatchCallback> = all_batches
         .iter()
-        .filter(|b| b.source_worker_id.contains("HttpClient4"))
+        .filter(|b| b.source_worker_id == cancel_worker_id.agent_id.to_string())
         .cloned()
         .collect();
 
@@ -1065,7 +1295,7 @@ async fn oplog_processor_in_different_env_after_unregistering(
         .await?;
     client_2.delete_plugin(&oplog_processor_plugin.id.0).await?;
 
-    let repo_id = agent_id!("Repository", "worker1");
+    let repo_id = agent_key!("Repository", "worker1");
     let worker_id = user_1.start_agent(&component.id, repo_id.clone()).await?;
 
     user_1
@@ -1173,7 +1403,7 @@ async fn oplog_processor_crash_after_confirmed_flush(
         .store()
         .await?;
 
-    let repo_id = agent_id!("Repository", "worker1");
+    let repo_id = agent_key!("Repository", "worker1");
     let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     user.invoke_and_await_agent(
@@ -1218,7 +1448,7 @@ async fn oplog_processor_crash_after_confirmed_flush(
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Crash both user worker and oplog processor plugin worker via simulated_crash
-    crash_user_and_plugin_workers(&user, &worker_id, &plugin_component.id).await;
+    crash_user_and_plugin_workers(&user, &worker_id).await;
     user.wait_for_statuses(
         &worker_id,
         &[AgentStatus::Idle, AgentStatus::Running],
@@ -1337,7 +1567,7 @@ async fn oplog_processor_crash_stress(
         .store()
         .await?;
 
-    let repo_id = agent_id!("Repository", "worker1");
+    let repo_id = agent_key!("Repository", "worker1");
     let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     // Phase 1: Initial invocations with default thresholds — establishes the
@@ -1403,7 +1633,7 @@ async fn oplog_processor_crash_stress(
         tracing::info!(
             "Chaos round {round}: crashing workers immediately after {INVOCATIONS_PER_ROUND} synchronous invocations..."
         );
-        crash_user_and_plugin_workers(&user, &worker_id, &plugin_component.id).await;
+        crash_user_and_plugin_workers(&user, &worker_id).await;
 
         // Wait for recovery before next round
         user.wait_for_statuses(
@@ -1579,7 +1809,7 @@ async fn oplog_processor_no_duplicates_after_crash(
         .store()
         .await?;
 
-    let repo_id = agent_id!("Repository", "worker1");
+    let repo_id = agent_key!("Repository", "worker1");
     let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     user.invoke_and_await_agent(
@@ -1620,7 +1850,7 @@ async fn oplog_processor_no_duplicates_after_crash(
     tokio::time::sleep(Duration::from_secs(10)).await;
 
     // Crash both user worker and oplog processor plugin worker via simulated_crash
-    crash_user_and_plugin_workers(&user, &worker_id, &plugin_component.id).await;
+    crash_user_and_plugin_workers(&user, &worker_id).await;
     user.wait_for_statuses(
         &worker_id,
         &[AgentStatus::Idle, AgentStatus::Running],
@@ -1743,7 +1973,7 @@ async fn oplog_processor_multiple_plugins_independent(
         .store()
         .await?;
 
-    let repo_id = agent_id!("Repository", "worker1");
+    let repo_id = agent_key!("Repository", "worker1");
     let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     user.invoke_and_await_agent(
@@ -1872,7 +2102,7 @@ async fn oplog_processor_partial_plugin_failure(
         .store()
         .await?;
 
-    let repo_id = agent_id!("Repository", "worker1");
+    let repo_id = agent_key!("Repository", "worker1");
     let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     user.invoke_and_await_agent(
@@ -1938,7 +2168,7 @@ async fn oplog_processor_activation_mid_stream(
         .store()
         .await?;
 
-    let repo_id = agent_id!("Repository", "worker1");
+    let repo_id = agent_key!("Repository", "worker1");
     let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     // Invoke twice BEFORE plugin is activated
@@ -2113,7 +2343,7 @@ async fn oplog_processor_deactivation(deps: &EnvBasedTestDependencies) -> anyhow
         .store()
         .await?;
 
-    let repo_id = agent_id!("Repository", "worker1");
+    let repo_id = agent_key!("Repository", "worker1");
     let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     user.invoke_and_await_agent(
@@ -2267,7 +2497,7 @@ async fn oplog_processor_idle_worker_timer_flush(
         .store()
         .await?;
 
-    let repo_id = agent_id!("Repository", "worker1");
+    let repo_id = agent_key!("Repository", "worker1");
     let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     // Just one invocation (+ init) — small batch, must be delivered by timer (5s)
@@ -2365,7 +2595,7 @@ async fn oplog_processor_rapid_invocations(deps: &EnvBasedTestDependencies) -> a
         .store()
         .await?;
 
-    let repo_id = agent_id!("Repository", "worker1");
+    let repo_id = agent_key!("Repository", "worker1");
     let _worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     // Rapid-fire 50 parallel invocations to stress the oplog processor
@@ -2471,7 +2701,7 @@ async fn oplog_processor_no_resend_after_confirmed(
         .store()
         .await?;
 
-    let repo_id = agent_id!("Repository", "worker1");
+    let repo_id = agent_key!("Repository", "worker1");
     let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     user.invoke_and_await_agent(
@@ -2516,7 +2746,7 @@ async fn oplog_processor_no_resend_after_confirmed(
     tokio::time::sleep(Duration::from_secs(5)).await;
 
     // Crash both user worker and oplog processor plugin worker via simulated_crash
-    crash_user_and_plugin_workers(&user, &worker_id, &plugin_component.id).await;
+    crash_user_and_plugin_workers(&user, &worker_id).await;
     user.wait_for_statuses(
         &worker_id,
         &[AgentStatus::Idle, AgentStatus::Running],

@@ -23,13 +23,13 @@ import {
 import type * as OplogTypes from 'golem:api/oplog@1.5.0';
 
 import { Uuid } from '../uuid';
-import { ComponentId, AccountId, EnvironmentId } from '../ids';
-import type { AgentId } from './hostapi';
+import { AccountId, EnvironmentId } from '../ids';
+import { AgentId } from '../agentId';
 
 // Re-export enriched types for convenience
 export { Uuid } from '../uuid';
 export { ComponentId, AccountId, EnvironmentId } from '../ids';
-export type { AgentId } from './hostapi';
+export { AgentId } from '../agentId';
 
 // Re-export types that don't contain UUID-based types
 export type Datetime = OplogTypes.Datetime;
@@ -61,6 +61,16 @@ export type AgentInitializationParameters = OplogTypes.AgentInitializationParame
 export type AgentMethodInvocationParameters = OplogTypes.AgentMethodInvocationParameters;
 export type LoadSnapshotParameters = OplogTypes.LoadSnapshotParameters;
 export type ProcessOplogEntriesParameters = OplogTypes.ProcessOplogEntriesParameters;
+export type SaveSnapshotParameters = OplogTypes.SaveSnapshotParameters;
+export type PublicCaller = OplogTypes.PublicCaller;
+export type PublicPrincipal = OplogTypes.PublicPrincipal;
+export type PublicPrincipalRef = OplogTypes.PublicPrincipalRef;
+export type PublicUserPrincipal = OplogTypes.PublicUserPrincipal;
+export type PublicAccountPrincipal = OplogTypes.PublicAccountPrincipal;
+export type PublicAccountAuthentication = OplogTypes.PublicAccountAuthentication;
+export type PublicAgentPrincipal = OplogTypes.PublicAgentPrincipal;
+export type PublicToolPrincipal = OplogTypes.PublicToolPrincipal;
+export type PublicTokenProvenance = OplogTypes.PublicTokenProvenance;
 export type ManualUpdateParameters = OplogTypes.ManualUpdateParameters;
 export type AgentInvocation = OplogTypes.AgentInvocation;
 export type AgentInvocationStartedParameters = OplogTypes.AgentInvocationStartedParameters;
@@ -69,6 +79,7 @@ export type FallibleResultParameters = OplogTypes.FallibleResultParameters;
 export type SaveSnapshotResultParameters = OplogTypes.SaveSnapshotResultParameters;
 export type AgentInvocationResult = OplogTypes.AgentInvocationResult;
 export type AgentInvocationFinishedParameters = OplogTypes.AgentInvocationFinishedParameters;
+export type AgentInvocationSettledParameters = OplogTypes.AgentInvocationSettledParameters;
 export type PendingAgentInvocationParameters = OplogTypes.PendingAgentInvocationParameters;
 export type UpdateDescription = OplogTypes.UpdateDescription;
 export type PendingUpdateParameters = OplogTypes.PendingUpdateParameters;
@@ -141,6 +152,8 @@ export type EnvironmentPluginGrantId = {
 export type CreateParameters = {
   timestamp: Datetime;
   agentId: AgentId;
+  /** The name of the agent's type. Owners without an agent type have none. */
+  agentTypeName?: string;
   componentRevision: ComponentRevision;
   env: [string, string][];
   createdBy: AccountId;
@@ -171,6 +184,7 @@ export type PublicOplogEntry =
   | { tag: 'cancelled'; val: CancelledParameters }
   | { tag: 'agent-invocation-started'; val: AgentInvocationStartedParameters }
   | { tag: 'agent-invocation-finished'; val: AgentInvocationFinishedParameters }
+  | { tag: 'agent-invocation-settled'; val: AgentInvocationSettledParameters }
   | { tag: 'suspend'; val: Timestamp }
   | { tag: 'error'; val: ErrorParameters }
   | { tag: 'recovery-succeeded'; val: Timestamp }
@@ -205,10 +219,7 @@ export type PublicOplogEntry =
 // Wrapping helpers
 
 function wrapAgentId(raw: RawAgentId): AgentId {
-  return {
-    componentId: ComponentId.from(raw.componentId),
-    agentId: raw.agentId,
-  };
+  return AgentId.from(raw);
 }
 
 function wrapPublicOplogEntry(raw: RawPublicOplogEntry): PublicOplogEntry {

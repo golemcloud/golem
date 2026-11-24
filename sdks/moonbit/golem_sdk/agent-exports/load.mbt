@@ -6,57 +6,75 @@ priv suberror SnapshotLoadError {
 ///|
 /// Tries to load a snapshot, parsing the versioned envelope and restoring agent state.
 /// Supports both JSON and binary envelopes on an uninitialized component.
+/// `constructor_` holds the agent's constructor parameters, which the restore
+/// code receives in its `SnapshotRestoreContext`.
 pub async fn load(
   snapshot : @host.Snapshot,
+  constructor_ : @types.SchemaValueTree,
   _background_group : @async-core.TaskGroup[Unit],
 ) -> Result[Unit, String] {
-  if @agents.get_agent_instance() is Some(_) {
-    return Err("Agent instance is already initialized")
+  load_with_environment(snapshot, constructor_, @environment.get_environment())
+}
+
+///|
+async fn load_with_environment(
+  snapshot : @host.Snapshot,
+  constructor_ : @types.SchemaValueTree,
+  env : Array[(String, String)],
+) -> Result[Unit, String] {
+  let (state_bytes, agent_id, agent_type) = read_restore_target(snapshot, env) catch {
+    SnapshotLoadError(msg) => {
+      @model.drop_wit_capabilities(constructor_)
+      return Err(msg)
+    }
   }
-  if snapshot.payload.length() == 0 {
-    return Err("Snapshot is empty")
+  let identity_fields = @agents.decode_snapshot_constructor(
+    agent_type, constructor_,
+  ) catch {
+    e => return Err("Failed to decode constructor parameters: \{Repr(e)}")
   }
-  let result = parse_snapshot_envelope(snapshot) catch {
-    SnapshotLoadError(msg) => return Err(msg)
-  }
-  let state_bytes = result
-  let agent_id = get_golem_agent_id() catch {
-    SnapshotLoadError(msg) => return Err(msg)
-  }
-  let identity = @identity.parse(agent_id) catch {
-    e => return Err("Failed to parse agent ID: \{Repr(e)}")
-  }
-  let identity_fields = @agents.decode_snapshot_identity(identity.input.value) catch {
-    e => return Err("Failed to decode agent identity: \{Repr(e)}")
-  }
-  let agent_type = identity.type_name
   @agents.restore_and_set_instance(agent_type, state_bytes, {
     agent_id,
     agent_type,
     identity_fields,
-    phantom_id: identity.phantom_id,
   })
 }
 
 ///|
-fn get_golem_agent_id() -> String raise SnapshotLoadError {
-  golem_agent_id_from(@environment.get_environment())
+fn read_restore_target(
+  snapshot : @host.Snapshot,
+  env : Array[(String, String)],
+) -> (@agents.SnapshotData, @schema.AgentId, String) raise SnapshotLoadError {
+  if @agents.get_agent_instance() is Some(_) {
+    raise SnapshotLoadError("Agent instance is already initialized")
+  }
+  if snapshot.payload.length() == 0 {
+    raise SnapshotLoadError("Snapshot is empty")
+  }
+  let state_bytes = parse_snapshot_envelope(snapshot)
+  let agent_id_text = get_golem_env_var(env, "GOLEM_AGENT_ID")
+  let agent_id = @schema.AgentId::parse(agent_id_text) catch {
+    e => raise SnapshotLoadError("Failed to parse agent ID: \{Repr(e)}")
+  }
+  let agent_type = get_golem_env_var(env, "GOLEM_AGENT_TYPE")
+  (state_bytes, agent_id, agent_type)
 }
 
 ///|
-/// Finds GOLEM_AGENT_ID in the environment that the agent can read. The host
-/// shows the variable only when the agent's permission card allows the agent to
-/// read it.
-fn golem_agent_id_from(
+/// Finds a variable that Golem sets in the environment that the agent can read.
+/// The host shows such a variable only when the agent's permission card allows
+/// the agent to read it.
+fn get_golem_env_var(
   env : Array[(String, String)],
+  name : String,
 ) -> String raise SnapshotLoadError {
   for pair in env {
-    if pair.0 == "GOLEM_AGENT_ID" {
+    if pair.0 == name {
       return pair.1
     }
   }
   raise SnapshotLoadError(
-    "GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID",
+    "\{name} is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : \{name}",
   )
 }
 

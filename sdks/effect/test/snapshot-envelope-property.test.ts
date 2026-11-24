@@ -49,17 +49,22 @@ const dbPartArb = fc.record({
 // ---------------------------------------------------------------------------
 
 describe("snapshot-envelope properties", () => {
-  prop("JSON envelope round-trips arbitrary state", { state: stateArb }, ({ state }) => {
-    expect(Schema.is(StateSchema)(state)).toBe(true)
-    const env = encodeJsonEnvelope(state)
-    expect(env.mimeType).toBe("application/json")
-    const decoded = decodeEnvelope(env)
-    expect(decoded.kind).toBe("json")
-    if (decoded.kind !== "json") throw new Error("expected json envelope")
-    // State round-trips through JSON exactly (the schema only contains
-    // JSON-safe leaves).
-    expect(decoded.state).toEqual(state)
-  })
+  prop(
+    "JSON envelope round-trips arbitrary state without a principal",
+    { state: stateArb },
+    ({ state }) => {
+      expect(Schema.is(StateSchema)(state)).toBe(true)
+      const env = encodeJsonEnvelope(state)
+      expect(env.mimeType).toBe("application/json")
+      const decoded = decodeEnvelope(env)
+      expect(decoded.kind).toBe("json")
+      if (decoded.kind !== "json") throw new Error("expected json envelope")
+      expect(decoded).not.toHaveProperty("principal")
+      // State round-trips through JSON exactly (the schema only contains
+      // JSON-safe leaves).
+      expect(decoded.state).toEqual(state)
+    },
+  )
 
   prop(
     "binary envelope round-trips an arbitrary user payload",

@@ -78,6 +78,7 @@ use execution::get_tool_invoke_results;
 use execution::observe_tool_invoke_plans;
 pub(crate) use execution::prepare_tool_parent_end;
 pub(crate) use execution::prepare_tool_parent_end_owned;
+pub(crate) use execution::settle_admitted_tool_children;
 pub(crate) use execution::settle_tool_children;
 pub(crate) use execution::settle_tool_children_owned;
 use execution::spawn_tool_execution;

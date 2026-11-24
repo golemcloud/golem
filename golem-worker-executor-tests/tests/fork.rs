@@ -13,15 +13,15 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_request, invocation_response,
 };
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    CreateStreamSessionRequest, CreateWorkerRequest, ResumeWorkerRequest,
-    StreamSessionCreationIntent, create_worker_response, resume_worker_response,
-    worker_executor_client::WorkerExecutorClient,
+    CreateStreamSessionRequest, CreateWorkerRequest, ForkWorkerRequest, ResumeWorkerRequest,
+    StreamSessionCreationIntent, create_worker_response, fork_worker_response,
+    resume_worker_response, worker_executor_client::WorkerExecutorClient,
 };
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::agent::{
-    AgentConfigEntryDto, AgentTarget, ResolvedRevert, RevertWorkerTarget,
+    AgentInvocationMode, AgentTypeName, InvocationFreshnessDisposition,
 };
-use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition};
 use golem_common::model::caller::Caller;
 use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::ComponentRevision;
@@ -46,6 +46,7 @@ use golem_worker_executor::services::rpc::{
 };
 use golem_worker_executor::services::shard::ShardService;
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
+use golem_worker_executor::worker::target::ResolvedTarget;
 use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     TestContext, TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies,
@@ -107,6 +108,56 @@ pub(crate) async fn start_with_local_resume_and_snapshot_policy(
     .await
 }
 
+/// Forks `source` at `cut` into the agent with ID `target`. A test that retries one fork
+/// passes the same `target` to every attempt.
+pub(crate) async fn fork_worker_to(
+    executor: &TestWorkerExecutor,
+    source: &OwnedAgentId,
+    target: &OwnedAgentId,
+    cut: OplogIndex,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        ForkWorkerRequest, fork_worker_response,
+    };
+
+    let response = executor
+        .client
+        .clone()
+        .fork_worker(ForkWorkerRequest {
+            source_agent_id: Some(source.agent_id.into()),
+            target_agent_id: Some(target.agent_id.into()),
+            oplog_index_cutoff: cut.into(),
+            environment_id: Some(source.environment_id.into()),
+            component_owner_account_id: Some(executor.context.account_id.into()),
+            component_owner_account_email: "test@golem".to_string(),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            caller: Some(callers::anonymous().into()),
+            expected_fingerprint: None,
+        })
+        .await?
+        .into_inner();
+    match response.result {
+        Some(fork_worker_response::Result::Success(_)) => Ok(()),
+        Some(fork_worker_response::Result::Failure(error)) => {
+            Err(anyhow::anyhow!("Error forking worker: {error:?}"))
+        }
+        None => Err(anyhow::anyhow!("Error forking worker: empty response")),
+    }
+}
+
+/// A fresh ID for a fork of `source`: an ID of the source's agent type.
+pub(crate) fn fresh_fork_target(source: &OwnedAgentId) -> OwnedAgentId {
+    OwnedAgentId::new(
+        source.environment_id,
+        &AgentId::random(
+            source
+                .agent_id
+                .type_id()
+                .expect("a component agent has an agent type"),
+        ),
+    )
+}
+
 #[derive(Default)]
 pub(crate) struct RemoteRpcEvidence {
     pub(crate) sessions: std::sync::atomic::AtomicUsize,
@@ -123,7 +174,6 @@ pub(crate) async fn start_with_remote_streaming_rpc(
     let proxy = Arc::new(OnceLock::<Arc<dyn WorkerProxy>>::new());
     let shard = Arc::new(OnceLock::<Arc<dyn ShardService>>::new());
     let evidence = Arc::new(RemoteRpcEvidence::default());
-    let environment_id = context.default_environment_id;
     let account_id = context.account_id;
     let executor = start_with_overrides(
         deps,
@@ -144,8 +194,8 @@ pub(crate) async fn start_with_remote_streaming_rpc(
                     let wrapped: Arc<dyn WorkerProxy> = Arc::new(LocalResumeProxy {
                         inner,
                         client: client.clone(),
-                        environment_id,
                         component_owner_account_id: Some(account_id),
+                        fork_owner: None,
                         evidence: Some(evidence.clone()),
                         lose_response: Arc::new(AtomicBool::new(false)),
                         checkpoint: Arc::new(Mutex::new(None)),
@@ -179,11 +229,31 @@ async fn start_with_resume_checkpoint(
     checkpoint: Option<Arc<tokio::sync::Notify>>,
     overrides: TestExecutorOverrides,
 ) -> anyhow::Result<TestWorkerExecutor> {
+    start_with_resume_checkpoint_and_fork_owner(
+        deps,
+        context,
+        lose_resume_response,
+        checkpoint,
+        overrides,
+        None,
+    )
+    .await
+}
+
+/// As `start_with_resume_checkpoint`; with a `fork_owner`, `fork-agent` reaches the test
+/// executor's `fork_worker` the way worker-service forwards it.
+async fn start_with_resume_checkpoint_and_fork_owner(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    lose_resume_response: bool,
+    checkpoint: Option<Arc<tokio::sync::Notify>>,
+    overrides: TestExecutorOverrides,
+    fork_owner: Option<AccountId>,
+) -> anyhow::Result<TestWorkerExecutor> {
     let client = Arc::new(Mutex::new(None));
     let target = client.clone();
     let lose_response = Arc::new(AtomicBool::new(lose_resume_response));
     let checkpoint = Arc::new(Mutex::new(checkpoint));
-    let environment_id = context.default_environment_id;
     let executor = start_with_overrides(
         deps,
         context,
@@ -192,8 +262,8 @@ async fn start_with_resume_checkpoint(
                 Arc::new(LocalResumeProxy {
                     inner,
                     client: target.clone(),
-                    environment_id,
                     component_owner_account_id: None,
+                    fork_owner,
                     evidence: None,
                     lose_response: lose_response.clone(),
                     checkpoint: checkpoint.clone(),
@@ -217,8 +287,8 @@ struct StreamingRemoteRpc {
 impl Rpc for StreamingRemoteRpc {
     async fn create_and_initialize(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
+        exclusive: bool,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -232,7 +302,7 @@ impl Rpc for StreamingRemoteRpc {
         self.inner
             .create_and_initialize(
                 target,
-                environment_id,
+                exclusive,
                 self_created_by,
                 self_agent_id,
                 self_env,
@@ -250,11 +320,11 @@ impl Rpc for StreamingRemoteRpc {
         target: &OwnedAgentId,
         key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
-        owner: &AgentId,
+        canceller: &golem_common::model::caller::Principal,
         auth: &AuthCtx,
     ) -> Result<bool, RpcError> {
         self.inner
-            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
             .await
     }
 
@@ -265,6 +335,7 @@ impl Rpc for StreamingRemoteRpc {
         request_key: golem_common::model::InvocationRequestKey,
         invocation: golem_common::model::AgentInvocation,
         scheduled_at: chrono::DateTime<chrono::Utc>,
+        self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, RpcError> {
         self.inner
@@ -274,6 +345,7 @@ impl Rpc for StreamingRemoteRpc {
                 request_key,
                 invocation,
                 scheduled_at,
+                self_agent_id,
                 auth_ctx,
             )
             .await
@@ -281,9 +353,9 @@ impl Rpc for StreamingRemoteRpc {
 
     async fn create_demand(
         &self,
-        agent: AgentTarget,
-        environment_id: EnvironmentId,
+        agent: ResolvedTarget,
         method: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         created_by: AccountId,
         caller: &AgentId,
         env: &[(String, String)],
@@ -297,8 +369,8 @@ impl Rpc for StreamingRemoteRpc {
         self.inner
             .create_demand(
                 agent,
-                environment_id,
                 method,
+                invocation,
                 created_by,
                 caller,
                 env,
@@ -314,8 +386,7 @@ impl Rpc for StreamingRemoteRpc {
 
     async fn invoke_and_await(
         &self,
-        agent: AgentTarget,
-        environment_id: EnvironmentId,
+        agent: ResolvedTarget,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
@@ -333,7 +404,6 @@ impl Rpc for StreamingRemoteRpc {
         self.inner
             .invoke_and_await(
                 agent,
-                environment_id,
                 key,
                 freshness,
                 expected_callee_fingerprint,
@@ -353,8 +423,7 @@ impl Rpc for StreamingRemoteRpc {
 
     async fn invoke_and_await_streaming(
         &self,
-        agent: AgentTarget,
-        environment_id: EnvironmentId,
+        agent: ResolvedTarget,
         key: IdempotencyKey,
         method: String,
         input: ProtoSchemaValue,
@@ -375,7 +444,6 @@ impl Rpc for StreamingRemoteRpc {
         self.remote
             .invoke_and_await_streaming(
                 agent,
-                environment_id,
                 key,
                 method,
                 input,
@@ -416,8 +484,7 @@ impl Rpc for StreamingRemoteRpc {
 
     async fn invoke(
         &self,
-        agent: AgentTarget,
-        environment_id: EnvironmentId,
+        agent: ResolvedTarget,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
@@ -434,7 +501,6 @@ impl Rpc for StreamingRemoteRpc {
         self.inner
             .invoke(
                 agent,
-                environment_id,
                 key,
                 freshness,
                 expected_callee_fingerprint,
@@ -455,8 +521,9 @@ impl Rpc for StreamingRemoteRpc {
 struct LocalResumeProxy {
     inner: Arc<dyn WorkerProxy>,
     client: Arc<Mutex<Option<Client>>>,
-    environment_id: EnvironmentId,
     component_owner_account_id: Option<AccountId>,
+    /// The account that owns the components whose agents are forked on the test executor.
+    fork_owner: Option<AccountId>,
     evidence: Option<Arc<RemoteRpcEvidence>>,
     lose_response: Arc<AtomicBool>,
     checkpoint: Arc<Mutex<Option<Arc<tokio::sync::Notify>>>>,
@@ -468,7 +535,6 @@ struct LocalResumeProxy {
 /// through worker-service when the target lives on another executor.
 pub(crate) fn remote_rpc_preparing_on(
     executor: &TestWorkerExecutor,
-    environment_id: EnvironmentId,
     component_owner_account_id: AccountId,
     inner: Arc<dyn WorkerProxy>,
     shard_service: Arc<dyn ShardService>,
@@ -477,8 +543,8 @@ pub(crate) fn remote_rpc_preparing_on(
         Arc::new(LocalResumeProxy {
             inner,
             client: Arc::new(Mutex::new(Some(executor.client.clone()))),
-            environment_id,
             component_owner_account_id: Some(component_owner_account_id),
+            fork_owner: None,
             evidence: None,
             lose_response: Arc::new(AtomicBool::new(false)),
             checkpoint: Arc::new(Mutex::new(None)),
@@ -492,8 +558,9 @@ pub(crate) fn remote_rpc_preparing_on(
 impl WorkerProxy for LocalResumeProxy {
     async fn prepare(
         &self,
-        agent: &OwnedAgentId,
+        agent: &ResolvedTarget,
         method: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         caller: &AgentId,
         env: HashMap<String, String>,
         stack: InvocationContextStack,
@@ -510,19 +577,33 @@ impl WorkerProxy for LocalResumeProxy {
                 .unwrap()
                 .clone()
                 .expect("test executor connected");
+            let target = agent.to_proto().map_err(WorkerProxyError::InternalError)?;
+            let (constructor, unkeyed_id) = match (target.target.target, target.constructor) {
+                (Some(golem_api_grpc::proto::golem::worker::agent_target::Target::Key(key)), _) => {
+                    (Some(key), None)
+                }
+                (
+                    Some(golem_api_grpc::proto::golem::worker::agent_target::Target::Id(id)),
+                    constructor,
+                ) => (constructor, Some(id)),
+                (None, constructor) => (constructor, None),
+            };
             let response = client
                 .prepare_worker(CreateWorkerRequest {
-                    agent_id: Some(agent.agent_id().into()),
+                    constructor,
+                    unkeyed_id,
+                    invocation,
+                    component_id: target.component_id,
                     env,
                     config: config.into_iter().map(Into::into).collect(),
                     component_owner_account_id: self.component_owner_account_id.map(Into::into),
-                    environment_id: Some(agent.environment_id.into()),
+                    environment_id: Some(agent.owned_agent_id.environment_id.into()),
                     ignore_already_existing: true,
                     auth_ctx: Some(auth.clone().into()),
                     caller: Some(request_caller.into()),
                     invocation_context: Some(
                         golem_api_grpc::proto::golem::worker::InvocationContext {
-                            parent: Some(caller.clone().into()),
+                            parent: Some((*caller).into()),
                             env: HashMap::new(),
                             tracing: Some(stack.into()),
                         },
@@ -565,6 +646,7 @@ impl WorkerProxy for LocalResumeProxy {
             .prepare(
                 agent,
                 method,
+                invocation,
                 caller,
                 env,
                 stack,
@@ -579,7 +661,7 @@ impl WorkerProxy for LocalResumeProxy {
 
     async fn resume(
         &self,
-        agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         force: bool,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
@@ -591,11 +673,12 @@ impl WorkerProxy for LocalResumeProxy {
             .expect("test executor connected");
         let response = client
             .resume_worker(ResumeWorkerRequest {
-                agent_id: Some(agent_id.clone().into()),
-                environment_id: Some(self.environment_id.into()),
+                agent_id: Some(owned_agent_id.agent_id.into()),
+                environment_id: Some(owned_agent_id.environment_id.into()),
                 force: Some(force),
                 auth_ctx: Some(auth_ctx.clone().into()),
                 caller: Some(callers::anonymous().into()),
+                expected_fingerprint: None,
             })
             .await?
             .into_inner();
@@ -627,7 +710,8 @@ impl WorkerProxy for LocalResumeProxy {
 
     async fn create(
         &self,
-        agent: &OwnedAgentId,
+        agent: &ResolvedTarget,
+        exclusive: bool,
         caller: &AgentId,
         env: HashMap<String, String>,
         stack: InvocationContextStack,
@@ -639,6 +723,7 @@ impl WorkerProxy for LocalResumeProxy {
         self.inner
             .create(
                 agent,
+                exclusive,
                 caller,
                 env,
                 stack,
@@ -652,7 +737,7 @@ impl WorkerProxy for LocalResumeProxy {
 
     async fn invoke_agent(
         &self,
-        agent: &AgentId,
+        agent: &ResolvedTarget,
         method: String,
         input: SchemaValue,
         mode: AgentInvocationMode,
@@ -803,29 +888,64 @@ impl WorkerProxy for LocalResumeProxy {
         revision: ComponentRevision,
         mode: UpdateMode,
         disable_wakeup: bool,
+        requester: golem_common::model::caller::Caller,
         auth: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         self.inner
-            .update(agent, revision, mode, disable_wakeup, auth)
+            .update(agent, revision, mode, disable_wakeup, requester, auth)
             .await
     }
 
     async fn fork_worker(
         &self,
-        source: &AgentId,
+        source: &OwnedAgentId,
         target: &AgentId,
         cut: &OplogIndex,
         caller: golem_common::model::caller::Caller,
         auth: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
-        self.inner
-            .fork_worker(source, target, cut, caller, auth)
-            .await
+        let Some(owner) = self.fork_owner else {
+            return self
+                .inner
+                .fork_worker(source, target, cut, caller, auth)
+                .await;
+        };
+        let mut client = self
+            .client
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("test executor connected");
+        let response = client
+            .fork_worker(ForkWorkerRequest {
+                component_owner_account_id: Some(owner.into()),
+                source_agent_id: Some(source.agent_id.into()),
+                target_agent_id: Some((*target).into()),
+                oplog_index_cutoff: (*cut).into(),
+                environment_id: Some(source.environment_id.into()),
+                auth_ctx: Some(auth.clone().into()),
+                caller: Some(caller.into()),
+                component_owner_account_email: String::new(),
+                expected_fingerprint: None,
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(fork_worker_response::Result::Success(_)) => Ok(()),
+            Some(fork_worker_response::Result::Failure(error)) => Err(
+                WorkerProxyError::InternalError(WorkerExecutorError::try_from(error).map_err(
+                    |error| WorkerProxyError::InternalError(WorkerExecutorError::runtime(error)),
+                )?),
+            ),
+            None => Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::runtime("missing fork result"),
+            )),
+        }
     }
 
     async fn revert(
         &self,
-        agent: &AgentId,
+        agent: &OwnedAgentId,
         target: RevertWorkerTarget,
         resolved: Option<ResolvedRevert>,
         auth: &AuthCtx,
@@ -835,16 +955,19 @@ impl WorkerProxy for LocalResumeProxy {
 
     async fn complete_promise(
         &self,
+        environment_id: EnvironmentId,
         id: PromiseId,
         data: Vec<u8>,
         auth: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
-        self.inner.complete_promise(id, data, auth).await
+        self.inner
+            .complete_promise(environment_id, id, data, auth)
+            .await
     }
 
     async fn cancel_invocation(
         &self,
-        agent: &AgentId,
+        agent: &OwnedAgentId,
         key: golem_common::model::InvocationId,
         auth: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
@@ -856,11 +979,11 @@ impl WorkerProxy for LocalResumeProxy {
         target: &OwnedAgentId,
         key: golem_common::model::InvocationId,
         receipt: golem_common::model::agent::ScheduleId,
-        owner: &AgentId,
+        canceller: &golem_common::model::caller::Principal,
         auth: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         self.inner
-            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
             .await
     }
 
@@ -880,6 +1003,7 @@ impl WorkerProxy for LocalResumeProxy {
         &self,
         agent: &AgentId,
         env: EnvironmentId,
+        component: golem_common::model::component::ComponentId,
         revision: ComponentRevision,
         key: golem_common::model::InvocationId,
         account: AccountId,
@@ -888,10 +1012,12 @@ impl WorkerProxy for LocalResumeProxy {
         first: OplogIndex,
         entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
         auth: &AuthCtx,
+        caller: &golem_common::model::caller::Caller,
     ) -> Result<(), WorkerProxyError> {
         self.inner
             .process_oplog_entries(
-                agent, env, revision, key, account, config, metadata, first, entries, auth,
+                agent, env, component, revision, key, account, config, metadata, first, entries,
+                auth, caller,
             )
             .await
     }
@@ -899,7 +1025,7 @@ impl WorkerProxy for LocalResumeProxy {
 
 use crate::Tracing;
 use golem_common::model::ScanCursor;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{LastUniqueId, PrecompiledComponent};
 use test_r::{inherit_test_dep, test, timeout};
@@ -945,14 +1071,10 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     let source = executor
         .start_agent(
             &component.id,
-            agent_id!("DurableStreamAgent", "export-fork-retry"),
+            agent_key!("DurableStreamAgent", "export-fork-retry"),
         )
         .await?;
-    let target = AgentId::from_agent_id(
-        component.id,
-        &golem_common::phantom_agent_id!("DurableStreamAgent", Uuid::new_v4(), "export-fork-retry"),
-    )
-    .map_err(anyhow::Error::msg)?;
+    let target = fresh_fork_target(&source).agent_id;
     let session = Uuid::new_v4().to_string();
     let input = schema_value_to_proto_with_streams(
         SchemaValue::Record {
@@ -971,7 +1093,9 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         }),
         creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
         invocation: Some(InvocationStart {
-            agent_id: Some(source.clone().into()),
+            target: Some(crate::agent::id_target(&source)),
+            constructor: None,
+            component_id: None,
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(AuthCtx::System.into()),
             component_owner_account_id: Some(component.account_id.into()),
@@ -1024,7 +1148,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         .expect("sliding session has a deadline");
     let read_metadata = |admission, invocation_key| ReadStreamSlotRequest {
         route_scope: "[\"environment\",\"1\",\"route\"]".into(),
-        agent_id: Some(source.clone().into()),
+        agent_id: Some(source.agent_id.into()),
         environment_id: Some(component.environment_id.into()),
         auth_ctx: Some(AuthCtx::System.into()),
         session: session.clone(),
@@ -1109,7 +1233,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     assert_eq!(continuation.expiry_deadline_millis, Some(touched_deadline));
     let append = |agent: &AgentId, value: &str| AppendToStreamSlotRequest {
         route_scope: "[\"environment\",\"1\",\"route\"]".into(),
-        agent_id: Some(agent.clone().into()),
+        agent_id: Some((*agent).into()),
         environment_id: Some(component.environment_id.into()),
         auth_ctx: Some(AuthCtx::System.into()),
         session: session.clone(),
@@ -1133,7 +1257,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
             sequence: 0,
         }),
     };
-    let initial_append = append(&source, "shared");
+    let initial_append = append(&source.agent_id, "shared");
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     let accepted = executor
         .client
@@ -1159,7 +1283,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     ));
     let duplicate_deadline = duplicate.expiry_deadline_millis.unwrap();
     assert_eq!(duplicate_deadline, append_deadline);
-    let mut gap = append(&source, "gap");
+    let mut gap = append(&source.agent_id, "gap");
     gap.producer.as_mut().unwrap().sequence = 3;
     let gap = executor
         .client
@@ -1174,8 +1298,8 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     assert_eq!(gap.expiry_deadline_millis, Some(duplicate_deadline));
     let request = ForkStreamSlotRequest {
         route_scope: "[\"environment\",\"1\",\"route\"]".into(),
-        source_agent_id: Some(source.clone().into()),
-        target_agent_id: Some(target.clone().into()),
+        source_agent_id: Some(source.agent_id.into()),
+        target_agent_id: Some(target.into()),
         environment_id: Some(component.environment_id.into()),
         auth_ctx: Some(AuthCtx::System.into()),
         session: session.clone(),
@@ -1202,7 +1326,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         "{rejected:?}"
     );
     executor.interrupt(&source).await?;
-    executor.append_after_next_oplog_commit(&source);
+    executor.append_after_next_oplog_commit(&source.agent_id);
     let lost = executor
         .client
         .clone()
@@ -1233,7 +1357,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         ),
         "fork must not inherit writer state: {fork_append:?}"
     );
-    let mut source_append = append(&source, "source-only");
+    let mut source_append = append(&source.agent_id, "source-only");
     source_append.producer.as_mut().unwrap().sequence = 1;
     let accepted = executor
         .client
@@ -1246,14 +1370,16 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         Some(append_to_stream_slot_response::Result::Accepted(_))
     ));
     // Live admission must be folded before any status-cache eviction or full oplog refold.
-    let live_admissions = executor.export_fork_admissions(&source).await?;
+    let live_admissions = executor.export_fork_admissions(&source.agent_id).await?;
     assert_eq!(live_admissions.reservations.len(), 1);
     assert!(live_admissions.reservations.contains_key(&target));
     assert_eq!(live_admissions.session_counts.get(&session), Some(&1));
     executor.shutdown_and_wait_for_invocation_loops().await?;
-    let admitted_before_restart = executor.export_fork_admission_records(&source).await?;
+    let admitted_before_restart = executor
+        .export_fork_admission_records(&source.agent_id)
+        .await?;
     assert_eq!(admitted_before_restart.len(), 1);
-    executor.remove_cached_status(&source).await?;
+    executor.remove_cached_status(&source.agent_id).await?;
     drop(executor);
     let executor = start_with_local_resume(deps, &context, false).await?;
     let mut retry = request.clone();
@@ -1275,9 +1401,11 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         receipt.fork_offset, prefix.offset,
         "default tail must retain the first cut"
     );
-    let admitted_after_restart = executor.export_fork_admission_records(&source).await?;
+    let admitted_after_restart = executor
+        .export_fork_admission_records(&source.agent_id)
+        .await?;
     assert_eq!(admitted_after_restart, admitted_before_restart);
-    let reconstructed = executor.export_fork_admissions(&source).await?;
+    let reconstructed = executor.export_fork_admissions(&source.agent_id).await?;
     assert_eq!(reconstructed.reservations.len(), 1);
     assert_eq!(
         reconstructed.reservations[&target].request_hash,
@@ -1293,7 +1421,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         Some(admitted_before_restart[0].credit_millis)
     );
     for (agent, expected) in [
-        (&source, vec!["shared", "source-only"]),
+        (&source.agent_id, vec!["shared", "source-only"]),
         (
             &target,
             vec!["shared", "fork-initial", "fork-second", "fork-writer"],
@@ -1304,7 +1432,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
             .clone()
             .read_stream_slot(ReadStreamSlotRequest {
                 route_scope: "[\"environment\",\"1\",\"route\"]".into(),
-                agent_id: Some(agent.clone().into()),
+                agent_id: Some((*agent).into()),
                 environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(AuthCtx::System.into()),
                 session: session.clone(),
@@ -1354,17 +1482,9 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
             assert!(read.expiry_deadline_millis.is_some());
         }
     }
-    let nested_target = AgentId::from_agent_id(
-        component.id,
-        &golem_common::phantom_agent_id!(
-            "DurableStreamAgent",
-            Uuid::new_v4(),
-            "export-fork-nested"
-        ),
-    )
-    .map_err(anyhow::Error::msg)?;
+    let nested_target = fresh_fork_target(&source).agent_id;
     let mut nested = request.clone();
-    nested.source_agent_id = Some(target.clone().into());
+    nested.source_agent_id = Some(target.into());
     nested.target_agent_id = Some(nested_target.into());
     nested.source_path = "/source/nested-input".into();
     let nested_created = executor
@@ -1407,18 +1527,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         matches!(rejected.result, Some(fork_stream_slot_response::Result::Rejected(ref rejection)) if rejection.reason == Reason::Conflict as i32)
     );
     let mut over_count = request.clone();
-    over_count.target_agent_id = Some(
-        AgentId::from_agent_id(
-            component.id,
-            &golem_common::phantom_agent_id!(
-                "DurableStreamAgent",
-                Uuid::new_v4(),
-                "export-fork-retry"
-            ),
-        )
-        .map_err(anyhow::Error::msg)?
-        .into(),
-    );
+    over_count.target_agent_id = Some(fresh_fork_target(&source).agent_id.into());
     let rejected = executor
         .client
         .clone()
@@ -1443,17 +1552,9 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     );
 
     // Invalid expiry policies must not reserve the target or consume admission.
-    let overflow_target = AgentId::from_agent_id(
-        component.id,
-        &golem_common::phantom_agent_id!(
-            "DurableStreamAgent",
-            Uuid::new_v4(),
-            "export-fork-overflow-expiry"
-        ),
-    )
-    .map_err(anyhow::Error::msg)?;
+    let overflow_target = fresh_fork_target(&source).agent_id;
     let mut overflowing = request.clone();
-    overflowing.target_agent_id = Some(overflow_target.clone().into());
+    overflowing.target_agent_id = Some(overflow_target.into());
     overflowing.max_forks_per_session = 2;
     overflowing.expiry_policy = Some(StreamSessionExpiryPolicy {
         kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(
@@ -1491,17 +1592,9 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     );
 
     // Out-of-range absolute deadlines must not reserve the target or consume admission.
-    let out_of_range_target = AgentId::from_agent_id(
-        component.id,
-        &golem_common::phantom_agent_id!(
-            "DurableStreamAgent",
-            Uuid::new_v4(),
-            "export-fork-out-of-range-expiry"
-        ),
-    )
-    .map_err(anyhow::Error::msg)?;
+    let out_of_range_target = fresh_fork_target(&source).agent_id;
     let mut out_of_range = request.clone();
-    out_of_range.target_agent_id = Some(out_of_range_target.clone().into());
+    out_of_range.target_agent_id = Some(out_of_range_target.into());
     out_of_range.max_forks_per_session = 4;
     out_of_range.expiry_policy = Some(StreamSessionExpiryPolicy {
         kind: Some(stream_session_expiry_policy::Kind::ExpiresAtMillis(
@@ -1530,21 +1623,12 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     );
 
     // An expiry that elapses during staging must not reserve the target or consume admission.
-    let expiring_during_publication_target = AgentId::from_agent_id(
-        component.id,
-        &golem_common::phantom_agent_id!(
-            "DurableStreamAgent",
-            Uuid::new_v4(),
-            "export-fork-expiring-during-publication"
-        ),
-    )
-    .map_err(anyhow::Error::msg)?;
+    let expiring_during_publication_target = fresh_fork_target(&source).agent_id;
     let now_millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_millis() as u64;
     let mut expires_during_publication = request.clone();
-    expires_during_publication.target_agent_id =
-        Some(expiring_during_publication_target.clone().into());
+    expires_during_publication.target_agent_id = Some(expiring_during_publication_target.into());
     expires_during_publication.max_forks_per_session = 6;
     expires_during_publication.expiry_policy = Some(StreamSessionExpiryPolicy {
         kind: Some(stream_session_expiry_policy::Kind::ExpiresAtMillis(
@@ -1576,17 +1660,9 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         "an absolute expiry that elapsed during publication reserved the target: {accepted:?}"
     );
 
-    let expiring_target = AgentId::from_agent_id(
-        component.id,
-        &golem_common::phantom_agent_id!(
-            "DurableStreamAgent",
-            Uuid::new_v4(),
-            "export-fork-expiring"
-        ),
-    )
-    .map_err(anyhow::Error::msg)?;
+    let expiring_target = fresh_fork_target(&source).agent_id;
     let mut expiring_request = request.clone();
-    expiring_request.target_agent_id = Some(expiring_target.clone().into());
+    expiring_request.target_agent_id = Some(expiring_target.into());
     expiring_request.max_forks_per_session = 5;
     expiring_request.expiry_policy = Some(StreamSessionExpiryPolicy {
         kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(0)),
@@ -1608,7 +1684,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
                 .clone()
                 .read_stream_slot(ReadStreamSlotRequest {
                     route_scope: "[\"environment\",\"1\",\"route\"]".into(),
-                    agent_id: Some(expiring_target.clone().into()),
+                    agent_id: Some(expiring_target.into()),
                     environment_id: Some(component.environment_id.into()),
                     auth_ctx: Some(AuthCtx::System.into()),
                     session: session.clone(),
@@ -1663,7 +1739,9 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
             expiry_policy: None,
             creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
             invocation: Some(InvocationStart {
-                agent_id: Some(source.clone().into()),
+                target: Some(crate::agent::id_target(&source)),
+                constructor: None,
+                component_id: None,
                 environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(AuthCtx::System.into()),
                 component_owner_account_id: Some(component.account_id.into()),
@@ -1680,7 +1758,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         created.result,
         Some(create_stream_session_response::Result::Success(_))
     ));
-    let mut concurrent_append = append(&source, "concurrent");
+    let mut concurrent_append = append(&source.agent_id, "concurrent");
     concurrent_append.session = concurrent_session.clone();
     let accepted = executor
         .client
@@ -1694,7 +1772,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     ));
     let concurrent_request = |target: AgentId| ForkStreamSlotRequest {
         route_scope: "[\"environment\",\"1\",\"route\"]".into(),
-        source_agent_id: Some(source.clone().into()),
+        source_agent_id: Some(source.agent_id.into()),
         target_agent_id: Some(target.into()),
         environment_id: Some(component.environment_id.into()),
         auth_ctx: Some(AuthCtx::System.into()),
@@ -1708,17 +1786,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
-    let new_target = || {
-        AgentId::from_agent_id(
-            component.id,
-            &golem_common::phantom_agent_id!(
-                "DurableStreamAgent",
-                Uuid::new_v4(),
-                "export-fork-concurrent"
-            ),
-        )
-        .map_err(anyhow::Error::msg)
-    };
+    let new_target = || anyhow::Ok(fresh_fork_target(&source).agent_id);
     let left = concurrent_request(new_target()?);
     let right = concurrent_request(new_target()?);
     let mut left_client = executor.client.clone();
@@ -1766,7 +1834,9 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         }),
         creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
         invocation: Some(InvocationStart {
-            agent_id: Some(source.clone().into()),
+            target: Some(crate::agent::id_target(&source)),
+            constructor: None,
+            component_id: None,
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(AuthCtx::System.into()),
             component_owner_account_id: Some(component.account_id.into()),
@@ -1833,7 +1903,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         .clone()
         .read_stream_slot(ReadStreamSlotRequest {
             route_scope: "[\"environment\",\"1\",\"route\"]".into(),
-            agent_id: Some(source.clone().into()),
+            agent_id: Some(source.agent_id.into()),
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(AuthCtx::System.into()),
             session: expired_session.clone(),
@@ -1883,7 +1953,9 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
             }),
             creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
             invocation: Some(InvocationStart {
-                agent_id: Some(source.clone().into()),
+                target: Some(crate::agent::id_target(&source)),
+                constructor: None,
+                component_id: None,
                 environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(AuthCtx::System.into()),
                 component_owner_account_id: Some(component.account_id.into()),
@@ -1974,10 +2046,9 @@ async fn stream_slot_reads_after_reload_with_archived_oplog_prefix(
     let source = executor
         .start_agent(
             &component.id,
-            agent_id!("DurableStreamAgent", "archived-oplog-prefix"),
+            agent_key!("DurableStreamAgent", "archived-oplog-prefix"),
         )
         .await?;
-    let owned = OwnedAgentId::new(component.environment_id, &source);
     let session = Uuid::new_v4().to_string();
     let input = schema_value_to_proto_with_streams(
         SchemaValue::Record {
@@ -1999,7 +2070,7 @@ async fn stream_slot_reads_after_reload_with_archived_oplog_prefix(
             }),
             creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
             invocation: Some(InvocationStart {
-                agent_id: Some(source.clone().into()),
+                target: Some(crate::agent::id_target(&source)),
                 environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(AuthCtx::System.into()),
                 component_owner_account_id: Some(component.account_id.into()),
@@ -2019,7 +2090,7 @@ async fn stream_slot_reads_after_reload_with_archived_oplog_prefix(
         let mut client = executor.client.clone();
         let request = ReadStreamSlotRequest {
             route_scope: "[\"environment\",\"1\",\"route\"]".into(),
-            agent_id: Some(source.clone().into()),
+            agent_id: Some(source.agent_id.into()),
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(AuthCtx::System.into()),
             session: session.clone(),
@@ -2047,7 +2118,7 @@ async fn stream_slot_reads_after_reload_with_archived_oplog_prefix(
     let head = read(&executor).await?;
     assert!(head.writable, "the pending session accepts external writes");
     assert!(
-        archived_oplog_chunks(deps, &context, &owned, 1)
+        archived_oplog_chunks(deps, &context, &source, 1)
             .await?
             .is_empty(),
         "the session is read first while its whole oplog is in the primary oplog"
@@ -2065,7 +2136,7 @@ async fn stream_slot_reads_after_reload_with_archived_oplog_prefix(
             .clone()
             .append_to_stream_slot(AppendToStreamSlotRequest {
                 route_scope: "[\"environment\",\"1\",\"route\"]".into(),
-                agent_id: Some(source.clone().into()),
+                agent_id: Some(source.agent_id.into()),
                 environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(AuthCtx::System.into()),
                 session: session.clone(),
@@ -2098,10 +2169,10 @@ async fn stream_slot_reads_after_reload_with_archived_oplog_prefix(
     loop {
         anyhow::ensure!(
             tokio::time::Instant::now() < deadline,
-            "the oplog of {owned} was not archived"
+            "the oplog of {source} was not archived"
         );
         append(&executor).await?;
-        let archived = archived_oplog_chunks(deps, &context, &owned, 1)
+        let archived = archived_oplog_chunks(deps, &context, &source, 1)
             .await?
             .iter()
             .map(|(last_index, _)| *last_index)
@@ -2110,7 +2181,7 @@ async fn stream_slot_reads_after_reload_with_archived_oplog_prefix(
             continue;
         };
         let last = executor.get_oplog_last_index(&source).await?;
-        let primary = agent_oplog_length(deps, &context, &owned).await?;
+        let primary = agent_oplog_length(deps, &context, &source).await?;
         if primary > 0 && archived > 1 && primary == last - archived {
             break;
         }
@@ -2167,7 +2238,7 @@ async fn sliding_expiry_refreshes_are_coalesced(
     let source = executor
         .start_agent(
             &component.id,
-            agent_id!("DurableStreamAgent", "expiry-refresh-coalescing"),
+            agent_key!("DurableStreamAgent", "expiry-refresh-coalescing"),
         )
         .await?;
     let session = Uuid::new_v4().to_string();
@@ -2191,7 +2262,9 @@ async fn sliding_expiry_refreshes_are_coalesced(
             }),
             creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
             invocation: Some(InvocationStart {
-                agent_id: Some(source.clone().into()),
+                target: Some(crate::agent::id_target(&source)),
+                constructor: None,
+                component_id: None,
                 environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(AuthCtx::System.into()),
                 component_owner_account_id: Some(component.account_id.into()),
@@ -2211,7 +2284,7 @@ async fn sliding_expiry_refreshes_are_coalesced(
     let session_key: golem_common::model::InvocationId = created.invocation_key.unwrap().into();
     let read = |admission, invocation_key| ReadStreamSlotRequest {
         route_scope: "[\"environment\",\"1\",\"route\"]".into(),
-        agent_id: Some(source.clone().into()),
+        agent_id: Some(source.agent_id.into()),
         environment_id: Some(component.environment_id.into()),
         auth_ctx: Some(AuthCtx::System.into()),
         session: session.clone(),
@@ -2283,7 +2356,7 @@ async fn sliding_expiry_refreshes_are_coalesced(
 
     let append = AppendToStreamSlotRequest {
         route_scope: "[\"environment\",\"1\",\"route\"]".into(),
-        agent_id: Some(source.clone().into()),
+        agent_id: Some(source.agent_id.into()),
         environment_id: Some(component.environment_id.into()),
         auth_ctx: Some(AuthCtx::System.into()),
         session,
@@ -2373,20 +2446,24 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let source = agent_id!("GolemHostApi", "fork-crash");
+    let source = agent_key!("GolemHostApi", "fork-crash");
     let source_id = executor.start_agent(&component.id, source.clone()).await?;
     let key = IdempotencyKey::fresh();
+    // The account that starts the forking invocation, also on its retry.
+    let account = callers::account(golem_common::model::account::AccountId::new());
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
         let source = source.clone();
         let key = key.clone();
+        let account = account.clone();
         async move {
             executor
-                .invoke_and_await_agent_with_key(
+                .invoke_and_await_agent_impl(
                     &component,
                     &source,
-                    &key,
+                    Some(&key),
+                    Some(account),
                     "self_fork_result",
                     data_value!(),
                 )
@@ -2398,16 +2475,22 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
         result = &mut invocation => anyhow::bail!("fork returned before checkpoint: {result:?}"),
     }
     let (cursor, before) = executor
-        .get_workers_metadata(&component.id, None, ScanCursor::default(), 100, true)
+        .get_workers_metadata(
+            &component.environment_id,
+            &AgentTypeName("GolemHostApi".to_string()),
+            None,
+            ScanCursor::default(),
+            100,
+            true,
+        )
         .await?;
     assert!(cursor.is_none());
     assert_eq!(before.len(), 2);
     let child = before
         .iter()
-        .find(|agent| agent.agent_id != source_id)
+        .find(|agent| agent.agent_id != source_id.agent_id)
         .unwrap()
-        .agent_id
-        .clone();
+        .agent_id;
     executor.shutdown_and_wait_for_invocation_loops().await?;
     invocation.abort();
     let _ = invocation.await;
@@ -2415,10 +2498,11 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
 
     let executor = start_with_local_resume(deps, &context, false).await?;
     let result = executor
-        .invoke_and_await_agent_with_key(
+        .invoke_and_await_agent_impl(
             &component,
             &source,
-            &key,
+            Some(&key),
+            Some(account.clone()),
             "self_fork_result",
             data_value!(),
         )
@@ -2426,7 +2510,14 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
         .into_typed::<Result<String, String>>()?;
     assert_eq!(result, Ok("original".to_string()));
     let (cursor, after) = executor
-        .get_workers_metadata(&component.id, None, ScanCursor::default(), 100, true)
+        .get_workers_metadata(
+            &component.environment_id,
+            &AgentTypeName("GolemHostApi".to_string()),
+            None,
+            ScanCursor::default(),
+            100,
+            true,
+        )
         .await?;
     assert!(cursor.is_none());
     assert_eq!(after.len(), 2, "recovery must not create a second child");
@@ -2451,12 +2542,17 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
     let source_fingerprint = executor.get_worker_metadata(&source_id).await?.fingerprint;
     assert_eq!(
         child_requests[0].caller,
-        callers::agent_in(
-            source_id.clone(),
-            source_fingerprint,
-            component.environment_id
-        ),
-        "the child records the forking agent, not the request that created the source"
+        golem_common::model::caller::Caller {
+            immediate: callers::agent_in(
+                source_id.agent_id,
+                source.agent_type.clone(),
+                source_fingerprint,
+                source_id.environment_id
+            )
+            .immediate,
+            ..account
+        },
+        "the child records the account that started the fork and the forking agent"
     );
     let result = executor
         .invoke_and_await_agent(&component, &source, "self_fork_result", data_value!())
@@ -2464,7 +2560,14 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
         .into_typed::<Result<String, String>>()?;
     assert_eq!(result, Ok("original".to_string()));
     let (_, fresh) = executor
-        .get_workers_metadata(&component.id, None, ScanCursor::default(), 100, true)
+        .get_workers_metadata(
+            &component.environment_id,
+            &AgentTypeName("GolemHostApi".to_string()),
+            None,
+            ScanCursor::default(),
+            100,
+            true,
+        )
         .await?;
     assert_eq!(
         fresh.len(),
@@ -2476,7 +2579,99 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
 
 #[test]
 #[timeout("120s")]
-async fn guest_fork_same_key_on_phantom_siblings_creates_distinct_children(
+async fn fork_agent_records_the_account_and_the_forking_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_resume_checkpoint_and_fork_owner(
+        deps,
+        &context,
+        false,
+        None,
+        TestExecutorOverrides::default(),
+        Some(context.account_id),
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let source = agent_key!("GolemHostApi", "fork-agent-source");
+    let source_id = executor.start_agent(&component.id, source.clone()).await?;
+    let cut = executor.stored_oplog(&source_id.agent_id).await.len() as u64;
+    // The account calls the guest function that calls `fork-agent` on the source agent.
+    let account = callers::account(golem_common::model::account::AccountId::new());
+    let result = executor
+        .invoke_and_await_agent_impl(
+            &component,
+            &source,
+            None,
+            Some(account.clone()),
+            "fork_agent_result",
+            data_value!(source_id.agent_id, cut),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert_eq!(result, Ok(()));
+
+    // The fork gets a new agent ID, so the child is the other agent of the type.
+    let (cursor, agents) = executor
+        .get_workers_metadata(
+            &component.environment_id,
+            &AgentTypeName("GolemHostApi".to_string()),
+            None,
+            ScanCursor::default(),
+            100,
+            true,
+        )
+        .await?;
+    assert!(cursor.is_none());
+    assert_eq!(agents.len(), 2);
+    let child = agents
+        .iter()
+        .find(|agent| agent.agent_id != source_id.agent_id)
+        .unwrap()
+        .agent_id;
+    let child_requests = executor
+        .stored_oplog(&child)
+        .await
+        .into_iter()
+        .filter_map(|entry| match entry {
+            golem_common::model::oplog::OplogEntry::Create { parameters, .. } => {
+                Some(parameters.create_request)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(child_requests.len(), 1);
+    assert_eq!(
+        child_requests[0].kind,
+        golem_common::model::oplog::CreateRequestKind::Fork
+    );
+    let source_fingerprint = executor.get_worker_metadata(&source_id).await?.fingerprint;
+    assert_eq!(
+        child_requests[0].caller,
+        golem_common::model::caller::Caller {
+            immediate: callers::agent_in(
+                source_id.agent_id,
+                source.agent_type.clone(),
+                source_fingerprint,
+                source_id.environment_id
+            )
+            .immediate,
+            ..account
+        },
+        "the forked agent records the account as original caller and the forking agent as immediate"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn guest_fork_same_key_on_unkeyed_siblings_creates_distinct_children(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -2489,23 +2684,34 @@ async fn guest_fork_same_key_on_phantom_siblings_creates_distinct_children(
         .store()
         .await?;
     let key = IdempotencyKey::new("same-key-for-two-independent-agents".into());
-    for phantom in [uuid::Uuid::from_u128(41), uuid::Uuid::from_u128(42)] {
-        let source = golem_common::phantom_agent_id!("GolemHostApi", phantom, "siblings");
-        executor.start_agent(&component.id, source.clone()).await?;
-        let result = executor
-            .invoke_and_await_agent_with_key(
-                &component,
-                &source,
-                &key,
-                "self_fork_result",
-                data_value!(),
-            )
-            .await?
-            .into_typed::<Result<String, String>>()?;
+    for _ in 0..2 {
+        let source = crate::agent::create_unkeyed_agent(
+            &executor,
+            &component,
+            &agent_key!("GolemHostApi", "siblings"),
+        )
+        .await?;
+        let result = crate::agent::invoke_and_await_agent_by_id(
+            &executor,
+            &component,
+            &source,
+            Some(&key),
+            "self_fork_result",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Result<String, String>>()?;
         assert_eq!(result, Ok("original".to_string()));
     }
     let (cursor, agents) = executor
-        .get_workers_metadata(&component.id, None, ScanCursor::default(), 100, true)
+        .get_workers_metadata(
+            &component.environment_id,
+            &AgentTypeName("GolemHostApi".to_string()),
+            None,
+            ScanCursor::default(),
+            100,
+            true,
+        )
         .await?;
     assert!(cursor.is_none());
     assert_eq!(agents.len(), 4);
@@ -2559,18 +2765,10 @@ async fn a_rejected_export_fork_copies_no_snapshot_and_two_attempts_of_one_expor
     let source = executor
         .start_agent(
             &component.id,
-            agent_id!("DurableStreamAgent", "export-fork-snapshots"),
+            agent_key!("DurableStreamAgent", "export-fork-snapshots"),
         )
         .await?;
-    let target = AgentId::from_agent_id(
-        component.id,
-        &golem_common::phantom_agent_id!(
-            "DurableStreamAgent",
-            Uuid::new_v4(),
-            "export-fork-snapshots"
-        ),
-    )
-    .map_err(anyhow::Error::msg)?;
+    let target = fresh_fork_target(&source).agent_id;
     let session = Uuid::new_v4().to_string();
     let input = schema_value_to_proto_with_streams(
         SchemaValue::Record {
@@ -2592,7 +2790,9 @@ async fn a_rejected_export_fork_copies_no_snapshot_and_two_attempts_of_one_expor
             }),
             creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
             invocation: Some(InvocationStart {
-                agent_id: Some(source.clone().into()),
+                target: Some(crate::agent::id_target(&source)),
+                constructor: None,
+                component_id: None,
                 environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(AuthCtx::System.into()),
                 component_owner_account_id: Some(component.account_id.into()),
@@ -2610,8 +2810,8 @@ async fn a_rejected_export_fork_copies_no_snapshot_and_two_attempts_of_one_expor
     };
     let request = ForkStreamSlotRequest {
         route_scope: "[\"environment\",\"1\",\"route\"]".into(),
-        source_agent_id: Some(source.clone().into()),
-        target_agent_id: Some(target.clone().into()),
+        source_agent_id: Some(source.agent_id.into()),
+        target_agent_id: Some(target.into()),
         environment_id: Some(component.environment_id.into()),
         auth_ctx: Some(AuthCtx::System.into()),
         session: session.clone(),

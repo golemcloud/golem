@@ -53,6 +53,76 @@ fn route(mappings: &[(&str, &str)]) -> CompiledRoute {
     route
 }
 
+/// A harness whose component is the one of `route`: the component `agent1(id: u64)`
+/// implements in the nil environment, with existing keyed agents for IDs 8, 9 and 42.
+fn live_files_harness() -> InvocationHarness {
+    let harness = InvocationHarness::with_agent_type(
+        AgentInvocationOutput {
+            result: golem_common::model::AgentInvocationResult::AgentInitialization,
+            consumed_fuel: None,
+            invocation_status: None,
+            component_revision: None,
+            agent_id: None,
+            idempotency_key: None,
+            oplog_index: None,
+            agent_fingerprint: None,
+            background_failure: None,
+        },
+        golem_common::schema::AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
+            type_name: AgentTypeName("agent1".into()),
+            description: String::new(),
+            source_language: String::new(),
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![
+                    golem_common::schema::NamedField::user_supplied("id", SchemaType::u64()),
+                ]),
+            },
+            methods: vec![],
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: golem_common::model::agent::Snapshotting::Disabled(Empty {}),
+            config: vec![],
+        },
+        ComponentId(uuid::Uuid::nil()),
+        EnvironmentId(uuid::Uuid::nil()),
+    );
+    for id in [8, 9, 42] {
+        harness.add_keyed_agent(&agent1(id));
+    }
+    harness
+}
+
+/// The constructor of the `agent1` agent with this ID parameter.
+fn agent1(id: u64) -> golem_common::model::agent::AgentKey {
+    golem_common::model::agent::AgentKey::new(
+        AgentTypeName("agent1".into()),
+        golem_common::schema::TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::record(vec![
+                golem_common::schema::NamedFieldType {
+                    name: "id".into(),
+                    body: SchemaType::u64(),
+                    metadata: Default::default(),
+                },
+            ])),
+            golem_common::schema::SchemaValue::Record {
+                fields: vec![golem_common::schema::SchemaValue::U64(id)],
+            },
+        ),
+    )
+    .unwrap()
+}
+
+/// The keyed agent of `agent1(id)` in the harness's environment.
+fn agent1_id(harness: &InvocationHarness, id: u64) -> golem_common::model::AgentId {
+    golem_common::model::AgentId::keyed(harness.environment_id, harness.type_id, &agent1(id))
+}
+
 fn endpoint(harness: &InvocationHarness, routes: Vec<CompiledRoute>) -> CustomApiPoemEndpoint {
     endpoint_with_timeout(harness, routes, std::time::Duration::from_secs(300))
 }
@@ -156,7 +226,7 @@ async fn live_http_wire_deadlines_disconnects_and_late_failure() {
             "body-error",
             "unread-upload",
         ] {
-            let harness = invocation_harness();
+            let harness = live_files_harness();
             let cancelled = CancellationToken::new();
             let guard = cancelled.clone().drop_guard();
             let entered = Arc::new(tokio::sync::Notify::new());
@@ -267,12 +337,45 @@ async fn live_http_wire_deadlines_disconnects_and_late_failure() {
 }
 
 #[test]
-async fn mounted_read_rejects_paths_before_normalization() {
-    let harness = invocation_harness();
-    let agent = golem_common::model::AgentId {
-        component_id: harness.component_id,
-        agent_id: "agent1(42)".into(),
+async fn mounted_read_preserves_a_key_collision_without_serving_a_file() {
+    let harness = live_files_harness();
+    enqueue(
+        &harness,
+        Err(
+            golem_service_base::error::worker_executor::WorkerExecutorError::AgentKeyCollision {
+                agent_id: agent1_id(&harness, 42),
+                requested_key: agent1(42).to_string(),
+            }
+            .into(),
+        ),
+    );
+    let response = endpoint(&harness, vec![route(&[("/a", "/public/a")])])
+        .execute(request("GET", "/sites/42/a", &[]))
+        .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body: serde_json::Value =
+        serde_json::from_slice(&response.into_body().into_vec().await.unwrap()).unwrap();
+    assert_eq!(body["code"], "AGENT_KEY_COLLISION");
+    let calls = harness.file_reads.calls.lock().unwrap();
+    let (target, constructor, component_id) = calls[0].target.invoke_fields();
+    let Some(golem_api_grpc::proto::golem::worker::agent_target::Target::Key(key)) = target.target
+    else {
+        panic!("a mounted read must carry its key, not only an ID");
     };
+    assert_eq!(
+        golem_common::model::agent::ParsedAgentKey::try_from(key)
+            .unwrap()
+            .to_string(),
+        "agent1(42)"
+    );
+    assert!(constructor.is_none());
+    assert_eq!(component_id, Some(harness.component_id.into()));
+}
+
+#[test]
+async fn mounted_read_rejects_paths_before_normalization() {
+    let harness = live_files_harness();
+    let constructor = golem_common::model::agent::ParsedAgentKey::from(agent1(42));
     for path in [
         "/public/../private",
         "/public//a",
@@ -284,7 +387,10 @@ async fn mounted_read_rejects_paths_before_normalization() {
             harness
                 .worker_service
                 .read_mounted_file(
-                    &agent,
+                    harness.component_id,
+                    &harness.agent_type.type_name,
+                    Some(&constructor),
+                    crate::service::worker::AgentBinding::Constructor,
                     path,
                     FileByteSelection::Full,
                     harness.environment_id,
@@ -309,7 +415,7 @@ fn live_deadline_is_shared_by_mappings_head_and_body() {
         .unwrap()
         .block_on(async {
             tokio::time::pause();
-            let harness = invocation_harness();
+            let harness = live_files_harness();
             let cancelled = CancellationToken::new();
             for head in [FileReadHead::Absent, file(3, 0, 3, b"abc").head] {
                 let guard = cancelled.clone().drop_guard();
@@ -338,7 +444,7 @@ fn live_deadline_is_shared_by_mappings_head_and_body() {
             assert_eq!(harness.file_reads.calls.lock().unwrap().len(), 2);
             assert!(cancelled.is_cancelled());
 
-            let harness = invocation_harness();
+            let harness = live_files_harness();
             let cancelled = CancellationToken::new();
             let guard = cancelled.clone().drop_guard();
             let source = futures::stream::poll_fn(move |_| {
@@ -373,7 +479,7 @@ fn live_deadline_is_shared_by_mappings_head_and_body() {
 
 #[test]
 async fn mounted_read_auth_uses_system_and_typed_selection_is_terminal() {
-    let harness = invocation_harness();
+    let harness = live_files_harness();
     let mut protected = route(&[("/*", "/public/$1")]);
     protected.security = RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
         header_name: "x-session".into(),
@@ -404,8 +510,8 @@ async fn mounted_read_auth_uses_system_and_typed_selection_is_terminal() {
     }
     let calls = harness.file_reads.calls.lock().unwrap();
     assert_eq!(calls.len(), 2);
-    assert_eq!(calls[0].agent_id.agent_id, "agent1(42)");
-    assert_eq!(calls[1].agent_id.agent_id, "agent1(9)");
+    assert_eq!(calls[0].agent_id, agent1_id(&harness, 42));
+    assert_eq!(calls[1].agent_id, agent1_id(&harness, 9));
     assert!(
         calls
             .iter()
@@ -450,7 +556,7 @@ async fn live_file_representation_corpus_through_request_handler() {
                 length: expected.len() as u64,
             }
         };
-        let harness = invocation_harness();
+        let harness = live_files_harness();
         enqueue(
             &harness,
             Ok(read(
@@ -513,7 +619,7 @@ async fn live_file_representation_corpus_through_request_handler() {
         );
         let calls = harness.file_reads.calls.lock().unwrap();
         assert_eq!(calls.len(), 1, "{id}");
-        assert_eq!(calls[0].agent_id.agent_id, "agent1(42)");
+        assert_eq!(calls[0].agent_id, agent1_id(&harness, 42));
         assert_eq!(
             calls[0].path,
             format!("/public{}", input["path"].as_str().unwrap())
@@ -594,7 +700,7 @@ async fn live_file_ranges_and_preconditions() {
             b"".as_slice(),
         ),
     ] {
-        let harness = invocation_harness();
+        let harness = live_files_harness();
         enqueue(&harness, Ok(head));
         let response = endpoint(&harness, vec![route(&[("/*", "/public/$1")])])
             .execute(request("GET", "/sites/8/a.txt", &headers))
@@ -633,7 +739,7 @@ async fn live_file_only_absence_advances_and_errors_are_private() {
             1,
         ),
     ] {
-        let harness = invocation_harness();
+        let harness = live_files_harness();
         enqueue(&harness, first);
         enqueue(&harness, Ok(file(3, 0, 3, b"abc")));
         let response = endpoint(
@@ -662,7 +768,7 @@ async fn live_file_only_absence_advances_and_errors_are_private() {
         vec![("if-none-match", "*")],
         vec![("if-none-match", "malformed")],
     ] {
-        let harness = invocation_harness();
+        let harness = live_files_harness();
         enqueue(&harness, Ok(read(FileReadHead::Absent, vec![])));
         enqueue(&harness, Ok(read(FileReadHead::Absent, vec![])));
         let response = endpoint(
@@ -683,7 +789,7 @@ async fn live_file_directory_intent_and_literal_decoding() {
         ("/sites/9/a/", "/public/a", true),
         ("/sites/9/", "/public", false),
     ] {
-        let harness = invocation_harness();
+        let harness = live_files_harness();
         enqueue(
             &harness,
             Ok(if directory {
@@ -714,7 +820,7 @@ async fn live_file_directory_intent_and_literal_decoding() {
 
 #[test]
 async fn live_file_auth_preflight_and_invalid_requests_do_not_read() {
-    let harness = invocation_harness();
+    let harness = live_files_harness();
     let mut protected = route(&[("/*", "/public/$1")]);
     protected.security = RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
         header_name: "x-session".into(),

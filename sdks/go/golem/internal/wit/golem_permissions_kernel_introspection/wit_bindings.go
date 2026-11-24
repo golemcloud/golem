@@ -61,7 +61,7 @@ func ListModules() []KernelModule {
 	result0 := make([]KernelModule, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0)))), index*(4*4))
-		result := wasm_lift_1_t1008(unsafe.Add(unsafe.Pointer(base), 0))
+		result := wasm_lift_1_t1027(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result0 = append(result0, result)
 	}
@@ -96,7 +96,7 @@ func ValidateGrant(g golem_permissions_types.PatternGrant) witTypes.Result[witTy
 
 		result4 = witTypes.Ok[witTypes.Unit, golem_permissions_types.PermissionError](witTypes.Unit{})
 	case 1:
-		result := wasm_lift_1_t981(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t1000(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result4 = witTypes.Err[witTypes.Unit, golem_permissions_types.PermissionError](result)
 	default:
@@ -108,7 +108,7 @@ func ValidateGrant(g golem_permissions_types.PatternGrant) witTypes.Result[witTy
 }
 
 //go:noinline
-func wasm_lift_1_t1008(src unsafe.Pointer) KernelModule {
+func wasm_lift_1_t1027(src unsafe.Pointer) KernelModule {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	result := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))); index++ {
@@ -122,7 +122,7 @@ func wasm_lift_1_t1008(src unsafe.Pointer) KernelModule {
 }
 
 //go:noinline
-func wasm_lift_1_t981(src unsafe.Pointer) golem_permissions_types.PermissionError {
+func wasm_lift_1_t1000(src unsafe.Pointer) golem_permissions_types.PermissionError {
 	var variant golem_permissions_types.PermissionError
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:

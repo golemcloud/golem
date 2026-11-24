@@ -69,30 +69,32 @@ impl PrimaryOplogService {
         }
     }
 
-    fn oplog_key(agent_id: &AgentId) -> String {
-        agent_id.to_redis_key()
+    fn oplog_key(owned_agent_id: &OwnedAgentId) -> String {
+        owned_agent_id.storage_key()
     }
 
-    fn staged_oplog_key(agent_id: &AgentId, stage_id: uuid::Uuid) -> String {
-        format!("{}#{stage_id}", Self::oplog_key(agent_id))
+    fn staged_oplog_key(owned_agent_id: &OwnedAgentId, stage_id: uuid::Uuid) -> String {
+        format!("{}#{stage_id}", Self::oplog_key(owned_agent_id))
     }
 
-    pub(super) fn namespace(agent_id: &AgentId, agent_mode: AgentMode) -> IndexedStorageNamespace {
+    pub(super) fn namespace(
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> IndexedStorageNamespace {
         IndexedStorageNamespace::OpLog {
-            agent_id: agent_id.clone(),
+            owned_agent_id: owned_agent_id.clone(),
             agent_mode,
         }
     }
 
-    fn staged_namespace(agent_id: &AgentId, agent_mode: AgentMode) -> IndexedStorageNamespace {
+    fn staged_namespace(
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> IndexedStorageNamespace {
         IndexedStorageNamespace::StagedOpLog {
-            agent_id: agent_id.clone(),
+            owned_agent_id: owned_agent_id.clone(),
             agent_mode,
         }
-    }
-
-    pub fn key_prefix(component_id: &ComponentId) -> String {
-        component_id.0.to_string()
     }
 
     async fn append_initial_entry(
@@ -104,9 +106,9 @@ impl PrimaryOplogService {
         entry: &OplogEntry,
         shard_epoch: Option<ShardEpoch>,
     ) {
-        let key = Self::oplog_key(&owned_agent_id.agent_id);
+        let key = Self::oplog_key(owned_agent_id);
         let namespace = IndexedStorageNamespace::OpLog {
-            agent_id: owned_agent_id.agent_id(),
+            owned_agent_id: owned_agent_id.clone(),
             agent_mode,
         };
         let value = Bytes::from(
@@ -150,7 +152,7 @@ impl PrimaryOplogService {
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         record_oplog_call("open");
 
-        let key = Self::oplog_key(&owned_agent_id.agent_id);
+        let key = Self::oplog_key(owned_agent_id);
         let max_operations_before_commit = match agent_mode {
             AgentMode::Durable => self.max_operations_before_commit,
             AgentMode::Ephemeral => self.max_operations_before_commit_ephemeral,
@@ -205,12 +207,12 @@ impl PrimaryOplogService {
         agent_mode: AgentMode,
         retry_config: &RetryConfig,
     ) -> Result<OplogIndex, String> {
-        let key = Self::oplog_key(&owned_agent_id.agent_id);
-        let agent_id = owned_agent_id.agent_id();
+        let key = Self::oplog_key(owned_agent_id);
+        let ns_owner = owned_agent_id.clone();
         Ok(OplogIndex::from_u64(
             retry_storage_op_result(retry_config, "get_last_index", &key, || {
                 let ns = IndexedStorageNamespace::OpLog {
-                    agent_id: agent_id.clone(),
+                    owned_agent_id: ns_owner.clone(),
                     agent_mode,
                 };
                 let key = key.clone();
@@ -226,17 +228,23 @@ impl PrimaryOplogService {
         ))
     }
 
-    pub fn get_agent_id_from_key(key: &str, component_id: &ComponentId) -> AgentId {
-        let redis_prefix = format!("{}:", component_id.0);
-        if key.starts_with(&redis_prefix) {
-            let agent_name = &key[redis_prefix.len()..];
-            AgentId {
-                agent_id: agent_name.to_string(),
-                component_id: *component_id,
-            }
-        } else {
-            panic!("Failed to get worker id from indexed storage key: {key}")
-        }
+    /// The agents of the storage keys that a scan of the environment returned. A key that is no
+    /// storage key of an agent of the environment is skipped.
+    pub fn owned_agent_ids_of_keys(
+        environment_id: &EnvironmentId,
+        keys: Vec<String>,
+    ) -> Vec<OwnedAgentId> {
+        keys.into_iter()
+            .filter_map(|key| match OwnedAgentId::from_storage_key(&key) {
+                Some(owned_agent_id) if owned_agent_id.environment_id == *environment_id => {
+                    Some(owned_agent_id)
+                }
+                _ => {
+                    warn!("Skipping an oplog key that is no agent of {environment_id}: {key}");
+                    None
+                }
+            })
+            .collect()
     }
 
     pub(super) async fn upload_raw_payload(
@@ -319,6 +327,7 @@ impl PrimaryOplogService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogService for PrimaryOplogService {
     async fn lock_lifecycle(&self, agent_id: &AgentId) -> OplogLifecycleGuard {
         self.oplogs.lock_lifecycle(agent_id).await
@@ -351,8 +360,8 @@ impl OplogService for PrimaryOplogService {
         if agent_mode != AgentMode::Durable {
             return Err("Only durable agents can have staged oplogs".into());
         }
-        let key = Self::staged_oplog_key(&owned_agent_id.agent_id, stage_id);
-        let namespace = Self::staged_namespace(&owned_agent_id.agent_id, agent_mode);
+        let key = Self::staged_oplog_key(owned_agent_id, stage_id);
+        let namespace = Self::staged_namespace(owned_agent_id, agent_mode);
         Ok(Arc::new(PrimaryOplog::new(
             // A stage is hidden and has exactly one writer, so it asserts no epoch and can never
             // be fenced: it is published into the target only once it is fully committed.
@@ -384,13 +393,10 @@ impl OplogService for PrimaryOplogService {
         stage_id: uuid::Uuid,
     ) -> Result<bool, String> {
         record_oplog_call("staged_exists");
-        let key = Self::staged_oplog_key(&owned_agent_id.agent_id, stage_id);
+        let key = Self::staged_oplog_key(owned_agent_id, stage_id);
         self.indexed_storage
             .with("oplog", "staged_exists")
-            .exists(
-                Self::staged_namespace(&owned_agent_id.agent_id, agent_mode),
-                &key,
-            )
+            .exists(Self::staged_namespace(owned_agent_id, agent_mode), &key)
             .await
             .map_err(|error| format!("Failed checking staged oplog {key}: {error}"))
     }
@@ -407,18 +413,18 @@ impl OplogService for PrimaryOplogService {
         if agent_mode != AgentMode::Durable {
             return Err("Only durable agents can publish staged oplogs".into());
         }
-        let stage_key = Self::staged_oplog_key(&owned_agent_id.agent_id, stage_id);
-        let target_key = Self::oplog_key(&owned_agent_id.agent_id);
+        let stage_key = Self::staged_oplog_key(owned_agent_id, stage_id);
+        let target_key = Self::oplog_key(owned_agent_id);
         self.indexed_storage
             .with("oplog", "publish_staged")
             .move_if_absent(
                 IndexedStorageNamespace::StagedOpLog {
-                    agent_id: owned_agent_id.agent_id.clone(),
+                    owned_agent_id: owned_agent_id.clone(),
                     agent_mode,
                 },
                 &stage_key,
                 IndexedStorageNamespace::OpLog {
-                    agent_id: owned_agent_id.agent_id.clone(),
+                    owned_agent_id: owned_agent_id.clone(),
                     agent_mode,
                 },
                 &target_key,
@@ -435,13 +441,10 @@ impl OplogService for PrimaryOplogService {
         stage_id: uuid::Uuid,
     ) -> Result<(), String> {
         record_oplog_call("discard_staged");
-        let key = Self::staged_oplog_key(&owned_agent_id.agent_id, stage_id);
+        let key = Self::staged_oplog_key(owned_agent_id, stage_id);
         self.indexed_storage
             .with("oplog", "discard_staged")
-            .delete(
-                Self::staged_namespace(&owned_agent_id.agent_id, agent_mode),
-                &key,
-            )
+            .delete(Self::staged_namespace(owned_agent_id, agent_mode), &key)
             .await
             .map_err(|error| format!("Failed discarding staged oplog {key}: {error}"))
     }
@@ -460,7 +463,7 @@ impl OplogService for PrimaryOplogService {
         record_oplog_call("create");
         lifecycle.assert_agent(&owned_agent_id.agent_id);
 
-        let key = Self::oplog_key(&owned_agent_id.agent_id);
+        let key = Self::oplog_key(owned_agent_id);
 
         // The record goes in before the existence probe and the first entry. A probe taken before
         // the claim can miss a `Create` that an executor at an older epoch lands in between, and
@@ -472,7 +475,7 @@ impl OplogService for PrimaryOplogService {
                 record_owning_epoch(
                     &*self.indexed_storage,
                     &self.retry_config,
-                    Self::namespace(&owned_agent_id.agent_id, agent_mode),
+                    Self::namespace(owned_agent_id, agent_mode),
                     &owned_agent_id.agent_id,
                     &key,
                     epoch,
@@ -485,12 +488,12 @@ impl OplogService for PrimaryOplogService {
         if fence_at_create.is_none() {
             let already_exists: bool = {
                 let is = self.indexed_storage.clone();
-                let agent_id = owned_agent_id.agent_id();
+                let ns_owner = owned_agent_id.clone();
                 let key = key.clone();
                 retry_storage_op(&self.retry_config, "create_exists", &key, || {
                     let is = is.clone();
                     let ns = IndexedStorageNamespace::OpLog {
-                        agent_id: agent_id.clone(),
+                        owned_agent_id: ns_owner.clone(),
                         agent_mode,
                     };
                     let key = key.clone();
@@ -546,13 +549,13 @@ impl OplogService for PrimaryOplogService {
         // the existence probe performed by `create` is skipped: the initial
         // entry is appended directly without any prior read. The epoch record still goes in
         // first - a fresh agent id does not mean a fresh shard.
-        let key = Self::oplog_key(&owned_agent_id.agent_id);
+        let key = Self::oplog_key(owned_agent_id);
         let fence_at_create = match shard_epoch {
             Some(epoch) => {
                 record_owning_epoch(
                     &*self.indexed_storage,
                     &self.retry_config,
-                    Self::namespace(&owned_agent_id.agent_id, agent_mode),
+                    Self::namespace(owned_agent_id, agent_mode),
                     &owned_agent_id.agent_id,
                     &key,
                     epoch,
@@ -652,11 +655,11 @@ impl OplogService for PrimaryOplogService {
         expected_epoch: ShardEpoch,
     ) -> Result<(), OplogError> {
         record_oplog_call("assert_owning_epoch");
-        let key = Self::oplog_key(&owned_agent_id.agent_id);
+        let key = Self::oplog_key(owned_agent_id);
         match record_owning_epoch(
             self.indexed_storage.as_ref(),
             &self.retry_config,
-            Self::namespace(&owned_agent_id.agent_id, agent_mode),
+            Self::namespace(owned_agent_id, agent_mode),
             &owned_agent_id.agent_id,
             &key,
             expected_epoch,
@@ -679,15 +682,15 @@ impl OplogService for PrimaryOplogService {
         lifecycle.assert_agent(&owned_agent_id.agent_id);
 
         let is = self.indexed_storage.clone();
-        let agent_id = owned_agent_id.agent_id();
-        let key = Self::oplog_key(&owned_agent_id.agent_id);
+        let ns_owner = owned_agent_id.clone();
+        let key = Self::oplog_key(owned_agent_id);
         // The entries and the epoch record go in one step, and only while the record is still
         // this executor's: a delete that outlived the agent's shard is refused like a write, and
         // leaves the new owner's oplog alone.
         let outcome = retry_maintenance_storage_op(&self.retry_config, "delete", &key, || {
             let is = is.clone();
             let ns = IndexedStorageNamespace::OpLog {
-                agent_id: agent_id.clone(),
+                owned_agent_id: ns_owner.clone(),
                 agent_mode,
             };
             let key = key.clone();
@@ -700,7 +703,7 @@ impl OplogService for PrimaryOplogService {
         match outcome {
             Ok(()) => Ok(()),
             Err(error @ IndexedStorageError::Fenced { .. }) => {
-                let fence = OplogFence::refused(agent_id, error);
+                let fence = OplogFence::refused(owned_agent_id.agent_id, error);
                 warn!(
                     agent_id = %owned_agent_id,
                     expected_epoch = fence.expected_epoch.0,
@@ -710,7 +713,7 @@ impl OplogService for PrimaryOplogService {
                 Err(OplogError::Fenced(fence))
             }
             Err(other) => Err(OplogError::Maintenance(format!(
-                "Failed to delete primary oplog for {agent_id}: {other}"
+                "Failed to delete primary oplog for {owned_agent_id}: {other}"
             ))),
         }
     }
@@ -746,14 +749,14 @@ impl OplogService for PrimaryOplogService {
 
         Ok({
             let is = self.indexed_storage.clone();
-            let agent_id = owned_agent_id.agent_id();
-            let key = Self::oplog_key(&owned_agent_id.agent_id);
+            let ns_owner = owned_agent_id.clone();
+            let key = Self::oplog_key(owned_agent_id);
             let start: u64 = idx.into();
             let end: u64 = end.into();
             retry_storage_op(&self.retry_config, "read", &key, || {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
-                    agent_id: agent_id.clone(),
+                    owned_agent_id: ns_owner.clone(),
                     agent_mode,
                 };
                 let key = key.clone();
@@ -786,12 +789,12 @@ impl OplogService for PrimaryOplogService {
 
         Ok({
             let is = self.indexed_storage.clone();
-            let agent_id = owned_agent_id.agent_id();
-            let key = Self::oplog_key(&owned_agent_id.agent_id);
+            let ns_owner = owned_agent_id.clone();
+            let key = Self::oplog_key(owned_agent_id);
             retry_storage_op_result(&self.retry_config, "exists", &key, || {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
-                    agent_id: agent_id.clone(),
+                    owned_agent_id: ns_owner.clone(),
                     agent_mode,
                 };
                 let key = key.clone();
@@ -801,10 +804,10 @@ impl OplogService for PrimaryOplogService {
         })
     }
 
-    async fn scan_for_component(
+    async fn scan_for_type(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        type_id: TypeId,
         modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
@@ -821,7 +824,7 @@ impl OplogService for PrimaryOplogService {
 
         let (next_resume, keys) = {
             let is = self.indexed_storage.clone();
-            let prefix = Self::key_prefix(component_id);
+            let prefix = OwnedAgentId::type_storage_key_prefix(*environment_id, type_id);
             let resume = state.resume.clone();
             retry_scan_storage_op(&self.retry_config, "scan", &prefix, || {
                 let is = is.clone();
@@ -845,13 +848,7 @@ impl OplogService for PrimaryOplogService {
 
         let cursor = next_scan_cursor(state, modes, next_resume)?;
         let examined_keys = keys.len() as u64;
-        let agent_ids = keys
-            .into_iter()
-            .map(|key| OwnedAgentId {
-                agent_id: Self::get_agent_id_from_key(&key, component_id),
-                environment_id: *environment_id,
-            })
-            .collect();
+        let agent_ids = Self::owned_agent_ids_of_keys(environment_id, keys);
 
         Ok(ScanPage {
             cursor,

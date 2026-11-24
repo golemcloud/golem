@@ -20,6 +20,7 @@ use golem_client::invocation_session::{
 };
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::auth::TokenSecret;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_session_public::{
     INVOCATION_SESSION_VERSION, InvocationSelector, PublicClientMessage, PublicInvocationOutcome,
     PublicInvocationResult, PublicResumeOperation, PublicServerMessage, PublicStreamDirection,
@@ -140,6 +141,9 @@ impl SessionCheckpoint {
                     .context("missing request timing")?
                     .accepted = Some(now);
             }
+            PublicServerMessage::InvocationReady { mappings, .. } => {
+                self.install_mappings(mappings)?;
+            }
             PublicServerMessage::InvocationResult {
                 mappings, result, ..
             } => {
@@ -257,18 +261,21 @@ impl InvocationSessionRequestProvider for RequestProvider {
 pub struct DetachedSession {
     pub checkpoint: SessionCheckpoint,
     state: InvocationSessionStateSnapshot,
+    environment_id: EnvironmentId,
 }
 
 pub struct PublicInvocationSession {
     inner: InvocationSession,
     checkpoint: SessionCheckpoint,
     deadline: tokio::time::Instant,
+    environment_id: EnvironmentId,
 }
 
 impl PublicInvocationSession {
     pub async fn start(
         deps: &BenchmarkTestDependencies,
         token: &TokenSecret,
+        environment_id: EnvironmentId,
         application: &str,
         environment: &str,
         agent: &ParsedAgentKey,
@@ -291,20 +298,22 @@ impl PublicInvocationSession {
             attempt_id: uuid::Uuid::new_v4(),
             config: Vec::new(),
             idempotency_key: key.value.clone(),
-            method_parameters,
+            method_parameters: method_parameters.try_into()?,
             selector: Box::new(InvocationSelector {
                 agent_type: agent.agent_type.to_string(),
                 application: application.to_string(),
-                constructor_parameters,
+                target: golem_common::model::invocation_session_public::PublicAgentTarget::Key {
+                    constructor_parameters,
+                },
                 environment: environment.to_string(),
                 method: method.to_string(),
-                phantom_id: agent.phantom_id,
             }),
             version: INVOCATION_SESSION_VERSION,
         };
         Self::open(
             deps,
             token,
+            environment_id,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
                 stable_stream_bindings: BTreeMap::new(),
@@ -336,12 +345,21 @@ impl PublicInvocationSession {
                 .context("session token is absent")?,
             version: INVOCATION_SESSION_VERSION,
         });
-        Self::open(deps, token, state, detached.checkpoint.clone(), timeout).await
+        Self::open(
+            deps,
+            token,
+            detached.environment_id,
+            state,
+            detached.checkpoint.clone(),
+            timeout,
+        )
+        .await
     }
 
     async fn open(
         deps: &BenchmarkTestDependencies,
         token: &TokenSecret,
+        environment_id: EnvironmentId,
         state: InvocationSessionStateSnapshot,
         mut checkpoint: SessionCheckpoint,
         timeout: Duration,
@@ -357,7 +375,7 @@ impl PublicInvocationSession {
         let worker_service = deps.worker_service();
         let provider = Arc::new(RequestProvider {
             url: format!(
-                "ws://{}:{}/v1/agents/invoke-agent-session",
+                "ws://{}:{}/v1/runtime/envs/{environment_id}/invoke-agent-session",
                 worker_service.http_host(),
                 worker_service.http_port()
             ),
@@ -381,6 +399,7 @@ impl PublicInvocationSession {
             inner,
             checkpoint,
             deadline,
+            environment_id,
         };
         while !session.inner.is_accepted() {
             session.receive().await?;
@@ -409,6 +428,7 @@ impl PublicInvocationSession {
         Ok(DetachedSession {
             checkpoint: self.checkpoint,
             state,
+            environment_id: self.environment_id,
         })
     }
 
@@ -467,10 +487,7 @@ mod tests {
     fn accepted(channel: u32, stream_token: &str) -> PublicServerMessage {
         PublicServerMessage::InvocationAccepted {
             attempt_id: uuid::Uuid::new_v4(),
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId(uuid::Uuid::from_u128(4)),
-                agent_id: "counter()".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 4),
             idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
             mappings: vec![mapping(channel, stream_token)],
             session_token: "session".to_string(),

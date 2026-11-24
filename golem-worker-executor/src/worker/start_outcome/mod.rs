@@ -232,7 +232,7 @@ pub(crate) fn decide(
             (_, None) => StartAction::Error(error.passed_through()),
         },
         Cell::Visible => StartAction::Error(WorkerExecutorError::failed_to_resume_worker(
-            agent_id.clone(),
+            *agent_id,
             WorkerExecutorError::invalid_request(raw_text(&error)),
         )),
         Cell::VisibleInvocation => StartAction::Error(WorkerExecutorError::InvocationFailed {

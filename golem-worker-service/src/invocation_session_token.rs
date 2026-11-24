@@ -15,6 +15,7 @@
 use crate::config::InvocationSessionTokenConfig;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use golem_common::model::AgentId;
 use golem_common::model::invocation_session_public::{MAX_TOKEN_SIZE, PublicErrorCode};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -84,8 +85,8 @@ pub struct SessionTokenPayload {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionAgentIdentity {
     pub component_id: Uuid,
-    pub component_revision: u64,
-    pub agent_id: String,
+    pub component_revision: Option<u64>,
+    pub agent_id: AgentId,
     pub target: SessionInvocationTarget,
 }
 
@@ -105,10 +106,16 @@ pub fn encode_session_agent_identity(
     identity: &SessionAgentIdentity,
 ) -> Result<String, InvocationSessionTokenError> {
     let mut bytes = Vec::new();
-    bytes.push(2);
+    bytes.push(3);
     bytes.extend_from_slice(identity.component_id.as_bytes());
-    bytes.extend_from_slice(&identity.component_revision.to_be_bytes());
-    write_identity_text(&mut bytes, &identity.agent_id)?;
+    bytes.push(u8::from(identity.component_revision.is_some()));
+    bytes.extend_from_slice(
+        &identity
+            .component_revision
+            .unwrap_or_default()
+            .to_be_bytes(),
+    );
+    bytes.extend_from_slice(identity.agent_id.0.as_bytes());
     match &identity.target {
         SessionInvocationTarget::Method { agent_type, method } => {
             bytes.push(1);
@@ -126,7 +133,7 @@ pub fn encode_session_agent_identity(
             write_identity_text(&mut bytes, &path)?;
         }
     }
-    Ok(format!("v2.{}", URL_SAFE_NO_PAD.encode(bytes)))
+    Ok(format!("v3.{}", URL_SAFE_NO_PAD.encode(bytes)))
 }
 
 fn write_identity_text(
@@ -147,19 +154,27 @@ pub fn decode_session_agent_identity(
     encoded: &str,
 ) -> Result<SessionAgentIdentity, InvocationSessionTokenError> {
     let encoded = encoded
-        .strip_prefix("v2.")
+        .strip_prefix("v3.")
         .ok_or_else(|| token_invalid("invalid session agent identity"))?;
     let bytes = URL_SAFE_NO_PAD
         .decode(encoded)
         .map_err(|_| token_invalid("invalid session agent identity"))?;
-    if bytes.len() < 26 || bytes[0] != 2 {
+    if bytes.len() < 43 || bytes[0] != 3 {
         return Err(token_invalid("invalid session agent identity"));
     }
     let component_id = Uuid::from_slice(&bytes[1..17])
         .map_err(|_| token_invalid("invalid session agent identity"))?;
-    let component_revision = u64::from_be_bytes(bytes[17..25].try_into().unwrap());
-    let mut offset = 25;
-    let agent_id = read_identity_text(&bytes, &mut offset)?;
+    let revision = u64::from_be_bytes(bytes[18..26].try_into().unwrap());
+    let component_revision = match bytes[17] {
+        0 if revision == 0 => None,
+        1 => Some(revision),
+        _ => return Err(token_invalid("invalid session execution revision")),
+    };
+    let agent_id = AgentId(
+        Uuid::from_slice(&bytes[26..42])
+            .map_err(|_| token_invalid("invalid session agent identity"))?,
+    );
+    let mut offset = 42;
     let kind = *bytes
         .get(offset)
         .ok_or_else(|| token_invalid("invalid session agent identity"))?;
@@ -707,6 +722,7 @@ mod tests {
     use crate::config::{InvocationSessionTokenConfig, InvocationSessionTokenKeyConfig};
     use base64::Engine;
     use golem_common::base_model::auth::TokenSecret;
+    use golem_common::model::AgentId;
     use golem_common::model::base64::Base64;
     use golem_common::model::invocation_session_public::PublicErrorCode;
     use serde::Deserialize;
@@ -951,8 +967,8 @@ mod tests {
     fn native_session_identity_round_trips_without_method_identity() {
         let identity = SessionAgentIdentity {
             component_id: Uuid::new_v4(),
-            component_revision: 17,
-            agent_id: "native-owner".to_string(),
+            component_revision: Some(17),
+            agent_id: AgentId::from_parts(0, 7),
             target: SessionInvocationTarget::ExternalTool {
                 tool_name: "files".to_string(),
                 command_path: Vec::new(),

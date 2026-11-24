@@ -55,10 +55,6 @@ impl ToolSchemaRepr for SchemaGraph {
     }
 }
 
-pub(super) fn schema_graph_root(graph: &SchemaGraph) -> SchemaType {
-    graph.root.clone()
-}
-
 /// The whole collected value type of an option (used to validate an option's
 /// `default`): a `repeatable-list` collects into `list<item>`, a
 /// `repeatable-map` into its map node; scalar/optional-scalar use the value

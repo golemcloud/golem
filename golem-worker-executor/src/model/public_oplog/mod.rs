@@ -24,13 +24,11 @@ use attribution::PublicOplogAttributionResolver;
 #[cfg(test)]
 use conversion::host_response_to_public_value;
 pub(crate) use conversion::with_expected_request;
-use invocation::{
-    agent_invocation_result_to_public, agent_invocation_to_public, enrich_golem_rpc_invoke,
-    enrich_golem_rpc_scheduled_invocation,
-};
+use invocation::{agent_invocation_result_to_public, agent_invocation_to_public};
 pub use reading::{
-    check_oplog_cursor_query, find_component_revision_at, get_public_oplog_chunk,
-    get_public_oplog_entry, get_public_oplog_page, oplog_page_cursor, oplog_page_start,
+    PublicOplogRangePage, check_oplog_cursor_query, find_component_revision_at,
+    get_public_oplog_chunk, get_public_oplog_entry, get_public_oplog_page,
+    get_public_oplog_range_page, oplog_page_cursor, oplog_page_start, oplog_range_allowance,
     search_public_oplog, search_public_oplog_page,
 };
 use snapshots::raw_snapshot_to_public;
@@ -42,7 +40,8 @@ use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
-use golem_common::model::agent::{AgentMode, AgentTypeName, OwnerKind, ParsedAgentKey};
+use golem_common::base_model::caller::{ClaimVisibility, PublicCaller};
+use golem_common::model::agent::{AgentMode, AgentTypeName, OwnerKind};
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
 use golem_common::model::entity::{
@@ -53,20 +52,20 @@ use golem_common::model::lucene::Query;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFailedParams, AgentInvocationFinishedParams,
-    AgentInvocationStartedParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, CardDerivedParams, CardEventQueuedParams, CardExpiredParams,
-    CardInstallFailedParams, CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams,
-    CardTransferConfirmedParams, CardTransferStartedParams, CardTransferredParams,
-    CommittedRemoteTransactionParams, CompletionDeliveredParams, CompletionDiscardedParams,
-    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndParams,
-    ErrorParams, ExitedParams, FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams,
-    InterruptedParams, JumpParams, LogParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, RecoverySucceededParams, RemoveRetryPolicyParams,
-    RestartParams, ResumedParams, RevertParams, RolledBackRemoteTransactionParams,
-    SetRetryPolicyParams, SnapshotConfirmedParams, SnapshotParams, SpanClosedParams, StartParams,
-    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, StreamTerminalParams,
-    SuccessfulUpdateParams, SuspendParams,
+    AgentInvocationSettledParams, AgentInvocationStartedParams, BeginRemoteTransactionParams,
+    CancelPendingInvocationParams, CancelledParams, CardDerivedParams, CardEventQueuedParams,
+    CardExpiredParams, CardInstallFailedParams, CardInstalledParams, CardRevokedCascadeParams,
+    CardRevokedParams, CardTransferConfirmedParams, CardTransferStartedParams,
+    CardTransferredParams, CommittedRemoteTransactionParams, CompletionDeliveredParams,
+    CompletionDiscardedParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
+    DropResourceParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams, GrowMemoryParams,
+    HostStreamFrameParams, InterruptedParams, JumpParams, LogParams,
+    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RecoverySucceededParams,
+    RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
+    SnapshotParams, SpanClosedParams, StartParams, StreamItemsParams, StreamRegisteredParams,
+    StreamSessionParams, StreamTerminalParams, SuccessfulUpdateParams, SuspendParams,
 };
 use golem_common::model::oplog::public_oplog_entry::{
     PublicSpanAttributes, PublicSpanFinished, PublicSpanKind, PublicSpanLink, PublicSpanOutcome,
@@ -76,18 +75,17 @@ use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
     AgentMethodInvocationParameters, ExternalToolInvocationParameters,
-    ExternalToolResultParameters, FallibleResultParameters, HostRequest, HostRequestGolemRpcInvoke,
-    HostRequestGolemRpcScheduledInvocation, HostResponse, HostResponseEntityInvocation,
-    JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters, MultipartPartData,
-    MultipartSnapshotData, MultipartSnapshotPart, OmittedOplogEntry, OplogEntry, OplogIndex,
-    PluginInstallationDescription, ProcessOplogEntriesParameters,
+    ExternalToolResultParameters, FallibleResultParameters, HostRequest, HostResponse,
+    HostResponseEntityInvocation, JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters,
+    MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, OmittedOplogEntry, OplogEntry,
+    OplogIndex, PluginInstallationDescription, ProcessOplogEntriesParameters,
     ProcessOplogEntriesResultParameters, PublicAgentEntity, PublicAgentEntityKind,
     PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute, PublicEntityCallMode,
     PublicEntityInvocation, PublicEntityInvocationContext, PublicEntityInvocationOperation,
     PublicExternalToolResult, PublicFailedSnapshotAssistedUpdateDetails, PublicOplogEntry,
     PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicOplogPageEntry,
     PublicSnapshotAssistedUpdateDetails, PublicSnapshotData, PublicToolInvocationOperation,
-    PublicTypedAgentConfigEntry, PublicUpdateDescription, RawSnapshotData,
+    PublicTypedAgentConfigEntry, PublicUpdateDescription, RawSnapshotData, SaveSnapshotParameters,
     SaveSnapshotResultParameters, SnapshotAssistedAutomaticUpdateParameters,
     SnapshotBasedUpdateParameters, UpdateDescription,
 };
@@ -95,9 +93,7 @@ use golem_common::model::oplog::{
     OplogPayload, ReplayDivergence, ReplayStep, SpanAttributes, SpanFinished, SpanKind,
     SpanOutcome, SpanStarted,
 };
-use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, OwnedAgentId,
-};
+use golem_common::model::{AgentInvocation, AgentInvocationResult, OwnedAgentId};
 use golem_common::schema::graph::reachable_defs;
 use golem_common::schema::{
     InputSchema, IntoTypedSchemaValue, NamedFieldType, OutputSchema, SchemaGraph, SchemaType,
@@ -135,6 +131,8 @@ pub struct PublicOplogSearchResult<E = PublicOplogEntryWithIndex> {
     pub last_index: OplogIndex,
 }
 
+/// The public form of the raw oplog entries. `claims` says whether the callers of the public
+/// entries hold the users' verified claims.
 #[async_trait]
 pub trait PublicOplogEntryOps: Sized {
     async fn from_oplog_entry(
@@ -148,6 +146,7 @@ pub trait PublicOplogEntryOps: Sized {
         owner_kind: OwnerKind,
         agent_type: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
+        claims: ClaimVisibility,
     ) -> Result<Self, String> {
         Self::from_enrichment_entry(
             oplog_index,
@@ -160,6 +159,7 @@ pub trait PublicOplogEntryOps: Sized {
             owner_kind,
             agent_type,
             component_revision,
+            claims,
         )
         .await
     }
@@ -175,6 +175,7 @@ pub trait PublicOplogEntryOps: Sized {
         owner_kind: OwnerKind,
         agent_type: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
+        claims: ClaimVisibility,
     ) -> Result<Self, String>;
 }
 

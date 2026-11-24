@@ -1010,6 +1010,7 @@ impl From<CompiledToolBinding> for golem_api_grpc::proto::golem::registry::Compi
             tool_release_id: value.release_id.map(|id| id.0.into()),
             metadata_digest: Some(value.metadata_digest.into()),
             tagged_source,
+            shell: value.shell,
         }
     }
 }
@@ -1069,6 +1070,7 @@ impl TryFrom<golem_api_grpc::proto::golem::registry::CompiledToolBinding> for Co
                 .map_err(|error| error.to_string())?
                 .into(),
             source: tool_source_from_proto(value.tagged_source, value.source)?,
+            shell: value.shell,
         })
     }
 }

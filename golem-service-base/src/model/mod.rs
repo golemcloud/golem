@@ -32,21 +32,13 @@ use golem_common::model::component::{
     AgentFilePermissions, ComponentRevision, PluginInstallationAction,
 };
 use golem_common::model::filesystem::{FileReadError, FileReadHead};
-use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
+use golem_common::model::oplog::{OplogCursor, OplogScan, PublicOplogPageEntry};
 use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, OplogIndex, ScanCursor};
 use poem_openapi::Object;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::time::{Duration, SystemTime};
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct WorkerCreationResponse {
-    pub agent_id: AgentId,
-    pub component_revision: ComponentRevision,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -97,11 +89,10 @@ pub struct DeactivatePluginResponse {}
 pub struct RevertWorkerResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
-pub struct ForkWorkerResponse {}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
-pub struct CancelInvocationResponse {
-    pub canceled: bool,
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ForkWorkerResponse {
+    pub agent_id: AgentId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
@@ -112,6 +103,8 @@ pub struct GetOplogResponse {
     pub next: Option<OplogCursor>,
     pub first_index_in_chunk: u64,
     pub last_index: u64,
+    // The scan accounting of a range read, which names `to`; absent for other reads.
+    pub scan: Option<OplogScan>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
@@ -136,7 +129,6 @@ pub struct UpdateWorkerRequest {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct ForkWorkerRequest {
-    pub target_agent_id: AgentId,
     pub oplog_index_cutoff: OplogIndex,
 }
 
@@ -188,30 +180,6 @@ pub enum MonthlyResourcePolicyStatus {
     Available,
     Unavailable,
 }
-
-const UNLIMITED_CONCURRENT_AGENTS_PER_EXECUTOR: u64 = 1_000_000_000_000_000_000;
-
-fn normalize_concurrent_agents_limit(limit: u64) -> u64 {
-    if limit == 0 {
-        // Backward-compatibility with older registry versions that do not send
-        // this proto field (proto3 scalar default = 0).
-        UNLIMITED_CONCURRENT_AGENTS_PER_EXECUTOR
-    } else {
-        limit
-    }
-}
-
-/// Normalise the oplog write rate from the proto wire value.
-/// proto3 scalar default is 0 — treat as unlimited (10^18 sentinel).
-fn normalize_oplog_writes_per_second(rate: u64) -> u64 {
-    if rate == 0 {
-        UNLIMITED_OPLOG_WRITES_PER_SECOND
-    } else {
-        rate
-    }
-}
-
-const UNLIMITED_OPLOG_WRITES_PER_SECOND: u64 = 1_000_000_000_000_000_000;
 
 impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimits {
     fn from(value: ResourceLimits) -> Self {
@@ -372,14 +340,8 @@ impl TryFrom<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceL
             available_http_calls: value.available_http_calls,
             available_rpc_calls: value.available_rpc_calls,
             available_blob_storage_bytes: value.available_blob_storage_bytes,
-            max_concurrent_agents_per_executor: normalize_concurrent_agents_limit(
-                value.max_concurrent_agents_per_executor,
-            ),
-            // proto3 default (0) means unlimited — normalise to the 10^18
-            // sentinel used throughout the codebase.
-            oplog_writes_per_second: normalize_oplog_writes_per_second(
-                value.oplog_writes_per_second,
-            ),
+            max_concurrent_agents_per_executor: value.max_concurrent_agents_per_executor,
+            oplog_writes_per_second: value.oplog_writes_per_second,
             usage_update_applied: value.usage_update_applied,
         })
     }
@@ -750,89 +712,67 @@ mod tests {
     }
 
     #[test]
-    fn resource_limits_proto_zero_limit_maps_to_unlimited_sentinel() {
-        let proto = ResourceLimits {
-            monthly_policy: Some(monthly_resource_policy()),
-            max_memory_per_worker: 2,
-            max_table_elements_per_worker: 3,
-            max_disk_space_per_worker: 4,
-            per_invocation_http_call_limit: 0,
-            per_invocation_rpc_call_limit: 0,
-            available_http_calls: 0,
-            available_rpc_calls: 0,
-            available_blob_storage_bytes: 0,
-            max_concurrent_agents_per_executor: 0,
-            oplog_writes_per_second: 0,
-            monthly_policy_status:
-                golem_api_grpc::proto::golem::common::MonthlyResourcePolicyStatus::Available.into(),
-            usage_update_applied: false,
-            monthly_usage_mode_revision: 0,
-            monthly_policy_revision: 0,
-        };
+    fn resource_limits_proto_concurrency_and_rate_limits_are_preserved() {
+        for (max_concurrent_agents_per_executor, oplog_writes_per_second) in
+            [(7, 500), (0, 500), (7, 0)]
+        {
+            let proto = ResourceLimits {
+                monthly_policy: Some(monthly_resource_policy()),
+                max_memory_per_worker: 2,
+                max_table_elements_per_worker: 3,
+                max_disk_space_per_worker: 4,
+                per_invocation_http_call_limit: 0,
+                per_invocation_rpc_call_limit: 0,
+                available_http_calls: 0,
+                available_rpc_calls: 0,
+                available_blob_storage_bytes: 9,
+                max_concurrent_agents_per_executor,
+                oplog_writes_per_second,
+                monthly_policy_status:
+                    golem_api_grpc::proto::golem::common::MonthlyResourcePolicyStatus::Available
+                        .into(),
+                usage_update_applied: true,
+                monthly_usage_mode_revision: 6,
+                monthly_policy_revision: 7,
+            };
 
-        let converted: super::ResourceLimits = proto.try_into().unwrap();
+            let converted: super::ResourceLimits = proto.try_into().unwrap();
 
-        assert_eq!(
-            converted.max_concurrent_agents_per_executor,
-            1_000_000_000_000_000_000
-        );
-        assert_eq!(converted.oplog_writes_per_second, 1_000_000_000_000_000_000);
-    }
-
-    #[test]
-    fn resource_limits_proto_non_zero_limit_is_preserved() {
-        let proto = ResourceLimits {
-            monthly_policy: Some(monthly_resource_policy()),
-            max_memory_per_worker: 2,
-            max_table_elements_per_worker: 3,
-            max_disk_space_per_worker: 4,
-            per_invocation_http_call_limit: 0,
-            per_invocation_rpc_call_limit: 0,
-            available_http_calls: 0,
-            available_rpc_calls: 0,
-            available_blob_storage_bytes: 9,
-            max_concurrent_agents_per_executor: 7,
-            oplog_writes_per_second: 500,
-            monthly_policy_status:
-                golem_api_grpc::proto::golem::common::MonthlyResourcePolicyStatus::Available.into(),
-            usage_update_applied: true,
-            monthly_usage_mode_revision: 6,
-            monthly_policy_revision: 7,
-        };
-
-        let converted: super::ResourceLimits = proto.try_into().unwrap();
-
-        assert_eq!(converted.max_concurrent_agents_per_executor, 7);
-        assert_eq!(converted.oplog_writes_per_second, 500);
-        assert_eq!(converted.available_blob_storage_bytes, 9);
-        assert_eq!(converted.monthly_usage_mode_revision, 6);
-        assert_eq!(converted.monthly_policy_revision, 7);
-        assert_eq!(converted.monthly_policy.period.year, 2026);
-        assert_eq!(converted.monthly_policy.period.month, 9);
-        assert_eq!(
-            converted.monthly_policy.mode,
-            golem_common::model::account_usage::MonthlyUsageMode::AllowOverage
-        );
-        assert_eq!(converted.monthly_policy.available_fuel, 1);
-        assert_eq!(converted.monthly_policy.available_memory_gb_seconds, 2);
-        assert_eq!(
-            converted
-                .monthly_policy
-                .available_memory_byte_nanoseconds_remainder,
-            3
-        );
-        assert_eq!(
-            converted
-                .monthly_policy
-                .available_durable_storage_byte_seconds,
-            4
-        );
-        assert_eq!(
-            converted
-                .monthly_policy
-                .available_ephemeral_storage_byte_nanoseconds_remainder,
-            7
-        );
+            assert_eq!(
+                converted.max_concurrent_agents_per_executor,
+                max_concurrent_agents_per_executor
+            );
+            assert_eq!(converted.oplog_writes_per_second, oplog_writes_per_second);
+            assert_eq!(converted.available_blob_storage_bytes, 9);
+            assert_eq!(converted.monthly_usage_mode_revision, 6);
+            assert_eq!(converted.monthly_policy_revision, 7);
+            assert_eq!(converted.monthly_policy.period.year, 2026);
+            assert_eq!(converted.monthly_policy.period.month, 9);
+            assert_eq!(
+                converted.monthly_policy.mode,
+                golem_common::model::account_usage::MonthlyUsageMode::AllowOverage
+            );
+            assert_eq!(converted.monthly_policy.available_fuel, 1);
+            assert_eq!(converted.monthly_policy.available_memory_gb_seconds, 2);
+            assert_eq!(
+                converted
+                    .monthly_policy
+                    .available_memory_byte_nanoseconds_remainder,
+                3
+            );
+            assert_eq!(
+                converted
+                    .monthly_policy
+                    .available_durable_storage_byte_seconds,
+                4
+            );
+            assert_eq!(
+                converted
+                    .monthly_policy
+                    .available_ephemeral_storage_byte_nanoseconds_remainder,
+                7
+            );
+        }
     }
 
     #[test]

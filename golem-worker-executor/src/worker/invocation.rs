@@ -29,14 +29,16 @@ use crate::preview2::oplog_processor_plugin::exports::golem::api1_5_0::oplog_pro
 use crate::preview2::{golem_agent, golem_api_1_x};
 use crate::services::HasWorker;
 use crate::services::oplog::UnreadableOplog;
-use crate::workerctx::{PublicWorkerIo, WorkerCtx};
+use crate::workerctx::{PublicWorkerIo, ResultRecordedAt, WorkerCtx};
 use futures::FutureExt;
 use golem_common::model::AgentId;
-use golem_common::model::agent::{AgentMode, ParsedAgentKey};
+use golem_common::model::agent::{AgentMode, ParsedAgentKey, ResolvedOwnerContext};
 use golem_common::model::component_metadata::{AgentMethodStreamMetadata, ComponentMetadata};
 use golem_common::model::oplog::AgentError as OplogAgentError;
 use golem_common::model::tool::{ToolActivationSnapshot, ToolName};
-use golem_common::model::{AgentInvocation, AgentInvocationResult, OplogIndex};
+use golem_common::model::{
+    AgentInvocation, AgentInvocationOutput, AgentInvocationResult, OplogIndex,
+};
 use golem_common::schema::SchemaValue;
 #[cfg(test)]
 use golem_common::schema::agent::InputSchema;
@@ -51,6 +53,8 @@ use golem_schema::schema::wit::{decode_value_with, encode_value_with, encode_val
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
+use std::future::Future;
+use std::pin::Pin;
 use tracing::{Instrument, Level, debug, span};
 use wasmtime::component::Accessor;
 use wasmtime::{AsContextMut, StoreContextMut};
@@ -59,16 +63,85 @@ pub(crate) const INVOCATION_STACK_SIZE: usize = 16 * 1024 * 1024;
 
 impl<Ctx: WorkerCtx> super::Worker<Ctx> {
     pub(crate) async fn start_pending_invocation(
-        &self,
+        self: &std::sync::Arc<Self>,
         idempotency_key: InvocationId,
+        operation: golem_common::model::InvocationRequestOperation,
         payload: golem_common::model::oplog::OplogPayload<
-            golem_common::model::AgentInvocationPayload,
+            golem_common::model::StoredAgentInvocationPayload,
         >,
         context: golem_common::model::invocation_context::InvocationContextStack,
         wallet_pin: golem_common::model::card::InvocationWalletPin,
+        selected_preparation: Option<(super::DurableStreamingInvocationRequest, Option<String>)>,
+    ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
+        if let Some((request, _)) = &selected_preparation {
+            let memory = golem_common::serialization::serialize(&(
+                &payload,
+                &request.attempt,
+                &request.foreign_mappings,
+            ))
+            .map_err(WorkerExecutorError::runtime)?
+            .len();
+            let worker = self.clone();
+            return self
+                .durable_stream_producer()
+                .await?
+                .run_admitted(None, memory, false, move |_, admission| async move {
+                    Ok::<_, crate::durable_host::durable_stream::SessionError>(
+                        worker
+                            .start_pending_invocation_owned(
+                                idempotency_key,
+                                operation,
+                                payload,
+                                context,
+                                wallet_pin,
+                                selected_preparation,
+                                Some(admission),
+                            )
+                            .await,
+                    )
+                })
+                .await
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+        }
+        self.start_pending_invocation_owned(
+            idempotency_key,
+            operation,
+            payload,
+            context,
+            wallet_pin,
+            None,
+            None,
+        )
+        .await
+    }
+
+    async fn start_pending_invocation_owned(
+        &self,
+        idempotency_key: InvocationId,
+        operation: golem_common::model::InvocationRequestOperation,
+        payload: golem_common::model::oplog::OplogPayload<
+            golem_common::model::StoredAgentInvocationPayload,
+        >,
+        context: golem_common::model::invocation_context::InvocationContextStack,
+        wallet_pin: golem_common::model::card::InvocationWalletPin,
+        selected_preparation: Option<(super::DurableStreamingInvocationRequest, Option<String>)>,
+        admission: Option<
+            std::sync::Arc<crate::durable_host::durable_stream::StreamWriteAdmission>,
+        >,
     ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
         use crate::services::oplog::{CommitLevel, OplogOps};
 
+        let session_guard = if selected_preparation.is_some() {
+            let producer = self.durable_stream_producer().await?;
+            let key = producer.qualify_session(
+                &golem_common::model::durable_stream::StreamRegistrationInvocation::Local(
+                    idempotency_key,
+                ),
+            );
+            Some(producer.session_lock(&key).lock_owned().await)
+        } else {
+            None
+        };
         // The running loop must not wait for a stopping instance to join this loop.
         let instance = self.instance.lock().await;
         if !matches!(instance.state(), super::WorkerInstance::Running(_))
@@ -84,10 +157,129 @@ impl<Ctx: WorkerCtx> super::Worker<Ctx> {
         {
             return Ok(None);
         }
+        if session_guard.is_some()
+            && self
+                .durable_stream_session_status(&idempotency_key)
+                .await?
+                .is_some_and(|status| {
+                    status.expired
+                        || status.cancellation_requested
+                        || status.expiry_deadline_millis.is_some_and(|deadline| {
+                            deadline <= golem_common::model::Timestamp::now_utc().to_millis()
+                        })
+                })
+        {
+            self.add_and_commit_oplog_internal(
+                &instance,
+                golem_common::model::oplog::OplogEntry::cancel_pending_invocation(idempotency_key),
+                Some(super::WorkerCommand::WorkAvailable),
+            )
+            .await?;
+            return Ok(None);
+        }
+        if let Some((request, route_scope)) = selected_preparation {
+            use golem_common::model::durable_stream::{
+                DURABLE_STREAM_FORMAT_VERSION, StreamBindingRecord, StreamRegistrationInvocation,
+                StreamSessionPreparedRecord, StreamTopologyPreparedRecord,
+            };
+            let producer = self.durable_stream_producer().await?;
+            let streams = crate::durable_host::durable_session::StreamSession::new(
+                producer.clone(),
+                self.oplog.clone(),
+                StreamRegistrationInvocation::Local(idempotency_key),
+                std::iter::empty(),
+            );
+            let topologies = request
+                .foreign_mappings
+                .iter()
+                .filter(|mapping| !producer.owns_handle_identity(&mapping.handle))
+                .map(|mapping| {
+                    Ok(StreamTopologyPreparedRecord {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: request.attempt.session_key.clone(),
+                        attachment: streams
+                            .attachment_key(&mapping.handle, producer.attachment_epoch_floor())
+                            .map_err(|error| {
+                                error.into_worker_executor_error(WorkerExecutorError::runtime)
+                            })?,
+                        mapping: mapping.clone(),
+                    })
+                })
+                .collect::<Result<Vec<_>, WorkerExecutorError>>()?;
+            let foreign = request
+                .foreign_mappings
+                .iter()
+                .map(StreamBindingRecord::foreign)
+                .collect::<Vec<_>>();
+            let mut attempt = request.attempt;
+            attempt.invocation.stream_handles = request
+                .foreign_mappings
+                .iter()
+                .map(|mapping| mapping.handle.clone())
+                .collect();
+            let started = self.oplog.agent_invocation_started_entry_from_payload(
+                idempotency_key,
+                operation,
+                payload,
+                context,
+                wallet_pin,
+            );
+            let admission = admission.expect("selected preparation holds producer admission");
+            admission
+                .submit(move |producer, write_context| async move {
+                    producer
+                        .prepare_session(
+                            Some(&write_context),
+                            request.registrations,
+                            topologies,
+                            started,
+                            request.acceptance_committed,
+                            move |bindings| StreamSessionPreparedRecord {
+                                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                session_key: idempotency_key,
+                                public_session_id: request.public_session_id,
+                                route_scope,
+                                expiry_policy: request.expiry_policy,
+                                expiry_deadline_millis: request.expiry_deadline_millis,
+                                stream_mappings: if foreign.is_empty() {
+                                    bindings
+                                } else {
+                                    foreign
+                                },
+                                attempt,
+                            },
+                        )
+                        .await
+                })
+                .await
+                .map_err(
+                    |error: crate::durable_host::durable_stream::StreamStoreError| {
+                        error.into_worker_executor_error(WorkerExecutorError::runtime)
+                    },
+                )?;
+            drop(instance);
+            drop(session_guard);
+            admission
+                .wait_published()
+                .await
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+            let status = self.get_repaired_status().await?;
+            return status
+                .running
+                .as_ref()
+                .filter(|running| running.key == idempotency_key)
+                .map(|running| Some(running.request.index))
+                .ok_or_else(|| {
+                    WorkerExecutorError::runtime(
+                        "committed streaming start is absent from agent status",
+                    )
+                });
+        }
         let index = self
             .oplog
             .add_agent_invocation_started_from_pending(
                 idempotency_key,
+                operation,
                 payload,
                 context,
                 wallet_pin,
@@ -100,8 +292,11 @@ impl<Ctx: WorkerCtx> super::Worker<Ctx> {
                     self.agent_id()
                 ),
             })?;
+        // The commit also stores a deferred `AgentInvocationSettled` of the previous invocation,
+        // and its fold covers both entries in order.
         self.commit_oplog_and_update_state(CommitLevel::Always)
             .await?;
+        self.settlement_committed();
         Ok(Some(index))
     }
 }
@@ -122,26 +317,67 @@ pub(crate) async fn with_invocation_stack<F: std::future::Future>(future: F) -> 
 
 /// Admits a pending invocation before executing it. `None` means admission declined to start.
 pub async fn invoke_live_observed_and_traced<Ctx: WorkerCtx>(
-    lowered: LoweredInvocation,
+    mut lowered: LoweredInvocation,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     invocation: crate::worker::HydratedInvocation,
     stream_session: Option<&InvocationId>,
+    recorder: Option<&mut dyn ReturnRecorder<Ctx>>,
 ) -> Result<Option<InvokeResult>, WorkerExecutorError> {
     let mut store = store.as_context_mut();
     let was_live_before = store.data().is_live();
+    let worker = store.data().get_public_state().worker();
+    let original = invocation.invocation.clone();
+    let needs_binding_restore = if matches!(original, AgentInvocation::AgentMethod { .. }) {
+        worker
+            .prepared_stream_session(original.idempotency_key().expect("method invocation key"))
+            .await?
+            .is_none()
+    } else {
+        false
+    };
     let started = async {
         store
             .data_mut()
-            .on_agent_invocation_started(invocation)
+            .on_agent_invocation_started(invocation, lowered.input())
             .await
     }
     .instrument(span!(Level::INFO, "on_agent_invocation_started"))
     .await;
     match started {
-        Ok(true) => invoke_observed_and_traced(lowered, &mut store, instance, stream_session)
-            .await
-            .map(Some),
+        Ok(true) => {
+            if needs_binding_restore
+                && worker
+                    .prepared_stream_session(
+                        original.idempotency_key().expect("method invocation key"),
+                    )
+                    .await?
+                    .is_some()
+            {
+                let execution_input = worker
+                    .rehydrate_durable_streaming_input(&original)
+                    .await
+                    .map_err(|error| {
+                        WorkerExecutorError::runtime(format!(
+                            "committed input reconstruction failed: {error}"
+                        ))
+                    })?;
+                lowered = lower_invocation(
+                    original,
+                    &store.data().component_metadata().metadata,
+                    &worker.owner_context,
+                    execution_input,
+                )
+                .map_err(|error| {
+                    WorkerExecutorError::runtime(format!(
+                        "committed invocation lowering failed: {error}"
+                    ))
+                })?;
+            }
+            invoke_observed_and_traced(lowered, &mut store, instance, stream_session, recorder)
+                .await
+                .map(Some)
+        }
         Ok(false) => {
             store.data_mut().on_agent_invocation_finished().await;
             Ok(None)
@@ -164,6 +400,8 @@ pub async fn invoke_live_observed_and_traced<Ctx: WorkerCtx>(
 /// - `store`: reference to the wasmtime instance's store
 /// - `instance`: reference to the wasmtime instance
 /// - `stream_session`: the session to materialize before ending the invocation scope
+/// - `recorder`: records the result of an agent method with a non-streaming result, or of the
+///   constructor, at the export's return, before the background work of the invocation drains
 ///
 /// Pending live invocations must first pass admission through
 /// [`invoke_live_observed_and_traced`]. Replay and snapshot calls need no pending admission.
@@ -172,11 +410,12 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     stream_session: Option<&InvocationId>,
+    recorder: Option<&mut dyn ReturnRecorder<Ctx>>,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
     let was_live_before = store.data().is_live();
 
-    let result = invoke_observed(lowered, &mut store, instance, stream_session).await;
+    let result = invoke_observed(lowered, &mut store, instance, stream_session, recorder).await;
 
     match &result {
         Err(_) => {
@@ -223,9 +462,11 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     stream_session: Option<&InvocationId>,
+    recorder: Option<&mut dyn ReturnRecorder<Ctx>>,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
+    let records_at_return = recorder.is_some() && lowered.records_result_at_return(stream_session);
     let LoweredInvocation {
         display_name,
         read_only_method,
@@ -243,12 +484,13 @@ async fn invoke_observed<Ctx: WorkerCtx>(
             return Err(error);
         }
     };
+    let initializes = matches!(&call, PreparedCall::Initialize { .. });
     let defers_producer_settlement = matches!(
         &call,
         PreparedCall::Invoke { expected_output, .. } if expected_output.uses_streams()
     );
 
-    let primary_body = match store
+    let mut primary_body = match store
         .data()
         .durable_ctx()
         .enter_primary_invocation_body()
@@ -271,7 +513,8 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     // executing wasm via the epoch callback; the resulting `InvokeResult::Interrupted` is
     // converted below into a typed timeout failure, so the timeout follows the normal
     // `TrapType::Error` retry handling instead of leaving the worker externally `Interrupted`.
-    let deadline = store.data().durable_ctx().arm_invocation_deadline();
+    // An invocation that records its result at the export's return disarms it there.
+    let mut deadline = Some(store.data().durable_ctx().arm_invocation_deadline());
 
     // If the invocation targets a read-only AgentMethod, enable the read-only invocation
     // strictness for the duration of the call. We restore the mode on every exit path:
@@ -289,13 +532,52 @@ async fn invoke_observed<Ctx: WorkerCtx>(
 
     let invocation_caller = call.caller();
     let durable_ctx = store.data_mut().durable_ctx_mut();
-    durable_ctx.set_invocation_caller(invocation_caller);
+    durable_ctx.set_invocation_caller(Some(invocation_caller));
     durable_ctx.set_invocation_id(call.has_invocation_id());
     let call_future = async {
-        let result = dispatch_call(&mut store, instance, call, &display_name).await;
-        // Returning a stream handle does not end its producer's invocation. Keep its
-        // authority and lane registration until production and tail work settle.
-        if let Some(idempotency_key) = stream_session {
+        let mut at_return_usage = None;
+        let mut result = dispatch_call(
+            &mut store,
+            instance,
+            call,
+            &display_name,
+            records_at_return.then_some(&mut at_return_usage),
+        )
+        .await;
+        if let Some(recorder) = recorder.filter(|_| records_at_return) {
+            // The export returned, unless the constructor returned an error, whose background
+            // work drained before the result.
+            let returned = matches!(&result, Ok(InvokeResult::Succeeded { .. }))
+                || (!initializes && matches!(&result, Ok(InvokeResult::MethodFailed { .. })));
+            if returned {
+                stash_replayed_invocation_terminal(&mut store, &mut result).await;
+                // Live, and at the replay tail, the tool children that run settle before the
+                // result is recorded, so that their failures still fail the invocation. Replay
+                // that read the recorded terminal consumed their entries already: they lie
+                // before it.
+                if !store
+                    .data()
+                    .durable_ctx()
+                    .has_replayed_invocation_terminal()
+                    && let Some(parent) = primary_body
+                        .as_ref()
+                        .and_then(|body| body.invocation().cloned())
+                {
+                    settle_tool_children_before_result(&mut store, parent, &mut result).await;
+                }
+            }
+            record_at_return_and_drain(
+                &mut store,
+                &display_name,
+                result,
+                recorder,
+                &mut deadline,
+                &mut primary_body,
+            )
+            .await
+        } else if let Some(idempotency_key) = stream_session {
+            // Returning a stream handle does not end its producer's invocation. Keep its
+            // authority and lane registration until production and tail work settle.
             materialize_streaming_result(&mut store, result, &display_name, idempotency_key).await
         } else {
             result
@@ -331,7 +613,9 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         crate::durable_host::tool::fence_tool_operations_for_jump(&mut store).await?;
     }
 
+    // A result recorded at the export's return settled its producers at the end of its drain.
     if !defers_producer_settlement
+        && !store.data().durable_ctx().result_recorded_at_return()
         && matches!(&call_result, Ok(InvokeResult::Succeeded { .. }))
         && store.data().check_interrupt().is_none()
     {
@@ -384,44 +668,8 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         .map_err(anyhow::Error::from)?;
     }
 
-    if let Some(parent) = primary_body
-        .as_ref()
-        .and_then(|primary_body| primary_body.invocation().cloned())
-    {
-        for error in
-            crate::durable_host::tool::prepare_tool_parent_end(&mut store, parent.clone()).await
-        {
-            let consumed_fuel = call_result
-                .as_ref()
-                .map(InvokeResult::consumed_fuel)
-                .unwrap_or_default();
-            let failure = invoke_result_from_trap(
-                &mut store,
-                consumed_fuel,
-                wasmtime::Error::from_anyhow(error),
-            )
-            .await;
-            retain_invocation_failure(&mut call_result, failure);
-        }
-        if let Some(primary_body) = primary_body {
-            primary_body.complete();
-        }
-        for error in crate::durable_host::tool::settle_tool_children(&mut store, parent).await {
-            let consumed_fuel = call_result
-                .as_ref()
-                .map(InvokeResult::consumed_fuel)
-                .unwrap_or_default();
-            let failure = invoke_result_from_trap(
-                &mut store,
-                consumed_fuel,
-                wasmtime::Error::from_anyhow(error),
-            )
-            .await;
-            retain_invocation_failure(&mut call_result, failure);
-        }
-        if let Some(owner_failure) = store.data().durable_ctx().selected_tool_owner_failure() {
-            apply_selected_owner_failure(&mut call_result, owner_failure);
-        }
+    if let Some(body) = primary_body.take_if(|body| body.invocation().is_some()) {
+        end_tool_parent(&mut store, body, &mut call_result).await;
     }
 
     drop(output_watch_guard);
@@ -492,6 +740,68 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     store.data_mut().on_agent_invocation_finished().await;
 
     apply_invocation_deadline(&mut store, deadline, call_result).await
+}
+
+/// Ends the primary body's tool parent: releases its deferred tool admissions, waits for its tool
+/// children to settle, and turns `result` into the failure of a tool child or of the selected
+/// owner failure.
+async fn end_tool_parent<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    primary_body: crate::durable_host::PrimaryInvocationBody,
+    result: &mut Result<InvokeResult, WorkerExecutorError>,
+) {
+    let parent = primary_body
+        .invocation()
+        .cloned()
+        .expect("only a primary body with an invocation ends a tool parent");
+    for error in crate::durable_host::tool::prepare_tool_parent_end(store, parent.clone()).await {
+        let consumed_fuel = result
+            .as_ref()
+            .map(InvokeResult::consumed_fuel)
+            .unwrap_or_default();
+        let failure =
+            invoke_result_from_trap(store, consumed_fuel, wasmtime::Error::from_anyhow(error))
+                .await;
+        retain_invocation_failure(result, failure);
+    }
+    primary_body.complete();
+    for error in crate::durable_host::tool::settle_tool_children(store, parent).await {
+        let consumed_fuel = result
+            .as_ref()
+            .map(InvokeResult::consumed_fuel)
+            .unwrap_or_default();
+        let failure =
+            invoke_result_from_trap(store, consumed_fuel, wasmtime::Error::from_anyhow(error))
+                .await;
+        retain_invocation_failure(result, failure);
+    }
+    if let Some(owner_failure) = store.data().durable_ctx().selected_tool_owner_failure() {
+        apply_selected_owner_failure(result, owner_failure);
+    }
+}
+
+/// Waits at the export's return, with the tool parent open, for the tool children of `parent`
+/// that run or need no admission, and turns `result` into the failure of a tool child or of the
+/// selected owner failure. A capable child that waits for its parent's end stays staged: the end
+/// of the parent, after the background work drained, admits it.
+async fn settle_tool_children_before_result<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    parent: crate::worker::owner_lane::OwnerInvocationId,
+    result: &mut Result<InvokeResult, WorkerExecutorError>,
+) {
+    for error in crate::durable_host::tool::settle_admitted_tool_children(store, parent).await {
+        let consumed_fuel = result
+            .as_ref()
+            .map(InvokeResult::consumed_fuel)
+            .unwrap_or_default();
+        let failure =
+            invoke_result_from_trap(store, consumed_fuel, wasmtime::Error::from_anyhow(error))
+                .await;
+        retain_invocation_failure(result, failure);
+    }
+    if let Some(owner_failure) = store.data().durable_ctx().selected_tool_owner_failure() {
+        apply_selected_owner_failure(result, owner_failure);
+    }
 }
 
 fn apply_selected_owner_failure(
@@ -671,7 +981,7 @@ async fn materialize_streaming_result<Ctx: WorkerCtx>(
     let materialized = match runtime {
         Some(runtime) => {
             runtime
-                .drive(future, entity_invocation.as_ref(), policy)
+                .drive(future, entity_invocation.as_ref(), policy, false)
                 .await
         }
         None => future.await,
@@ -767,9 +1077,12 @@ async fn materialize_streaming_result<Ctx: WorkerCtx>(
 /// interrupt even when the deadline also fired.
 async fn apply_invocation_deadline<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
-    deadline: crate::durable_host::InvocationDeadline,
+    deadline: Option<crate::durable_host::InvocationDeadline>,
     call_result: Result<InvokeResult, WorkerExecutorError>,
 ) -> Result<InvokeResult, WorkerExecutorError> {
+    let Some(deadline) = deadline else {
+        return call_result;
+    };
     if !deadline.exceeded() || store.data().durable_ctx().is_interrupting() {
         return call_result;
     }
@@ -777,23 +1090,28 @@ async fn apply_invocation_deadline<Ctx: WorkerCtx>(
         Ok(InvokeResult::Interrupted {
             consumed_fuel,
             interrupt_kind: InterruptKind::Interrupt(_),
-        }) => {
-            let retry_from = store.data().get_current_retry_point().await;
-            Ok(InvokeResult::Failed {
-                consumed_fuel,
-                timed_out: true,
-                error: OplogAgentError::InternalError(format!(
-                    "invocation exceeded the configured maximum invocation duration of {:?}",
-                    deadline
-                        .duration()
-                        .expect("an exceeded deadline always has a configured duration")
-                )),
-                retry_from,
-                semantic_trap_retry_override: None,
-                provenance: FailureProvenance::Host,
-            })
-        }
+        }) => Ok(timed_out_failure(store, consumed_fuel, deadline.duration()).await),
         other => other,
+    }
+}
+
+/// The failure of an invocation whose `limits.max_invocation_duration` deadline fired.
+async fn timed_out_failure<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    consumed_fuel: u64,
+    duration: Option<std::time::Duration>,
+) -> InvokeResult {
+    let retry_from = store.data().get_current_retry_point().await;
+    InvokeResult::Failed {
+        consumed_fuel,
+        timed_out: true,
+        error: OplogAgentError::InternalError(format!(
+            "invocation exceeded the configured maximum invocation duration of {:?}",
+            duration.expect("an exceeded deadline always has a configured duration")
+        )),
+        retry_from,
+        semantic_trap_retry_override: None,
+        provenance: FailureProvenance::Host,
     }
 }
 
@@ -956,11 +1274,11 @@ fn unreadable_oplog_in(error: &wasmtime::Error) -> Option<(AgentId, WorkerExecut
         .chain()
         .find_map(|cause| match cause.downcast_ref::<WorkerExecutorError>() {
             Some(error @ WorkerExecutorError::OplogFailed { agent_id, .. }) => {
-                Some((agent_id.clone(), error.clone()))
+                Some((*agent_id, error.clone()))
             }
             _ => cause
                 .downcast_ref::<UnreadableOplog>()
-                .map(|error| (error.agent_id.clone(), error.clone().into())),
+                .map(|error| (error.agent_id, error.clone().into())),
         })
 }
 
@@ -1090,7 +1408,7 @@ pub(crate) async fn run_tool_guest_call<Ctx: WorkerCtx, R>(
             }
         });
     let result = match runtime {
-        Some(runtime) => runtime.drive(driver, entity.as_ref(), policy).await,
+        Some(runtime) => runtime.drive(driver, entity.as_ref(), policy, false).await,
         None => driver.await,
     };
     let ctx = store.data().durable_ctx();
@@ -1195,6 +1513,9 @@ pub(crate) async fn run_stream_producers_settled<Ctx: WorkerCtx, R>(
 pub(crate) enum SettlementDeadline {
     RootReturned,
     GuestTasksExited,
+    /// The drain of an invocation whose result was recorded at the export's return. It is not
+    /// bounded by `limits.tail_work_settle_timeout`.
+    AfterResult,
 }
 
 pub(crate) async fn run_guest_call_settled_at<Ctx: WorkerCtx, R>(
@@ -1244,31 +1565,29 @@ pub(crate) async fn run_guest_call_settled_at<Ctx: WorkerCtx, R>(
         tracing::debug!("invocation tail-work settlement check: {active} spawned task(s) active");
         tail_work_settled(active)
     };
-    let tail_work_deadline = store
-        .data()
-        .durable_ctx()
-        .arm_tail_work_deadline(drain_started);
+    let tail_work_deadline = (!matches!(deadline, SettlementDeadline::AfterResult)).then(|| {
+        store
+            .data()
+            .durable_ctx()
+            .arm_tail_work_deadline(drain_started)
+    });
     let future = store
         .as_context_mut()
         .run_concurrent_and_settle(fun, &mut settled);
     let result = match runtime {
         Some(runtime) => {
             runtime
-                .drive(future, entity_invocation.as_ref(), policy)
+                .drive(future, entity_invocation.as_ref(), policy, false)
                 .await
         }
         None => future.await,
     };
     let interrupted = store.data().durable_ctx().is_interrupting()
         || store.data().durable_ctx().invocation_deadline_exceeded();
-    let tail_timeout = if tail_work_deadline.exceeded() && !interrupted {
-        Some((
-            tail_work_deadline.duration(),
-            tracker_for_error.active_count(),
-        ))
-    } else {
-        None
-    };
+    let tail_timeout = tail_work_deadline
+        .as_ref()
+        .filter(|deadline| deadline.exceeded() && !interrupted)
+        .map(|deadline| (deadline.duration(), tracker_for_error.active_count()));
     classify_guest_call_settlement(
         store.data().agent_id(),
         store.data().durable_ctx().last_replayed_index(),
@@ -1278,19 +1597,410 @@ pub(crate) async fn run_guest_call_settled_at<Ctx: WorkerCtx, R>(
     )
 }
 
+/// Records the result of an agent method with a non-streaming result, or of the constructor,
+/// when its export returns, before the background work of the invocation drains.
+///
+/// The invocation loop and the replay driver supply it. It keeps the outcome of the recording,
+/// which the caller reads after [`invoke_observed_and_traced`] returns.
+pub trait ReturnRecorder<Ctx: WorkerCtx>: Send {
+    /// Records `result`, a `Succeeded` or `MethodFailed` result, and gives it back. `true` means
+    /// the result is recorded and the background work drains; `false` means it is not recorded,
+    /// and the invocation returns `result` without a drain.
+    fn record<'a>(
+        &'a mut self,
+        store: &'a mut StoreContextMut<'_, Ctx>,
+        display_name: &'a str,
+        result: InvokeResult,
+    ) -> Pin<Box<dyn Future<Output = (InvokeResult, bool)> + Send + 'a>>;
+}
+
+/// The outcome of recording a result at the export's return.
+pub(crate) enum ReturnRecorded {
+    Succeeded(Result<(), WorkerExecutorError>),
+    MethodFailed(Result<(), crate::worker::MethodFailureSettlementError>),
+}
+
+impl ReturnRecorded {
+    /// Whether the result is recorded.
+    pub(crate) fn is_recorded(&self) -> bool {
+        match self {
+            Self::Succeeded(recorded) => recorded.is_ok(),
+            Self::MethodFailed(recorded) => recorded.is_ok(),
+        }
+    }
+}
+
+/// Records a `Succeeded` or `MethodFailed` result at the export's return, live or by consuming
+/// the recorded terminal in replay, and gives `result` back. Any other result records nothing.
+pub(crate) async fn record_result_at_return<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    display_name: &str,
+    result: InvokeResult,
+    uses_streams: bool,
+) -> (InvokeResult, Option<ReturnRecorded>) {
+    match result {
+        InvokeResult::Succeeded {
+            result,
+            consumed_fuel,
+        } => {
+            let mut output = AgentInvocationOutput {
+                result: *result,
+                consumed_fuel: Some(consumed_fuel),
+                invocation_status: None,
+                component_revision: Some(store.data().component_metadata().revision),
+                agent_id: None,
+                idempotency_key: None,
+                oplog_index: None,
+                agent_fingerprint: None,
+                background_failure: None,
+            };
+            let recorded = store
+                .data_mut()
+                .on_agent_invocation_success(
+                    display_name,
+                    consumed_fuel,
+                    &mut output,
+                    ResultRecordedAt::ExportReturn,
+                )
+                .await;
+            (
+                InvokeResult::Succeeded {
+                    result: Box::new(output.result),
+                    consumed_fuel,
+                },
+                Some(ReturnRecorded::Succeeded(recorded)),
+            )
+        }
+        InvokeResult::MethodFailed { ref error, .. } => {
+            let recorded = crate::durable_host::DurableWorkerCtx::<Ctx>::on_agent_method_failure(
+                store,
+                display_name,
+                error.clone(),
+                uses_streams,
+                ResultRecordedAt::ExportReturn,
+            )
+            .await;
+            (result, Some(ReturnRecorded::MethodFailed(recorded)))
+        }
+        other => (other, None),
+    }
+}
+
+/// Runs a guest export call on the store's event loop until the root future resolves, leaving
+/// the spawned guest and host work of the call in the Store. A poll that blocks while the root
+/// is the only open activity of the Store traps with [`wasmtime::Trap::AsyncDeadlock`].
+async fn run_guest_call_until_return<Ctx: WorkerCtx, R>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    fun: impl AsyncFnOnce(&Accessor<Ctx>) -> R,
+) -> Result<R, GuestCallSettlementError> {
+    let runtime = store.data().durable_ctx().runtime_suspension.clone();
+    let entity_invocation = store
+        .data()
+        .durable_ctx()
+        .entity_invocation_scope()
+        .map(|scope| scope.invocation_id().clone());
+    let policy = store.data().durable_ctx().suspension_policy();
+    let attribution = store.data().durable_ctx().attribution.clone();
+    let invocation_key = store.data().durable_ctx().invocation_key();
+    let runtime_for_call = runtime.clone();
+    let future = store
+        .as_context_mut()
+        .run_concurrent(async move |accessor: &Accessor<Ctx>| {
+            if let (Some(runtime), Some(activity)) =
+                (&runtime_for_call, accessor.runtime_activity())
+            {
+                runtime.certify_root(activity);
+            }
+            attribution
+                .scoped(Some(invocation_key), fun(accessor))
+                .await
+        });
+    let result = match runtime {
+        Some(runtime) => {
+            runtime
+                .drive(future, entity_invocation.as_ref(), policy, true)
+                .await
+        }
+        None => future.await,
+    };
+    let interrupted = store.data().durable_ctx().is_interrupting()
+        || store.data().durable_ctx().invocation_deadline_exceeded();
+    classify_guest_call_settlement(
+        store.data().agent_id(),
+        store.data().durable_ctx().last_replayed_index(),
+        result,
+        None,
+        interrupted,
+    )
+}
+
+/// In replay, after the export returned, waits with the event loop running for the recorded
+/// terminal of the invocation and stashes it for the result reader. The background work and the
+/// tool children of the invocation keep replaying meanwhile and consume the entries recorded
+/// before the terminal. At the replay tail, and in a live run, nothing is stashed. A failure of
+/// the background work while it waits replaces `result`.
+async fn stash_replayed_invocation_terminal<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    result: &mut Result<InvokeResult, WorkerExecutorError>,
+) {
+    let Some(reader) = store.data().durable_ctx().invocation_terminal_reader() else {
+        return;
+    };
+    let read = run_guest_call_until_return(store, async |accessor| {
+        // A replayed call that the guest dropped resolves through its claim or a
+        // `ReplayCancelWaiter`, never through the dropped-call queue, so no drain has to record
+        // an entry before the recorded terminal is read.
+        if let Some(terminal) = reader.read().await.transpose() {
+            accessor.with(|mut access| {
+                access
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .stash_replayed_invocation_terminal(terminal)
+            });
+        }
+    })
+    .await;
+    match read {
+        Ok(()) => {}
+        Err(GuestCallSettlementError::Infrastructure(error)) => *result = Err(error),
+        Err(GuestCallSettlementError::Trap(error))
+        | Err(GuestCallSettlementError::Interrupted(error)) => {
+            let consumed_fuel = result
+                .as_ref()
+                .map(InvokeResult::consumed_fuel)
+                .unwrap_or_default();
+            *result = invoke_result_from_trap(store, consumed_fuel, error).await;
+        }
+    }
+}
+
+/// Records `result` at the export's return and drains the background work of the invocation.
+///
+/// A result other than `Succeeded` or `MethodFailed`, and a result the recorder does not record,
+/// returns at once. The invocation deadline is disarmed before the recording; a deadline that
+/// fired first turns the result into the timeout failure. A recorded result drains the background
+/// work without the tail-work settlement timeout, and settles the invocation: the end of the
+/// drain ends the tool parent of `primary_body`, which admits and settles the tool children made
+/// after the return and the staged ones, then settles the schema producers of a success and
+/// records `AgentInvocationSettled` with the fuel of the drain. A failed drain, or a failed tool
+/// child at its end, returns its failure; the result stays recorded. `primary_body` stays with
+/// the caller when the result is not recorded.
+async fn record_at_return_and_drain<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    display_name: &str,
+    result: Result<InvokeResult, WorkerExecutorError>,
+    recorder: &mut dyn ReturnRecorder<Ctx>,
+    deadline: &mut Option<crate::durable_host::InvocationDeadline>,
+    primary_body: &mut Option<crate::durable_host::PrimaryInvocationBody>,
+) -> Result<InvokeResult, WorkerExecutorError> {
+    let result = match result {
+        Ok(result @ (InvokeResult::Succeeded { .. } | InvokeResult::MethodFailed { .. })) => result,
+        other => return unrecorded_at_return(store, other),
+    };
+    if let Some(armed) = deadline.take() {
+        let duration = armed.duration();
+        if !armed.disarm() {
+            let failure = timed_out_failure(store, result.consumed_fuel(), duration).await;
+            return unrecorded_at_return(store, Ok(failure));
+        }
+    }
+    let (result, recorded) = recorder.record(store, display_name, result).await;
+    if !recorded {
+        return unrecorded_at_return(store, Ok(result));
+    }
+    store
+        .data_mut()
+        .durable_ctx_mut()
+        .mark_result_recorded_at_return();
+
+    rearm_fuel_check(store);
+    let current_level = store.get_fuel().unwrap_or(0);
+    let agent_mode = store.data().agent_mode();
+    if let Err(error) = store.data_mut().ensure_fuel(current_level) {
+        return Err(resource_capacity_error(agent_mode, error));
+    }
+    let drained =
+        run_guest_call_settled_at(store, async |_accessor| (), SettlementDeadline::AfterResult)
+            .await;
+    let mut ended = Ok(result);
+    if let Some(body) = primary_body.take_if(|body| body.invocation().is_some()) {
+        end_tool_parent(store, body, &mut ended).await;
+    }
+    let settled_fuel = finish_invocation_and_get_fuel_consumption(store, display_name).await?;
+    // A tool child that failed at the end of the drain fails the drain, like a trap of the
+    // background work: its failure carries the fuel of the drain.
+    if let Ok(
+        InvokeResult::Failed { consumed_fuel, .. }
+        | InvokeResult::Interrupted { consumed_fuel, .. },
+    ) = &mut ended
+    {
+        *consumed_fuel = settled_fuel;
+    }
+    match drained {
+        Ok(()) => {}
+        Err(GuestCallSettlementError::Infrastructure(error)) => return Err(error),
+        Err(GuestCallSettlementError::Trap(error))
+        | Err(GuestCallSettlementError::Interrupted(error)) => {
+            return invoke_result_from_trap(store, settled_fuel, error).await;
+        }
+    }
+    let result = match ended {
+        Ok(result @ (InvokeResult::Succeeded { .. } | InvokeResult::MethodFailed { .. })) => result,
+        failure => return failure,
+    };
+    if matches!(result, InvokeResult::Succeeded { .. }) && store.data().check_interrupt().is_none()
+    {
+        store
+            .data_mut()
+            .durable_ctx_mut()
+            .settle_schema_producers(Ok(()));
+    }
+    store
+        .data_mut()
+        .durable_ctx_mut()
+        .on_agent_invocation_settled(settled_fuel)
+        .await?;
+    Ok(result)
+}
+
+/// Returns `result` of an invocation whose result is not recorded at the export's return. The
+/// terminal that replay stashed for the result reader is discarded; when reading it failed, that
+/// failure is returned instead.
+fn unrecorded_at_return<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    result: Result<InvokeResult, WorkerExecutorError>,
+) -> Result<InvokeResult, WorkerExecutorError> {
+    match store
+        .data_mut()
+        .durable_ctx_mut()
+        .take_replayed_invocation_terminal()
+    {
+        Some(Err(error)) => Err(error),
+        Some(Ok(_)) | None => result,
+    }
+}
+
 /// Dispatches a single lowered invocation to the matching typed guest export
 /// accessor (`golem:agent/guest@2.0.0`, `golem:api/save-snapshot`,
 /// `golem:api/load-snapshot`, or `golem:api/oplog-processor`) and maps its
 /// typed result into an [`InvokeResult`].
+///
+/// With `at_return_usage`, the constructor and an agent method with a non-streaming result run
+/// until the export returns and leave their background work in the Store; the caller records the
+/// result and drains it ([`record_at_return_and_drain`]). They leave the resource usage guard of
+/// the call in `at_return_usage`, so that it covers the drain. Every other call drains its
+/// background work before it returns its result.
 async fn dispatch_call<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     instance: &wasmtime::component::Instance,
     call: PreparedCall,
     display_name: &str,
+    at_return_usage: Option<&mut Option<crate::services::linear_memory::GuestResourceUsageGuard>>,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let attribution = store.data().durable_ctx().attribution.clone();
     let invocation_key = store.data().durable_ctx().invocation_key();
     match call {
+        PreparedCall::Initialize {
+            agent_type, input, ..
+        } if at_return_usage.is_some() => {
+            let guest = load_agent_guest(store, instance)?;
+            *at_return_usage.expect("the guard checked the usage slot") =
+                prepare_metered_guest_call(store, display_name, false).await?;
+            let returned = attribution.export_returned(invocation_key);
+            let result = run_guest_call_until_return(store, async |accessor| {
+                returned
+                    .observe(attribution.armed(
+                        invocation_key,
+                        guest.call_initialize(accessor, agent_type, input),
+                    ))
+                    .await
+            })
+            .await;
+            store
+                .data_mut()
+                .durable_ctx_mut()
+                .apply_return_cut_off(invocation_key);
+            // A constructor error is not recorded at the return, so its background work drains
+            // before the failure is handled, as for every other unrecorded result.
+            let result = match result {
+                Ok(Ok(Err(wire_err))) => {
+                    match run_guest_call_settled(store, async |_accessor| ()).await {
+                        Ok(()) => Ok(Ok(Err(wire_err))),
+                        Err(error) => Err(error),
+                    }
+                }
+                other => other,
+            };
+            let consumed_fuel =
+                finish_invocation_and_get_fuel_consumption(store, display_name).await?;
+            match result {
+                Ok(Ok(Ok(()))) => Ok(InvokeResult::Succeeded {
+                    consumed_fuel,
+                    result: Box::new(AgentInvocationResult::AgentInitialization),
+                }),
+                Ok(Ok(Err(wire_err))) => invoke_result_from_agent_error(
+                    store,
+                    golem_common::model::agent::AgentInvocationKind::AgentInitialization,
+                    consumed_fuel,
+                    wire_err,
+                ),
+                Ok(Err(err))
+                | Err(GuestCallSettlementError::Interrupted(err))
+                | Err(GuestCallSettlementError::Trap(err)) => {
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await
+                }
+                Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
+            }
+        }
+        PreparedCall::Invoke {
+            method_name,
+            input,
+            expected_output,
+            ..
+        } if !expected_output.uses_streams() && at_return_usage.is_some() => {
+            let guest = load_agent_guest(store, instance)?;
+            *at_return_usage.expect("the guard checked the usage slot") =
+                prepare_metered_guest_call(store, display_name, false).await?;
+            let returned = attribution.export_returned(invocation_key);
+            let result = run_guest_call_until_return(store, async |accessor| {
+                returned
+                    .observe(attribution.armed(
+                        invocation_key,
+                        guest.call_invoke(accessor, method_name, input),
+                    ))
+                    .await
+            })
+            .await;
+            store
+                .data_mut()
+                .durable_ctx_mut()
+                .apply_return_cut_off(invocation_key);
+            let consumed_fuel =
+                finish_invocation_and_get_fuel_consumption(store, display_name).await?;
+            match result {
+                Ok(Ok(Ok(invoke_output))) => {
+                    decode_invoke_output(store, invoke_output).and_then(|output| {
+                        validate_invoke_output(display_name, &expected_output, &output)?;
+                        Ok(InvokeResult::Succeeded {
+                            consumed_fuel,
+                            result: Box::new(AgentInvocationResult::AgentMethod { output }),
+                        })
+                    })
+                }
+                Ok(Ok(Err(wire_err))) => invoke_result_from_agent_error(
+                    store,
+                    golem_common::model::agent::AgentInvocationKind::AgentMethod,
+                    consumed_fuel,
+                    wire_err,
+                ),
+                Ok(Err(err))
+                | Err(GuestCallSettlementError::Interrupted(err))
+                | Err(GuestCallSettlementError::Trap(err)) => {
+                    invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await
+                }
+                Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
+            }
+        }
         PreparedCall::Initialize {
             agent_type, input, ..
         } => {
@@ -1360,7 +2070,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 let result = match runtime {
                     Some(runtime) => {
                         runtime
-                            .drive(future, entity_invocation.as_ref(), policy)
+                            .drive(future, entity_invocation.as_ref(), policy, false)
                             .await
                     }
                     None => future.await,
@@ -1426,7 +2136,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
         }
-        PreparedCall::SaveSnapshot => {
+        PreparedCall::SaveSnapshot { .. } => {
             let guest = load_save_snapshot_guest(store, instance)?;
             let _usage = prepare_metered_guest_call(store, display_name, false).await?;
             let result = run_guest_call_settled(store, async |accessor| {
@@ -1452,12 +2162,14 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
         }
-        PreparedCall::LoadSnapshot { snapshot } => {
+        PreparedCall::LoadSnapshot {
+            snapshot, input, ..
+        } => {
             let guest = load_load_snapshot_guest(store, instance)?;
             let _usage = prepare_metered_guest_call(store, display_name, true).await?;
             let result = run_guest_call_settled(store, async |accessor| {
                 attribution
-                    .armed(invocation_key, guest.call_load(accessor, snapshot))
+                    .armed(invocation_key, guest.call_load(accessor, snapshot, input))
                     .await
             })
             .await;
@@ -1479,11 +2191,11 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         PreparedCall::ProcessOplogEntries {
             account_info,
             config,
-            component_id,
             agent_id,
             metadata,
             first_entry_index,
             entries,
+            ..
         } => {
             let guest = load_oplog_processor_guest(store, instance)?;
             let _usage = prepare_metered_guest_call(store, display_name, false).await?;
@@ -1495,7 +2207,6 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                             accessor,
                             account_info,
                             config,
-                            component_id,
                             agent_id,
                             metadata,
                             first_entry_index,
@@ -2094,6 +2805,36 @@ pub struct LoweredInvocation {
     call: LoweredCall,
 }
 
+impl LoweredInvocation {
+    /// Whether the invocation records its result at the export's return, before its background
+    /// work drains, when its caller supplies a [`ReturnRecorder`]: the constructor and an agent
+    /// method with a non-streaming result that runs without a durable streaming session.
+    /// `stream_session` is the session the caller passes to [`invoke_observed_and_traced`]; a
+    /// method with stream inputs runs in one even when its result has no streams.
+    pub(crate) fn records_result_at_return(&self, stream_session: Option<&InvocationId>) -> bool {
+        if stream_session.is_some() {
+            return false;
+        }
+        match &self.call {
+            LoweredCall::Initialize { .. } => true,
+            LoweredCall::Invoke {
+                expected_output, ..
+            } => !expected_output.uses_streams(),
+            _ => false,
+        }
+    }
+
+    fn input(&self) -> Option<&SchemaValue> {
+        match &self.call {
+            LoweredCall::Initialize { input, .. } | LoweredCall::Invoke { input, .. } => {
+                Some(input)
+            }
+            LoweredCall::ExternalTool { input, .. } => Some(input.value()),
+            _ => None,
+        }
+    }
+}
+
 /// The typed guest-export call an [`AgentInvocation`] lowers to.
 ///
 /// `Initialize`/`Invoke` carry the schema-native input as a [`SchemaValue`]
@@ -2113,18 +2854,22 @@ enum LoweredCall {
         caller: golem_common::model::caller::Caller,
         expected_output: Box<ExpectedInvokeOutput>,
     },
-    SaveSnapshot,
+    SaveSnapshot {
+        caller: golem_common::model::caller::Caller,
+    },
     LoadSnapshot {
         snapshot: golem_api_1_x::host::Snapshot,
+        input: SchemaValue,
+        caller: golem_common::model::caller::Caller,
     },
     ProcessOplogEntries {
         account_info: oplog_processor_exports::AccountInfo,
         config: Vec<(String, String)>,
-        component_id: core_wire::ComponentId,
         agent_id: core_wire::AgentId,
         metadata: golem_api_1_x::host::AgentMetadata,
         first_entry_index: u64,
         entries: Vec<golem_api_1_x::oplog::OplogEntry>,
+        caller: golem_common::model::caller::Caller,
     },
     ExternalTool {
         activation: Box<ToolActivationSnapshot>,
@@ -2155,18 +2900,22 @@ enum PreparedCall {
         caller: golem_common::model::caller::Caller,
         expected_output: Box<ExpectedInvokeOutput>,
     },
-    SaveSnapshot,
+    SaveSnapshot {
+        caller: golem_common::model::caller::Caller,
+    },
     LoadSnapshot {
         snapshot: golem_api_1_x::host::Snapshot,
+        input: core_wire::SchemaValueTree,
+        caller: golem_common::model::caller::Caller,
     },
     ProcessOplogEntries {
         account_info: oplog_processor_exports::AccountInfo,
         config: Vec<(String, String)>,
-        component_id: core_wire::ComponentId,
         agent_id: core_wire::AgentId,
         metadata: golem_api_1_x::host::AgentMetadata,
         first_entry_index: u64,
         entries: Vec<golem_api_1_x::oplog::OplogEntry>,
+        caller: golem_common::model::caller::Caller,
     },
     ExternalTool {
         activation: std::sync::Arc<ToolActivationSnapshot>,
@@ -2187,14 +2936,14 @@ impl PreparedCall {
         matches!(self, Self::Invoke { .. } | Self::ExternalTool { .. })
     }
 
-    fn caller(&self) -> Option<golem_common::model::caller::Caller> {
+    fn caller(&self) -> golem_common::model::caller::Caller {
         match self {
             Self::Initialize { caller, .. }
             | Self::Invoke { caller, .. }
-            | Self::ExternalTool { caller, .. } => Some(caller.clone()),
-            Self::SaveSnapshot | Self::LoadSnapshot { .. } | Self::ProcessOplogEntries { .. } => {
-                None
-            }
+            | Self::ExternalTool { caller, .. }
+            | Self::SaveSnapshot { caller }
+            | Self::LoadSnapshot { caller, .. }
+            | Self::ProcessOplogEntries { caller, .. } => caller.clone(),
         }
     }
 }
@@ -2251,24 +3000,40 @@ fn materialize_call<Ctx: WorkerCtx>(
                 expected_output,
             }
         }
-        LoweredCall::SaveSnapshot => PreparedCall::SaveSnapshot,
-        LoweredCall::LoadSnapshot { snapshot } => PreparedCall::LoadSnapshot { snapshot },
+        LoweredCall::SaveSnapshot { caller } => PreparedCall::SaveSnapshot { caller },
+        LoweredCall::LoadSnapshot {
+            snapshot,
+            input,
+            caller,
+        } => {
+            let input =
+                encode_value_with(&input, store.data_mut().durable_ctx_mut()).map_err(|e| {
+                    WorkerExecutorError::runtime(format!(
+                        "Failed to encode load-snapshot constructor input: {e}"
+                    ))
+                })?;
+            PreparedCall::LoadSnapshot {
+                snapshot,
+                input,
+                caller,
+            }
+        }
         LoweredCall::ProcessOplogEntries {
             account_info,
             config,
-            component_id,
             agent_id,
             metadata,
             first_entry_index,
             entries,
+            caller,
         } => PreparedCall::ProcessOplogEntries {
             account_info,
             config,
-            component_id,
             agent_id,
             metadata,
             first_entry_index,
             entries,
+            caller,
         },
         LoweredCall::ExternalTool {
             activation,
@@ -2292,11 +3057,57 @@ fn materialize_call<Ctx: WorkerCtx>(
     })
 }
 
+pub(crate) fn native_invocation_start(
+    method_name: &str,
+    input: &SchemaValue,
+    allow_streams: bool,
+) -> Result<golem_api_grpc::proto::golem::worker::InvocationStart, WorkerExecutorError> {
+    let mut ordinal = 0;
+    let input = golem_common::schema::streaming::encode_recursive_stream_value(input, |_, _| {
+        let id = ordinal;
+        ordinal += 1;
+        Ok(id)
+    })
+    .map_err(WorkerExecutorError::invalid_request)?;
+    Ok(golem_api_grpc::proto::golem::worker::InvocationStart {
+        method_name: Some(method_name.to_string()),
+        input: Some(input),
+        allow_streams,
+        ..Default::default()
+    })
+}
+
+/// Checks only the request against the component chosen for a missing owner. This neither
+/// registers streams nor enters a guest, and must run before Create is persisted.
+pub(crate) fn validate_fresh_invocation(
+    start: &golem_api_grpc::proto::golem::worker::InvocationStart,
+    component_metadata: &ComponentMetadata,
+    owner_context: &ResolvedOwnerContext,
+) -> Result<(), WorkerExecutorError> {
+    let input = crate::grpc::capture_method_input(start)?;
+    let invocation = AgentInvocation::AgentMethod {
+        idempotency_key: golem_common::model::InvocationId(uuid::Uuid::nil()),
+        method_name: start
+            .method_name
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("method_name is required"))?,
+        input,
+        allow_streams: start.allow_streams,
+        invocation_context: golem_common::model::invocation_context::InvocationContextStack::fresh(
+        ),
+        caller: golem_common::model::caller::Caller::anonymous(),
+        scope_card: None,
+    };
+    lower_invocation(invocation, component_metadata, owner_context, None).map(|_| ())
+}
+
 pub fn lower_invocation(
     invocation: AgentInvocation,
     component_metadata: &ComponentMetadata,
-    agent_id: Option<&ParsedAgentKey>,
+    owner_context: &ResolvedOwnerContext,
+    execution_input: Option<TypedSchemaValue>,
 ) -> Result<LoweredInvocation, WorkerExecutorError> {
+    let agent_id = owner_context.agent();
     match invocation {
         AgentInvocation::AgentInitialization { input, caller, .. } => {
             let agent_type = resolve_agent_type(component_metadata, agent_id)?;
@@ -2317,14 +3128,11 @@ pub fn lower_invocation(
         AgentInvocation::AgentMethod {
             method_name,
             input,
+            allow_streams,
             caller,
             ..
         } => {
             let agent_type = resolve_agent_type(component_metadata, agent_id)?;
-            // The method is resolved only to classify read-only methods; the
-            // input carrier is already the schema-native parameter record.
-            // Encoding to the wire tree (which may mint owned capability
-            // handles) is deferred to `materialize_call`.
             let method = agent_type
                 .methods
                 .iter()
@@ -2336,6 +3144,22 @@ pub fn lower_invocation(
                     ))
                 })?;
 
+            if matches!(&input, golem_common::model::agent::AgentMethodInput::Native(input) if input.is_external_rest())
+                && let Some(output) = method.output_schema.schema()
+                && let Some(occurrence) =
+                    golem_schema::schema::host_managed::find_host_managed_type(
+                        &agent_type.schema,
+                        output,
+                    )
+                    .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?
+            {
+                return Err(WorkerExecutorError::invalid_request(format!(
+                    "Agent method output schema contains host-managed capability {} at {}; this method cannot be invoked through external REST",
+                    occurrence.kind.kind_name(),
+                    occurrence.path,
+                )));
+            }
+            let input = decode_method_input(&input, agent_type, method, execution_input.as_ref())?;
             let read_only_method = method.read_only.is_some().then(|| method_name.clone());
             let stream_metadata = validate_method_invocation(
                 component_metadata,
@@ -2344,6 +3168,11 @@ pub fn lower_invocation(
                 &input,
                 &method_name,
             )?;
+            if !allow_streams && stream_metadata.uses_streams() {
+                return Err(WorkerExecutorError::invalid_request(
+                    "the selected method requires a streaming invocation",
+                ));
+            }
 
             let expected_output = Box::new(ExpectedInvokeOutput {
                 graph: agent_type.schema.clone(),
@@ -2382,7 +3211,7 @@ pub fn lower_invocation(
                 activation,
                 tool_name,
                 command_path,
-                input,
+                input: execution_input.map(Box::new).unwrap_or(input),
                 stdin,
                 stdout,
                 stderr,
@@ -2392,28 +3221,43 @@ pub fn lower_invocation(
         AgentInvocation::ManualUpdate { .. } => Err(WorkerExecutorError::invalid_request(
             "ManualUpdate should not be invoked as a wasm function directly".to_string(),
         )),
-        AgentInvocation::SaveSnapshot { .. } => Ok(LoweredInvocation {
+        AgentInvocation::SaveSnapshot { caller, .. } => Ok(LoweredInvocation {
             display_name: "save-snapshot".to_string(),
             read_only_method: None,
-            call: LoweredCall::SaveSnapshot,
+            call: LoweredCall::SaveSnapshot { caller },
         }),
-        AgentInvocation::LoadSnapshot { snapshot, .. } => Ok(LoweredInvocation {
-            display_name: "load-snapshot".to_string(),
-            read_only_method: Some("load-snapshot".to_string()),
-            call: LoweredCall::LoadSnapshot {
-                snapshot: snapshot.into(),
-            },
-        }),
+        AgentInvocation::LoadSnapshot {
+            snapshot, caller, ..
+        } => {
+            let input = match owner_context {
+                ResolvedOwnerContext::Agent(agent) => agent.parameters.value().clone(),
+                ResolvedOwnerContext::OplogProcessor => SchemaValue::Record { fields: Vec::new() },
+                ResolvedOwnerContext::ComponentBaseline => {
+                    return Err(WorkerExecutorError::invalid_request(
+                        "load-snapshot needs an agent with constructor parameters".to_string(),
+                    ));
+                }
+            };
+            Ok(LoweredInvocation {
+                display_name: "load-snapshot".to_string(),
+                read_only_method: Some("load-snapshot".to_string()),
+                call: LoweredCall::LoadSnapshot {
+                    snapshot: snapshot.into(),
+                    input,
+                    caller,
+                },
+            })
+        }
         AgentInvocation::ProcessOplogEntries {
             account_id,
             config,
             metadata,
             first_entry_index,
             entries,
+            caller,
             ..
         } => {
-            let component_id: core_wire::ComponentId = metadata.agent_id.component_id.into();
-            let agent_id: core_wire::AgentId = metadata.agent_id.clone().into();
+            let agent_id: core_wire::AgentId = metadata.agent_id.into();
             let account_info = oplog_processor_exports::AccountInfo {
                 account_id: account_id.into(),
             };
@@ -2434,15 +3278,136 @@ pub fn lower_invocation(
                 call: LoweredCall::ProcessOplogEntries {
                     account_info,
                     config,
-                    component_id,
                     agent_id,
                     metadata,
                     first_entry_index: u64::from(first_entry_index),
                     entries,
+                    caller,
                 },
             })
         }
     }
+}
+
+pub(crate) fn decode_method_input(
+    input: &golem_common::model::agent::AgentMethodInput,
+    agent_type: &AgentTypeSchema,
+    method: &AgentMethodSchema,
+    prepared: Option<&TypedSchemaValue>,
+) -> Result<SchemaValue, WorkerExecutorError> {
+    use crate::grpc::stream_element_schema;
+    use golem_common::model::agent::AgentMethodInput;
+    use golem_common::model::invocation_session_public::PublicErrorCode;
+    use golem_common::schema::public_json::{
+        PublicSchemaValueError, PublicStreamReferencePolicy, decode_public_schema_value,
+    };
+    use golem_common::schema::streaming::encode_recursive_stream_value_with_schema;
+    use golem_common::schema::{FieldSource, NamedFieldType};
+    use golem_schema::schema::fingerprint::schema_fingerprint_v1;
+
+    let graph = SchemaGraph {
+        defs: agent_type.schema.defs.clone(),
+        root: SchemaType::record(
+            method
+                .input_schema
+                .fields()
+                .iter()
+                .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+                .map(|field| NamedFieldType {
+                    name: field.name.clone(),
+                    body: field.schema.clone(),
+                    metadata: field.metadata.clone(),
+                })
+                .collect(),
+        ),
+    };
+    let mut bindings = Vec::new();
+    if let Some(prepared) = prepared {
+        encode_recursive_stream_value_with_schema(
+            prepared.value(),
+            prepared.graph(),
+            prepared.root_type(),
+            |stream, path| {
+                let element = stream_element_schema(prepared.graph(), prepared.root_type(), path)?;
+                let fingerprint = schema_fingerprint_v1(prepared.graph(), element)
+                    .map_err(|error| error.to_string())?;
+                let ordinal = bindings.len() as u64;
+                bindings.push((stream.clone(), fingerprint));
+                Ok(ordinal)
+            },
+        )
+        .map_err(WorkerExecutorError::invalid_request)?;
+    }
+    let value = match input {
+        AgentMethodInput::Native(input) => input.decode(|ordinal, _| {
+            if prepared.is_none() {
+                return Ok(
+                    golem_common::schema::stream::SchemaValueStream::from_host_endpoint(
+                        crate::grpc::TransportStreamId(ordinal as u64),
+                    ),
+                );
+            }
+            bindings
+                .get(ordinal)
+                .map(|(stream, _)| stream.clone())
+                .ok_or_else(|| "stream-bearing input requires committed execution bindings".into())
+        }),
+        AgentMethodInput::PublicJson(input) => {
+            let json = serde_json::from_str(input.as_str())
+                .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+            let mut streams = bindings.iter();
+            let mut ordinal = 0u64;
+            decode_public_schema_value(
+                &graph,
+                &graph.root,
+                &json,
+                PublicStreamReferencePolicy::Provisional,
+                |_, _| {
+                    if prepared.is_none() {
+                        let stream =
+                            golem_common::schema::stream::SchemaValueStream::from_host_endpoint(
+                                crate::grpc::TransportStreamId(ordinal),
+                            );
+                        ordinal += 1;
+                        return Ok(stream);
+                    }
+                    streams
+                        .next()
+                        .map(|(stream, _)| stream.clone())
+                        .ok_or_else(|| {
+                            PublicSchemaValueError::new(
+                                PublicErrorCode::ValidationError,
+                                "stream-bearing input requires committed execution bindings",
+                            )
+                        })
+                },
+            )
+            .map_err(|error| error.to_string())
+        }
+    };
+    let value = value.map_err(WorkerExecutorError::invalid_request)?;
+    if !bindings.is_empty() {
+        let mut ordinal = 0;
+        encode_recursive_stream_value_with_schema(&value, &graph, &graph.root, |_, path| {
+            let element = stream_element_schema(&graph, &graph.root, path)?;
+            let fingerprint =
+                schema_fingerprint_v1(&graph, element).map_err(|error| error.to_string())?;
+            if bindings.get(ordinal).map(|(_, fingerprint)| *fingerprint) != Some(fingerprint) {
+                return Err(
+                    "recorded input stream is incompatible with the selected method".into(),
+                );
+            }
+            ordinal += 1;
+            Ok((ordinal - 1) as u64)
+        })
+        .map_err(WorkerExecutorError::invalid_request)?;
+        if ordinal != bindings.len() {
+            return Err(WorkerExecutorError::invalid_request(
+                "selected method does not use every recorded input stream",
+            ));
+        }
+    }
+    Ok(value)
 }
 
 pub fn validate_agent_method_invocation(
@@ -2717,10 +3682,7 @@ mod tests {
                 kind: InterruptKind::ShardLost,
             },
             WorkerExecutorError::OplogFenced {
-                agent_id: golem_common::model::AgentId {
-                    component_id: golem_common::model::component::ComponentId::new(),
-                    agent_id: "fenced".into(),
-                },
+                agent_id: golem_common::model::AgentId::from_parts(7, 1),
                 expected_epoch: 1,
                 actual_epoch: Some(2),
             },
@@ -3009,14 +3971,25 @@ mod tests {
             SchemaGraph::anonymous(SchemaType::record(Vec::new())),
             SchemaValue::Record { fields: Vec::new() },
         );
-        ParsedAgentKey::new(AgentTypeName(AGENT_TYPE.to_string()), parameters, None)
+        ParsedAgentKey::new(AgentTypeName(AGENT_TYPE.to_string()), parameters)
     }
 
     fn method_invocation(input: SchemaValue) -> AgentInvocation {
+        let mut ordinal = 0;
+        let proto =
+            golem_common::schema::streaming::encode_recursive_stream_value(&input, |_, _| {
+                let result = ordinal;
+                ordinal += 1;
+                Ok(result)
+            })
+            .unwrap();
+        let (input, _) =
+            golem_common::model::agent::NativeMethodInput::capture(proto, Vec::new()).unwrap();
         AgentInvocation::AgentMethod {
             idempotency_key: InvocationId(Uuid::from_u128(1)),
             method_name: METHOD_NAME.to_string(),
-            input,
+            input: golem_common::model::agent::AgentMethodInput::Native(input),
+            allow_streams: true,
             invocation_context: InvocationContextStack::fresh(),
             caller: Caller::anonymous(),
             scope_card: None,
@@ -3030,30 +4003,381 @@ mod tests {
         let input = SchemaValue::Record {
             fields: vec![SchemaValue::U32(7), SchemaValue::String("hi".to_string())],
         };
-        let lowered = lower_invocation(method_invocation(input), &metadata, Some(&agent_id))
-            .expect("valid input should lower");
+        let lowered = lower_invocation(
+            method_invocation(input),
+            &metadata,
+            &ResolvedOwnerContext::Agent(Box::new(agent_id)),
+            None,
+        )
+        .expect("valid input should lower");
         assert_eq!(lowered.display_name, METHOD_NAME);
         assert!(lowered.read_only_method.is_none());
     }
 
     #[test]
-    fn load_snapshot_uses_read_only_strictness() {
-        let lowered = lower_invocation(
-            AgentInvocation::LoadSnapshot {
-                idempotency_key: InvocationId(Uuid::from_u128(2)),
-                snapshot: RawSnapshotData {
-                    data: vec![1, 2, 3],
-                    mime_type: "application/octet-stream".to_string(),
+    fn restored_stream_bindings_do_not_replace_the_original_request() {
+        use golem_common::schema::stream::SchemaValueStream;
+
+        let tail = NamedField::user_supplied(
+            "tail",
+            SchemaType::option(SchemaType::list(SchemaType::stream(Some(
+                SchemaType::string(),
+            )))),
+        );
+        let method = AgentMethodSchema {
+            name: METHOD_NAME.to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(vec![
+                NamedField::user_supplied("count", SchemaType::u32()),
+                NamedField::user_supplied("items", SchemaType::stream(Some(SchemaType::u32()))),
+                tail.clone(),
+            ]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: Vec::new(),
+            read_only: None,
+        };
+        let original = method_invocation(SchemaValue::Record {
+            fields: vec![
+                SchemaValue::U32(7),
+                SchemaValue::Stream(SchemaValueStream::from_host_endpoint(())),
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::List {
+                        elements: vec![SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+                            (),
+                        ))],
+                    })),
                 },
-                caller: Caller::anonymous(),
+            ],
+        });
+        let prepared = TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::record(
+                method
+                    .input_schema
+                    .fields()
+                    .iter()
+                    .map(|field| golem_common::schema::NamedFieldType {
+                        name: field.name.clone(),
+                        body: field.schema.clone(),
+                        metadata: field.metadata.clone(),
+                    })
+                    .collect(),
+            )),
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::U32(999),
+                    SchemaValue::Stream(SchemaValueStream::from_host_endpoint(42_u64)),
+                    SchemaValue::Option {
+                        inner: Some(Box::new(SchemaValue::List {
+                            elements: vec![SchemaValue::Stream(
+                                SchemaValueStream::from_host_endpoint(91_u64),
+                            )],
+                        })),
+                    },
+                ],
             },
+        );
+        let mut public_original = original.clone();
+        let AgentInvocation::AgentMethod { input, .. } = &mut public_original else {
+            unreachable!()
+        };
+        *input = golem_common::model::agent::AgentMethodInput::PublicJson(
+            golem_common::model::agent::JsonMethodInput::capture(
+                br#"{"kind":"record","value":{"fields":[
+                    {"kind":"u32","value":7},
+                    {"kind":"stream","value":{"provisionalRef":"00000000-0000-4000-8000-000000000011"}},
+                    {"kind":"option","value":{"inner":{"kind":"list","value":{"elements":[
+                        {"kind":"stream","value":{"provisionalRef":"00000000-0000-4000-8000-000000000012"}}
+                    ]}}}}
+                ]}}"#,
+            )
+            .unwrap(),
+        );
+        for original in [original, public_original] {
+            let metadata = metadata_with_method(method.clone());
+            let lowered = lower_invocation(
+                original.clone(),
+                &metadata,
+                &ResolvedOwnerContext::Agent(Box::new(agent_id())),
+                Some(prepared.clone()),
+            )
+            .unwrap();
+            let LoweredCall::Invoke {
+                input: SchemaValue::Record { fields },
+                ..
+            } = lowered.call
+            else {
+                panic!("expected method input");
+            };
+            assert_eq!(fields[0], SchemaValue::U32(7));
+            let SchemaValue::Stream(stream) = &fields[1] else {
+                panic!("expected restored stream")
+            };
+            assert_eq!(
+                stream
+                    .with_host_endpoint::<u64, _>(|endpoint| *endpoint)
+                    .unwrap(),
+                42
+            );
+            let SchemaValue::Option {
+                inner: Some(nested),
+            } = &fields[2]
+            else {
+                panic!("expected the original optional tail")
+            };
+            let SchemaValue::List { elements } = nested.as_ref() else {
+                panic!("expected the original nested list")
+            };
+            let [SchemaValue::Stream(stream)] = elements.as_slice() else {
+                panic!("expected the second restored stream")
+            };
+            assert_eq!(
+                stream
+                    .with_host_endpoint::<u64, _>(|endpoint| *endpoint)
+                    .unwrap(),
+                91
+            );
+
+            let mut changed = method.clone();
+            changed.input_schema = InputSchema::Parameters(vec![
+                NamedField::user_supplied("count", SchemaType::u32()),
+                NamedField::user_supplied("items", SchemaType::stream(Some(SchemaType::string()))),
+                tail.clone(),
+            ]);
+            let error = lower_invocation(
+                original,
+                &metadata_with_method(changed),
+                &ResolvedOwnerContext::Agent(Box::new(agent_id())),
+                Some(prepared.clone()),
+            )
+            .err()
+            .unwrap();
+            assert!(
+                error
+                    .to_string()
+                    .contains("incompatible with the selected method"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn deployed_method_input_keeps_its_encoding_and_selected_stream_bindings() {
+        use golem_common::model::agent::{AgentMethodInput, NativeMethodInput};
+        use golem_common::schema::stream::SchemaValueStream;
+
+        let method = AgentMethodSchema {
+            name: METHOD_NAME.to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(vec![
+                NamedField::user_supplied("count", SchemaType::u32()),
+                NamedField::user_supplied("items", SchemaType::stream(Some(SchemaType::u32()))),
+                NamedField::user_supplied("labels", SchemaType::stream(Some(SchemaType::string()))),
+            ]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: Vec::new(),
+            read_only: None,
+        };
+        let mut original = method_invocation(SchemaValue::Record { fields: Vec::new() });
+        let AgentInvocation::AgentMethod { input, .. } = &mut original else {
+            unreachable!()
+        };
+        let deployed_input = SchemaValue::Record {
+            fields: vec![
+                SchemaValue::U32(7),
+                SchemaValue::Stream(SchemaValueStream::from_host_endpoint(8u64)),
+                SchemaValue::Stream(SchemaValueStream::from_host_endpoint(9u64)),
+            ],
+        };
+        let proto = golem_common::schema::streaming::encode_recursive_stream_value(
+            &deployed_input,
+            |stream, _| stream.with_host_endpoint::<u64, _>(|id| *id),
+        )
+        .unwrap();
+        *input = AgentMethodInput::Native(NativeMethodInput::capture(proto, vec![]).unwrap().0);
+        let prepared = TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::record(
+                method
+                    .input_schema
+                    .fields()
+                    .iter()
+                    .map(|field| golem_common::schema::NamedFieldType {
+                        name: field.name.clone(),
+                        body: field.schema.clone(),
+                        metadata: field.metadata.clone(),
+                    })
+                    .collect(),
+            )),
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::U32(999),
+                    SchemaValue::Stream(SchemaValueStream::from_host_endpoint(42_u64)),
+                    SchemaValue::Stream(SchemaValueStream::from_host_endpoint(91_u64)),
+                ],
+            },
+        );
+        let owner = ResolvedOwnerContext::Agent(Box::new(agent_id()));
+        let metadata = metadata_with_method(method.clone());
+        let provisional = lower_invocation(original.clone(), &metadata, &owner, None).unwrap();
+        let LoweredCall::Invoke {
+            input: SchemaValue::Record { fields },
+            ..
+        } = provisional.call
+        else {
+            panic!("expected provisional method input")
+        };
+        assert_eq!(fields[0], SchemaValue::U32(7));
+        for (ordinal, field) in fields[1..].iter().enumerate() {
+            let SchemaValue::Stream(stream) = field else {
+                panic!("expected provisional stream")
+            };
+            assert_eq!(
+                stream
+                    .with_host_endpoint::<crate::grpc::TransportStreamId, _>(|endpoint| endpoint.0)
+                    .unwrap(),
+                ordinal as u64
+            );
+        }
+        for reversed in [false, true] {
+            let mut selected = method.clone();
+            if reversed {
+                let InputSchema::Parameters(fields) = &mut selected.input_schema;
+                fields.swap(1, 2);
+            }
+            let metadata = metadata_with_method(selected);
+            let lowered =
+                lower_invocation(original.clone(), &metadata, &owner, Some(prepared.clone()));
+            if reversed {
+                assert!(
+                    lowered
+                        .err()
+                        .unwrap()
+                        .to_string()
+                        .contains("incompatible with the selected method")
+                );
+                continue;
+            }
+            let lowered = lowered.unwrap();
+            let LoweredCall::Invoke {
+                input: SchemaValue::Record { fields },
+                ..
+            } = lowered.call
+            else {
+                panic!("expected method input")
+            };
+            assert_eq!(fields[0], SchemaValue::U32(7));
+            let expected = [42_u64, 91_u64];
+            for (field, expected) in fields[1..].iter().zip(expected) {
+                let SchemaValue::Stream(stream) = field else {
+                    panic!("expected restored stream")
+                };
+                assert_eq!(
+                    stream
+                        .with_host_endpoint::<u64, _>(|endpoint| *endpoint)
+                        .unwrap(),
+                    expected
+                );
+            }
+        }
+    }
+
+    fn load_snapshot_invocation() -> AgentInvocation {
+        AgentInvocation::LoadSnapshot {
+            idempotency_key: InvocationId(Uuid::from_u128(2)),
+            caller: crate::test_callers::sample_caller(),
+            snapshot: RawSnapshotData {
+                data: vec![1, 2, 3],
+                mime_type: "application/octet-stream".to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn load_snapshot_uses_read_only_strictness_and_passes_the_agents_constructor_input() {
+        let constructor_input = SchemaValue::Record {
+            fields: vec![SchemaValue::String("restored-key".to_string())],
+        };
+        let agent_id = ParsedAgentKey::new(
+            AgentTypeName(AGENT_TYPE.to_string()),
+            TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::record(Vec::new())),
+                constructor_input.clone(),
+            ),
+        );
+        let lowered = lower_invocation(
+            load_snapshot_invocation(),
             &metadata(),
-            Some(&agent_id()),
+            &ResolvedOwnerContext::Agent(Box::new(agent_id)),
+            None,
         )
         .expect("snapshot load should lower");
 
         assert_eq!(lowered.display_name, "load-snapshot");
         assert_eq!(lowered.read_only_method.as_deref(), Some("load-snapshot"));
+        let LoweredCall::LoadSnapshot { input, .. } = lowered.call else {
+            panic!("snapshot load must lower to a load-snapshot call");
+        };
+        assert_eq!(input, constructor_input);
+    }
+
+    #[test]
+    fn load_snapshot_without_an_agent_key_is_rejected() {
+        let Err(err) = lower_invocation(
+            load_snapshot_invocation(),
+            &metadata(),
+            &ResolvedOwnerContext::ComponentBaseline,
+            None,
+        ) else {
+            panic!("an owner without constructor parameters cannot load a snapshot");
+        };
+        assert!(
+            err.to_string().contains("load-snapshot needs an agent"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn load_snapshot_for_a_processor_passes_an_empty_constructor_record() {
+        let metadata = ComponentMetadata::from_parts(
+            KnownExports {
+                oplog_processor_interface: Some("golem:api/oplog-processor@1.5.0".into()),
+                save_snapshot_interface: Some("golem:api/save-snapshot@1.5.0".into()),
+                load_snapshot_interface: Some("golem:api/load-snapshot@1.5.0".into()),
+                ..Default::default()
+            },
+            vec![],
+            vec![],
+            Default::default(),
+        );
+        assert!(
+            metadata.has_oplog_processor()
+                && metadata.has_save_snapshot()
+                && metadata.has_load_snapshot()
+        );
+        let lowered = lower_invocation(
+            load_snapshot_invocation(),
+            &metadata,
+            &ResolvedOwnerContext::OplogProcessor,
+            None,
+        )
+        .expect("a snapshot-capable processor must be able to restore its snapshot");
+        let LoweredCall::LoadSnapshot { input, .. } = lowered.call else {
+            panic!("expected load-snapshot");
+        };
+        assert_eq!(input, SchemaValue::Record { fields: Vec::new() });
+    }
+
+    #[test]
+    fn component_agent_without_recorded_parameters_cannot_resolve_an_owner() {
+        let error = ResolvedOwnerContext::from_authoritative_kind(
+            golem_common::model::agent::OwnerKind::ComponentAgent,
+            &AgentId::from_parts(42, 1),
+            None,
+            &metadata(),
+        )
+        .unwrap_err();
+        assert!(error.contains("no agent type"), "{error}");
     }
 
     #[test]
@@ -3064,7 +4388,8 @@ mod tests {
                 caller: Caller::anonymous(),
             },
             &metadata(),
-            Some(&agent_id()),
+            &ResolvedOwnerContext::Agent(Box::new(agent_id())),
+            None,
         )
         .expect("snapshot save should lower");
 
@@ -3079,7 +4404,8 @@ mod tests {
         let Err(err) = lower_invocation(
             method_invocation(SchemaValue::U32(1)),
             &metadata,
-            Some(&agent_id),
+            &ResolvedOwnerContext::Agent(Box::new(agent_id)),
+            None,
         ) else {
             panic!("non-record input must be rejected");
         };
@@ -3097,8 +4423,12 @@ mod tests {
         let input = SchemaValue::Record {
             fields: vec![SchemaValue::U32(7)],
         };
-        let Err(err) = lower_invocation(method_invocation(input), &metadata, Some(&agent_id))
-        else {
+        let Err(err) = lower_invocation(
+            method_invocation(input),
+            &metadata,
+            &ResolvedOwnerContext::Agent(Box::new(agent_id)),
+            None,
+        ) else {
             panic!("arity mismatch must be rejected");
         };
         assert!(
@@ -3115,8 +4445,12 @@ mod tests {
         let input = SchemaValue::Record {
             fields: vec![SchemaValue::U32(7), SchemaValue::Bool(true)],
         };
-        let Err(err) = lower_invocation(method_invocation(input), &metadata, Some(&agent_id))
-        else {
+        let Err(err) = lower_invocation(
+            method_invocation(input),
+            &metadata,
+            &ResolvedOwnerContext::Agent(Box::new(agent_id)),
+            None,
+        ) else {
             panic!("field type mismatch must be rejected");
         };
         assert!(
@@ -3141,7 +4475,8 @@ mod tests {
         let result = lower_invocation(
             method_invocation(SchemaValue::Record { fields: Vec::new() }),
             &metadata,
-            Some(&agent_id()),
+            &ResolvedOwnerContext::Agent(Box::new(agent_id())),
+            None,
         );
         if let Err(error) = result {
             panic!("unexpected error: {error}");
@@ -3280,7 +4615,13 @@ mod tests {
                 invocation_uses_streams(&invocation, &metadata, Some(&agent_id())),
                 expected
             );
-            let lowered = lower_invocation(invocation, &metadata, Some(&agent_id())).unwrap();
+            let lowered = lower_invocation(
+                invocation,
+                &metadata,
+                &ResolvedOwnerContext::Agent(Box::new(agent_id())),
+                None,
+            )
+            .unwrap();
             let LoweredCall::Invoke {
                 expected_output, ..
             } = lowered.call
@@ -3444,10 +4785,7 @@ mod tests {
 
     /// The agent whose guest calls the tests settle.
     fn own_agent_id() -> AgentId {
-        AgentId {
-            component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
-            agent_id: "own".to_string(),
-        }
+        AgentId::from_parts(7, 2)
     }
 
     /// A host call whose oplog read failed fails the agent, not the guest call: the read failure,
@@ -3491,12 +4829,9 @@ mod tests {
     /// this agent with the cause of the other.
     #[test]
     fn an_unreadable_oplog_of_another_agent_fails_only_the_call() {
-        let other = AgentId {
-            component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
-            agent_id: "other".to_string(),
-        };
+        let other = AgentId::from_parts(7, 3);
         let unreadable = |error| UnreadableOplog {
-            agent_id: other.clone(),
+            agent_id: other,
             error,
         };
         let corrupt = unreadable(crate::services::oplog::OplogReadError::Gap {

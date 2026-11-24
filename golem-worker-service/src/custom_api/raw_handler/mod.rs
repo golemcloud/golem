@@ -15,15 +15,14 @@ use super::http_envelope::{
 use super::http_session::{HttpSession, HttpSessionEvent, HttpSessionLimits};
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ResponseBody, RichRequest, RouteExecutionResult};
-use crate::service::worker::WorkerService;
+use crate::service::worker::{AcceptedInvocation, AgentBinding, WorkerService};
 use bytes::Bytes;
 use futures::StreamExt;
 use golem_api_grpc::proto::golem::worker::{
     InvocationContext, InvocationStart, StreamDirection, invocation_session_completion,
     invocation_session_result, stream_terminal,
 };
-use golem_common::model::AgentId;
-use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::agent::{InvocationFreshnessDisposition, ParsedAgentKey};
 use golem_common::schema::stream::SchemaValueStream;
 use golem_common::schema::{
     FromSchema, IntoSchema, SchemaGraph, SchemaValue, TypedSchemaValue, try_into_schema_graph,
@@ -87,10 +86,11 @@ impl RawHandler {
         .map_err(|error| RequestHandlerError::RawRequest(error.request_status()))?;
 
         let has_request_body = head.chunked || head.content_length.is_some_and(|length| length > 0);
-        let mut session = self.start_session(request, selected, target, &head)?;
+        let mut session = self.start_session(request, selected, target, &head).await?;
         let mut guard = session.drop_guard();
         let upload_done = Arc::new(AtomicBool::new(false));
         let mut upload = None;
+        let mut accepted = None;
         let response_value = receive_response_head(
             &mut session,
             request.underlying.take_body(),
@@ -99,8 +99,31 @@ impl RawHandler {
             self.limits.request_body_idle_timeout,
             has_request_body,
             version,
+            &mut accepted,
         )
-        .await?;
+        .await;
+        if let Some(accepted) = accepted {
+            request.accepted_invocation = Some(AcceptedInvocation {
+                id: golem_common::model::OwnedInvocationId::new(
+                    accepted
+                        .agent_id
+                        .ok_or(RequestHandlerError::RawBadGateway)?
+                        .try_into()
+                        .map_err(|_| RequestHandlerError::RawBadGateway)?,
+                    accepted
+                        .idempotency_key
+                        .ok_or(RequestHandlerError::RawBadGateway)?
+                        .into(),
+                ),
+                environment_id: accepted
+                    .environment_id
+                    .map(TryInto::try_into)
+                    .transpose()
+                    .map_err(|_| RequestHandlerError::RawBadGateway)?
+                    .unwrap_or(selected.route.environment_id),
+            });
+        }
+        let response_value = response_value?;
         let (status, headers, output_id) = parse_response(response_value)?;
         let response_head = process_response_head(&method, status, &headers)
             .map_err(|_| RequestHandlerError::RawBadGateway)?;
@@ -147,7 +170,7 @@ impl RawHandler {
         })
     }
 
-    fn start_session(
+    async fn start_session(
         &self,
         request: &RichRequest,
         selected: &ResolvedRouteEntry,
@@ -156,23 +179,30 @@ impl RawHandler {
     ) -> Result<HttpSession, RequestHandlerError> {
         let handler = &target.method;
         let request_key = golem_common::model::InvocationRequestKey::external(None, None);
-        let key = request_key.owner_key(&handler.method_name);
-        let logical = ParsedAgentKey::try_new(
+        let constructor = ParsedAgentKey::try_new(
             target.agent.agent_type.clone(),
             TypedSchemaValue::new(
                 target.agent.constructor_input.graph.clone(),
                 SchemaValue::Record { fields: vec![] },
             ),
-            None,
         )
         .map_err(|_| RequestHandlerError::RawInternal)?;
-        let final_id = logical
-            .with_ephemeral_invocation_phantom(&key)
-            .map_err(|_| RequestHandlerError::RawInternal)?;
-        let agent_id = AgentId {
-            component_id: target.agent.component_id,
-            agent_id: final_id.to_string(),
-        };
+        let (bound, _, freshness_disposition) = self
+            .worker_service
+            .bound_invocation_target(
+                target.agent.component_id,
+                &target.agent.agent_type,
+                Some(&constructor),
+                AgentBinding::Constructor,
+                &request_key,
+                &handler.method_name,
+                &AuthCtx::System,
+            )
+            .await
+            .map_err(|error| {
+                tracing::warn!(error = %error, "Raw HTTP invocation target could not be bound");
+                RequestHandlerError::RawInternal
+            })?;
         let caller = caller_from_request(request)?;
         let context = InvocationContext {
             parent: None,
@@ -180,29 +210,33 @@ impl RawHandler {
             tracing: Some(request.invocation_context().into()),
         };
         let input = request_value(head, selected);
-        HttpSession::start(
-            InvocationStart {
-                agent_id: Some(agent_id.into()),
-                method_name: Some(handler.method_name.clone()),
-                input: Some(input),
-                request_key: Some(request_key.into()),
-                context: Some(context),
-                auth_ctx: Some(AuthCtx::System.into()),
-                caller: Some(caller.into()),
-                environment_id: Some(selected.route.environment_id.into()),
-                config: vec![],
-                component_owner_account_id: Some(selected.route.account_id.into()),
-                mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-                freshness_disposition:
+        let mut start = InvocationStart {
+            method_name: Some(handler.method_name.clone()),
+            input: Some(input),
+            request_key: Some(request_key.into()),
+            context: Some(context),
+            auth_ctx: Some(AuthCtx::System.into()),
+            caller: Some(caller.into()),
+            environment_id: Some(selected.route.environment_id.into()),
+            config: vec![],
+            component_owner_account_id: Some(selected.route.account_id.into()),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+            freshness_disposition: match freshness_disposition {
+                InvocationFreshnessDisposition::MayExist => {
+                    golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                        as i32
+                }
+                InvocationFreshnessDisposition::KnownFresh => {
                     golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh
-                        as i32,
-                attempt_id: Some(uuid::Uuid::new_v4().into()),
-                ..Default::default()
+                        as i32
+                }
             },
-            self.worker_service.clone(),
-            self.limits.clone(),
-        )
-        .map_err(map_session_error)
+            attempt_id: Some(uuid::Uuid::new_v4().into()),
+            ..Default::default()
+        };
+        bound.apply(&mut start);
+        HttpSession::start(start, self.worker_service.clone(), self.limits.clone())
+            .map_err(map_session_error)
     }
 }
 
@@ -214,6 +248,7 @@ pub(super) async fn receive_response_head(
     idle_timeout: std::time::Duration,
     has_request_body: bool,
     version: HttpVersion,
+    accepted: &mut Option<golem_api_grpc::proto::golem::worker::InvocationAccepted>,
 ) -> Result<ProtoValue, RequestHandlerError> {
     let mut body = Some(body);
     // Before acceptance nothing polls the body, so the HTTP server does not notice a client
@@ -228,7 +263,11 @@ pub(super) async fn receive_response_head(
             None => session.events.recv().await,
         };
         match event.ok_or(RequestHandlerError::RawBadGateway)? {
-            HttpSessionEvent::Accepted(_) => {
+            HttpSessionEvent::QueuedAccepted(identity) => {
+                *accepted = Some(identity);
+            }
+            HttpSessionEvent::Accepted(identity) => {
+                *accepted = Some(identity);
                 acceptance_deadline = None;
                 if upload.is_none() {
                     *upload = Some(start_upload(

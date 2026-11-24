@@ -26,9 +26,9 @@ use async_trait::async_trait;
 use golem_common::model::ShardEpoch;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
+use golem_common::model::type_id::TypeId;
 use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -176,6 +176,7 @@ impl Debug for RateLimitedOplog {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Oplog for RateLimitedOplog {
     fn retire(&self) {
         self.inner.retire();
@@ -418,6 +419,7 @@ impl std::fmt::Debug for RateLimitedOplogService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogService for RateLimitedOplogService {
     async fn lock_lifecycle(&self, agent_id: &AgentId) -> OplogLifecycleGuard {
         self.inner.lock_lifecycle(agent_id).await
@@ -668,16 +670,16 @@ impl OplogService for RateLimitedOplogService {
         self.inner.try_exists(owned_agent_id, agent_mode).await
     }
 
-    async fn scan_for_component(
+    async fn scan_for_type(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        type_id: TypeId,
         modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<ScanPage, WorkerExecutorError> {
         self.inner
-            .scan_for_component(environment_id, component_id, modes, cursor, count)
+            .scan_for_type(environment_id, type_id, modes, cursor, count)
             .await
     }
 
@@ -731,7 +733,6 @@ mod tests {
     use async_trait::async_trait;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::AgentMode;
-    use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::regions::OplogRegion;
     use golem_common::model::{
@@ -743,7 +744,6 @@ mod tests {
     use std::sync::RwLock;
     use std::time::Instant;
     use test_r::test;
-    use uuid::Uuid;
 
     test_r::enable!();
 
@@ -753,7 +753,7 @@ mod tests {
         environment_id: EnvironmentId,
     ) -> AgentMetadata {
         AgentMetadata {
-            component_id: agent_id.component_id,
+            component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
             agent_type_name: None,
             canonical_key: None,
             agent_id,
@@ -766,7 +766,7 @@ mod tests {
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: AgentStatusRecord::default(),
-            original_phantom_id: None,
+            constructor_parameters: None,
             fingerprint: AgentFingerprint::new(),
             agent_mode: AgentMode::Durable,
             create_request: golem_common::model::oplog::CreateRequest::new(
@@ -785,6 +785,7 @@ mod tests {
     }
 
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl ResourceLimits for FixedResourceLimits {
         async fn initialize_account(
             &self,
@@ -837,10 +838,7 @@ mod tests {
 
         let account_id = AccountId::new();
         let env_id = EnvironmentId::new();
-        let agent_id = AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: "test".to_string(),
-        };
+        let agent_id = AgentId::from_parts(7, 1);
         let owned = OwnedAgentId::new(env_id, &agent_id);
 
         let last_known_status = read_only_lock::arc_swap::ReadOnlyView::new(Arc::new(
@@ -1031,6 +1029,7 @@ mod tests {
                 function_name,
                 invocation_id: None,
                 observational_owner: None,
+                driver: None,
                 request: Some(request_payload),
                 durable_function_type: DurableFunctionType::ReadRemote,
                 span_started: None,

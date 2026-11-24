@@ -96,6 +96,8 @@ interface oplog {
     record create-parameters {
         timestamp: datetime,
         agent-id: agent-id,
+        /// The name of the agent's type. Owners without an agent type have none.
+        agent-type-name: option<string>,
         owner-kind: owner-kind,
         agent-mode: agent-mode,
         component-revision: component-revision,
@@ -107,7 +109,6 @@ interface oplog {
         initial-total-linear-memory-size: u64,
         initial-active-plugins: list<plugin-installation-description>,
         local-agent-config: list<local-agent-config-entry>,
-        original-phantom-id: option<uuid>,
         instance-id: uuid,
         /// Whether the agent is a never-live sandbox. A marked agent reports the
         /// `sandboxed` status.
@@ -140,12 +141,19 @@ interface oplog {
     ///
     /// `denial` is the reason the host denied the call before it ran. A denied
     /// call never runs its operation, and its `end` holds the denied response.
+    ///
+    /// `driver` is the oplog index of the agent invocation whose settlement waits
+    /// for this call. It is present in two cases: a store task that records after
+    /// its spawning invocation closed records the invocation that resumed it, and
+    /// agent-level work recorded while an invocation runs records that invocation,
+    /// even when the call's invocation id is anchored at the same invocation.
     record start-parameters {
         timestamp: datetime,
         parent-start-index: option<oplog-index>,
         function-name: string,
         invocation-id: option<durable-invocation-id>,
         observational-owner: option<oplog-index>,
+        driver: option<oplog-index>,
         request: option<typed-schema-value>,
         durable-function-type: wrapped-function-type,
         span-started: option<span-started>,
@@ -296,6 +304,12 @@ interface oplog {
         start-index: oplog-index,
     }
 
+    record agent-invocation-settled-parameters {
+        timestamp: datetime,
+        invocation-id: uuid,
+        consumed-fuel: s64,
+    }
+
     enum oplog-error-kind {
         invocation,
         recovery
@@ -440,33 +454,112 @@ interface oplog {
         %record: typed-schema-value,
     }
 
+    /// The (issuer, subject) pair of a principal. golem:agent imports golem:api, so this
+    /// interface cannot use golem:agent/common.principal-ref; this record has the same fields.
+    record public-principal-ref {
+        issuer: string,
+        subject: string,
+    }
+
+    enum public-account-authentication {
+        api-token,
+        bootstrap-token,
+        sign-in,
+    }
+
+    /// A user, authenticated by a sign-in provider: the provider's pair. The oplog never gives
+    /// a user's claims to a guest.
+    record public-user-principal {
+        pair: public-principal-ref,
+        authenticated-at: datetime,
+    }
+
+    /// An account: (Golem issuer, "account:<account-id>").
+    record public-account-principal {
+        pair: public-principal-ref,
+        account-id: account-id,
+        authentication: public-account-authentication,
+    }
+
+    /// An agent: (Golem issuer, "agent:<agent-id>/<fingerprint>").
+    record public-agent-principal {
+        pair: public-principal-ref,
+        agent-id: agent-id,
+        agent-type: string,
+        environment-id: environment-id,
+    }
+
+    /// A tool: (Golem issuer, "tool:<environment-id>/<tool-name>").
+    record public-tool-principal {
+        pair: public-principal-ref,
+        environment-id: environment-id,
+        tool-name: string,
+    }
+
+    /// One principal, as Golem verified it. Every kind except anonymous has a pair.
+    variant public-principal {
+        user(public-user-principal),
+        account(public-account-principal),
+        agent(public-agent-principal),
+        tool(public-tool-principal),
+        anonymous,
+    }
+
+    /// A token that the request presented, and the pair of its maker. It never holds the
+    /// token's value.
+    record public-token-provenance {
+        id: uuid,
+        maker: option<public-principal-ref>,
+    }
+
+    /// Who started the chain, who made this call, and the tokens presented at the entry point.
+    /// Both roles are always present, also when they are the same principal.
+    record public-caller {
+        original: public-principal,
+        immediate: public-principal,
+        tokens: list<public-token-provenance>,
+    }
+
     record agent-initialization-parameters {
         invocation-id: uuid,
         constructor-parameters: typed-schema-value,
         trace-id: string,
         trace-states: list<string>,
         invocation-context: list<list<span-data>>,
+        caller: public-caller,
     }
 
     record agent-method-invocation-parameters {
         invocation-id: uuid,
         method-name: string,
+        /// Component-independent original-method-input diagnostic envelope, not the
+        /// executed method's input schema. Includes rejected captured JSON fields;
+        /// native values are typed and host capabilities are redacted before encoding.
         function-input: typed-schema-value,
         trace-id: string,
         trace-states: list<string>,
         invocation-context: list<list<span-data>>,
+        caller: public-caller,
+    }
+
+    record save-snapshot-parameters {
+        caller: public-caller,
     }
 
     record load-snapshot-parameters {
         snapshot: snapshot-data,
+        caller: public-caller,
     }
 
     record process-oplog-entries-parameters {
         invocation-id: uuid,
+        caller: public-caller,
     }
 
     record manual-update-parameters {
         target-revision: component-revision,
+        /// Who requested the update. It is not the caller of the update's snapshot save.
+        requester: public-caller,
     }
 
     record external-tool-invocation-parameters {
@@ -477,13 +570,14 @@ interface oplog {
         trace-id: string,
         trace-states: list<string>,
         invocation-context: list<list<span-data>>,
+        caller: public-caller,
     }
 
     variant agent-invocation {
         agent-initialization(agent-initialization-parameters),
         agent-method-invocation(agent-method-invocation-parameters),
         external-tool(external-tool-invocation-parameters),
-        save-snapshot,
+        save-snapshot(save-snapshot-parameters),
         load-snapshot(load-snapshot-parameters),
         process-oplog-entries(process-oplog-entries-parameters),
         manual-update(manual-update-parameters),
@@ -546,6 +640,8 @@ interface oplog {
         target-revision: component-revision,
         description: update-description,
         update-attempt-index: oplog-index,
+        /// Who requested the update. It is never the caller of the update's snapshot save or load.
+        requester: public-caller,
     }
 
     record successful-update-parameters {
@@ -627,6 +723,8 @@ interface oplog {
         parent-start-index: option<oplog-index>,
         invocation-id: option<durable-invocation-id>,
         observational-owner: option<oplog-index>,
+        /// The invocation that drives the call when it is not the invocation the call belongs to
+        driver: option<oplog-index>,
         /// Whether the call carries a request: true for a durable call, false for a durable scope
         carries-request: bool,
         /// The request of the call, when it is known
@@ -641,6 +739,7 @@ interface oplog {
         observational-owner,
         request-presence,
         parent,
+        driver,
     }
 
     record failed-snapshot-assisted-update-details {
@@ -830,6 +929,8 @@ interface oplog {
     record raw-create-parameters {
         timestamp: datetime,
         agent-id: agent-id,
+        /// The name of the agent's type. Owners without an agent type have none.
+        agent-type-name: option<string>,
         owner-kind: owner-kind,
         agent-mode: agent-mode,
         component-revision: component-revision,
@@ -841,7 +942,6 @@ interface oplog {
         initial-total-linear-memory-size: u64,
         initial-active-plugins: list<environment-plugin-grant-id>,
         local-agent-config: list<raw-local-agent-config-entry>,
-        original-phantom-id: option<uuid>,
         instance-id: uuid,
         /// Whether the agent is a never-live sandbox. A marked agent reports the
         /// `sandboxed` status.
@@ -854,6 +954,7 @@ interface oplog {
         function-name: string,
         invocation-id: option<durable-invocation-id>,
         observational-owner: option<oplog-index>,
+        driver: option<oplog-index>,
         request: option<oplog-payload>,
         durable-function-type: wrapped-function-type,
         span-started: option<span-started>,
@@ -957,9 +1058,28 @@ interface oplog {
         session-expired,
     }
 
+    /// The command of an external tool that a request runs
+    record raw-external-tool-operation {
+        tool-name: string,
+        command-path: list<string>,
+    }
+
+    /// What an accepted request runs. The request entries store it next to the payload, which
+    /// does not repeat it.
+    variant raw-invocation-request-operation {
+        manual-update(component-revision),
+        agent-initialization,
+        agent-method(string),
+        external-tool(raw-external-tool-operation),
+        load-snapshot,
+        save-snapshot,
+        process-oplog-entries,
+    }
+
     record raw-agent-invocation-started-parameters {
         timestamp: datetime,
         invocation-id: uuid,
+        operation: raw-invocation-request-operation,
         payload: oplog-payload,
         trace-id: string,
         trace-states: list<string>,
@@ -983,6 +1103,12 @@ interface oplog {
         start-index: oplog-index,
     }
 
+    record raw-agent-invocation-settled-parameters {
+        timestamp: datetime,
+        invocation-id: uuid,
+        consumed-fuel: s64,
+    }
+
     record raw-error-parameters {
         timestamp: datetime,
         kind: oplog-error-kind,
@@ -1002,6 +1128,7 @@ interface oplog {
         timestamp: datetime,
         not-before: option<datetime>,
         invocation-id: uuid,
+        operation: raw-invocation-request-operation,
         payload: oplog-payload,
         trace-id: string,
         trace-states: list<string>,
@@ -1041,6 +1168,9 @@ interface oplog {
         timestamp: datetime,
         description: raw-update-description,
         update-attempt-index: option<oplog-index>,
+        /// Who requested the update, in the oplog's binary encoding, as an `oplog-payload` holds the
+        /// caller of an invocation. `enrich-oplog-entries` gives it as a `public-caller`.
+        requester: list<u8>,
     }
 
     record raw-successful-update-parameters {
@@ -1123,6 +1253,8 @@ interface oplog {
         /// The agent has completed an invocation
         agent-invocation-finished(raw-agent-invocation-finished-parameters),
         agent-invocation-failed(raw-agent-invocation-failed-parameters),
+        /// The background work of an agent invocation ended after its result was recorded
+        agent-invocation-settled(raw-agent-invocation-settled-parameters),
         /// Agent suspended
         suspend(timestamp),
         /// Agent failed
@@ -1237,6 +1369,8 @@ interface oplog {
         /// The agent has completed an invocation
         agent-invocation-finished(agent-invocation-finished-parameters),
         agent-invocation-failed(agent-invocation-failed-parameters),
+        /// The background work of an agent invocation ended after its result was recorded
+        agent-invocation-settled(agent-invocation-settled-parameters),
         /// Agent suspended
         suspend(timestamp),
         /// Agent failed

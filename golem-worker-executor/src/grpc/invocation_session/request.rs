@@ -17,9 +17,9 @@ use super::{
     DURABLE_STREAM_FORMAT_VERSION, DurableStreamingInvocationRequest, EnvironmentId, FieldSource,
     HashMap, HashSet, InputStreamAck, IntoTypedSchemaValue, InvocationRequest, InvocationResponse,
     InvocationSessionState, InvocationStart, MAX_DURABLE_STREAM_ITEM_SIZE,
-    MAX_NEW_STREAM_HANDLES_PER_VALUE, Message, NamedFieldType, ParsedAgentKey,
-    PersistedInvocationTarget, PersistedStreamInvocationDescriptor, ProducerRegistrationRequest,
-    ResumeAttach, ResumeAttemptDescriptor, ResumeOperation, SchemaGraph, SchemaType, SchemaValue,
+    MAX_NEW_STREAM_HANDLES_PER_VALUE, Message, NamedFieldType, PersistedInvocationTarget,
+    PersistedStreamInvocationDescriptor, Principal, ProducerRegistrationRequest, ResumeAttach,
+    ResumeAttemptDescriptor, ResumeOperation, SchemaGraph, SchemaType, SchemaValue,
     SchemaValueStream, SessionError, SessionStreamRole, StartAttemptDescriptor,
     StreamCancellationRequest, StreamEndpointSide, StreamInvocationId, StreamItemsPayload,
     StreamRegistrationCoordinate, StreamRegistrationInvocation, StreamResumeCursor,
@@ -31,7 +31,77 @@ use super::{
     encode_recursive_stream_value_with_schema, invocation_request, invocation_response, mpsc,
     schema_fingerprint_v1,
 };
-use golem_common::model::caller::{Caller, Principal};
+use golem_common::model::caller::Caller;
+
+pub(crate) fn capture_session_acceptance(
+    request: &InvocationStart,
+    live_join_buffer_events: usize,
+) -> Result<golem_common::model::durable_stream::StreamSessionAcceptance, WorkerExecutorError> {
+    let transport_stream_ids = request
+        .input
+        .as_ref()
+        .map(golem_common::schema::streaming::preflight_proto_recursive_stream_value)
+        .transpose()
+        .map_err(WorkerExecutorError::invalid_request)?
+        .unwrap_or_default();
+    Ok(
+        golem_common::model::durable_stream::StreamSessionAcceptance {
+            public_session_id: String::new(),
+            route_scope: None,
+            expiry_policy: golem_common::model::durable_stream::StreamSessionExpiryPolicy::None,
+            expiry_deadline_millis: None,
+            effective_identity: effective_session_identity(&request.auth_ctx, &request.caller)?,
+            execution_config: session_execution_config(request)?,
+            live_join_buffer_events: u32::try_from(live_join_buffer_events).map_err(|_| {
+                WorkerExecutorError::invalid_request("invalid live join buffer capacity")
+            })?,
+            transport_stream_ids,
+        },
+    )
+}
+
+fn session_execution_config(request: &InvocationStart) -> Result<Vec<u8>, WorkerExecutorError> {
+    let has_stdout = request
+        .external_tool
+        .as_ref()
+        .is_some_and(|tool| tool.stdout);
+    let has_stderr = request
+        .external_tool
+        .as_ref()
+        .is_some_and(|tool| tool.stderr);
+    let mut execution = request.clone();
+    execution.target = None;
+    execution.constructor = None;
+    execution.component_id = None;
+    execution.method_name = None;
+    execution.input = None;
+    execution.captured_method_input = None;
+    execution.external_tool = None;
+    execution.idempotency_key = None;
+    execution.auth_ctx = None;
+    execution.caller = None;
+    execution.environment_id = None;
+    execution.component_owner_account_id = None;
+    execution.attempt_id = None;
+    execution.expected_callee_fingerprint = None;
+    execution.durable_input_mappings.clear();
+    let mut environment = execution.context.as_mut().map(|context| {
+        context.tracing = None;
+        std::mem::take(&mut context.env)
+            .into_iter()
+            .collect::<Vec<_>>()
+    });
+    if let Some(environment) = environment.as_mut() {
+        environment.sort();
+    }
+    golem_common::serialization::serialize(&(
+        execution.encode_to_vec(),
+        environment,
+        has_stdout,
+        has_stderr,
+    ))
+    .map_err(WorkerExecutorError::runtime)
+}
 
 pub(crate) fn decode_invocation_input(
     input: golem_schema::proto::golem::schema::SchemaValue,
@@ -43,8 +113,44 @@ pub(crate) fn decode_invocation_input(
     })
 }
 
+pub(crate) fn capture_method_input(
+    request: &InvocationStart,
+) -> Result<golem_common::model::agent::AgentMethodInput, WorkerExecutorError> {
+    if let Some(captured) = &request.captured_method_input {
+        if request.input.is_some() || !request.durable_input_mappings.is_empty() {
+            return Err(WorkerExecutorError::invalid_request(
+                "captured method input cannot be combined with native input or mappings",
+            ));
+        }
+        return golem_common::serialization::decode(captured)
+            .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()));
+    }
+    let input = request
+        .input
+        .clone()
+        .ok_or_else(|| WorkerExecutorError::invalid_request("invocation start has no input"))?;
+    let mappings = request
+        .durable_input_mappings
+        .iter()
+        .cloned()
+        .map(durable_stream_mapping_from_proto)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(WorkerExecutorError::invalid_request)?;
+    let foreign = mappings
+        .into_iter()
+        .map(|mapping| (mapping.transport_stream_id, mapping.handle))
+        .collect();
+    let (input, _) = golem_common::model::agent::NativeMethodInput::capture(input, foreign)
+        .map_err(WorkerExecutorError::invalid_request)?;
+    Ok(golem_common::model::agent::AgentMethodInput::Native(input))
+}
+
+/// `callee` is the agent that the request's target resolved to, and `callee_agent_type` its
+/// agent type, which an agent method invocation requires.
 pub(crate) fn build_durable_streaming_request(
     request: &InvocationStart,
+    callee: AgentId,
+    callee_agent_type: Option<&golem_common::model::agent::AgentTypeName>,
     component_metadata: &golem_common::model::component_metadata::ComponentMetadata,
     component_revision: ComponentRevision,
     callee_fingerprint: golem_common::model::AgentFingerprint,
@@ -53,12 +159,6 @@ pub(crate) fn build_durable_streaming_request(
     acceptance_committed: tokio::sync::oneshot::Sender<()>,
     live_join_buffer_events: usize,
 ) -> Result<DurableStreamingInvocationRequest, WorkerExecutorError> {
-    let callee: AgentId = request
-        .agent_id
-        .clone()
-        .ok_or_else(|| WorkerExecutorError::invalid_request("agent_id not found"))?
-        .try_into()
-        .map_err(WorkerExecutorError::invalid_request)?;
     let environment_id = request
         .environment_id
         .ok_or_else(|| WorkerExecutorError::invalid_request("environment_id not found"))?
@@ -101,14 +201,22 @@ pub(crate) fn build_durable_streaming_request(
         ),
         _ => None,
     };
+    let method_input = if matches!(invocation, AgentInvocation::AgentMethod { .. }) {
+        Some(
+            decode_invocation_input(request.input.clone().ok_or_else(|| {
+                WorkerExecutorError::invalid_request("invocation start has no input")
+            })?)
+            .map_err(WorkerExecutorError::invalid_request)?,
+        )
+    } else {
+        None
+    };
     let (graph, input_root, invocation_input, target, has_stdout, has_stderr) = match &invocation {
-        AgentInvocation::AgentMethod {
-            method_name, input, ..
-        } => {
-            let parsed = ParsedAgentKey::parse(&callee.agent_id, component_metadata)
-                .map_err(WorkerExecutorError::invalid_request)?;
+        AgentInvocation::AgentMethod { method_name, .. } => {
+            let callee_agent_type = callee_agent_type
+                .ok_or_else(|| WorkerExecutorError::invalid_request("agent type not found"))?;
             let agent_type = component_metadata
-                .find_agent_type_by_name_ref(&parsed.agent_type)
+                .find_agent_type_by_name_ref(callee_agent_type)
                 .ok_or_else(|| WorkerExecutorError::invalid_request("agent type not found"))?;
             let method = agent_type
                 .methods
@@ -131,7 +239,7 @@ pub(crate) fn build_durable_streaming_request(
             (
                 &agent_type.schema,
                 root,
-                input,
+                method_input.as_ref().expect("method input was decoded"),
                 PersistedInvocationTarget::AgentMethod {
                     method_name: method_name.clone(),
                 },
@@ -169,7 +277,7 @@ pub(crate) fn build_durable_streaming_request(
     };
     let session_key = StreamInvocationId {
         callee_environment_id: environment_id,
-        callee: callee.clone(),
+        callee,
         callee_fingerprint,
         idempotency_key,
     };
@@ -311,14 +419,13 @@ pub(crate) fn build_durable_streaming_request(
 
     if let Some(origin) = &request.origin_invocation {
         let invalid = || WorkerExecutorError::invalid_request("invalid executor RPC origin");
-        let _: EnvironmentId = origin
+        let origin_environment_id: EnvironmentId = origin
             .callee_environment_id
             .ok_or_else(invalid)?
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
-        let _: AgentId = origin
+        let origin_callee: AgentId = origin
             .callee
-            .clone()
             .ok_or_else(invalid)?
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
@@ -328,14 +435,21 @@ pub(crate) fn build_durable_streaming_request(
         let parent: AgentId = request
             .context
             .as_ref()
-            .and_then(|context| context.parent.clone())
+            .and_then(|context| context.parent)
             .ok_or_else(invalid)?
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
-        if fingerprint.is_nil()
-            || origin.idempotency_key.is_none()
-            || !matches!(&caller.immediate, Principal::Agent(agent) if agent.address == parent)
-        {
+        // The calling code is the agent that made the call, or a tool that this agent hosts. A
+        // tool principal names no host, so the origin must name that agent as its callee: the
+        // origin and the parent then name the same agent.
+        let internal = match &caller.immediate {
+            Principal::Agent(agent) => agent.address == parent,
+            Principal::Tool(tool) => {
+                tool.environment_id == origin_environment_id && origin_callee == parent
+            }
+            _ => false,
+        };
+        if fingerprint.is_nil() || origin.idempotency_key.is_none() || !internal {
             return Err(invalid());
         }
     }
@@ -423,38 +537,7 @@ pub(crate) fn build_durable_streaming_request(
     .encode_to_vec();
     let input_schema = Arc::new(graph.clone());
 
-    let mut execution = request.clone();
-    execution.agent_id = None;
-    execution.method_name = None;
-    execution.input = None;
-    execution.external_tool = None;
-    execution.idempotency_key = None;
-    execution.auth_ctx = None;
-    execution.caller = None;
-    execution.environment_id = None;
-    execution.component_owner_account_id = None;
-    execution.attempt_id = None;
-    execution.expected_callee_fingerprint = None;
-    execution.durable_input_mappings.clear();
-    // The first accepted invocation retains its tracing context; a new attempt's spans do
-    // not change its logical identity. Environment values do, but protobuf HashMap encoding
-    // is not canonical, so encode them separately in key order.
-    let mut environment = execution.context.as_mut().map(|context| {
-        context.tracing = None;
-        std::mem::take(&mut context.env)
-            .into_iter()
-            .collect::<Vec<_>>()
-    });
-    if let Some(environment) = environment.as_mut() {
-        environment.sort();
-    }
-    let execution_config = golem_common::serialization::serialize(&(
-        execution.encode_to_vec(),
-        environment,
-        has_stdout,
-        has_stderr,
-    ))
-    .map_err(WorkerExecutorError::runtime)?;
+    let execution_config = session_execution_config(request)?;
     let effective_identity = effective_session_identity(&request.auth_ctx, &request.caller)?;
     let attempt = StartAttemptDescriptor {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
@@ -491,7 +574,7 @@ pub(crate) fn build_durable_streaming_request(
     })
 }
 
-pub(super) fn resumed_input_schema(
+pub(crate) fn resumed_input_schema(
     prepared: &golem_common::model::durable_stream::StreamSessionPreparedRecord,
 ) -> Result<(SchemaGraph, Vec<(u64, SchemaType)>), WorkerExecutorError> {
     let typed = golem_schema::proto::golem::schema::TypedSchemaValue::decode(
@@ -548,7 +631,6 @@ pub(super) fn build_resume_attempt(
 ) -> Result<ResumeAttemptDescriptor, WorkerExecutorError> {
     let callee: AgentId = request
         .agent_id
-        .clone()
         .ok_or_else(|| WorkerExecutorError::invalid_request("resume agent_id not found"))?
         .try_into()
         .map_err(WorkerExecutorError::invalid_request)?;
@@ -688,10 +770,15 @@ pub(super) fn effective_session_identity(
             Ok::<_, WorkerExecutorError>(auth_ctx.encode_to_vec())
         })
         .transpose()?;
+    // The auth-context entry is always present, empty without an auth context, so the principal
+    // is always the second entry and an auth context is never read as a principal.
     let mut effective_identity = Vec::new();
-    for identity in [auth_ctx, caller.as_ref().map(Message::encode_to_vec)]
-        .into_iter()
-        .flatten()
+    for identity in [
+        Some(auth_ctx.unwrap_or_default()),
+        caller.as_ref().map(Message::encode_to_vec),
+    ]
+    .into_iter()
+    .flatten()
     {
         effective_identity.extend_from_slice(&(identity.len() as u64).to_be_bytes());
         effective_identity.extend_from_slice(&identity);
@@ -712,12 +799,12 @@ pub(super) fn require_expected_callee_fingerprint(
         )
     })?;
     if uuid::Uuid::from(expected) != actual.0 {
-        return Err(WorkerExecutorError::worker_not_found(agent_id.clone()));
+        return Err(WorkerExecutorError::worker_not_found(*agent_id));
     }
     Ok(())
 }
 
-fn stream_element_schema<'a>(
+pub(crate) fn stream_element_schema<'a>(
     graph: &'a SchemaGraph,
     root: &'a SchemaType,
     path: &[StreamValuePathStep],
@@ -795,21 +882,6 @@ fn stream_element_schema<'a>(
 
 fn replace_streams_for_persistence(invocation: AgentInvocation) -> AgentInvocation {
     match invocation {
-        AgentInvocation::AgentMethod {
-            idempotency_key,
-            method_name,
-            input,
-            invocation_context,
-            caller,
-            scope_card,
-        } => AgentInvocation::AgentMethod {
-            idempotency_key,
-            method_name,
-            input: erase_streams(input),
-            invocation_context,
-            caller,
-            scope_card,
-        },
         AgentInvocation::ExternalTool {
             idempotency_key,
             tool_name,
@@ -919,8 +991,19 @@ pub(super) fn request_agent_id(
     request: &InvocationRequest,
 ) -> Option<golem_api_grpc::proto::golem::worker::AgentId> {
     match request.request.as_ref() {
-        Some(invocation_request::Request::Start(start)) => start.agent_id.clone(),
+        Some(invocation_request::Request::Start(start)) => start_agent_id(start),
         _ => None,
+    }
+}
+
+/// The agent ID that a start names. A key target names no ID before it resolves.
+pub(super) fn start_agent_id(
+    start: &InvocationStart,
+) -> Option<golem_api_grpc::proto::golem::worker::AgentId> {
+    use golem_api_grpc::proto::golem::worker::agent_target::Target;
+    match start.target.as_ref()?.target.as_ref()? {
+        Target::Id(agent_id) => Some(*agent_id),
+        Target::Key(_) => None,
     }
 }
 

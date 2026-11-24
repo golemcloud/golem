@@ -232,6 +232,7 @@ impl<Repo: EnvironmentRepo> LoggedEnvironmentRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     async fn get_by_name(
         &self,
@@ -447,6 +448,7 @@ impl DbEnvironmentRepo<SqlitePool> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     async fn get_by_name(
         &self,
@@ -1062,7 +1064,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                             SELECT cr.component_id, cr.revision_id, cr.hash,
                                    cr.created_at, cr.created_by, cr.deleted,
                                    cr.size, cr.metadata,
-                                   cr.object_store_key, cr.binary_hash
+                                   cr.object_store_key, cr.binary_hash, cr.package_metadata
                             FROM component_revisions cr
                             JOIN components c ON c.component_id = cr.component_id
                             WHERE c.environment_id = $1
@@ -1369,6 +1371,7 @@ trait EnvironmentRepoInternal: EnvironmentRepo {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl EnvironmentRepoInternal for DbEnvironmentRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;

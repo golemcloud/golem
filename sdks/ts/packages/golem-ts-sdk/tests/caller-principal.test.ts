@@ -14,6 +14,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { schemaValueToWit, v } from '../src/internal/schema-model';
+import { selectSelfAgent } from './selfAgentTestSupport';
 
 const input = schemaValueToWit(v.record([]));
 
@@ -38,7 +39,7 @@ const agent = () =>
     tag: 'agent',
     val: {
       pair: pair('agent:2/3'),
-      agentId: { componentId: { uuid: uuid(2n) }, agentId: 'Relay("r")' },
+      agentId: { uuid: uuid(2n) },
       agentType: 'Relay',
       environmentId: { uuid: uuid(4n) },
     },
@@ -75,8 +76,7 @@ describe('callers read from the invocation context', () => {
           },
         },
       });
-    (globalThis as { currentAgentId?: string }).currentAgentId =
-      `CallerProbe(${JSON.stringify(input)})`;
+    selectSelfAgent('CallerProbe');
 
     const invocationContext = await import('golem:agent/invocation-context@2.0.0');
     const caller = vi.mocked(invocationContext.caller);
@@ -103,8 +103,7 @@ describe('callers read from the invocation context', () => {
         methods: { ignore: sdk.method({ input: {}, returns: z.void() }) },
       })
       .implement({ init: () => ({}), methods: { ignore() {} } });
-    (globalThis as { currentAgentId?: string }).currentAgentId =
-      `LazyCallerProbe(${JSON.stringify(input)})`;
+    selectSelfAgent('LazyCallerProbe');
 
     const invocationContext = await import('golem:agent/invocation-context@2.0.0');
     const caller = vi.mocked(invocationContext.caller);
@@ -148,7 +147,8 @@ describe('Caller and Principal', () => {
     const immediate = caller.immediate;
     if (immediate.kind !== 'agent') throw new Error('an agent');
     expect(immediate.agentType).toBe('Relay');
-    expect(immediate.agentId.agentId).toBe('Relay("r")');
+    expect(immediate.agentId.uuid.highBits).toBe(2n);
+    expect(immediate.agentId.uuid.lowBits).toBe(7n);
   });
 
   it('prints each kind as "<kind> <ref text>" and anonymous as "anonymous"', async () => {

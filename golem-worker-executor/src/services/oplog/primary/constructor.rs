@@ -58,6 +58,7 @@ impl CreateOplogConstructor {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogConstructor for CreateOplogConstructor {
     fn shard_epoch(&self) -> Option<ShardEpoch> {
         self.shard_epoch
@@ -76,7 +77,7 @@ impl OplogConstructor for CreateOplogConstructor {
                 record_owning_epoch(
                     &*self.indexed_storage,
                     &self.retry_config,
-                    PrimaryOplogService::namespace(&self.owned_agent_id.agent_id, self.agent_mode),
+                    PrimaryOplogService::namespace(&self.owned_agent_id, self.agent_mode),
                     &self.owned_agent_id.agent_id,
                     &self.key,
                     shard_epoch,
@@ -120,7 +121,7 @@ impl OplogConstructor for CreateOplogConstructor {
             self.max_payload_size,
             self.max_retained_auto_commit_batches,
             self.retry_config,
-            PrimaryOplogService::namespace(&self.owned_agent_id.agent_id, self.agent_mode),
+            PrimaryOplogService::namespace(&self.owned_agent_id, self.agent_mode),
             self.key,
             last_oplog_idx,
             self.owned_agent_id,

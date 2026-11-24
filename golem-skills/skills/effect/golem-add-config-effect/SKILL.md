@@ -118,22 +118,24 @@ agents:
 Override values when creating an individual agent. Dot-separated keys address nested fields:
 
 ```shell
-golem agent new 'MyAgent("agent-1")' \
+golem agent create --keyed 'MyAgent("agent-1")' \
   --config 'appName="CLI Application"' \
   --config maxRetries=5 \
   --config 'server.host="example.com"' \
   --config server.port=8443
 ```
 
-For an RPC-created remote agent, use the typed `overrides` option. Overrides are recursively
-partial, apply when the remote agent is first created, and cannot override secret fields:
+For an RPC-created remote agent, use the typed `config` option of `create`. Overrides are
+recursively partial, apply when `create` creates the remote agent, and cannot override secret
+fields. `upsert` takes no overrides:
 
 ```typescript
 const program = Effect.gen(function* () {
-  const remote = yield* MyAgent.client.get(
+  const remote = yield* MyAgent.client.create(
     { name: "agent-2" },
     {
-      overrides: {
+      keyed: true,
+      config: {
         appName: "RPC Application",
         server: { host: "rpc.example.com" },
       },

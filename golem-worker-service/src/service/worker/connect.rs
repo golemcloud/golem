@@ -79,7 +79,7 @@ impl Drop for ConnectWorkerStream {
             self.agent_id
         );
         let limit_service = self.limit_service.clone();
-        let agent_id = self.agent_id.clone();
+        let agent_id = self.agent_id;
         let account_id = self.account_id;
         tokio::spawn(async move {
             let result = limit_service

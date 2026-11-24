@@ -78,7 +78,7 @@ ownership, so the original cannot be pulled, closed, or sent again.
 Definition-derived and generated guest clients accept and return `AgentStream` recursively:
 
 ```scala
-val target = StreamingAgentClient.get("main")
+val target = StreamingAgentClient.upsert("main")
 val input  = AgentStream.fromStream(Stream.fromIterable(values))
 val result: Future[AgentStream[Long]] = target.doubled(input)
 ```

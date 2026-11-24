@@ -14,6 +14,7 @@ import "golem/schema/schema.proto";
 import "golem/worker/retry_policy.proto";
 import "golem/worker/worker_error.proto";
 import "golem/worker/worker_id.proto";
+import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
 
 // An oplog entry in its raw/internal representation.
@@ -28,6 +29,7 @@ message RawOplogEntry {
     RawAgentInvocationStartedParameters agent_invocation_started = 4;
     RawAgentInvocationFinishedParameters agent_invocation_finished = 5;
     RawAgentInvocationFailedParameters agent_invocation_failed = 70;
+    RawAgentInvocationSettledParameters agent_invocation_settled = 72;
     RawTimestampOnly suspend = 6;
     RawErrorParameters error = 7;
     RawJumpParameters jump = 9;
@@ -174,7 +176,6 @@ message RawCreateParameters {
   uint64 initial_total_linear_memory_size = 8;
   repeated golem.component.EnvironmentPluginGrantId initial_active_plugins = 9;
   repeated bytes local_agent_config = 10;
-  optional golem.common.UUID original_phantom_id = 11;
   optional golem.common.UUID instance_id = 12;
   golem.component.AgentMode agent_mode = 13;
   OwnerKind owner_kind = 14;
@@ -182,13 +183,14 @@ message RawCreateParameters {
   optional string agent_type_name = 16;
   optional string canonical_key = 17;
   RawCreateRequest create_request = 18;
-  bool never_live = 19;
+  optional string constructor_parameters = 19;
+  bool never_live = 20;
 }
 
 enum RawCreateRequestKind {
   RAW_CREATE_REQUEST_KIND_GET_OR_CREATE = 0;
   RAW_CREATE_REQUEST_KIND_EXCLUSIVE = 1;
-  RAW_CREATE_REQUEST_KIND_PHANTOM = 2;
+  RAW_CREATE_REQUEST_KIND_UNKEYED = 2;
   RAW_CREATE_REQUEST_KIND_FORK = 3;
 }
 
@@ -212,6 +214,7 @@ message RawStartParameters {
   optional uint64 observational_owner = 7;
   optional RawSpanStarted span_started = 8;
   optional string denial = 9;
+  optional uint64 driver = 10;
 }
 
 message RawEndParameters {
@@ -290,6 +293,25 @@ message RawAgentInvocationStartedParameters {
   repeated string trace_states = 4;
   repeated RawSpanData invocation_context = 5;
   RawInvocationWalletPin wallet_pin = 6;
+  RawInvocationRequestOperation operation = 7;
+}
+
+// What a request runs. The payload of its entry is stored without it.
+message RawInvocationRequestOperation {
+  oneof operation {
+    uint64 manual_update_target_revision = 1;
+    google.protobuf.Empty agent_initialization = 2;
+    string agent_method = 3;
+    RawExternalToolOperation external_tool = 4;
+    google.protobuf.Empty load_snapshot = 5;
+    google.protobuf.Empty save_snapshot = 6;
+    google.protobuf.Empty process_oplog_entries = 7;
+  }
+}
+
+message RawExternalToolOperation {
+  string tool_name = 1;
+  repeated string command_path = 2;
 }
 
 message RawInvocationWalletPin {
@@ -304,12 +326,19 @@ message RawAgentInvocationFinishedParameters {
   uint64 component_revision = 3;
   optional string method_name = 4;
   golem.common.UUID invocation_id = 5;
+  bool awaits_settlement = 6;
 }
 
 message RawAgentInvocationFailedParameters {
   golem.common.UUID invocation_id = 1;
   AgentError error = 2;
   uint64 start_index = 3;
+  bool awaits_settlement = 4;
+}
+
+message RawAgentInvocationSettledParameters {
+  golem.common.UUID invocation_id = 1;
+  int64 consumed_fuel = 2;
 }
 
 message RawErrorParameters {
@@ -336,11 +365,14 @@ message RawPendingAgentInvocationParameters {
   repeated string trace_states = 4;
   repeated RawSpanData invocation_context = 5;
   google.protobuf.Timestamp not_before = 6;
+  RawInvocationRequestOperation operation = 7;
 }
 
 message RawPendingUpdateParameters {
   RawUpdateDescription description = 1;
   optional uint64 update_attempt_index = 2;
+  // Who requested the update. Required: an entry without it does not decode.
+  golem.component.Caller requester = 3;
 }
 
 message RawSuccessfulUpdateParameters {

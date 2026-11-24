@@ -9,7 +9,7 @@ description: "Fan out work to multiple parallel agents and collect results in a 
 
 Golem agents process invocations **sequentially**. Within one invocation, async I/O and stream tasks can overlap cooperatively; this is not CPU-thread parallelism. Distribute work across **multiple agent instances** for independent invocation execution. This skill covers two approaches:
 
-1. **Child agents via `AgentClient::get(id)`** — spawn separate agent instances, dispatch work, and collect results
+1. **Child agents via `AgentClient::upsert(id)`** — spawn separate agent instances, dispatch work, and collect results
 2. **`fork()`** — clone the current agent at the current execution point for lightweight parallel execution
 
 Use the `futures_concurrency` crate for structured concurrency when aggregating results from multiple async operations.
@@ -48,7 +48,7 @@ impl Coordinator for CoordinatorImpl {
     async fn fan_out(&mut self, items: Vec<String>) -> Vec<String> {
         // Build a Vec of futures — one per child agent
         let futures: Vec<_> = items.iter().enumerate().map(|(i, item)| {
-            let child = WorkerClient::get(i as u64);
+            let child = WorkerClient::upsert(i as u64);
             let item = item.clone();
             async move { child.process(item).await }
         }).collect();
@@ -90,7 +90,7 @@ impl Coordinator for CoordinatorImpl {
 
         // Fire-and-forget: trigger each child with its promise ID
         for (region, pid) in regions.iter().zip(&promise_ids) {
-            let mut child = RegionWorkerClient::get(region.clone());
+            let mut child = RegionWorkerClient::upsert(region.clone());
             child.trigger_run_report(pid.clone());
         }
 
@@ -149,7 +149,7 @@ use futures_concurrency::prelude::*;
 
 async fn fan_out_strict(&mut self, items: Vec<String>) -> Result<Vec<String>, String> {
     let futures: Vec<_> = items.iter().enumerate().map(|(i, item)| {
-        let child = FallibleWorkerClient::get(i as u64);
+        let child = FallibleWorkerClient::upsert(i as u64);
         let item = item.clone();
         async move {
             child.process(item).await
@@ -175,7 +175,7 @@ enum WorkResult {
 
 async fn fan_out_with_errors(&mut self, items: Vec<String>) -> (Vec<String>, Vec<String>) {
     let futures: Vec<_> = items.iter().enumerate().map(|(i, item)| {
-        let child = FallibleWorkerClient::get(i as u64);
+        let child = FallibleWorkerClient::upsert(i as u64);
         let item = item.clone();
         async move {
             // Collect domain errors without cancelling siblings.
@@ -202,7 +202,7 @@ async fn fan_out_with_errors(&mut self, items: Vec<String>) -> (Vec<String>, Vec
 
 ## Approach 2: `fork()`
 
-`fork()` clones the current agent at the current execution point, creating a new agent instance with the same state but a unique phantom ID. Only a durable agent can fork, and the forked agent is durable too. Use Golem promises to synchronize between the original and forked agents.
+`fork()` clones the current agent at the current execution point, creating a new agent instance without a key, with the same state but a new agent ID (`ForkDetails::forked_agent_id`). Only a durable agent can fork, and the forked agent is durable too. Use Golem promises to synchronize between the original and forked agents.
 
 ### Basic Fork Pattern
 
@@ -276,7 +276,7 @@ async fn multi_fork(&mut self, n: u32) -> Result<Vec<String>, String> {
 |----------|-------------|----------|
 | Work is **independent** and stateless | ✅ Best fit | Works but overkill |
 | Need to **share current state** with workers | ❌ Must pass via args | ✅ Forked copy inherits state |
-| Workers need **persistent identity** | ✅ Each has own ID | ❌ Each forked agent gets a generated phantom ID |
+| Workers need **persistent identity** | ✅ Each has own ID | ❌ Each forked agent gets a new agent ID and no key |
 | Number of parallel tasks is **dynamic** | ✅ Spawn as many as needed | ✅ Fork in a loop |
 | Need **domain error collection** | Return `Result` from the worker; RPC failures can still panic in the caller | Forked agent shares oplog lineage |
 

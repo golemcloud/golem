@@ -43,139 +43,10 @@ fn managed_xfs_reuses_downloads_without_reusing_vm_state() {
 }
 
 #[test]
-fn main_validation_dashboard_validates_and_persists_public_observations() {
-    let output = Command::new("python3")
-        .args([
-            "-B",
-            ".github/main-validation/observer/dashboard/test_server.py",
-        ])
-        .current_dir(workspace_path())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn main_validation_retains_logs_and_reports_actual_task_lifetimes() {
-    let output = Command::new("python3")
-        .args([
-            "-B",
-            ".github/scripts/release-tooling-tests/tests/main_validation_progress.py",
-        ])
-        .current_dir(workspace_path())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn main_validation_freezes_executor_binaries_without_changing_the_selection() {
-    let output = Command::new("python3")
-        .args([
-            "-B",
-            ".github/scripts/release-tooling-tests/tests/main_validation_freeze.py",
-        ])
-        .current_dir(workspace_path())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn main_validation_slack_preserves_delivery_receipts_with_formatted_alerts() {
-    let output = Command::new("python3")
-        .args([
-            "-B",
-            ".github/scripts/release-tooling-tests/tests/main_validation_slack.py",
-        ])
-        .current_dir(workspace_path())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn main_validation_discovers_durable_events_and_preserves_webhook_configuration() {
-    let output = Command::new("python3")
-        .args([
-            "-B",
-            ".github/scripts/release-tooling-tests/tests/main_validation_events.py",
-        ])
-        .current_dir(workspace_path())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn main_validation_lists_all_commits_since_the_previous_selected_run() {
-    let output = Command::new("python3")
-        .args([
-            "-B",
-            ".github/scripts/release-tooling-tests/tests/main_validation_changes.py",
-        ])
-        .current_dir(workspace_path())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn main_validation_reuses_component_wasms_by_source_across_languages() {
-    let output = Command::new("python3")
-        .args([
-            "-B",
-            ".github/scripts/release-tooling-tests/tests/main_validation_fixtures.py",
-        ])
-        .current_dir(workspace_path())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn main_validation_keeps_failed_workload_results_separate_from_cache_delivery() {
-    let output = Command::new("python3")
-        .args([
-            "-B",
-            ".github/scripts/release-tooling-tests/tests/main_validation_cache_lifecycle.py",
-        ])
-        .current_dir(workspace_path())
+fn main_validation_typescript_fixtures() {
+    let output = Command::new("bun")
+        .args(["test", "--timeout", "180000", "."])
+        .current_dir(workspace_path().join(".github/main-validation"))
         .output()
         .unwrap();
     assert!(
@@ -295,13 +166,10 @@ fn main_uses_main_validation_without_legacy_workflows() {
 }
 
 #[test]
-fn main_validation_cutover_executes_selection_and_exact_release_gate_shells() {
-    let output = Command::new("python3")
-        .args([
-            "-B",
-            ".github/scripts/release-tooling-tests/tests/main_validation_cutover.py",
-        ])
-        .current_dir(workspace_path())
+fn main_validation_typescript_checks() {
+    let output = Command::new("npm")
+        .args(["run", "check"])
+        .current_dir(workspace_path().join(".github/main-validation"))
         .output()
         .unwrap();
     assert!(

@@ -1,7 +1,7 @@
 use golem_rust::agentic::Config;
 use golem_rust::wasip3::http::{client, types};
 use golem_rust::wasip3::{wit_future, wit_stream};
-use golem_rust::{ConfigSchema, agent_definition, agent_implementation, description};
+use golem_rust::{ConfigSchema, agent_definition, agent_implementation, description, read_only};
 
 mod wallet_replay;
 
@@ -49,7 +49,7 @@ impl CounterAgent for CounterImpl {
 #[agent_definition]
 pub trait Caller {
     fn new() -> Self;
-    async fn call(&self, name: String) -> u32;
+    async fn call(&self, agent_id: golem_rust::AgentId) -> u32;
 }
 
 struct CallerImpl {}
@@ -60,8 +60,8 @@ impl Caller for CallerImpl {
         Self {}
     }
 
-    async fn call(&self, name: String) -> u32 {
-        let mut client = CounterAgentClient::get(name);
+    async fn call(&self, agent_id: golem_rust::AgentId) -> u32 {
+        let mut client = CounterAgentClient::get_by_id(&agent_id).expect("counter must exist");
         client.increment().await
     }
 }
@@ -157,6 +157,9 @@ pub trait SnapshotUpdateTest {
     fn suffix_trap(&self) -> u32;
     fn suffix_exit(&self) -> u32;
     fn accumulated_value(&self) -> u32;
+    fn revision_one_only(&self) -> u32;
+    #[read_only]
+    fn revision_cache_probe(&self) -> u32;
     fn write_file(&mut self, path: String, content: String);
     fn read_file(&self, path: String) -> Option<String>;
 }
@@ -223,6 +226,14 @@ impl SnapshotUpdateTest for SnapshotUpdateTestImpl {
     }
 
     fn accumulated_value(&self) -> u32 {
+        self.accumulated_value
+    }
+
+    fn revision_one_only(&self) -> u32 {
+        1
+    }
+
+    fn revision_cache_probe(&self) -> u32 {
         self.accumulated_value
     }
 

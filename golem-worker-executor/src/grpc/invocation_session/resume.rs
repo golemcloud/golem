@@ -36,7 +36,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         response_lease: ResponseLease,
         scope: &crate::worker::tasks::TaskScope,
     ) {
-        let rejection_identity = (resume.idempotency_key, resume.agent_id.clone());
+        let rejection_identity = (resume.idempotency_key, resume.agent_id);
+        let mut was_queued = false;
+        let mut attachment_ended = false;
+        let mut captured_method_input = None;
         let result = async {
             Self::validate_auth_ctx(&resume.auth_ctx)?;
             let attempt = build_resume_attempt(
@@ -48,7 +51,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .get(),
             )?;
             let lookup = InvocationStart {
-                agent_id: resume.agent_id.clone(),
+                target: resume.agent_id.map(|agent_id| {
+                    golem_api_grpc::proto::golem::worker::AgentTarget {
+                        target: Some(
+                            golem_api_grpc::proto::golem::worker::agent_target::Target::Id(
+                                agent_id,
+                            ),
+                        ),
+                    }
+                }),
                 idempotency_key: resume.idempotency_key.map(|key| {
                     golem_common::model::IdempotencyKey::from_uuid(uuid::Uuid::from(key)).into()
                 }),
@@ -58,8 +69,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
                 ..Default::default()
             };
+            let resolved = self.resolve_request_target(&lookup).await?;
             let (worker, _response_lease) = self
-                .get_or_create_pending_for_lookup(&lookup, None)
+                .get_or_create_pending_for_lookup(&lookup, &resolved, None)
                 .await?
                 .ok_or_else(|| {
                     WorkerExecutorError::invalid_request(
@@ -69,12 +81,59 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             scope
                 .bind(&worker.tasks)
                 .map_err(WorkerExecutorError::runtime)?;
+            let method = match worker.accepted_invocation_payload(&attempt.session_key.idempotency_key).await? {
+                Some(golem_common::model::agent::AgentInvocationPayload::AgentMethod { method_name, input, .. }) => {
+                    captured_method_input = Some(golem_common::serialization::serialize(&input).map_err(WorkerExecutorError::runtime)?);
+                    Some(method_name)
+                }
+                _ => None,
+            };
+            if let Some((attached, epoch, streams)) = worker.resume_queued_method(&attempt).await? {
+                let pending = InvocationResponse { response: Some(invocation_response::Response::Accepted(InvocationAccepted {
+                    agent_id: resume.agent_id,
+                    idempotency_key: resume.idempotency_key,
+                    environment_id: resume.environment_id,
+                    callee_fingerprint: resume.expected_callee_fingerprint,
+                    attachment_id: Some(attached.attachment_id.0.into()),
+                    attempt_id: resume.attempt_id,
+                    epoch,
+                    method_name: method,
+                    ..Default::default()
+                })) };
+                protocol_state.validate_response(&pending).map_err(WorkerExecutorError::runtime)?;
+                was_queued = true;
+                *response_lease.lock().unwrap() = streams.response_lease();
+                let wait = async {
+                    outward.send(pending).await.map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                    tokio::select! {
+                        ready = worker.clone().wait_method_session_ready(attempt.session_key.idempotency_key) => ready.map(|_| ()),
+                        _ = outward.closed() => Err(WorkerExecutorError::runtime("queued resume transport closed")),
+                        _ = inbound.message() => Err(WorkerExecutorError::invalid_request("stream controls require execution readiness")),
+                    }
+                }.await;
+                if let Err(error) = wait {
+                    detach_durable_attachment(Some(streams)).await;
+                    return Err(error);
+                }
+                if streams.ensure_current_attachment().await.is_err() {
+                    send_attachment_revocation(&outward, Ok(())).await;
+                    attachment_ended = true;
+                    return Err(WorkerExecutorError::runtime("queued resume attachment was fenced"));
+                }
+            }
             worker.resume_durable_streaming_invocation(attempt).await
         }
         .await;
         let mut acceptance = match result {
             Ok(acceptance) => acceptance,
             Err(error) => {
+                if attachment_ended {
+                    return;
+                }
+                if was_queued {
+                    super::send_worker_failure(&outward, error).await;
+                    return;
+                }
                 tracing::warn!(
                     agent_id = ?resume.agent_id,
                     attempt_id = ?resume.attempt_id,
@@ -213,9 +272,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         };
         if responses
             .send(InvocationResponse {
-                response: Some(invocation_response::Response::Accepted(
+                response: Some((if was_queued { invocation_response::Response::Ready } else { invocation_response::Response::Accepted })(
                     InvocationAccepted {
-                        agent_id: resume.agent_id.clone(),
+                        agent_id: resume.agent_id,
                         idempotency_key: resume.idempotency_key,
                         component_revision: Some(
                             acceptance
@@ -268,6 +327,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             PersistedInvocationTarget::AgentMethod { .. } => Vec::new(),
                         },
                         terminal_cursor_stream_ids: terminal_cursor_stream_ids.into_iter().map(|id| id.0.into()).collect(),
+                        captured_method_input,
                     },
                 )),
             })
@@ -374,12 +434,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                     .target_component_revision
                                     .get(),
                             ),
-                            agent_id: resume.agent_id.clone(),
+                            agent_id: resume.agent_id,
                             idempotency_key: resume.idempotency_key,
                             fuel_consumed: None,
                             status: None,
                             oplog_index: None,
                             agent_fingerprint: resume.expected_callee_fingerprint,
+                            background_failure: None,
                         },
                     )),
                 })

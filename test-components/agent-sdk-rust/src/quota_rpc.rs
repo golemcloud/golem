@@ -100,7 +100,7 @@ impl QuotaRpcSender for QuotaRpcSenderImpl {
         let child_token = token.split(child_expected_use);
 
         let receiver_name = format!("{}-receiver", self.name);
-        let receiver = QuotaRpcReceiverClient::get(receiver_name);
+        let receiver = QuotaRpcReceiverClient::upsert(receiver_name);
         receiver.trigger_reserve_and_call_in_loop(child_token, host.clone(), port, max_iterations);
 
         for _ in 0..max_iterations {

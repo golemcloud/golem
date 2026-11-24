@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::dispatch_target;
 use super::execution::known_fresh_dispatch_allowed;
 use super::{
     CancellationTokenEntry, RpcCallTarget, WasmRpcEntry, WasmRpcEntryPayload,
@@ -32,12 +33,11 @@ use crate::services::oplog::CommitLevel;
 use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use futures::future::Either;
+use golem_common::model::AgentId;
 use golem_common::model::AgentInvocation;
 use golem_common::model::InvocationRequestKey;
 use golem_common::model::OwnedAgentId;
-use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
-use golem_common::model::caller::Caller;
 use golem_common::model::invocation_context::InvocationContextSpan;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::DurableFunctionType;
@@ -66,7 +66,7 @@ pub(super) fn validate_cancellation_token_owner(
             token.owner
         )));
     }
-    if token.metadata.agent_id != token.recipient.agent_id.agent_id {
+    if AgentId::from(token.metadata.agent_id) != token.recipient.agent_id {
         return Err(WorkerExecutorError::runtime(
             "scheduled invocation cancellation token recipient does not match its metadata",
         ));
@@ -113,12 +113,13 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
             }
 
             let schedule_id = serialized_schedule_id.into_domain();
+            let canceller = self.outgoing_caller().immediate;
             self.rpc()
                 .cancel_scheduled_invocation(
                     &recipient,
                     invocation_key,
                     schedule_id,
-                    &current_agent.agent_id(),
+                    &canceller,
                     handle.agent_auth_ctx(),
                 )
                 .await
@@ -160,7 +161,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         // wasmtime traps.
         let (
             logical_remote_agent_id,
-            ephemeral_logical_agent_id,
+            ephemeral,
             remote_agent_type,
             remote_method_streams,
             env,
@@ -171,7 +172,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             let (env, config) = payload.target_activation.target_creation_data();
             (
                 payload.remote_agent_id.clone(),
-                payload.ephemeral_logical_agent_id.clone(),
+                payload.ephemeral.clone(),
                 payload.remote_agent_type.clone(),
                 payload.remote_method_streams.clone(),
                 env,
@@ -228,7 +229,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let call_target = RpcCallTarget::new(
             begun.idempotency_key_position(self),
             &logical_remote_agent_id,
-            ephemeral_logical_agent_id.as_ref(),
+            ephemeral.as_ref(),
             &method_name,
         );
         let call = match begun.resolve(self).await? {
@@ -326,7 +327,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .clone(),
         );
 
-        let target_fingerprint = if ephemeral_logical_agent_id.is_some() {
+        let target_fingerprint = if ephemeral.is_some() {
             // The scheduled ephemeral target is created now, so the schedule commits in its oplog
             // and the wake pins this incarnation. The target runs nothing before the deadline.
             let freshness = if known_fresh_dispatch_allowed(first_live_dispatch, true) {
@@ -349,14 +350,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             let rpc = self.rpc();
             let demand = rpc
                 .create_demand(
-                    AgentTarget::Current(remote_agent_id.agent_id()),
-                    remote_agent_id.environment_id,
+                    dispatch_target(&remote_agent_id, ephemeral.as_ref()),
                     &method_name,
+                    Some(crate::worker::invocation::native_invocation_start(
+                        &method_name,
+                        &input_value,
+                        false,
+                    )?),
                     self.created_by(),
                     self.agent_id(),
                     &env,
                     self.clone_as_inherited_stack(&span_id),
-                    &Caller::entry(self.self_principal()),
+                    &self.outgoing_caller(),
                     config,
                     handle.agent_auth_ctx(),
                     Some(idempotency_key),
@@ -381,9 +386,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let invocation = AgentInvocation::AgentMethod {
             idempotency_key: invocation_id.id(),
             method_name,
-            input: input_value,
+            allow_streams: false,
+            input: input_value
+                .try_into()
+                .map_err(|error: String| handle.trap(anyhow::anyhow!(error)))?,
             invocation_context: stack,
-            caller: Caller::entry(self.self_principal()),
+            caller: self.outgoing_caller(),
             scope_card: None,
         };
         let result = self
@@ -394,6 +402,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 request_key,
                 invocation,
                 scheduled_at,
+                self.agent_id(),
                 handle.agent_auth_ctx(),
             )
             .await

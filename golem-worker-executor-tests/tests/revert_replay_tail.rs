@@ -20,7 +20,7 @@ use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::oplog::payload::HostRequestGolemApiRevertAgent;
 use golem_common::model::{AgentStatus, OplogIndex};
 use golem_common::schema::FromSchema;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::card::{CardService, CardState};
@@ -86,7 +86,7 @@ async fn replay_tail_revert_records_and_authorizes_the_resolved_index(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let target = agent_id!("GolemHostApi", "revert-index-target");
+    let target = agent_key!("GolemHostApi", "revert-index-target");
     let target_id = executor.start_agent(&component.id, target.clone()).await?;
     executor
         .invoke_and_await_agent(
@@ -104,7 +104,7 @@ async fn replay_tail_revert_records_and_authorizes_the_resolved_index(
             data_value!(),
         )
         .await?;
-    let target_before = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
+    let target_before = settled_oplog(&executor, &target_id).await?;
     let retained = target_before
         .iter()
         .rev()
@@ -127,7 +127,7 @@ async fn replay_tail_revert_records_and_authorizes_the_resolved_index(
         })
         .store()
         .await?;
-    let caller = agent_id!("GolemHostApi", "revert-index-caller");
+    let caller = agent_key!("GolemHostApi", "revert-index-caller");
     let card = component
         .metadata
         .agent_type_provision_configs
@@ -142,7 +142,7 @@ async fn replay_tail_revert_records_and_authorizes_the_resolved_index(
             &component,
             &caller,
             "revert_last_invocations_result",
-            data_value!(target_id.clone(), 1u64),
+            data_value!(target_id.agent_id, 1u64),
         )
         .await?
         .into_typed::<Result<(), String>>()?;
@@ -193,10 +193,6 @@ async fn replay_tail_revert_records_and_authorizes_the_resolved_index(
     )?;
     let resolved = request.resolved_revert.expect("resolved target");
     assert_eq!(resolved.last_oplog_index, retained);
-    assert_eq!(
-        resolved.observed_oplog_index,
-        target_before.last().unwrap().oplog_index
-    );
     assert!(
         start.denial.is_some(),
         "authorization must check the actual retained index"
@@ -224,20 +220,20 @@ async fn revert_resolution_errors_survive_replay_tail_and_reconstruction(
             .component_dep(&context.default_environment_id, host_api_tests)
             .store()
             .await?;
-        let target = agent_id!("GolemHostApi", format!("resolution-target-{missing}"));
+        let target = agent_key!("GolemHostApi", format!("resolution-target-{missing}"));
         let target_id = executor.start_agent(&component.id, target.clone()).await?;
         if missing {
             executor.delete_worker(&target_id).await?;
         }
         let count = if missing { 1u64 } else { 4u64 };
-        let caller = agent_id!("GolemHostApi", format!("resolution-caller-{missing}"));
+        let caller = agent_key!("GolemHostApi", format!("resolution-caller-{missing}"));
         let caller_id = executor.start_agent(&component.id, caller.clone()).await?;
         let error = executor
             .invoke_and_await_agent(
                 &component,
                 &caller,
                 "revert_last_invocations_result",
-                data_value!(target_id.clone(), count),
+                data_value!(target_id.agent_id, count),
             )
             .await?
             .into_typed::<Result<(), String>>()?
@@ -292,7 +288,7 @@ async fn revert_resolution_errors_survive_replay_tail_and_reconstruction(
                 )
                 .await?;
         }
-        let target_before = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
+        let target_before = settled_oplog(&executor, &target_id).await?;
         executor
             .revert(
                 &caller_id,
@@ -357,4 +353,30 @@ async fn revert_resolution_errors_survive_replay_tail_and_reconstruction(
         );
     }
     Ok(())
+}
+
+/// The oplog of `agent_id` once every invocation with a recorded result settled. An invocation
+/// can settle after its caller got the result.
+pub(crate) async fn settled_oplog(
+    executor: &(impl TestDsl + Sync),
+    agent_id: &golem_common::model::OwnedAgentId,
+) -> anyhow::Result<Vec<golem_common::model::oplog::PublicOplogEntryWithIndex>> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let oplog = executor.get_oplog(agent_id, OplogIndex::INITIAL).await?;
+            let finished = oplog
+                .iter()
+                .filter(|e| matches!(e.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+                .count();
+            let settled = oplog
+                .iter()
+                .filter(|e| matches!(e.entry, PublicOplogEntry::AgentInvocationSettled(_)))
+                .count();
+            if finished == settled {
+                return Ok(oplog);
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await?
 }

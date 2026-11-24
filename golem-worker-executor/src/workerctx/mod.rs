@@ -62,12 +62,12 @@ use golem_common::model::{
     AgentId, AgentInvocationOutput, AgentStatusRecord, InvocationId, OplogIndex, OwnedAgentId,
 };
 use golem_common::resource_runtime::ResourceStore;
+use golem_common::schema::SchemaValue;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::component::Component;
 use std::collections::HashSet;
 use std::sync::{Arc, Weak};
-use uuid::Uuid;
 use wasmtime::component::Instance;
 use wasmtime::{ResourceLimiterAsync, Store};
 use wasmtime_wasi::WasiView;
@@ -130,6 +130,17 @@ pub trait EntityReconstructionClaimHook: Send + Sync {
     async fn after_claim(&self, start_index: OplogIndex);
 }
 
+/// When an invocation records its result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResultRecordedAt {
+    /// At the export's return, before the background work of the invocation drains. The end of
+    /// the drain then disposes the producers, checks the custom durable scopes and releases the
+    /// retained `Start`s.
+    ExportReturn,
+    /// After the work of the invocation settled, on the settled path.
+    Settlement,
+}
+
 /// Where a replaying accessor durable call is paused relative to its scope admission.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -179,7 +190,6 @@ pub trait ReplayAdmissionHook: Send + Sync {
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
 /// well as providing hooks for the general worker executor logic.
-#[async_trait]
 pub trait WorkerCtx:
     FuelManagement
     + CallCountManagement
@@ -258,7 +268,7 @@ pub trait WorkerCtx:
     /// - `execution_status`: Lock created to store the execution status
     /// - `file_loader`: The service for loading files and making them available to workers
     #[allow(clippy::too_many_arguments)]
-    async fn create(
+    fn create(
         account_id: AccountId,
         owned_agent_id: OwnedAgentId,
         owner_context: ResolvedOwnerContext,
@@ -297,7 +307,6 @@ pub trait WorkerCtx:
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         websocket_connection_pool: WebSocketConnectionPool,
         pending_update: Option<HydratedUpdate>,
-        original_phantom_id: Option<Uuid>,
         runtime: OwnerRuntime,
         entity_execution_mode: Option<InvocationExecutionMode>,
         owner_execution: Arc<OwnerExecution>,
@@ -305,7 +314,7 @@ pub trait WorkerCtx:
         filesystem_capability: FilesystemCapability,
         executable: WorkerCtxExecutable,
         entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
-    ) -> Result<Self, WorkerExecutorError>;
+    ) -> impl Future<Output = Result<Self, WorkerExecutorError>> + Send;
 
     fn as_wasi_view(&mut self) -> impl WasiView;
 
@@ -392,7 +401,6 @@ pub trait EntityInvocationManagement {
 /// more, and once the invocation is finished, returns the remaining amount. The implementation is
 /// supposed to track the amount of borrowed fuel and compare that with the actual fuel levels
 ///passed to these functions.
-#[async_trait]
 pub trait FuelManagement {
     /// Whether this deployment measures compute usage. Disabled metering is explicitly unlimited.
     fn fuel_metering_enabled(&self) -> bool;
@@ -447,22 +455,23 @@ pub trait CallCountManagement {
 ///
 /// A worker can be invoked multiple times during its lifetime, and each invocation has its own
 /// invocation key, but only one invocation can be active at a time.
-#[async_trait]
 pub trait InvocationManagement {
     /// Sets the invocation key associated with the current invocation of the worker.
-    async fn set_current_idempotency_key(&mut self, key: InvocationId);
+    fn set_current_idempotency_key(&mut self, key: InvocationId)
+    -> impl Future<Output = ()> + Send;
 
     /// Gets the invocation key associated with the current invocation of the worker.
-    async fn get_current_idempotency_key(&self) -> Option<InvocationId>;
+    fn get_current_idempotency_key(&self) -> impl Future<Output = Option<InvocationId>> + Send;
 
     /// Sets (overwrites) the current invocation context stack
-    async fn set_current_invocation_context(
+    fn set_current_invocation_context(
         &mut self,
         invocation_context: InvocationContextStack,
-    ) -> Result<(), WorkerExecutorError>;
+    ) -> impl Future<Output = Result<(), WorkerExecutorError>> + Send;
 
     /// Gets the current invocation context stack
-    async fn get_current_invocation_context(&self) -> InvocationContextStack;
+    fn get_current_invocation_context(&self)
+    -> impl Future<Output = InvocationContextStack> + Send;
 
     /// Returns whether we are in live mode where we are executing new calls.
     fn is_live(&self) -> bool;
@@ -475,7 +484,6 @@ pub trait InvocationManagement {
 /// the worker's status.
 ///
 /// See `AgentStatus` for the possible states of a worker.
-#[async_trait]
 pub trait StatusManagement {
     /// Checks if the worker is being interrupted, or has been interrupted. If not, the result
     /// is None. Otherwise, it is the kind of interrupt that happened.
@@ -491,48 +499,53 @@ pub trait StatusManagement {
 /// The invocation hooks interface of a worker context has some functions called around
 /// worker invocation. These hooks can be used observe the beginning and the end (either
 /// successful or failed) of invocations.
-#[async_trait]
 pub trait InvocationHooks {
     /// Called when a worker is about to be invoked. Returns false if the pending invocation
     /// was removed before it could start; the caller must skip execution and result persistence.
-    async fn on_agent_invocation_started(
+    /// `input` is the lowered initializer, method or tool input for execution. The hydrated
+    /// invocation retains the original persisted request independently of this value.
+    fn on_agent_invocation_started(
         &mut self,
         invocation: crate::worker::HydratedInvocation,
-    ) -> Result<bool, WorkerExecutorError>;
+        input: Option<&SchemaValue>,
+    ) -> impl Future<Output = Result<bool, WorkerExecutorError>> + Send;
 
     /// Clears invocation-scoped runtime state after the guest call returns or traps.
-    async fn on_agent_invocation_finished(&mut self);
+    fn on_agent_invocation_finished(&mut self) -> impl Future<Output = ()> + Send;
 
     /// Called when a worker invocation fails.
-    async fn on_invocation_failure(
+    fn on_invocation_failure(
         &mut self,
         full_function_name: &str,
         trap_type: &TrapType,
-    ) -> InvocationFailureDecision;
+    ) -> impl Future<Output = InvocationFailureDecision> + Send;
 
     /// Validates a replayed method failure or commits its live terminal without failing the agent.
-    async fn record_agent_method_failure(
+    fn record_agent_method_failure(
         &mut self,
         full_function_name: &str,
         error: AgentError,
-    ) -> Result<(), WorkerExecutorError>;
+        recorded_at: ResultRecordedAt,
+    ) -> impl Future<Output = Result<(), WorkerExecutorError>> + Send;
 
     /// Called when an agent invocation succeeds, with the typed result directly.
     ///
     /// The implementation may populate fields on `output` that are only known
     /// after the success has been persisted to the oplog — for example
     /// `oplog_index` and `agent_fingerprint` derived from the committed
-    /// `AgentInvocationFinished` entry.
-    async fn on_agent_invocation_success(
+    /// `AgentInvocationFinished` entry. It must not change `output.result`: the invocation
+    /// returns that value.
+    fn on_agent_invocation_success(
         &mut self,
         full_function_name: &str,
         consumed_fuel: u64,
         output: &mut AgentInvocationOutput,
-    ) -> Result<(), WorkerExecutorError>;
+        recorded_at: ResultRecordedAt,
+    ) -> impl Future<Output = Result<(), WorkerExecutorError>> + Send;
 
     /// Gets the retry point that should be associated with a current error. Errors are grouped
     /// by this information. The current oplog index is a good default.
-    async fn get_current_retry_point(&self) -> OplogIndex;
+    fn get_current_retry_point(&self) -> impl Future<Output = OplogIndex> + Send;
 
     /// Switches the invocation strictness mode to `ReadOnly` for the duration of a single agent
     /// method invocation. Under read-only strictness, outgoing HTTP and RPC host calls trap
@@ -548,7 +561,6 @@ pub trait InvocationHooks {
     fn exit_read_only_mode(&mut self);
 }
 
-#[async_trait]
 pub trait UpdateManagement {
     /// The first condition currently blocking a snapshot from being taken and committed, or
     /// `None` when the worker is at a safe snapshot boundary.
@@ -568,28 +580,27 @@ pub trait UpdateManagement {
     /// Called when an update attempt has failed, with its `FailedUpdate` entry. Fails when the
     /// oplog refused to record the failure: the agent has been given up, and must not be rebuilt
     /// on its old revision here.
-    async fn on_worker_update_failed(
+    fn on_worker_update_failed(
         &self,
         failed_update: OplogEntry,
-    ) -> Result<(), WorkerExecutorError>;
+    ) -> impl Future<Output = Result<(), WorkerExecutorError>> + Send;
 
     /// Called when an update attempt succeeded. `bootstrap` is the bootstrap range of the target
     /// revision's core initializer that the update recorded. Fails when the oplog refused to
     /// record the update: the agent has been given up, and the update must not be reported as
     /// applied.
-    async fn on_worker_update_succeeded(
+    fn on_worker_update_succeeded(
         &self,
         target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
         snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
         bootstrap: Option<OplogRegion>,
-    ) -> Result<(), WorkerExecutorError>;
+    ) -> impl Future<Output = Result<(), WorkerExecutorError>> + Send;
 }
 
 /// Operations not requiring an active worker context, but still depending on the
 /// worker context implementation.
-#[async_trait]
 pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// Extra dependencies required by this specific worker context. A value of this type is
     /// passed to the created worker context in the 'extra_deps' parameter of 'WorkerCtx::create'.
@@ -597,12 +608,12 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
 
     /// Gets how many times the worker has been retried to recover from an error, and what
     /// error was stored in the last entry.
-    async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
+    fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         latest_worker_status: &AgentStatusRecord,
-    ) -> Option<LastError>;
+    ) -> impl Future<Output = Option<LastError>> + Send;
 
     /// Prepares a wasmtime instance after it has been created, but before it can be invoked.
     /// This can be used to restore the previous state of the worker, but by general it can be no-op.
@@ -614,22 +625,21 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// - Ok(Some(RetryDecision::Delayed())) - the preparation has been interrupted by an error and should be retried after a delay
     /// - Ok(Some(RetryDecision::ReacquirePermits)) - the preparation has been interrupted by an error, but should be retried immediately after dropping and reacquiring te permits
     /// - Ok(Some(RetryDecision::None)) - the preparation has been interrupted and should not be retried, but it is not an error (example: suspend after resuming a previously interrupted invocation)
-    async fn prepare_instance(
+    fn prepare_instance(
         agent_id: &AgentId,
         instance: &Instance,
         store: &mut Store<Ctx>,
-    ) -> Result<Option<RetryDecision>, WorkerExecutorError>;
+    ) -> impl Future<Output = Result<Option<RetryDecision>, WorkerExecutorError>> + Send;
 
     /// Callback called when the executor's shard assignment has been changed
-    async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync + 'static>(
+    fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync + 'static>(
         this: &T,
-    ) -> Result<(), anyhow::Error>;
+    ) -> impl Future<Output = Result<(), anyhow::Error>> + Send;
 }
 
 /// A required interface to be implemented by the worker context's public state.
 ///
 /// It is used to "connect" to a worker's event stream
-#[async_trait]
 pub trait PublicWorkerIo {
     /// Gets the event service created for the worker, which can be used to
     /// subscribe to worker events.
@@ -638,16 +648,14 @@ pub trait PublicWorkerIo {
 
 /// Trait used for reading worker filesystem. The worker will not be running any invocations when methods of this trait are called,
 /// so not locking is needed in the implementation.
-#[async_trait]
 pub trait FileSystemReading {
-    async fn get_file_system_node(
+    fn get_file_system_node(
         &self,
         path: &CanonicalFilePath,
-    ) -> Result<GetFileSystemNodeResult, WorkerExecutorError>;
+    ) -> impl Future<Output = Result<GetFileSystemNodeResult, WorkerExecutorError>> + Send;
 }
 
 /// Functions to manipulate and query the current invocation context
-#[async_trait]
 pub trait InvocationContextManagement {
     /// Removes an inherited span without finishing it
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError>;

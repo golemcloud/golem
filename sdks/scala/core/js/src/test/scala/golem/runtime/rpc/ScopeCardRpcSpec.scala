@@ -18,7 +18,7 @@ package golem.runtime.rpc
 
 import golem.host.PermissionsApi.ScopeCard
 import golem.schema.GuestPermissionCardHandle
-import golem.host.js.schema.{JsSchemaValueTree, JsTypedAgentConfigValue}
+import golem.host.js.schema.JsSchemaValueTree
 import golem.runtime.rpc.host.WasmRpcApi
 import zio.ZIO
 import zio.test._
@@ -33,7 +33,7 @@ object ScopeCardRpcSpec extends ZIOSpecDefault {
 
     def install(): Unit = {
       val metadata = js.Dynamic.literal(
-        agentId = "Target(\"a\")",
+        agentId = js.Dynamic.literal(uuid = js.Dynamic.literal(highBits = js.BigInt("5"), lowBits = js.BigInt("6"))),
         invocationId = js.Dynamic.literal(
           owner = js.Dynamic.literal(tag = "agent", `val` = js.Dynamic.literal()),
           id = js.Dynamic.literal(highBits = js.BigInt("1"), lowBits = js.BigInt("2"))
@@ -70,12 +70,10 @@ object ScopeCardRpcSpec extends ZIOSpecDefault {
 
   private def invoker(): RemoteAgentClient.WasmRpcInvoker =
     new RemoteAgentClient.WasmRpcInvoker(
-      WasmRpcApi.newClient(
-        "Target",
-        js.Dynamic.literal().asInstanceOf[JsSchemaValueTree],
-        js.undefined,
-        js.Array[JsTypedAgentConfigValue]()
-      )
+      WasmRpcApi
+        .upsert("Target", js.Dynamic.literal().asInstanceOf[JsSchemaValueTree])
+        .fold(error => throw new IllegalStateException(error.toString), identity),
+      None
     )
 
   private val input = js.Dynamic.literal().asInstanceOf[JsSchemaValueTree]
@@ -129,7 +127,7 @@ object ScopeCardRpcSpec extends ZIOSpecDefault {
       val scope  = card(raw)
       val moved  = card(js.Dynamic.literal(name = "reflected-moved"))
       val client = golem.reflection.DynamicAgentClient
-        .ephemeral("Target", golem.schema.SchemaValue.StringValue("t"))
+        .upsert("Target", golem.schema.SchemaValue.StringValue("t"))
         .fold(error => throw new IllegalStateException(error.toString), identity)
       moved.release()
       val method = client.method("m")
@@ -162,14 +160,14 @@ object ScopeCardRpcSpec extends ZIOSpecDefault {
         )
       )
       val client = golem.reflection.DynamicAgentClient
-        .ephemeral("Target", golem.schema.SchemaValue.StringValue("t"))
+        .upsert("Target", golem.schema.SchemaValue.StringValue("t"))
         .fold(error => throw new IllegalStateException(error.toString), identity)
       ZIO.fromFuture { implicit ec =>
         client.method("m").invokeValue(golem.schema.SchemaValue.StringValue("x"), None).map { result =>
           assertTrue(
             result == Left(
               golem.reflection.GolemReflectError.Remote(
-                golem.reflection.AgentRpcError.Protocol("completed invocation has no metadata")
+                golem.runtime.rpc.AgentRpcError.Protocol("completed invocation has no metadata")
               )
             )
           )

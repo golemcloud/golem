@@ -213,8 +213,9 @@ impl<T> ContextWindow<'_, T> {
 }
 
 impl<T: 'static, D: HasData + ?Sized> DurableAccess<T, D> for Accessor<T, D> {
+    /// A guest import's host code reads its authority with the cut-off state it was made with.
     fn with<R>(&self, f: impl FnOnce(ContextWindow<'_, T>) -> R) -> R {
-        self.with(|mut access| {
+        crate::durable_host::attribution::with_import_access(self, |mut access| {
             f(ContextWindow {
                 data: access.data_mut(),
             })
@@ -555,13 +556,7 @@ mod tests {
 
     #[test]
     fn shared_context_drops_before_its_registration() {
-        let owner = OwnedAgentId::new(
-            EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "owner".into(),
-            },
-        );
+        let owner = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 1));
         let activation = Arc::new(
             EntityActivation::new(
                 ExecutableTarget::new(ComponentId::new(), 1_u64.try_into().unwrap()),

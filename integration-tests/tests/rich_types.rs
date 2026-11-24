@@ -29,9 +29,9 @@ use golem_common::model::oplog::{
 use golem_common::schema::{
     Quantity, QuantityUnit, SchemaType, SchemaValue, TypeId, TypedSchemaValue,
 };
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use golem_test_framework::dsl::{TestDsl, TestDslExtended, original_native_method_input};
 use std::path::PathBuf;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
@@ -95,22 +95,14 @@ fn finished_output<'a>(
         .unwrap_or_else(|| panic!("no AgentInvocationFinished entry for {method}"))
 }
 
-fn single_rich_arg(typed: &TypedSchemaValue) -> (&SchemaType, &SchemaValue) {
-    let ty = match typed.root_type() {
-        SchemaType::Record { fields, .. } => {
-            assert_eq!(fields.len(), 1, "expected single-argument input record");
-            &fields[0].body
-        }
-        other => panic!("expected record input type, got {other:?}"),
-    };
-    let value = match typed.value() {
+fn single_rich_arg(value: &SchemaValue) -> &SchemaValue {
+    match value {
         SchemaValue::Record { fields } => {
             assert_eq!(fields.len(), 1, "expected single-argument input record");
             &fields[0]
         }
         other => panic!("expected record input value, got {other:?}"),
-    };
-    (ty, value)
+    }
 }
 
 fn assert_round_trip(
@@ -125,12 +117,8 @@ fn assert_round_trip(
         "{method}: returned value is not the expected rich variant: {returned:?}"
     );
 
-    let started = started_input(oplog, method);
-    let (in_ty, in_val) = single_rich_arg(started);
-    assert!(
-        is_rich_type(in_ty),
-        "{method}: oplog input type is not the expected rich variant: {in_ty:?}"
-    );
+    let started = original_native_method_input(started_input(oplog, method)).unwrap();
+    let in_val = single_rich_arg(&started);
     assert!(
         is_rich_value(in_val),
         "{method}: oplog input value is not the expected rich variant: {in_val:?}"
@@ -177,7 +165,7 @@ async fn rich_semantic_types_round_trip_preserves_canonical_encoding(
         .store()
         .await?;
 
-    let parsed_agent_id = agent_id!("RichTypesAgent", "rich-types-1");
+    let parsed_agent_id = agent_key!("RichTypesAgent", "rich-types-1");
     let agent_id = user
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;

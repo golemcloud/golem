@@ -1,8 +1,11 @@
 use golem_rust::bindings::golem::api::oplog::{
-    AgentInvocation, OplogEntry, OplogIndex, PublicOplogEntry, enrich_oplog_entries,
+    AgentInvocation, OplogEntry, OplogIndex, PublicCaller, PublicOplogEntry, PublicPrincipal,
+    enrich_oplog_entries,
 };
 use golem_rust::oplog_processor::exports::golem::api::oplog_processor::Guest as OplogProcessorGuest;
-use golem_rust::schema::wit::wire::{AgentId, ComponentId};
+use golem_rust::oplog_processor::golem::agent::common::Principal;
+use golem_rust::oplog_processor::golem::agent::invocation_context;
+use golem_rust::schema::wit::wire::AgentId;
 use golem_rust::wasip3::http::{client, types};
 use golem_rust::wasip3::{wit_future, wit_stream};
 use uuid::Uuid;
@@ -13,12 +16,12 @@ use std::collections::HashMap;
 /// Per-batch delivery record posted to the callback URL.
 #[derive(serde::Serialize)]
 struct BatchCallback {
-    /// Source worker identity
+    /// Source agent ID
     source_worker_id: String,
-    /// Account that owns the worker
+    /// Account that owns the agent
     account_id: String,
-    /// Component the worker belongs to
-    component_id: String,
+    /// Agent type of the source agent
+    agent_type: Option<String>,
     /// Index of the first entry in this batch
     first_entry_index: u64,
     /// Number of entries in this batch
@@ -28,12 +31,107 @@ struct BatchCallback {
     /// Enriched durable host-call entries (Start/End/Cancelled) observed in this
     /// batch, derived from the output of `enrich-oplog-entries`
     durable_entries: Vec<DurableEntryRecord>,
+    /// The caller that the processor runs this batch as
+    caller: CallerRecord,
+}
+
+#[derive(serde::Serialize)]
+struct CallerRecord {
+    original: PrincipalRecord,
+    immediate: PrincipalRecord,
+}
+
+/// A principal's kind, with the account ID of an account and the agent ID of an agent.
+#[derive(serde::Serialize)]
+struct PrincipalRecord {
+    kind: String,
+    account_id: Option<String>,
+    agent_id: Option<String>,
+}
+
+impl From<Principal> for PrincipalRecord {
+    fn from(principal: Principal) -> Self {
+        let (kind, account_id, agent_id) = match principal {
+            Principal::User(_) => ("user", None, None),
+            Principal::Account(account) => (
+                "account",
+                Some(
+                    Uuid::from_u64_pair(
+                        account.account_id.uuid.high_bits,
+                        account.account_id.uuid.low_bits,
+                    )
+                    .to_string(),
+                ),
+                None,
+            ),
+            Principal::Agent(agent) => (
+                "agent",
+                None,
+                Some(
+                    Uuid::from_u64_pair(
+                        agent.agent_id.uuid.high_bits,
+                        agent.agent_id.uuid.low_bits,
+                    )
+                    .to_string(),
+                ),
+            ),
+            Principal::Tool(_) => ("tool", None, None),
+            Principal::Anonymous => ("anonymous", None, None),
+        };
+        Self {
+            kind: kind.to_string(),
+            account_id,
+            agent_id,
+        }
+    }
 }
 
 #[derive(serde::Serialize)]
 struct InvocationRecord {
     oplog_index: u64,
     fn_name: String,
+    /// The principal that started the chain, when the start was in this batch
+    original_caller: Option<CallerRoleRecord>,
+    /// The principal that made the call, when the start was in this batch
+    immediate_caller: Option<CallerRoleRecord>,
+}
+
+/// One role of an invocation's caller, as `enrich-oplog-entries` shows it.
+#[derive(Clone, serde::Serialize)]
+struct CallerRoleRecord {
+    /// "user", "account", "agent", "tool" or "anonymous"
+    kind: String,
+    /// The subject of the principal's pair; none for an anonymous principal
+    subject: Option<String>,
+}
+
+impl CallerRoleRecord {
+    fn new(principal: &PublicPrincipal) -> Self {
+        let (kind, pair) = match principal {
+            PublicPrincipal::User(user) => ("user", Some(&user.pair)),
+            PublicPrincipal::Account(account) => ("account", Some(&account.pair)),
+            PublicPrincipal::Agent(agent) => ("agent", Some(&agent.pair)),
+            PublicPrincipal::Tool(tool) => ("tool", Some(&tool.pair)),
+            PublicPrincipal::Anonymous => ("anonymous", None),
+        };
+        Self {
+            kind: kind.to_string(),
+            subject: pair.map(|pair| pair.subject.clone()),
+        }
+    }
+}
+
+/// An invocation whose start this processor saw, until its end.
+struct StartedInvocation {
+    fn_name: String,
+    caller: Option<(CallerRoleRecord, CallerRoleRecord)>,
+}
+
+fn caller_roles(caller: &PublicCaller) -> Option<(CallerRoleRecord, CallerRoleRecord)> {
+    Some((
+        CallerRoleRecord::new(&caller.original),
+        CallerRoleRecord::new(&caller.immediate),
+    ))
 }
 
 /// Evidence of an enriched durable host-call entry, taken from the enriched
@@ -54,7 +152,7 @@ struct DurableEntryRecord {
 }
 
 thread_local! {
-    static CURRENT_INVOCATIONS: RefCell<HashMap<String, String>> =
+    static CURRENT_INVOCATIONS: RefCell<HashMap<String, StartedInvocation>> =
         RefCell::new(HashMap::new());
 }
 
@@ -64,8 +162,7 @@ impl OplogProcessorGuest for OplogProcessorComponent {
     async fn process(
         account_info: golem_rust::oplog_processor::exports::golem::api::oplog_processor::AccountInfo,
         config: Vec<(String, String)>,
-        component_id: ComponentId,
-        worker_id: AgentId,
+        agent_id: AgentId,
         metadata: golem_rust::oplog_processor::host::AgentMetadata,
         first_entry_index: OplogIndex,
         entries: Vec<OplogEntry>,
@@ -84,7 +181,8 @@ impl OplogProcessorGuest for OplogProcessorComponent {
             account_info.account_id.uuid.low_bits,
         );
 
-        let comp_id = Uuid::from_u64_pair(component_id.uuid.high_bits, component_id.uuid.low_bits);
+        let source_agent_id =
+            Uuid::from_u64_pair(agent_id.uuid.high_bits, agent_id.uuid.low_bits).to_string();
 
         let mut invocations: Vec<InvocationRecord> = Vec::new();
         let mut durable_entries: Vec<DurableEntryRecord> = Vec::new();
@@ -101,7 +199,7 @@ impl OplogProcessorGuest for OplogProcessorComponent {
             .collect();
         let enriched_entries = enrich_oplog_entries(
             metadata.environment_id.clone(),
-            &metadata.agent_id.clone(),
+            metadata.agent_id.clone(),
             indexed_entries,
             metadata.component_revision,
         )
@@ -132,26 +230,47 @@ impl OplogProcessorGuest for OplogProcessorComponent {
                 _ => {}
             }
             if let PublicOplogEntry::AgentInvocationStarted(params) = entry {
-                let function_name = match &params.invocation {
-                    AgentInvocation::AgentInitialization(_) => "agent-initialization".to_string(),
-                    AgentInvocation::AgentMethodInvocation(method_params) => {
-                        method_params.method_name.clone()
-                    }
-                    AgentInvocation::ExternalTool(_) => "external-tool".to_string(),
-                    AgentInvocation::SaveSnapshot => "save-snapshot".to_string(),
-                    AgentInvocation::LoadSnapshot(_) => "load-snapshot".to_string(),
-                    AgentInvocation::ProcessOplogEntries(_) => "process-oplog-entries".to_string(),
-                    AgentInvocation::ManualUpdate(_) => "manual-update".to_string(),
+                let (function_name, caller) = match &params.invocation {
+                    AgentInvocation::AgentInitialization(init_params) => (
+                        "agent-initialization".to_string(),
+                        caller_roles(&init_params.caller),
+                    ),
+                    AgentInvocation::AgentMethodInvocation(method_params) => (
+                        method_params.method_name.clone(),
+                        caller_roles(&method_params.caller),
+                    ),
+                    AgentInvocation::ExternalTool(tool_params) => (
+                        "external-tool".to_string(),
+                        caller_roles(&tool_params.caller),
+                    ),
+                    AgentInvocation::SaveSnapshot(snapshot_params) => (
+                        "save-snapshot".to_string(),
+                        caller_roles(&snapshot_params.caller),
+                    ),
+                    AgentInvocation::LoadSnapshot(snapshot_params) => (
+                        "load-snapshot".to_string(),
+                        caller_roles(&snapshot_params.caller),
+                    ),
+                    AgentInvocation::ProcessOplogEntries(process_params) => (
+                        "process-oplog-entries".to_string(),
+                        caller_roles(&process_params.caller),
+                    ),
+                    AgentInvocation::ManualUpdate(_) => ("manual-update".to_string(), None),
                 };
                 CURRENT_INVOCATIONS.with(|ci| {
-                    ci.borrow_mut()
-                        .insert(format!("{worker_id:?}"), function_name);
+                    ci.borrow_mut().insert(
+                        source_agent_id.clone(),
+                        StartedInvocation {
+                            fn_name: function_name,
+                            caller,
+                        },
+                    );
                 });
             } else if let PublicOplogEntry::AgentInvocationFinished(_params) = entry {
-                let function_name = if let Some(function_name) =
-                    CURRENT_INVOCATIONS.with(|ci| ci.borrow_mut().remove(&format!("{worker_id:?}")))
+                let started = if let Some(started) =
+                    CURRENT_INVOCATIONS.with(|ci| ci.borrow_mut().remove(&source_agent_id.clone()))
                 {
-                    function_name
+                    started
                 } else {
                     // AgentInvocationStarted was in a previous batch sent to a
                     // different plugin worker (e.g. shard reassignment / locality
@@ -160,25 +279,39 @@ impl OplogProcessorGuest for OplogProcessorComponent {
                     println!(
                         "AgentInvocationFinished without corresponding AgentInvocationStarted"
                     );
-                    "unknown".to_string()
+                    StartedInvocation {
+                        fn_name: "unknown".to_string(),
+                        caller: None,
+                    }
+                };
+                let (original_caller, immediate_caller) = match started.caller {
+                    Some((original, immediate)) => (Some(original), Some(immediate)),
+                    None => (None, None),
                 };
 
                 invocations.push(InvocationRecord {
                     oplog_index: *oplog_index,
-                    fn_name: function_name,
+                    fn_name: started.fn_name,
+                    original_caller,
+                    immediate_caller,
                 });
             }
         }
 
         if let Some(url) = callback_url {
+            let caller = invocation_context::caller();
             let batch = BatchCallback {
-                source_worker_id: format!("{}", worker_id.agent_id),
+                source_worker_id: source_agent_id,
                 account_id: account_id.to_string(),
-                component_id: comp_id.to_string(),
+                agent_type: metadata.agent_type_name.clone(),
                 first_entry_index,
                 entry_count,
                 invocations,
                 durable_entries,
+                caller: CallerRecord {
+                    original: caller.original.into(),
+                    immediate: caller.immediate.into(),
+                },
             };
             let json = serde_json::to_string(&batch).map_err(|err| err.to_string())?;
             send_http_post(&url, json.into_bytes()).await?;

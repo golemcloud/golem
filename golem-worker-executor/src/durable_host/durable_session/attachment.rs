@@ -207,15 +207,25 @@ impl StreamSession {
         let session = self.clone();
         self.producer
             .run_admitted(None, memory, true, move |_, admission| async move {
-                let _session_guard = session.session_lock.lock().await;
-                let session_for_write = session.clone();
-                admission
-                    .submit(move |_, context| async move {
-                        session_for_write
-                            .commit_resume_attempt_owned(&context, record)
-                            .await
-                    })
+                let guard = session.session_lock.clone().lock_owned().await;
+                session
+                    .commit_resume_attempt_locked(record, guard, &admission)
                     .await
+            })
+            .await
+    }
+
+    pub(crate) async fn commit_resume_attempt_locked(
+        &self,
+        record: StreamSessionResumeAttemptRecord,
+        guard: tokio::sync::OwnedMutexGuard<()>,
+        admission: &Arc<StreamWriteAdmission>,
+    ) -> Result<(), SessionError> {
+        let _session_guard = guard;
+        let session = self.clone();
+        admission
+            .submit(move |_, context| async move {
+                session.commit_resume_attempt_owned(&context, record).await
             })
             .await
     }
@@ -510,10 +520,10 @@ impl StreamSession {
             epoch,
             session_key: self.session_key.clone(),
             producer_environment_id: handle.producer_environment_id,
-            producer: handle.producer.clone(),
+            producer: handle.producer,
             expected_producer_fingerprint: handle.expected_producer_fingerprint,
             consumer_environment_id: self.producer.environment_id(),
-            consumer: self.producer.agent_id().clone(),
+            consumer: *self.producer.agent_id(),
             expected_consumer_fingerprint: self.producer.fingerprint(),
             consumer_invocation: self.consumer_invocation.clone(),
         })
@@ -610,6 +620,7 @@ impl StreamSession {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl StreamAttachmentConsumerProbe for StreamSession {
     async fn status(
         &self,

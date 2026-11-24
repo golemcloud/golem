@@ -20,6 +20,20 @@ Each part of the report is one of these:
 
 A part without a rule is a token. Nothing is kept because a heuristic judged it harmless. A keep option (`--keep-scalars`, `--keep-shape`, `--keep-error-text`) keeps more data. Each one is a leak that you select for one export; see [Options that keep more data](#options-that-keep-more-data).
 
+## A report over MCP
+
+`golem mcp serve` offers the tool `agent_oplog_export` to a coding agent. One call returns one complete report as one `agent.oplog-export` document. The tool takes `agent_id`, a closed range `from` and `to`, the three keep options and `max_entry_bytes`, with the defaults of the CLI. It always obfuscates. It has no query, no cursor and no page: a call that a later call continues does not exist.
+
+- The range is inclusive, and `1 <= from <= to`. The CLI checks `to` against the last index of the oplog when it pins the root, and refuses a range that ends after it. Use `agent_oplog` to find the indexes of the failure.
+- The document holds `header` (the fields of the export header, and `from` and `to`), `entries` in index order, and the `coverage` of the whole range. `filtered` is always `false`. An entry that the CLI cannot read in full stays an `omitted` marker with a coverage item, as in a CLI export.
+- The reads of the range share one scan budget of the server, the same budget that limits an oplog search. The first read gets the configured budget. Each later read takes only what the reads before it left, and a read that fails is not repeated with the same budget. When the budget runs out before `to`, the call fails with `scan-budget-exceeded`.
+- When the complete document with its newline is larger than the result limit of 4 MiB, the call fails with `output-too-large` and `limit_bytes`. The error has `matched_entries` only when the CLI read the whole range. The CLI stops reading as soon as the report cannot fit.
+- A failed call returns no part of the report. Narrow `from` and `to`, or run `golem agent oplog --obfuscate` in a terminal.
+
+The scan budget limits the scan of the oplog on the server. It is not a time limit of the call: the reads of the root, of omitted entries and of `Start` entries are outside it.
+
+The MCP server runs in one CLI process, so it has one token key for its whole life, as a served viewer has. Tokens are equal inside one report. Do not compare the tokens of two reports: two reports of one server can share tokens, and a new start of the server makes new ones. Treat each report as independent.
+
 ## Who sees the raw data
 
 The CLI reads the raw oplog with your own permissions, through the same REST oplog reads as `golem agent oplog`: the oplog pages, the oplog search and the read of a single entry. It obfuscates the entries on your machine. So obfuscation protects the report that you share. It does not protect the read.
@@ -53,6 +67,7 @@ One process has one key:
 
 - one `golem agent oplog --obfuscate` command is one export with its own key;
 - `golem agent oplog --serve --obfuscate` uses one key for every page of the viewer session, so a token stays the same from page to page. A new start of the viewer makes a new key.
+- `golem mcp serve` uses one key for every `agent_oplog_export` call, so reports of one server can share tokens. Treat each report as independent (see [A report over MCP](#a-report-over-mcp)).
 
 So two exports give different tokens for the same value, also two exports of the same agent. Compare two reports by their structure (entry kinds, indices, host function names and the other kept metadata), not by their tokens. There is nothing to configure, rotate or keep secret: no setting, no environment variable and no key file.
 
@@ -105,6 +120,12 @@ The agent types are declarations: the values that an agent was created with stay
 The allowlist names a host function, a direction and a field. A new host function is customer data until a rule names it. A host value that is the customer's own value, such as the input and the output of an entity invocation or the input of an MCP tool call, gets no allowlist rule. The allowlist goes by the function name in the entry. The report cannot tell a Golem host call from a durable function that the agent code defines itself when both have the same name and the same request type graph, including its type IDs. Agent code can copy that graph on purpose; the report then applies the allowlist of the host function. Two kept fields are free text, the RPC method name and the config path, so such a function can put any text into the report in clear.
 
 The allowlist also needs the type graph of a payload to equal the graph that the CLI knows for the host function. When the server writes another graph, for example because it runs another Golem version, the whole payload is customer data and becomes tokens. The coverage document lists such a payload in `hostTypeMismatches`. Export with a CLI of the same version as the server to keep the Golem metadata of these payloads.
+
+### Callers
+
+Each invocation shows its caller: the principal that started the chain (`original`), the principal that made the call (`immediate`) and the tokens presented at the entry point. The report keeps the kind of each principal (`user`, `account`, `agent`, `tool` or `anonymous`) and the way an account authenticated (`apiToken`, `bootstrapToken` or `signIn`). The issuer and the subject of each pair, the account and environment IDs, the agent type, the tool name, the authentication time of a user and the token IDs are tokens. The agent ID of an agent principal is an agent reference, with the same token as the same agent elsewhere in the report. The report never holds a user's claims: `--show-claims` and `--obfuscate` cannot be combined.
+
+An update shows its requester, the caller of the update request, in the same form: the `requester` of a pending update and of a queued manual update.
 
 ## Table B: documented exceptions
 

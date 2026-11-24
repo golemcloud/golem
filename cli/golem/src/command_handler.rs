@@ -22,6 +22,7 @@ use golem_cli::error::NonSuccessfulExit;
 use golem_cli::fs;
 use golem_cli::log::{LogColorize, log_warn_action};
 use golem_cli::model::app::ResolvedLocalServer;
+use golem_registry_service::services::builtin_artifact::BuiltinArtifactShutdown;
 use golem_worker_executor::services::shutdown::{SHUTDOWN_GRACE, Shutdown};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -76,12 +77,21 @@ impl CommandHandlerHooks for ServerCommandHandler {
                 let shutdown = shutdown_signal();
                 tokio::pin!(shutdown);
 
+                // Shared with `launch_golem_services` below, so a built-in artifact download or
+                // metadata extraction still running inside it (on a detached `spawn_blocking`
+                // task `select!` cannot reach by dropping the future) can be stopped. Cancelling
+                // alone only asks it to notice; this process must also await `shutdown()` before
+                // returning, so it does not drop the Tokio runtime while a blocking task is
+                // still parked on a timer-bearing future that the runtime would tear down from
+                // under it, which panics and aborts the process (the bug this fixes).
+                let builtin_artifact_shutdown = BuiltinArtifactShutdown::new();
                 let launch_result = tokio::select! {
-                    res = launch_golem_services(&config) => Some(res),
+                    res = launch_golem_services(&config, builtin_artifact_shutdown.clone()) => Some(res),
                     _ = &mut shutdown => None,
                 };
 
                 let Some(launch_result) = launch_result else {
+                    builtin_artifact_shutdown.shutdown().await;
                     info!("Received shutdown signal during startup, stopping Golem server");
                     return Ok(());
                 };
@@ -138,7 +148,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
         )?;
         let data_dir = config.data_dir.clone();
 
-        let (mut join_set, _, _) = launch_golem_services(&config)
+        let (mut join_set, _, _) = launch_golem_services(&config, BuiltinArtifactShutdown::never())
             .await
             .map_err(|err| map_local_server_startup_error(err, &data_dir))?;
 
@@ -323,8 +333,12 @@ async fn clean_data_dir(ctx: &Arc<Context>, data_dir: &Path) -> anyhow::Result<(
 /// does not apply default signal dispositions, so without this the standalone
 /// server cannot be stopped by SIGINT/SIGTERM (e.g. Ctrl+C or `docker stop`).
 async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
+    signals::shutdown_signal().await
+}
+
+#[cfg(unix)]
+mod signals {
+    pub(super) async fn shutdown_signal() {
         use tokio::signal::unix::{SignalKind, signal};
 
         let mut sigint = signal(SignalKind::interrupt()).expect("Failed to install SIGINT handler");
@@ -336,8 +350,11 @@ async fn shutdown_signal() {
             _ = sigterm.recv() => {},
         }
     }
-    #[cfg(not(unix))]
-    {
+}
+
+#[cfg(not(unix))]
+mod signals {
+    pub(super) async fn shutdown_signal() {
         tokio::signal::ctrl_c()
             .await
             .expect("Failed to install Ctrl+C handler");
@@ -471,27 +488,32 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn clean_resolves_intermediate_symlink_without_following_final_symlink() {
-        use std::os::unix::fs::symlink;
+    mod unix {
+        use super::*;
+        use test_r::test;
 
-        let test_root =
-            std::env::temp_dir().join(format!("golem-clean-symlink-test-{}", std::process::id()));
-        let actual_parent = test_root.join("actual");
-        let intermediate_link = test_root.join("intermediate-link");
-        let final_link = actual_parent.join("final-link");
-        std::fs::create_dir_all(&actual_parent).unwrap();
-        symlink(&actual_parent, &intermediate_link).unwrap();
-        symlink(actual_parent.join("final-target"), &final_link).unwrap();
+        #[test]
+        fn clean_resolves_intermediate_symlink_without_following_final_symlink() {
+            use std::os::unix::fs::symlink;
 
-        let resolved_intermediate =
-            resolve_clean_data_dir(&intermediate_link.join("data")).unwrap();
-        let resolved_final = resolve_clean_data_dir(&final_link).unwrap();
-        let canonical_parent = std::fs::canonicalize(&actual_parent).unwrap();
+            let test_root = std::env::temp_dir()
+                .join(format!("golem-clean-symlink-test-{}", std::process::id()));
+            let actual_parent = test_root.join("actual");
+            let intermediate_link = test_root.join("intermediate-link");
+            let final_link = actual_parent.join("final-link");
+            std::fs::create_dir_all(&actual_parent).unwrap();
+            symlink(&actual_parent, &intermediate_link).unwrap();
+            symlink(actual_parent.join("final-target"), &final_link).unwrap();
 
-        assert_eq!(resolved_intermediate, canonical_parent.join("data"));
-        assert_eq!(resolved_final, canonical_parent.join("final-link"));
+            let resolved_intermediate =
+                resolve_clean_data_dir(&intermediate_link.join("data")).unwrap();
+            let resolved_final = resolve_clean_data_dir(&final_link).unwrap();
+            let canonical_parent = std::fs::canonicalize(&actual_parent).unwrap();
 
-        std::fs::remove_dir_all(&test_root).unwrap();
+            assert_eq!(resolved_intermediate, canonical_parent.join("data"));
+            assert_eq!(resolved_final, canonical_parent.join("final-link"));
+
+            std::fs::remove_dir_all(&test_root).unwrap();
+        }
     }
 }

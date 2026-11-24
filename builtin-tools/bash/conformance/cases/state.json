@@ -1,0 +1,126 @@
+{
+  "tier": "pr",
+  "description": "Separate calls: every `run` is a fresh shell, and only the working directory crosses calls.\n\nEach script is split at `#--call--` lines into separate calls. Our shell's example starts each call\nin the directory the previous one ended in, as a caller passing back the returned `cwd` does; the\noracle runs each call as its own `bash -c` in the directory the marker names (`/` when it names\nnone). Anything else a script wants to keep, it writes to a file.",
+  "cases": [
+    {
+      "name": "calls: the working directory carries",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\n#--call-- /tmp/w\npwd; cd ..; pwd\n#--call-- /tmp\npwd",
+      "tags": [
+        "state.cross-call"
+      ],
+      "options": {}
+    },
+    {
+      "name": "calls: relative paths resolve from the carried directory",
+      "script": "mkdir -p /tmp/r/sub; cd /tmp/r; echo data > sub/f\n#--call-- /tmp/r\ncat sub/f; cd sub\n#--call-- /tmp/r/sub\ncat f; echo \"$PWD\"",
+      "tags": [
+        "state.cross-call"
+      ],
+      "options": {}
+    },
+    {
+      "name": "calls: exit keeps the directory it left in",
+      "script": "cd /tmp && exit 3\n#--call-- /tmp\npwd",
+      "tags": [
+        "state.cross-call"
+      ],
+      "options": {}
+    },
+    {
+      "name": "calls: variables and exports end with their call",
+      "script": "x=1; export y=2; declare -i n=5\n#--call--\necho \"[${x-unset}] [${y-unset}] [${n-unset}]\"",
+      "tags": [
+        "state.cross-call"
+      ],
+      "options": {}
+    },
+    {
+      "name": "calls: arrays end with their call",
+      "script": "a=(1 2 3); declare -A m=([k]=v)\n#--call--\necho \"${#a[@]} ${#m[@]}\"",
+      "tags": [
+        "state.cross-call"
+      ],
+      "options": {}
+    },
+    {
+      "name": "calls: functions end with their call",
+      "script": "greet() { echo \"hi $1\"; }\n#--call--\ndeclare -F; echo done",
+      "tags": [
+        "state.cross-call"
+      ],
+      "options": {}
+    },
+    {
+      "name": "calls: aliases end with their call",
+      "script": "shopt -s expand_aliases; alias ll='echo listing'\n#--call--\nalias; echo done",
+      "tags": [
+        "state.cross-call"
+      ],
+      "options": {}
+    },
+    {
+      "name": "calls: shell options end with their call",
+      "script": "set -eu; set -o pipefail; shopt -s nullglob\n#--call--\nset -o | grep -E '^(errexit|nounset|pipefail)'; shopt nullglob",
+      "tags": [
+        "state.cross-call"
+      ],
+      "options": {}
+    },
+    {
+      "name": "calls: errexit does not carry",
+      "script": "set -e\n#--call--\nfalse; echo reached",
+      "tags": [
+        "state.cross-call"
+      ],
+      "options": {}
+    },
+    {
+      "name": "calls: the last status does not carry",
+      "script": "(exit 7)\n#--call--\necho $?",
+      "tags": [
+        "state.cross-call"
+      ],
+      "options": {}
+    },
+    {
+      "name": "calls: traps end with their call",
+      "script": "trap 'echo err' ERR; trap '' PIPE; trap 'echo bye' EXIT\n#--call--\ntrap -p; false; echo after",
+      "tags": [
+        "state.cross-call"
+      ],
+      "options": {}
+    },
+    {
+      "name": "calls: readonly ends with its call",
+      "script": "readonly r=1\n#--call--\nr=2; echo $r",
+      "tags": [
+        "state.cross-call"
+      ],
+      "options": {}
+    },
+    {
+      "name": "calls: positional parameters and the directory stack end with their call",
+      "script": "set -- a b c; cd /tmp; mkdir -p s; pushd s >/dev/null\n#--call-- /tmp/s\necho $#; dirs",
+      "tags": [
+        "state.cross-call"
+      ],
+      "options": {}
+    },
+    {
+      "name": "calls: each call is a new process",
+      "script": "echo $$ > /tmp/pid\n#--call--\ntest \"$$\" != \"$(cat /tmp/pid)\" && echo different",
+      "tags": [
+        "state.cross-call"
+      ],
+      "options": {}
+    },
+    {
+      "name": "calls: settings kept in a file",
+      "script": "printf '%s\\n' 'x=kept' 'greet() { echo \"hi $1\"; }' 'set -o pipefail' > /tmp/env.sh\n#--call--\n. /tmp/env.sh; echo $x; greet you; set -o | grep pipefail",
+      "tags": [
+        "state.cross-call"
+      ],
+      "options": {}
+    }
+  ]
+}

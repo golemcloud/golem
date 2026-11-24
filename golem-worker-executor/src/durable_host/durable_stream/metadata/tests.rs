@@ -102,8 +102,8 @@ impl Fixture {
         let account = AccountId::new();
         let metadata = AgentMetadata {
             owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
-            agent_id: identity.agent_id.clone(),
-            component_id: identity.agent_id.component_id,
+            agent_id: identity.agent_id,
+            component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
             agent_type_name: None,
             canonical_key: None,
             env: vec![],
@@ -114,7 +114,7 @@ impl Fixture {
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: AgentStatusRecord::default(),
-            original_phantom_id: None,
+            constructor_parameters: None,
             fingerprint: identity.fingerprint,
             agent_mode: AgentMode::Durable,
             create_request: golem_common::model::oplog::CreateRequest::new(
@@ -125,8 +125,8 @@ impl Fixture {
             ),
         };
         let create = OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
-            agent_id: identity.agent_id.clone(),
-            component_id: identity.agent_id.component_id,
+            agent_id: identity.agent_id,
+            component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
             agent_type_name: None,
             canonical_key: None,
             owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
@@ -140,7 +140,7 @@ impl Fixture {
             initial_total_linear_memory_size: 100,
             initial_active_plugins: HashSet::new(),
             local_agent_config: vec![],
-            original_phantom_id: None,
+            constructor_parameters: None,
             instance_id: identity.fingerprint.0,
             create_request: golem_common::model::oplog::CreateRequest::new(
                 golem_common::model::oplog::CreateRequestKind::GetOrCreate,
@@ -396,7 +396,7 @@ async fn cold_session_mapping_loads_its_local_registration() {
 async fn persisted_metadata_restores_entity_attribution() {
     let fixture = Fixture::new().await;
     let producer = fixture.producer().await;
-    let entity_parent_start_index = Some(OplogIndex::from_u64(42));
+    let entity_parent_start_index = Some(OplogIndex::INITIAL);
     let mut request = fixture.registration(0);
     request.entity_parent_start_index = entity_parent_start_index;
     let handle = producer.register(None, request).await.unwrap().value;
@@ -448,7 +448,7 @@ async fn persisted_metadata_restores_entity_attribution() {
         handle.stream_id,
     );
     key.consumer_environment_id = fixture.identity.environment_id;
-    key.consumer = fixture.identity.agent_id.clone();
+    key.consumer = fixture.identity.agent_id;
     key.expected_consumer_fingerprint = fixture.identity.fingerprint;
     key.session_key = fixture.identity.invocation.clone();
     key.consumer_invocation = fixture.identity.invocation.clone();
@@ -554,7 +554,7 @@ async fn persisted_metadata_restores_entity_attribution() {
 #[timeout("60s")]
 async fn result_without_owned_outputs_retains_entity_attribution_after_reload() {
     let fixture = Fixture::new().await;
-    let attribution = Some(OplogIndex::from_u64(73));
+    let attribution = Some(OplogIndex::INITIAL);
     fixture
         .producer()
         .await
@@ -1361,7 +1361,7 @@ async fn archived_projection_extends_nested_chunk_and_replays_lazily() {
     let producer = DurableStreamStore::load(
         fixture.oplog.clone(),
         fixture.identity.environment_id,
-        fixture.identity.agent_id.clone(),
+        fixture.identity.agent_id,
         fixture.identity.fingerprint,
         None,
     )
@@ -1584,14 +1584,14 @@ async fn persisted_reconciliation_pages_active_catalogue_without_payloads() {
 async fn persisted_fork_projection_keeps_prefix_locators_and_post_marker_appends() {
     let fixture = Fixture::new().await;
     let mut source = identity();
-    source.agent_id.agent_id = "source".into();
+    source.agent_id = crate::test_agent_id("source");
     source.fingerprint = AgentFingerprint(uuid::Uuid::from_u128(90));
-    source.invocation.callee = source.agent_id.clone();
+    source.invocation.callee = source.agent_id;
     source.invocation.callee_fingerprint = source.fingerprint;
     let registration = registered_stream(
         OplogIndex::from_u64(3),
         source.environment_id,
-        source.agent_id.clone(),
+        source.agent_id,
         source.fingerprint,
         registration(
             &source,
@@ -1623,9 +1623,8 @@ async fn persisted_fork_projection_keeps_prefix_locators_and_post_marker_appends
         &fixture.identity.agent_id,
         fixture.identity.fingerprint,
         OplogIndex::from_u64(3),
-    )
-    .unwrap();
-    next.producer = fixture.identity.agent_id.clone();
+    );
+    next.producer = fixture.identity.agent_id;
     next.expected_producer_fingerprint = fixture.identity.fingerprint;
     next.source_invocation = fixture.identity.invocation.clone();
     let items = |position, _stream_id, _producer_fingerprint, first_sequence, bytes: Vec<u8>| {
@@ -1719,7 +1718,7 @@ async fn persisted_fork_projection_keeps_prefix_locators_and_post_marker_appends
                     attachment.attachment_id,
                     old.stream_id,
                     attachment.consumer_environment_id,
-                    attachment.consumer.clone(),
+                    attachment.consumer,
                 ),
                 ProducerMetadataKey::AttachmentPage(0),
                 ProducerMetadataKey::Global,
@@ -1753,7 +1752,7 @@ async fn persisted_fork_projection_keeps_prefix_locators_and_post_marker_appends
     ));
     let mut fresh = attachment.clone();
     fresh.stream_id = next.stream_id;
-    fresh.producer = next.producer.clone();
+    fresh.producer = next.producer;
     fresh.expected_producer_fingerprint = next.expected_producer_fingerprint;
     let producer = fixture.producer().await;
     let prefix = producer.read_segment(&next, None, None).await.unwrap();
@@ -1800,7 +1799,7 @@ async fn persisted_fork_projection_keeps_prefix_locators_and_post_marker_appends
                     fresh.attachment_id,
                     fresh.stream_id,
                     fresh.consumer_environment_id,
-                    fresh.consumer.clone(),
+                    fresh.consumer,
                 ),
                 ProducerMetadataKey::Global,
             ],
@@ -1808,7 +1807,7 @@ async fn persisted_fork_projection_keeps_prefix_locators_and_post_marker_appends
         .await
         .unwrap();
     assert!(
-        matches!(&rows[0], Some(ProducerMetadataRow::AttachmentPage(page)) if page == &vec![(fresh.attachment_id, fresh.stream_id, fresh.consumer_environment_id, fresh.consumer.clone())])
+        matches!(&rows[0], Some(ProducerMetadataRow::AttachmentPage(page)) if page == &vec![(fresh.attachment_id, fresh.stream_id, fresh.consumer_environment_id, fresh.consumer)])
     );
     assert!(matches!(
         &rows[1],
@@ -1938,8 +1937,8 @@ async fn raw_and_indexed_controls_discard_nested_descendants_at_a_fork() {
     let target = &fixture.identity;
     let owner = OwnedAgentId::new(target.environment_id, &target.agent_id);
     let mut source = identity();
-    source.agent_id.agent_id = "source".into();
-    source.invocation.callee = source.agent_id.clone();
+    source.agent_id = crate::test_agent_id("source");
+    source.invocation.callee = source.agent_id;
     let oplog = Arc::new(TestOplog::default());
     oplog
         .add(fixture.oplog.read(OplogIndex::INITIAL).await.unwrap())
@@ -1948,7 +1947,7 @@ async fn raw_and_indexed_controls_discard_nested_descendants_at_a_fork() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         source.environment_id,
-        source.agent_id.clone(),
+        source.agent_id,
         source.fingerprint,
         None,
     )
@@ -2090,7 +2089,7 @@ async fn raw_and_indexed_controls_discard_nested_descendants_at_a_fork() {
     let raw_producer = DurableStreamStore::load(
         oplog.clone(),
         owner.environment_id,
-        owner.agent_id.clone(),
+        owner.agent_id,
         target.fingerprint,
         None,
     )
@@ -2149,15 +2148,15 @@ async fn persisted_fork_chain_preserves_consumer_only_heads() {
             Fixture::with_buffer(false, Arc::new(InMemoryKeyValueStorage::new()), 100).await;
         let target = fixture.identity.invocation.clone();
         let mut source = target.clone();
-        source.callee.agent_id = "source".into();
+        source.callee = crate::test_agent_id("source");
         source.callee_fingerprint = AgentFingerprint(uuid::Uuid::from_u128(91));
         let mut middle = target.clone();
-        middle.callee.agent_id = "middle".into();
+        middle.callee = crate::test_agent_id("middle");
         middle.callee_fingerprint = AgentFingerprint(uuid::Uuid::from_u128(92));
         let handle = super::super::registration::registered_stream(
             OplogIndex::from_u64(123),
             fixture.identity.environment_id,
-            fixture.identity.agent_id.clone(),
+            fixture.identity.agent_id,
             fixture.identity.fingerprint,
             fixture.registration(0),
         )
@@ -2352,7 +2351,7 @@ async fn persisted_fork_chain_preserves_consumer_only_heads() {
         let raw_producer = DurableStreamStore::load(
             fixture.oplog.clone(),
             owner.environment_id,
-            owner.agent_id.clone(),
+            owner.agent_id,
             fixture.identity.fingerprint,
             None,
         )
@@ -2495,7 +2494,7 @@ async fn persisted_session_catalogue_includes_mapping_free_foreign_sessions_once
         for ordinal in range {
             let mut session = fixture.identity.invocation.clone();
             session.idempotency_key = uuid::Uuid::from_u128(3000 + ordinal as u128).into();
-            session.callee.agent_id = "foreign()".into();
+            session.callee = crate::test_agent_id("foreign()");
             let repeated = !expected.insert(session.clone());
             let reader_id = local_reader(1, 0);
             producer

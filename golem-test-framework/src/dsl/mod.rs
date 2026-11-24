@@ -26,10 +26,10 @@ use golem_api_grpc::proto::golem::worker::v1::agent_error::Error as WorkerGrpcEr
 use golem_api_grpc::proto::golem::worker::v1::worker_execution_error;
 use golem_api_grpc::proto::golem::worker::{LogEvent, StdErrLog, StdOutLog, log_event};
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
-use golem_common::base_model::{AgentId, PromiseId};
+use golem_common::base_model::PromiseId;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::agent::{OwnedAgentId, ParsedAgentKey};
 use golem_common::model::application::{Application, ApplicationId};
 use golem_common::model::card::owner::{EmptyOwnerPattern, PolymorphicEmptyOwnerPattern};
 use golem_common::model::card::recipient::RecipientPattern;
@@ -65,6 +65,18 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot::Sender;
 use tracing::{Instrument, debug, info};
 use uuid::Uuid;
+
+/// Reads the typed native request projection from a public method invocation.
+/// Stream leaves remain ordinal placeholders, not executable endpoints.
+pub fn original_native_method_input(input: &TypedSchemaValue) -> anyhow::Result<SchemaValue> {
+    use golem_common::model::agent::PublicMethodInput;
+
+    let PublicMethodInput::Native { value, .. } = PublicMethodInput::from_value(input.value())?
+    else {
+        anyhow::bail!("expected a native method request")
+    };
+    Ok(value)
+}
 
 /// Represents a test component whose analysis cache has been pre-warmed
 /// during test-r dependency initialization. Tests that depend on a
@@ -168,15 +180,34 @@ impl Drop for LogOutputGuard {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentResult {
     value: Option<SchemaValue>,
-    agent_id: AgentId,
+    agent_id: OwnedAgentId,
+    background_failure: Option<String>,
 }
 
 impl AgentResult {
-    pub fn new(value: Option<SchemaValue>, agent_id: AgentId) -> Self {
-        Self { value, agent_id }
+    pub fn new(value: Option<SchemaValue>, agent_id: OwnedAgentId) -> Self {
+        Self {
+            value,
+            agent_id,
+            background_failure: None,
+        }
     }
 
-    pub fn agent_id(&self) -> &AgentId {
+    /// The result with the background failure that the result lookup reported.
+    pub fn with_background_failure(self, background_failure: Option<String>) -> Self {
+        Self {
+            background_failure,
+            ..self
+        }
+    }
+
+    /// The failure of the agent during the background work of the invocation, after it
+    /// recorded this result. Only a later lookup of the result reports it.
+    pub fn background_failure(&self) -> Option<&str> {
+        self.background_failure.as_deref()
+    }
+
+    pub fn agent_id(&self) -> &OwnedAgentId {
         &self.agent_id
     }
 
@@ -359,33 +390,37 @@ pub trait TestDsl {
     async fn try_start_agent(
         &self,
         component_id: &ComponentId,
-        id: ParsedAgentKey,
-    ) -> anyhow::Result<Result<AgentId, Self::WorkerError>> {
+        key: ParsedAgentKey,
+    ) -> anyhow::Result<Result<OwnedAgentId, Self::WorkerError>> {
         self.try_start_agent_with(
             component_id,
-            id,
+            key,
             HashMap::new(),
             Vec::<AgentConfigEntryDto>::new(),
         )
         .await
     }
 
+    /// Starts the keyed agent of `key`, which the component implements, and returns its ID in
+    /// the component's environment. Without `env` and `config` overrides it upserts the agent,
+    /// so an existing agent is returned as it is. With an override it creates the keyed agent
+    /// with the overrides, which fails when the agent already exists.
     async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        id: ParsedAgentKey,
+        key: ParsedAgentKey,
         env: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
-    ) -> anyhow::Result<Result<AgentId, Self::WorkerError>>;
+    ) -> anyhow::Result<Result<OwnedAgentId, Self::WorkerError>>;
 
     async fn start_agent(
         &self,
         component_id: &ComponentId,
-        id: ParsedAgentKey,
-    ) -> anyhow::Result<AgentId> {
+        key: ParsedAgentKey,
+    ) -> anyhow::Result<OwnedAgentId> {
         self.start_agent_with(
             component_id,
-            id,
+            key,
             HashMap::new(),
             Vec::<AgentConfigEntryDto>::new(),
         )
@@ -395,12 +430,12 @@ pub trait TestDsl {
     async fn start_agent_with(
         &self,
         component_id: &ComponentId,
-        id: ParsedAgentKey,
+        key: ParsedAgentKey,
         env: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
-    ) -> anyhow::Result<AgentId> {
+    ) -> anyhow::Result<OwnedAgentId> {
         let result = self
-            .try_start_agent_with(component_id, id, env, config)
+            .try_start_agent_with(component_id, key, env, config)
             .await?;
         Ok(result?)
     }
@@ -438,28 +473,8 @@ pub trait TestDsl {
         method_name: &str,
         params: TypedSchemaValue,
     ) -> anyhow::Result<AgentResult> {
-        self.invoke_and_await_agent_impl(component, agent_id, None, None, None, method_name, params)
+        self.invoke_and_await_agent_impl(component, agent_id, None, None, method_name, params)
             .await
-    }
-
-    async fn invoke_and_await_agent_at_deployment(
-        &self,
-        component: &ComponentDto,
-        agent_id: &ParsedAgentKey,
-        deployment_revision: DeploymentRevision,
-        method_name: &str,
-        params: TypedSchemaValue,
-    ) -> anyhow::Result<AgentResult> {
-        self.invoke_and_await_agent_impl(
-            component,
-            agent_id,
-            None,
-            Some(deployment_revision),
-            None,
-            method_name,
-            params,
-        )
-        .await
     }
 
     async fn invoke_and_await_agent_with_key(
@@ -475,14 +490,12 @@ pub trait TestDsl {
             agent_id,
             Some(idempotency_key),
             None,
-            None,
             method_name,
             params,
         )
         .await
     }
 
-    /// Invokes an agent method as the specified `Principal`. Used by the
     /// Invokes an agent as the given caller, as the read-only cache tests do: two callers
     /// never share a cached result.
     async fn invoke_and_await_agent_as_caller(
@@ -497,7 +510,6 @@ pub trait TestDsl {
             component,
             agent_id,
             None,
-            None,
             Some(caller),
             method_name,
             params,
@@ -510,29 +522,40 @@ pub trait TestDsl {
         component: &ComponentDto,
         agent_id: &ParsedAgentKey,
         idempotency_key: Option<&IdempotencyKey>,
-        deployment_revision: Option<DeploymentRevision>,
         caller: Option<golem_common::model::caller::Caller>,
         method_name: &str,
         params: TypedSchemaValue,
     ) -> anyhow::Result<AgentResult>;
 
-    async fn revert(&self, agent_id: &AgentId, target: RevertWorkerTarget) -> anyhow::Result<()>;
+    async fn revert(
+        &self,
+        agent_id: &OwnedAgentId,
+        target: RevertWorkerTarget,
+    ) -> anyhow::Result<()>;
 
     async fn get_oplog(
         &self,
-        agent_id: &AgentId,
+        agent_id: &OwnedAgentId,
         from: OplogIndex,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
 
-    async fn get_oplog_last_index(&self, agent_id: &AgentId) -> anyhow::Result<u64>;
+    /// Reads the oplog like [`TestDsl::get_oplog`], and asks for the verified claims of the users
+    /// among the callers.
+    async fn get_oplog_with_claims(
+        &self,
+        agent_id: &OwnedAgentId,
+        from: OplogIndex,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
+
+    async fn get_oplog_last_index(&self, agent_id: &OwnedAgentId) -> anyhow::Result<u64>;
 
     async fn search_oplog(
         &self,
-        agent_id: &AgentId,
+        agent_id: &OwnedAgentId,
         query: &str,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
 
-    async fn check_oplog_is_queryable(&self, agent_id: &AgentId) -> crate::Result<()> {
+    async fn check_oplog_is_queryable(&self, agent_id: &OwnedAgentId) -> crate::Result<()> {
         let entries = self.get_oplog(agent_id, OplogIndex::INITIAL).await?;
 
         for entry in entries {
@@ -554,7 +577,7 @@ pub trait TestDsl {
     /// the test (covers the "oplog grew by exactly N" assertions in the
     /// read-only test suite, e.g. issue #3393 T3 / T8 / T10 / T11 / R1 / R3 /
     /// H2 / H3).
-    async fn oplog_max_index(&self, agent_id: &AgentId) -> anyhow::Result<OplogIndex> {
+    async fn oplog_max_index(&self, agent_id: &OwnedAgentId) -> anyhow::Result<OplogIndex> {
         let entries = self.get_oplog(agent_id, OplogIndex::INITIAL).await?;
         Ok(entries
             .last()
@@ -564,21 +587,28 @@ pub trait TestDsl {
 
     async fn interrupt_with_optional_recovery(
         &self,
-        agent_id: &AgentId,
+        agent_id: &OwnedAgentId,
         recover_immediately: bool,
     ) -> anyhow::Result<()>;
 
-    async fn interrupt(&self, agent_id: &AgentId) -> anyhow::Result<()> {
+    async fn interrupt(&self, agent_id: &OwnedAgentId) -> anyhow::Result<()> {
         self.interrupt_with_optional_recovery(agent_id, false).await
     }
 
-    async fn simulated_crash(&self, agent_id: &AgentId) -> anyhow::Result<()> {
+    async fn simulated_crash(&self, agent_id: &OwnedAgentId) -> anyhow::Result<()> {
         self.interrupt_with_optional_recovery(agent_id, true).await
     }
 
-    async fn resume(&self, agent_id: &AgentId, force: bool) -> anyhow::Result<()>;
+    async fn resume(&self, agent_id: &OwnedAgentId, force: bool) -> anyhow::Result<()>;
 
-    async fn complete_promise(&self, promise_id: &PromiseId, data: Vec<u8>) -> anyhow::Result<()>;
+    /// Completes the promise of an agent of `environment_id`. A [`PromiseId`] names the agent
+    /// only by its agent ID, so the environment is given alongside it.
+    async fn complete_promise(
+        &self,
+        environment_id: &EnvironmentId,
+        promise_id: &PromiseId,
+        data: Vec<u8>,
+    ) -> anyhow::Result<()>;
 
     /// The ID of the promise that the agent's current incarnation created at `oplog_idx`.
     ///
@@ -586,11 +616,11 @@ pub trait TestDsl {
     /// that deletes and re-creates the agent must use the promise ID that the guest returned.
     async fn promise_id(
         &self,
-        agent_id: &AgentId,
+        agent_id: &OwnedAgentId,
         oplog_idx: OplogIndex,
     ) -> anyhow::Result<PromiseId> {
         Ok(PromiseId {
-            agent_id: agent_id.clone(),
+            agent_id: agent_id.agent_id,
             fingerprint: self.get_worker_metadata(agent_id).await?.fingerprint,
             oplog_idx,
         })
@@ -598,12 +628,12 @@ pub trait TestDsl {
 
     async fn make_worker_log_event_stream(
         &self,
-        agent_id: &AgentId,
+        agent_id: &OwnedAgentId,
     ) -> anyhow::Result<impl WorkerLogEventStream>;
 
     async fn capture_output(
         &self,
-        agent_id: &AgentId,
+        agent_id: &OwnedAgentId,
     ) -> anyhow::Result<UnboundedReceiver<LogEvent>> {
         let mut stream = self.make_worker_log_event_stream(agent_id).await?;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -623,7 +653,7 @@ pub trait TestDsl {
 
     async fn capture_output_with_termination(
         &self,
-        agent_id: &AgentId,
+        agent_id: &OwnedAgentId,
     ) -> anyhow::Result<(UnboundedReceiver<Option<LogEvent>>, Sender<()>)> {
         let mut stream = self.make_worker_log_event_stream(agent_id).await?;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -663,7 +693,7 @@ pub trait TestDsl {
         Ok((rx, abort_tx))
     }
 
-    async fn log_output(&self, agent_id: &AgentId) -> anyhow::Result<()> {
+    async fn log_output(&self, agent_id: &OwnedAgentId) -> anyhow::Result<()> {
         let mut stream = self.make_worker_log_event_stream(agent_id).await?;
         tokio::spawn(
             async move {
@@ -688,7 +718,7 @@ pub trait TestDsl {
         Ok(())
     }
 
-    async fn log_output_scoped(&self, agent_id: &AgentId) -> anyhow::Result<LogOutputGuard> {
+    async fn log_output_scoped(&self, agent_id: &OwnedAgentId) -> anyhow::Result<LogOutputGuard> {
         let mut stream = self.make_worker_log_event_stream(agent_id).await?;
         let (abort_tx, mut abort_rx) = tokio::sync::oneshot::channel();
 
@@ -726,42 +756,61 @@ pub trait TestDsl {
 
     async fn auto_update_worker(
         &self,
-        agent_id: &AgentId,
+        agent_id: &OwnedAgentId,
         target_revision: ComponentRevision,
         disable_wakeup: bool,
     ) -> anyhow::Result<()>;
 
     async fn snapshot_assisted_update_worker(
         &self,
-        agent_id: &AgentId,
+        agent_id: &OwnedAgentId,
         target_revision: ComponentRevision,
         disable_wakeup: bool,
     ) -> anyhow::Result<()>;
 
     async fn manual_update_worker(
         &self,
-        agent_id: &AgentId,
+        agent_id: &OwnedAgentId,
         target_revision: ComponentRevision,
         disable_wakeup: bool,
     ) -> anyhow::Result<()>;
 
-    async fn delete_worker(&self, agent_id: &AgentId) -> anyhow::Result<()>;
+    /// Updates an agent as the given caller, which the agent records as the requester of the
+    /// update, and gives the index of the update attempt. Only the worker-executor gRPC DSL can
+    /// send a caller: the REST DSL refuses one, because REST takes the caller from the request's
+    /// credentials.
+    async fn update_worker_as_caller(
+        &self,
+        agent_id: &OwnedAgentId,
+        mode: golem_common::model::agent::AgentUpdateMode,
+        target_revision: ComponentRevision,
+        disable_wakeup: bool,
+        caller: golem_common::model::caller::Caller,
+    ) -> anyhow::Result<OplogIndex>;
+
+    async fn delete_worker(&self, agent_id: &OwnedAgentId) -> anyhow::Result<()>;
 
     async fn get_worker_metadata_opt(
         &self,
-        agent_id: &AgentId,
+        agent_id: &OwnedAgentId,
     ) -> anyhow::Result<Option<AgentMetadataDto>>;
 
-    async fn get_worker_metadata(&self, agent_id: &AgentId) -> anyhow::Result<AgentMetadataDto> {
+    async fn get_worker_metadata(
+        &self,
+        agent_id: &OwnedAgentId,
+    ) -> anyhow::Result<AgentMetadataDto> {
         match self.get_worker_metadata_opt(agent_id).await? {
             Some(worker_metadata) => Ok(worker_metadata),
             None => Err(anyhow!("Worker not found: {}", agent_id)),
         }
     }
 
+    /// Lists the agents of one agent type of the environment. The listing is per agent type,
+    /// so the cursor pages through the agents of `agent_type` only.
     async fn get_workers_metadata(
         &self,
-        component_id: &ComponentId,
+        environment_id: &EnvironmentId,
+        agent_type: &AgentTypeName,
         filter: Option<AgentFilter>,
         cursor: ScanCursor,
         count: u64,
@@ -770,7 +819,7 @@ pub trait TestDsl {
 
     async fn wait_for_status(
         &self,
-        agent_id: &AgentId,
+        agent_id: &OwnedAgentId,
         status: AgentStatus,
         timeout: Duration,
     ) -> anyhow::Result<AgentMetadataDto> {
@@ -780,7 +829,7 @@ pub trait TestDsl {
     #[tracing::instrument(level = "info", skip(self, statuses, timeout), fields(%agent_id))]
     async fn wait_for_statuses(
         &self,
-        agent_id: &AgentId,
+        agent_id: &OwnedAgentId,
         statuses: &[AgentStatus],
         timeout: Duration,
     ) -> anyhow::Result<AgentMetadataDto> {
@@ -810,7 +859,7 @@ pub trait TestDsl {
     #[tracing::instrument(level = "info", skip(self, timeout), fields(%agent_id))]
     async fn wait_for_component_revision(
         &self,
-        agent_id: &AgentId,
+        agent_id: &OwnedAgentId,
         target_revision: ComponentRevision,
         timeout: Duration,
     ) -> anyhow::Result<AgentMetadataDto> {
@@ -832,24 +881,26 @@ pub trait TestDsl {
 
     async fn cancel_invocation(
         &self,
-        agent_id: &AgentId,
+        agent_id: &OwnedAgentId,
         idempotency_key: &golem_common::model::InvocationId,
     ) -> anyhow::Result<bool>;
 
     async fn get_file_system_node(
         &self,
-        agent_id: &AgentId,
+        agent_id: &OwnedAgentId,
         path: &str,
     ) -> anyhow::Result<Vec<AgentFileSystemNode>>;
 
-    async fn get_file_contents(&self, agent_id: &AgentId, path: &str) -> anyhow::Result<Bytes>;
+    async fn get_file_contents(&self, agent_id: &OwnedAgentId, path: &str)
+    -> anyhow::Result<Bytes>;
 
+    /// Forks the agent at `oplog_index` into a new agent of the same type and environment.
+    /// Golem issues the ID of the new agent.
     async fn fork_worker(
         &self,
-        source_agent_id: &AgentId,
-        target_agent_name: &str,
+        source_agent_id: &OwnedAgentId,
         oplog_index: OplogIndex,
-    ) -> anyhow::Result<()>;
+    ) -> anyhow::Result<OwnedAgentId>;
 }
 
 #[async_trait]
@@ -964,9 +1015,8 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         .render();
         let runtime_metadata = [
             "GOLEM_AGENT_ID",
+            "GOLEM_AGENT_KEY",
             "GOLEM_AGENT_TYPE",
-            "GOLEM_WORKER_NAME",
-            "GOLEM_COMPONENT_ID",
             "GOLEM_COMPONENT_REVISION",
         ]
         .into_iter()
@@ -1372,7 +1422,13 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
         WorkerExecutorError::AgentNotFound { agent_id } => {
             format!("Worker not found: {:?}", agent_id)
         }
+        WorkerExecutorError::AgentKeyCollision {
+            agent_id,
+            requested_key,
+        } => format!("Agent {agent_id} has another key than the requested {requested_key}"),
         WorkerExecutorError::ShardingNotReady => "Sharing not ready".to_string(),
+        error @ (WorkerExecutorError::InvocationCancelled
+        | WorkerExecutorError::CannotCancelRunningInvocation) => error.to_string(),
         WorkerExecutorError::FileSystemError { reason, .. } => {
             format!("File system error: {}", reason)
         }

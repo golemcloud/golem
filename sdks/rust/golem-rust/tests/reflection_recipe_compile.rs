@@ -10,7 +10,7 @@ test_r::enable!();
 
 #[cfg(feature = "export_golem_agentic")]
 mod recipe {
-    use golem_rust::{AgentMode, GolemReflectError, get_agent_type};
+    use golem_rust::{AgentMode, DynamicAgentClient, GolemReflectError, get_agent_type};
     use serde_json::{Value, json};
     use test_r::test;
 
@@ -28,9 +28,10 @@ mod recipe {
             .pack_json(&json!({ "query": "golem", "cursor": null }))?;
         method.input().validate_value(&input)?;
 
-        let agent_id = agent_type.agent_id_json(&json!({ "tenant": "docs" }), None)?;
-        let result = match agent_id
-            .dynamic_client()?
+        let agent_id = agent_type
+            .lookup_agent_id_json(&json!({ "tenant": "docs" }))?
+            .ok_or_else(|| GolemReflectError::RemoteNotFound("SearchAgent(docs)".to_string()))?;
+        let result = match DynamicAgentClient::from_agent_id(&agent_id)?
             .method(method.name())
             .invoke_value(input)
             .await

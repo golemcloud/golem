@@ -3,8 +3,7 @@
  * `golem:api/host@1.5.0`:
  *
  * - introspection: {@link getSelfMetadata}, {@link getAgentMetadata}
- * - resolution: {@link resolveComponentId}, {@link resolveAgentId},
- *   {@link resolveAgentIdStrict}
+ * - resolution: {@link resolveComponentId}
  * - lifecycle: {@link updateAgent}, {@link forkAgent},
  *   {@link revertAgent}, {@link fork}
  * - enumeration: {@link getAgents} (paged stream)
@@ -43,8 +42,8 @@ export type {
   AgentCreatedAtFilter,
   AgentEnvFilter,
   AgentId,
+  AgentKeyFilter,
   AgentMetadata,
-  AgentNameFilter,
   AgentPropertyFilter,
   AgentStatus,
   AgentStatusFilter,
@@ -181,9 +180,9 @@ export class Filter {
   /** @internal */
   private constructor(private readonly node: FilterNode) {}
 
-  /** Match by agent name. */
-  static name(comparator: ApiHost.StringFilterComparator, value: string): Filter {
-    return Filter.leaf({ tag: "name", val: { comparator, value } })
+  /** Match by the canonical key of keyed agents. An agent without a key never matches. */
+  static key(comparator: ApiHost.StringFilterComparator, value: string): Filter {
+    return Filter.leaf({ tag: "key", val: { comparator, value } })
   }
 
   /** Match by agent status. */
@@ -247,7 +246,7 @@ export class Filter {
  * and points directly at the wrapper that needs updating.
  */
 void ({
-  name: Filter.name,
+  key: Filter.key,
   status: Filter.status,
   version: Filter.version,
   "created-at": Filter.createdAt,
@@ -367,42 +366,6 @@ export const resolveComponentId = (
   })
 
 /**
- * Resolve a `(componentReference, agentName)` pair to an `AgentId`.
- *
- * @since 1.5.0
- * @category operations
- */
-export const resolveAgentId = (
-  componentReference: string,
-  agentName: string,
-): Effect.Effect<RawAgentId | undefined, AgentsHostError, AgentHostClient> =>
-  Effect.gen(function* () {
-    const ah = yield* AgentHostClient
-    return yield* Effect.try({
-      try: () => ah.resolveAgentId(componentReference, agentName),
-      catch: (e) => new AgentsHostError(e),
-    })
-  })
-
-/**
- * Strict variant of {@link resolveAgentId}.
- *
- * @since 1.5.0
- * @category operations
- */
-export const resolveAgentIdStrict = (
-  componentReference: string,
-  agentName: string,
-): Effect.Effect<RawAgentId | undefined, AgentsHostError, AgentHostClient> =>
-  Effect.gen(function* () {
-    const ah = yield* AgentHostClient
-    return yield* Effect.try({
-      try: () => ah.resolveAgentIdStrict(componentReference, agentName),
-      catch: (e) => new AgentsHostError(e),
-    })
-  })
-
-/**
  * Initiate an update of the given agent to `targetRevision`. The
  * revision is validated to fit a `u64`. Returns immediately — the
  * actual update is asynchronous on the host side.
@@ -425,20 +388,20 @@ export const updateAgent = (input: {
   })
 
 /**
- * Fork another agent at a given oplog index.
+ * Fork another agent at a given oplog index into a new agent of the same type. Returns the ID
+ * that Golem issued for the new agent; the new agent has no key.
  *
  * @since 1.5.0
  * @category operations
  */
 export const forkAgent = (input: {
   readonly source: RawAgentId
-  readonly target: RawAgentId
   readonly oplogIdxCutOff: RawOplogIndex
-}): Effect.Effect<void, AgentsHostError, AgentHostClient> =>
+}): Effect.Effect<RawAgentId, AgentsHostError, AgentHostClient> =>
   Effect.gen(function* () {
     const ah = yield* AgentHostClient
-    yield* Effect.try({
-      try: () => ah.forkAgent(input.source, input.target, input.oplogIdxCutOff),
+    return yield* Effect.try({
+      try: () => ah.forkAgent(input.source, input.oplogIdxCutOff),
       catch: (e) => new AgentsHostError(e),
     })
   })
@@ -485,14 +448,14 @@ export const fork: Effect.Effect<RawForkResult, AgentsHostError, AgentHostClient
 // ---------------------------------------------------------------------------
 
 /**
- * Stream all agents of the given component matching the optional
+ * Stream the agents of the given agent type in the current environment matching the optional
  * filter. Drives the host's `GetAgents` pager via `Stream.paginate`.
  *
  * @since 1.5.0
  * @category operations
  */
 export const getAgents = (input: {
-  readonly componentId: RawComponentId
+  readonly agentTypeName: string
   readonly filter?: Filter | RawAgentAnyFilter | undefined
   readonly precise?: boolean
 }): Stream.Stream<RawAgentMetadata, AgentsHostError, AgentHostClient> => {
@@ -503,7 +466,7 @@ export const getAgents = (input: {
         const ah = yield* AgentHostClient
         const handle = yield* Effect.acquireRelease(
           Effect.try({
-            try: () => ah.getAgentsCtor(input.componentId, rawFilter, input.precise ?? false),
+            try: () => ah.getAgentsCtor(input.agentTypeName, rawFilter, input.precise ?? false),
             catch: (e) => new AgentsHostError(e),
           }),
           (handle) => Effect.sync(() => disposeHostResource(handle)),

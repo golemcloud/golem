@@ -218,6 +218,7 @@ impl ApiEndpointError {
 impl From<WorkerServiceError> for ApiEndpointError {
     fn from(error: WorkerServiceError) -> Self {
         match error {
+            WorkerServiceError::AcceptedInvocation { source, .. } => (*source).into(),
             WorkerServiceError::Internal(_) => {
                 Self::internal(api::error_code::INTERNAL_UNKNOWN, error)
             }
@@ -246,6 +247,12 @@ impl From<WorkerServiceError> for ApiEndpointError {
             }
             WorkerServiceError::AgentNotFound(_) => {
                 Self::not_found(api::error_code::AGENT_NOT_FOUND, error)
+            }
+            WorkerServiceError::InvocationNotFound(_) => {
+                Self::not_found(api::error_code::INVOCATION_NOT_FOUND, error)
+            }
+            WorkerServiceError::AgentAccessDenied(_) => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
             }
             WorkerServiceError::GolemError(inner) => inner.into(),
             WorkerServiceError::Component(inner) => inner.into(),
@@ -323,8 +330,18 @@ impl From<WorkerExecutorError> for ApiEndpointError {
             WorkerExecutorError::AgentAlreadyExists { .. } => {
                 Self::conflict(api::error_code::AGENT_ALREADY_EXISTS, error)
             }
+            WorkerExecutorError::AgentKeyCollision { .. } => {
+                Self::conflict(api::error_code::AGENT_KEY_COLLISION, error)
+            }
             WorkerExecutorError::CreateIdempotencyKeyConflict { .. } => {
                 Self::unprocessable_entity(api::error_code::CREATE_IDEMPOTENCY_KEY_CONFLICT, error)
+            }
+            WorkerExecutorError::InvocationCancelled => {
+                Self::conflict(api::error_code::INVOCATION_CANCELLED, error)
+            }
+            // Until running invocations can be cancelled, this is a conflict instead of `202`.
+            WorkerExecutorError::CannotCancelRunningInvocation => {
+                Self::conflict(api::error_code::CANNOT_CANCEL_RUNNING_INVOCATION, error)
             }
             WorkerExecutorError::InvocationFailed { error, stderr } => Self::internal_worker(
                 api::error_code::INTERNAL_AGENT_EXECUTION_FAILED,
@@ -525,6 +542,9 @@ impl From<RequestHandlerError> for ApiEndpointError {
             RequestHandlerError::ResolvingRouteFailed(RouteResolverError::CouldNotBuildRouter) => {
                 Self::internal(api::error_code::INTERNAL_ROUTING_FAILURE, value)
             }
+            RequestHandlerError::AgentInvocationFailed(
+                WorkerServiceError::AcceptedInvocation { source, .. },
+            ) => RequestHandlerError::AgentInvocationFailed(*source).into(),
             RequestHandlerError::AgentInvocationFailed(WorkerServiceError::InternalCallError(
                 CallWorkerExecutorError::MessageTooLarge(_),
             )) => Self::payload_too_large(api::error_code::REQUEST_PAYLOAD_TOO_LARGE, value),
@@ -533,6 +553,13 @@ impl From<RequestHandlerError> for ApiEndpointError {
             )) if matches!(&error, WorkerExecutorError::InvalidRequest { details } if details.starts_with("IdempotencyConflict:")) => {
                 error.into()
             }
+            RequestHandlerError::AgentInvocationFailed(WorkerServiceError::GolemError(
+                error @ WorkerExecutorError::AgentKeyCollision { .. },
+            )) => error.into(),
+            RequestHandlerError::AgentInvocationFailed(
+                WorkerServiceError::AgentNotFound(_)
+                | WorkerServiceError::GolemError(WorkerExecutorError::AgentNotFound { .. }),
+            ) => Self::not_found(api::error_code::AGENT_NOT_FOUND, value),
             RequestHandlerError::AgentInvocationFailed(_) => {
                 Self::internal(api::error_code::INTERNAL_AGENT_EXECUTION_FAILED, value)
             }
@@ -572,22 +599,24 @@ mod tests {
     async fn create_conflicts_preserve_their_codes_through_grpc_and_http() {
         use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
         use golem_common::model::AgentId;
-        use golem_common::model::component::ComponentId;
         use poem::IntoResponse;
         use poem::http::StatusCode;
         use prost::Message;
 
-        let agent_id = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Counter(\"create-conflicts\")".into(),
-        };
+        let agent_id = AgentId::from_parts(7, 1);
         for (error, status, code) in [
             (
-                WorkerExecutorError::AgentAlreadyExists {
-                    agent_id: agent_id.clone(),
-                },
+                WorkerExecutorError::AgentAlreadyExists { agent_id },
                 StatusCode::CONFLICT,
                 api::error_code::AGENT_ALREADY_EXISTS,
+            ),
+            (
+                WorkerExecutorError::AgentKeyCollision {
+                    agent_id,
+                    requested_key: "Counter(\"a\")".to_string(),
+                },
+                StatusCode::CONFLICT,
+                api::error_code::AGENT_KEY_COLLISION,
             ),
             (
                 WorkerExecutorError::CreateIdempotencyKeyConflict { agent_id },
@@ -736,12 +765,7 @@ mod tests {
         ] {
             let api_error: ApiEndpointError =
                 WorkerServiceError::GolemError(WorkerExecutorError::StaleCursor {
-                    agent_id: golem_common::model::AgentId {
-                        component_id: golem_common::model::component::ComponentId(
-                            uuid::Uuid::nil(),
-                        ),
-                        agent_id: "Counter(\"a\")".to_string(),
-                    },
+                    agent_id: golem_common::model::AgentId::from_parts(7, 3),
                     next_oplog_index: golem_common::model::OplogIndex::from_u64(42),
                     reason,
                 })
@@ -765,6 +789,80 @@ mod tests {
                 assert_eq!(body.code, api::error_code::INTERNAL_SHARDING_NOT_READY);
             }
             other => panic!("expected InternalError, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cancelled_and_running_cancel_map_to_distinct_conflicts() {
+        for (error, code) in [
+            (
+                WorkerExecutorError::InvocationCancelled,
+                api::error_code::INVOCATION_CANCELLED,
+            ),
+            (
+                WorkerExecutorError::CannotCancelRunningInvocation,
+                api::error_code::CANNOT_CANCEL_RUNNING_INVOCATION,
+            ),
+        ] {
+            match ApiEndpointError::from(error) {
+                ApiEndpointError::Conflict(Json(body)) => assert_eq!(body.code, code),
+                other => panic!("expected Conflict, got: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    async fn acceptance_metadata_preserves_public_error_responses() {
+        use crate::service::worker::AcceptedInvocation;
+        use golem_common::model::environment::EnvironmentId;
+        use golem_common::model::{AgentId, InvocationId, OwnedInvocationId};
+        use poem::IntoResponse;
+
+        let wrap = |source| WorkerServiceError::AcceptedInvocation {
+            accepted: AcceptedInvocation {
+                id: OwnedInvocationId::new(
+                    AgentId::from_parts(7, 1),
+                    InvocationId(uuid::Uuid::new_v4()),
+                ),
+                environment_id: EnvironmentId::new(),
+            },
+            source: Box::new(source),
+        };
+        for make_error in [
+            (|| {
+                WorkerServiceError::GolemError(WorkerExecutorError::invalid_request(
+                    "IdempotencyConflict: different input",
+                ))
+            }) as fn() -> WorkerServiceError,
+            || WorkerServiceError::GolemError(WorkerExecutorError::InvocationCancelled),
+            || {
+                WorkerServiceError::RegistryServiceError(RegistryServiceError::LimitExceeded(
+                    "limit reached".into(),
+                ))
+            },
+            || WorkerServiceError::TypeChecker("invalid input".into()),
+        ] {
+            let plain: golem_api_grpc::proto::golem::worker::v1::AgentError = make_error().into();
+            let decorated: golem_api_grpc::proto::golem::worker::v1::AgentError =
+                wrap(make_error()).into();
+            assert_eq!(plain, decorated);
+            for custom_api in [false, true] {
+                let response = |error| {
+                    if custom_api {
+                        ApiEndpointError::from(RequestHandlerError::AgentInvocationFailed(error))
+                    } else {
+                        ApiEndpointError::from(error)
+                    }
+                    .into_response()
+                };
+                let plain = response(make_error());
+                let decorated = response(wrap(make_error()));
+                assert_eq!(plain.status(), decorated.status());
+                assert_eq!(
+                    plain.into_body().into_vec().await.unwrap(),
+                    decorated.into_body().into_vec().await.unwrap()
+                );
+            }
         }
     }
 }

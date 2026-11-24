@@ -17,11 +17,11 @@ use futures_util::{SinkExt, Stream, StreamExt};
 use golem_common::model::invocation_session_public::{
     BinaryMessage, BinaryMessageKind, BinaryMessageMetadata, DecimalU64,
     INVOCATION_SESSION_SUBPROTOCOL, INVOCATION_SESSION_VERSION, InvocationSelector,
-    MAX_LOGICAL_VALUE_SIZE, MAX_PACKED_U8_SIZE, MAX_WEBSOCKET_MESSAGE_SIZE, PublicByteStreamRole,
-    PublicClientMessage, PublicConfigEntry, PublicErrorCode, PublicInvocationOutcome,
-    PublicInvocationResult, PublicResumeOperation, PublicServerMessage, PublicStreamDirection,
-    PublicStreamError, PublicStreamMapping, PublicStreamOutcome, decode_binary_message,
-    decode_server_text, encode_binary_message, encode_text,
+    JsonMethodInput, MAX_LOGICAL_VALUE_SIZE, MAX_PACKED_U8_SIZE, MAX_WEBSOCKET_MESSAGE_SIZE,
+    PublicByteStreamRole, PublicClientMessage, PublicConfigEntry, PublicErrorCode,
+    PublicInvocationOutcome, PublicInvocationResult, PublicResumeOperation, PublicServerMessage,
+    PublicStreamDirection, PublicStreamError, PublicStreamMapping, PublicStreamOutcome,
+    decode_binary_message, decode_server_text, encode_binary_message, encode_client_text,
 };
 use golem_common::model::{InvocationId, OwnedInvocationId};
 use golem_common::schema::public_json::{
@@ -93,6 +93,10 @@ pub enum SessionTransportError {
     Transport(#[source] tungstenite::Error),
     #[error("failed to prepare invocation session request: {0}")]
     RequestProvider(String),
+    /// The request for `endpoint` could not be prepared because a service it needs is
+    /// temporarily unavailable. The session retries it within its reconnect window.
+    #[error("invocation session endpoint {endpoint} is not available: {message}")]
+    EndpointUnavailable { endpoint: String, message: String },
     #[error("invalid invocation session message: {0}")]
     Protocol(String),
     #[error("native {role} terminated: {outcome:?}")]
@@ -620,7 +624,7 @@ impl InputReplayBuffer {
         let exhausted =
             || SessionTransportError::Protocol("unacknowledged input limit exceeded".into());
         // A pending failure may not have an attachment yet. Reserve maximum-width identifiers.
-        let overhead = encode_text(&PublicClientMessage::StreamEnd {
+        let overhead = encode_client_text(&PublicClientMessage::StreamEnd {
             channel: u32::MAX,
             direction: PublicStreamDirection::Input,
             sequence: DecimalU64(u64::MAX),
@@ -1485,7 +1489,7 @@ impl InvocationSessionSender {
         &self,
         message: &PublicClientMessage,
     ) -> Result<(), SessionTransportError> {
-        let text = encode_text(message)
+        let text = encode_client_text(message)
             .map_err(|error| SessionTransportError::Protocol(error.to_string()))?;
         let len = text.len();
         self.send_wire(Message::Text(text.into()), len).await
@@ -1643,6 +1647,7 @@ pub struct InvocationSession {
     deliveries: DeliveryTracker,
     inputs: Vec<RegisteredInput>,
     attachment_state: AttachmentState,
+    execution_ready: bool,
     /// How many times the session has left a connection for a new one.
     reconnects: u64,
     reconnect: ReconnectClock,
@@ -1817,6 +1822,7 @@ impl InvocationSession {
             attachment_state: AttachmentState::Pending {
                 exact_retry: pending_operation_is_retry,
             },
+            execution_ready: false,
             reconnects: 0,
             reconnect,
         })
@@ -2069,17 +2075,43 @@ impl InvocationSession {
                         return Err(SessionTransportError::UnexpectedAttempt);
                     }
                     self.deliveries.begin_connection(mappings)?;
-                    self.install_input_mappings(mappings, true)?;
+                    self.execution_ready = !mappings.is_empty();
+                    self.install_input_mappings(mappings, self.execution_ready)?;
                     self.deliveries.set_attachment_state(
                         None,
                         Some(session_token.clone()),
-                        Some(OwnedInvocationId::new(agent_id.clone(), *idempotency_key)),
+                        Some(OwnedInvocationId::new(*agent_id, *idempotency_key)),
                     )?;
                     self.reconnect.accepted();
                     self.attachment_state = AttachmentState::Accepted {
                         attempt_id: *attempt_id,
                         replay_revocation_eligible: exact_retry,
                     };
+                }
+                PublicServerMessage::InvocationReady {
+                    attempt_id,
+                    agent_id,
+                    idempotency_key,
+                    mappings,
+                    session_token,
+                    ..
+                } => {
+                    if self.execution_ready
+                        || !matches!(self.attachment_state,
+                        AttachmentState::Accepted { attempt_id: accepted, .. } if accepted == *attempt_id)
+                        || self.deliveries.snapshot().accepted_invocation.as_ref()
+                            != Some(&OwnedInvocationId::new(*agent_id, *idempotency_key))
+                    {
+                        return Err(SessionTransportError::UnexpectedAttempt);
+                    }
+                    self.deliveries.begin_connection(mappings)?;
+                    self.install_input_mappings(mappings, true)?;
+                    self.deliveries.set_attachment_state(
+                        None,
+                        Some(session_token.clone()),
+                        None,
+                    )?;
+                    self.execution_ready = true;
                 }
                 PublicServerMessage::InvocationRejected {
                     attempt_id,
@@ -2238,7 +2270,7 @@ impl InvocationSession {
             } => {
                 *attempt_id = uuid::Uuid::new_v4();
                 let mut renamed = HashMap::new();
-                renew_provisional_refs(method_parameters, &mut renamed);
+                renew_provisional_refs(method_parameters, &mut renamed)?;
                 for input in &mut self.inputs {
                     if let Some(wire_ref) = renamed.get(&input.wire_ref) {
                         input.wire_ref = *wire_ref;
@@ -2280,6 +2312,7 @@ impl InvocationSession {
 
     async fn connect_pending(&mut self, exact_retry: bool) -> Result<(), SessionTransportError> {
         self.attachment_state = AttachmentState::Pending { exact_retry };
+        self.execution_ready = false;
         self.deliveries.begin_connection(&[])?;
         for input in &mut self.inputs {
             input.channel = None;
@@ -3051,7 +3084,30 @@ async fn connect_for_pending_operation(
     })?;
     loop {
         let attempt_timeout = reconnect.next_attempt().await?;
-        let request = request_provider.request().await?;
+        let request = match tokio::time::timeout(attempt_timeout, request_provider.request()).await
+        {
+            Ok(Ok(request)) => request,
+            Ok(Err(SessionTransportError::EndpointUnavailable { endpoint, message })) => {
+                reconnect.endpoint = endpoint.clone();
+                reconnect.failed(SessionTransportError::EndpointUnavailable { endpoint, message });
+                continue;
+            }
+            Ok(Err(error)) => return Err(error),
+            // A request cut short by the end of the window keeps the earlier cause.
+            Err(_)
+                if attempt_timeout < CONNECT_ATTEMPT_TIMEOUT && reconnect.last_cause.is_some() =>
+            {
+                reconnect.failed_again();
+                continue;
+            }
+            Err(_) => {
+                reconnect.failed(SessionTransportError::EndpointUnavailable {
+                    endpoint: reconnect.endpoint.clone(),
+                    message: format!("no request within {attempt_timeout:?}"),
+                });
+                continue;
+            }
+        };
         reconnect.endpoint = request.uri().to_string();
         let cause = match tokio::time::timeout(
             attempt_timeout,
@@ -3089,33 +3145,60 @@ async fn connect_for_pending_operation(
 /// Gives every provisional stream reference in a start's method parameters a new UUID, and
 /// records the old and new reference.
 fn renew_provisional_refs(
-    value: &mut serde_json::Value,
+    value: &mut JsonMethodInput,
     renamed: &mut HashMap<uuid::Uuid, uuid::Uuid>,
-) {
-    match value {
-        serde_json::Value::Object(object) => {
-            if object.get("kind").and_then(|kind| kind.as_str()) == Some("stream")
-                && let Some(serde_json::Value::Object(reference)) = object.get_mut("value")
-                && let Some(provisional) = reference.get_mut("provisionalRef")
-                && let Some(old) = provisional
-                    .as_str()
-                    .and_then(|old| uuid::Uuid::parse_str(old).ok())
-            {
-                let new = *renamed.entry(old).or_insert_with(uuid::Uuid::new_v4);
-                *provisional = serde_json::Value::String(new.to_string());
-                return;
+) -> Result<(), SessionTransportError> {
+    fn renew(
+        value: &serde_json::value::RawValue,
+        renamed: &mut HashMap<uuid::Uuid, uuid::Uuid>,
+    ) -> Result<Box<serde_json::value::RawValue>, serde_json::Error> {
+        let encoded = match value.get().as_bytes().first() {
+            Some(b'{') => {
+                let mut object: BTreeMap<String, Box<serde_json::value::RawValue>> =
+                    serde_json::from_str(value.get())?;
+                if object.get("kind").is_some_and(|kind| {
+                    serde_json::from_str::<String>(kind.get()).is_ok_and(|kind| kind == "stream")
+                }) && let Some(mut reference) = object.get("value").and_then(|value| {
+                    serde_json::from_str::<BTreeMap<String, Box<serde_json::value::RawValue>>>(
+                        value.get(),
+                    )
+                    .ok()
+                }) && let Some(old) = reference
+                    .get("provisionalRef")
+                    .and_then(|value| serde_json::from_str::<uuid::Uuid>(value.get()).ok())
+                {
+                    let new = *renamed.entry(old).or_insert_with(uuid::Uuid::new_v4);
+                    reference.insert(
+                        "provisionalRef".into(),
+                        serde_json::value::to_raw_value(&new)?,
+                    );
+                    object.insert("value".into(), serde_json::value::to_raw_value(&reference)?);
+                } else {
+                    for nested in object.values_mut() {
+                        *nested = renew(nested, renamed)?;
+                    }
+                }
+                serde_json::to_string(&object)?
             }
-            for nested in object.values_mut() {
-                renew_provisional_refs(nested, renamed);
+            Some(b'[') => {
+                let mut items: Vec<Box<serde_json::value::RawValue>> =
+                    serde_json::from_str(value.get())?;
+                for item in &mut items {
+                    *item = renew(item, renamed)?;
+                }
+                serde_json::to_string(&items)?
             }
-        }
-        serde_json::Value::Array(items) => {
-            for item in items {
-                renew_provisional_refs(item, renamed);
-            }
-        }
-        _ => {}
+            _ => value.get().to_string(),
+        };
+        serde_json::value::RawValue::from_string(encoded)
     }
+
+    let raw = serde_json::from_str(value.as_str())
+        .and_then(|raw: &serde_json::value::RawValue| renew(raw, renamed))
+        .map_err(|error| SessionTransportError::Protocol(error.to_string()))?;
+    *value = JsonMethodInput::capture(raw.get().as_bytes())
+        .map_err(|error| SessionTransportError::Protocol(error.to_string()))?;
+    Ok(())
 }
 
 fn operation_attempt_id(operation: &PublicClientMessage) -> Option<uuid::Uuid> {
@@ -3130,6 +3213,7 @@ fn operation_attempt_id(operation: &PublicClientMessage) -> Option<uuid::Uuid> {
 fn server_mappings(message: &PublicServerMessage) -> &[PublicStreamMapping] {
     match message {
         PublicServerMessage::InvocationAccepted { mappings, .. }
+        | PublicServerMessage::InvocationReady { mappings, .. }
         | PublicServerMessage::InvocationResult { mappings, .. }
         | PublicServerMessage::OutputStreamItem { mappings, .. }
         | PublicServerMessage::InputStreamAck { mappings, .. } => mappings,
@@ -3235,9 +3319,14 @@ async fn run_socket(
     }
 }
 
+/// Opens generated streaming invocations on the session endpoint of the selector's environment.
+/// The environment ID is resolved on each attempt, so an unreachable server is retried within
+/// the reconnect window and an unknown environment fails at once.
 struct GeneratedSessionRequestProvider {
     base_url: reqwest::Url,
     security: crate::Security,
+    application: String,
+    environment: String,
 }
 
 #[async_trait]
@@ -3258,7 +3347,27 @@ impl InvocationSessionRequestProvider for GeneratedSessionRequestProvider {
                 "failed to derive WebSocket service URL".to_string(),
             )
         })?;
-        url.set_path("/v1/agents/invoke-agent-session");
+        let environment_id = crate::bridge::environment_id(
+            &self.base_url,
+            &self.security,
+            &self.application,
+            &self.environment,
+        )
+        .await
+        .map_err(|error| match error {
+            crate::bridge::EnvironmentLookupError::Unavailable(message) => {
+                SessionTransportError::EndpointUnavailable {
+                    endpoint: self.base_url.to_string(),
+                    message,
+                }
+            }
+            crate::bridge::EnvironmentLookupError::Failed(message) => {
+                SessionTransportError::RequestProvider(message)
+            }
+        })?;
+        url.set_path(&format!(
+            "/v1/runtime/envs/{environment_id}/invoke-agent-session"
+        ));
         url.set_query(None);
         url.set_fragment(None);
         let mut request = url
@@ -3305,6 +3414,10 @@ where
     let method_parameters = encode_context
         .encode_value(&request.input_graph.root, &method_parameters)
         .map_err(|error| SessionTransportError::Protocol(error.to_string()))?;
+    let method_parameters = JsonMethodInput::try_from(method_parameters)
+        .map_err(|error| SessionTransportError::Protocol(error.to_string()))?;
+    let application = request.selector.application.clone();
+    let environment = request.selector.environment.clone();
     let start = PublicClientMessage::InvocationStart {
         attempt_id: uuid::Uuid::new_v4(),
         config: request.config,
@@ -3318,6 +3431,8 @@ where
         Arc::new(GeneratedSessionRequestProvider {
             base_url: request.base_url,
             security: request.security,
+            application,
+            environment,
         });
     let initial = InvocationSessionStateSnapshot {
         delivered_output_cursors: BTreeMap::new(),
@@ -3769,6 +3884,7 @@ where
 {
     match frame.frame() {
         ServerFrame::Message(PublicServerMessage::InvocationAccepted { .. })
+        | ServerFrame::Message(PublicServerMessage::InvocationReady { .. })
         | ServerFrame::Message(PublicServerMessage::InputStreamAck { .. }) => Ok(false),
         ServerFrame::Message(PublicServerMessage::InvocationRejected {
             code,
@@ -4495,13 +4611,136 @@ impl<T> Drop for AgentStream<T> {
 mod tests {
     use super::*;
     use base64::Engine;
+    use golem_common::model::invocation_session_public::encode_text;
     use serde::Deserialize;
 
     fn accepted_agent_id() -> golem_common::model::AgentId {
-        golem_common::model::AgentId {
-            component_id: golem_common::model::component::ComponentId(uuid::Uuid::from_u128(4)),
-            agent_id: "__external_tool:test".to_string(),
+        golem_common::model::AgentId::from_parts(0, 4)
+    }
+
+    fn generated_provider(base_url: &str) -> GeneratedSessionRequestProvider {
+        GeneratedSessionRequestProvider {
+            base_url: reqwest::Url::parse(base_url).unwrap(),
+            security: crate::Security::Bearer("token".to_string()),
+            application: "app".to_string(),
+            environment: "env".to_string(),
         }
+    }
+
+    /// Answers every HTTP request on a fresh port with `status` and an empty body.
+    async fn serve_status(status: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buffer = [0u8; 4096];
+                    let _ = socket.read(&mut buffer).await;
+                    let _ = socket
+                        .write_all(
+                            format!("HTTP/1.1 {status}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+                                .as_bytes(),
+                        )
+                        .await;
+                });
+            }
+        });
+        format!("http://{address}/")
+    }
+
+    #[test]
+    async fn generated_session_environment_lookup_is_retried_while_the_server_is_unavailable() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let closed = format!("http://{}/", listener.local_addr().unwrap());
+        drop(listener);
+        for base_url in [closed, serve_status("503 Service Unavailable").await] {
+            let error = generated_provider(&base_url).request().await.unwrap_err();
+            let SessionTransportError::EndpointUnavailable { endpoint, .. } = error else {
+                panic!("expected a retryable unavailable endpoint for {base_url}, got {error}");
+            };
+            assert_eq!(endpoint, base_url);
+        }
+    }
+
+    /// A server that accepts the environment lookup but never answers it must not hold the
+    /// session past its reconnect window: the session gives up as it does for an upgrade that
+    /// never completes (`an_upgrade_that_never_completes_is_abandoned_within_the_window`).
+    #[test]
+    async fn an_unanswered_environment_lookup_is_abandoned_within_the_window() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut held = Vec::new();
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                held.push(socket);
+            }
+        });
+        let provider: Arc<dyn InvocationSessionRequestProvider> =
+            Arc::new(GeneratedSessionRequestProvider {
+                base_url: reqwest::Url::parse(&format!("http://{address}/")).unwrap(),
+                security: crate::Security::Bearer("hang-token".to_string()),
+                application: "app".to_string(),
+                environment: "env".to_string(),
+            });
+        let start = PublicClientMessage::InvocationStart {
+            attempt_id: uuid::Uuid::new_v4(),
+            config: Vec::new(),
+            idempotency_key: "invocation-key".to_string(),
+            method_parameters: serde_json::json!({}).try_into().unwrap(),
+            selector: Box::new(InvocationSelector {
+                agent_type: "agent".to_string(),
+                application: "app".to_string(),
+                target: golem_common::model::invocation_session_public::PublicAgentTarget::Key {
+                    constructor_parameters: serde_json::json!({}),
+                },
+                environment: "env".to_string(),
+                method: "run".to_string(),
+            }),
+            version: 1,
+        };
+        let initial = InvocationSessionStateSnapshot {
+            delivered_output_cursors: BTreeMap::new(),
+            stable_stream_bindings: BTreeMap::new(),
+            pending_operation: Some(start),
+            session_token: None,
+            accepted_invocation: None,
+        };
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(15),
+            InvocationSession::open(
+                provider,
+                None,
+                ReconnectPolicy::Within(Duration::from_millis(400)),
+                initial,
+                false,
+                Arc::new(()),
+            ),
+        )
+        .await;
+        server.abort();
+        match outcome {
+            Err(_) => panic!(
+                "the session was still waiting for the environment lookup 15s after a 400ms reconnect window"
+            ),
+            Ok(Ok(_)) => panic!("connected without an environment ID"),
+            Ok(Err(error)) => assert!(
+                matches!(error, SessionTransportError::Unreachable { .. }),
+                "expected an unreachable error, got {error}"
+            ),
+        }
+    }
+
+    #[test]
+    async fn generated_session_environment_lookup_fails_at_once_on_a_server_answer() {
+        let base_url = serve_status("403 Forbidden").await;
+        let error = generated_provider(&base_url).request().await.unwrap_err();
+        assert!(
+            matches!(error, SessionTransportError::RequestProvider(_)),
+            "expected a final request error, got {error}"
+        );
     }
 
     #[derive(Deserialize)]
@@ -4544,7 +4783,7 @@ mod tests {
             let canonical = vector["canonical"].as_str().unwrap();
             let encoded = match vector["direction"].as_str().unwrap() {
                 "client" => {
-                    encode_text(&decode_client_text(canonical.as_bytes()).unwrap()).unwrap()
+                    encode_client_text(&decode_client_text(canonical.as_bytes()).unwrap()).unwrap()
                 }
                 "server" => {
                     encode_text(&decode_server_text(canonical.as_bytes()).unwrap()).unwrap()
@@ -4636,14 +4875,15 @@ mod tests {
             attempt_id,
             config: Vec::new(),
             idempotency_key: "invocation-key".to_string(),
-            method_parameters: serde_json::json!({}),
+            method_parameters: serde_json::json!({}).try_into().unwrap(),
             selector: Box::new(InvocationSelector {
                 agent_type: "agent".to_string(),
                 application: "app".to_string(),
-                constructor_parameters: serde_json::json!({}),
+                target: golem_common::model::invocation_session_public::PublicAgentTarget::Key {
+                    constructor_parameters: serde_json::json!({}),
+                },
                 environment: "env".to_string(),
                 method: "run".to_string(),
-                phantom_id: None,
             }),
             version: 1,
         }
@@ -4809,7 +5049,7 @@ mod tests {
     ) -> (String, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!(
-            "wss://localhost:{}/v1/agents/invoke-agent-session",
+            "wss://localhost:{}/v1/runtime/envs/00000000-0000-0000-0000-000000000001/invoke-agent-session",
             listener.local_addr().unwrap().port()
         );
         let acceptor = tokio_rustls::TlsAcceptor::from(server_config);
@@ -6962,10 +7202,7 @@ mod tests {
             .unwrap();
         let before = restored.snapshot();
         let different_owner = OwnedInvocationId::new(
-            golem_common::model::AgentId {
-                agent_id: "__external_tool:other".to_string(),
-                ..accepted_agent_id()
-            },
+            golem_common::model::AgentId::from_parts(0, 5),
             accepted.id(),
         );
         assert!(matches!(
@@ -9321,9 +9558,9 @@ mod tests {
             attempt_id,
             config,
             idempotency_key,
-            method_parameters: serde_json::json!({"kind":"record","value":{"fields":[
-                {"kind":"stream","value":{"provisionalRef":provisional_ref}}
-            ]}}),
+            method_parameters: JsonMethodInput::capture(format!(
+                r#"{{"kind":"record","value":{{"fields":[{{"kind":"stream","value":{{"provisionalRef":"{provisional_ref}"}}}},{{"kind":"f64","value":1e400}}]}}}}"#
+            ).as_bytes()).unwrap(),
             selector,
             version,
         };
@@ -9347,10 +9584,16 @@ mod tests {
             };
             assert_ne!(*retry_attempt, attempt_id);
             assert_eq!(idempotency_key, "invocation-key");
-            let retry_ref: uuid::Uuid = serde_json::from_value(
-                method_parameters["value"]["fields"][0]["value"]["provisionalRef"].clone(),
-            )
-            .unwrap();
+            assert!(method_parameters.as_str().contains(r#""value":1e400"#));
+            let parameters: BTreeMap<String, &serde_json::value::RawValue> =
+                serde_json::from_str(method_parameters.as_str()).unwrap();
+            let value: BTreeMap<String, &serde_json::value::RawValue> =
+                serde_json::from_str(parameters["value"].get()).unwrap();
+            let fields: Vec<&serde_json::value::RawValue> =
+                serde_json::from_str(value["fields"].get()).unwrap();
+            let reference: serde_json::Value = serde_json::from_str(fields[0].get()).unwrap();
+            let retry_ref: uuid::Uuid =
+                serde_json::from_value(reference["value"]["provisionalRef"].clone()).unwrap();
             assert_ne!(retry_ref, provisional_ref);
             send_server(
                 &mut socket,

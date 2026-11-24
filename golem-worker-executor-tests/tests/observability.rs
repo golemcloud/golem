@@ -15,16 +15,19 @@
 use crate::Tracing;
 use axum::routing::post;
 use axum::{Json, Router};
+use golem_common::model::caller::{ClaimVisibility, PublicCaller};
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
-use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
+use golem_common::model::oplog::{
+    OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
+};
 use golem_common::model::{AgentStatus, IdempotencyKey};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_test_framework::dsl::debug_render::debug_render_oplog_entry;
 use pretty_assertions::assert_eq;
 
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, callers, start,
 };
 use http::HeaderMap;
 use log::info;
@@ -66,7 +69,7 @@ async fn get_oplog_1(
         .store()
         .await?;
 
-    let agent_id = agent_id!("GolemHostApi", "getoplog1");
+    let agent_id = agent_key!("GolemHostApi", "getoplog1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -151,7 +154,7 @@ async fn ordinary_agent_is_not_never_live_after_restart(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("GolemHostApi", "ordinary-not-never-live");
+    let agent_id = agent_key!("GolemHostApi", "ordinary-not-never-live");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -187,6 +190,161 @@ async fn ordinary_agent_is_not_never_live_after_restart(
     Ok(())
 }
 
+/// The byte strings in the JSON form of a typed value: lists of `u8` values and binary payloads.
+fn byte_strings(value: &serde_json::Value, out: &mut Vec<Vec<u8>>) {
+    match value {
+        serde_json::Value::Array(items) => {
+            let as_u8 = |item: &serde_json::Value| {
+                let number = match item {
+                    serde_json::Value::Object(map) if map.get("kind") == Some(&"u8".into()) => {
+                        map.get("value")
+                    }
+                    other => Some(other),
+                };
+                number
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|n| u8::try_from(n).ok())
+            };
+            match items.iter().map(as_u8).collect::<Option<Vec<u8>>>() {
+                Some(bytes) if !bytes.is_empty() => out.push(bytes),
+                _ => items.iter().for_each(|item| byte_strings(item, out)),
+            }
+        }
+        serde_json::Value::Object(map) => map.values().for_each(|item| byte_strings(item, out)),
+        _ => {}
+    }
+}
+
+/// The byte strings that the host-call responses of an oplog hold, such as the chunks that a
+/// guest's `get-oplog` calls recorded.
+fn recorded_response_bytes(oplog: &[PublicOplogEntryWithIndex]) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    for entry in oplog {
+        if let PublicOplogEntry::End(end) = &entry.entry
+            && let Some(response) = &end.response
+        {
+            byte_strings(&serde_json::to_value(response.value()).unwrap(), &mut out);
+        }
+    }
+    out
+}
+
+fn method_invocation_callers(
+    oplog: &[PublicOplogEntryWithIndex],
+    method_name: &str,
+) -> Vec<PublicCaller> {
+    oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+                invocation: PublicAgentInvocation::AgentMethodInvocation(params),
+                ..
+            }) if params.method_name == method_name => Some(params.caller.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+#[tracing::instrument]
+async fn public_oplog_shows_callers_and_keeps_claims_out_of_guest_reads(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    const MARKER: &str = "claimsmarker7f3a";
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_key!("GolemHostApi", "callers");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let caller = callers::user_with_claims(
+        "http://test-idp.com",
+        "bob",
+        &format!(r#"{{"sub":"bob","email":"{MARKER}@mail.example"}}"#),
+    );
+    executor
+        .invoke_and_await_agent_as_caller(
+            &component,
+            &agent_id,
+            caller.clone(),
+            "generate_idempotency_keys",
+            data_value!(),
+        )
+        .await?;
+
+    // Without the claims request, the oplog shows both roles and no claims.
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        method_invocation_callers(&oplog, "generate_idempotency_keys"),
+        vec![PublicCaller::new(&caller, ClaimVisibility::Hidden)]
+    );
+    assert!(!serde_json::to_string(&oplog)?.contains(MARKER));
+
+    // With the claims request, both roles show the claims.
+    let oplog = executor
+        .get_oplog_with_claims(&worker_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        method_invocation_callers(&oplog, "generate_idempotency_keys"),
+        vec![PublicCaller::new(&caller, ClaimVisibility::Shown)]
+    );
+    assert!(serde_json::to_string(&oplog)?.contains(MARKER));
+
+    // The guest reads its own oplog. Its oplog keeps the chunk that it read: the chunk shows the
+    // caller roles and never the claims, also for a reader that asks for the claims.
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "read_own_oplog_result",
+            data_value!(),
+        )
+        .await?;
+    for oplog in [
+        executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?,
+        executor
+            .get_oplog_with_claims(&worker_id, OplogIndex::INITIAL)
+            .await?,
+    ] {
+        let chunks = recorded_response_bytes(&oplog)
+            .into_iter()
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .filter(|text| text.contains("AgentInvocationStarted"))
+            .collect::<Vec<_>>();
+        assert!(
+            !chunks.is_empty(),
+            "the guest's oplog read was not recorded"
+        );
+        assert!(
+            chunks
+                .iter()
+                .any(|chunk| chunk.contains(r#""subject":"bob""#)),
+            "the recorded chunk shows no caller: {chunks:?}"
+        );
+        for chunk in &chunks {
+            assert!(
+                !chunk.contains(MARKER),
+                "claims in a recorded chunk: {chunk}"
+            );
+        }
+    }
+    assert!(
+        !serde_json::to_string(&executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?)?
+            .contains(MARKER)
+    );
+
+    Ok(())
+}
+
 #[test]
 #[timeout("1m")]
 async fn p3_unread_response_cleanup_reconstructs_before_next_accessor(
@@ -219,7 +377,7 @@ async fn p3_unread_response_cleanup_reconstructs_before_next_accessor(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let agent = agent_id!("RawWasiHttp", "p3-unread-cleanup-reconstruction");
+    let agent = agent_key!("RawWasiHttp", "p3-unread-cleanup-reconstruction");
     let worker = executor
         .start_agent_with(
             &component.id,
@@ -364,7 +522,7 @@ async fn p3_unread_response_reconstructs_with_changed_drop_schedule(
             .component_dep(&context.default_environment_id, fixture)
             .store()
             .await?;
-        let agent = agent_id!("HttpGc", format!("drop-{live}-{restored}-{partial_body}"));
+        let agent = agent_key!("HttpGc", format!("drop-{live}-{restored}-{partial_body}"));
         let worker = executor
             .start_agent_with(
                 &component.id,
@@ -408,7 +566,7 @@ async fn p3_unread_response_reconstructs_with_changed_drop_schedule(
             .await??;
             executor
                 .interrupt_loaded_worker(
-                    &worker,
+                    &worker.agent_id,
                     golem_service_base::error::worker_executor::InterruptKind::Suspend(
                         golem_common::model::Timestamp::now_utc(),
                     ),
@@ -443,7 +601,9 @@ async fn p3_unread_response_reconstructs_with_changed_drop_schedule(
         }
         drop(executor);
         let executor = start_with_overrides(deps, &context, overrides()).await?;
-        executor.complete_promise(&promise, Vec::new()).await?;
+        executor
+            .complete_promise(&context.default_environment_id, &promise, Vec::new())
+            .await?;
         let report = executor
             .invoke_and_await_agent(&component, &agent, "inspect", data_value!())
             .await?
@@ -528,7 +688,7 @@ async fn guest_span_reconstructs_completed_and_incomplete_operations(
             .component_dep(&context.default_environment_id, fixture)
             .store()
             .await?;
-        let agent = agent_id!("InvocationContext", format!("span-prefix-{cut}"));
+        let agent = agent_key!("InvocationContext", format!("span-prefix-{cut}"));
         let worker = executor.start_agent(&component.id, agent.clone()).await?;
         let original = executor
             .invoke_and_await_agent(&component, &agent, "span_roundtrip", data_value!())
@@ -613,7 +773,7 @@ async fn finished_guest_span_attribute_error_does_not_open_operation(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let agent = agent_id!("InvocationContext", "finished-span-error");
+    let agent = agent_key!("InvocationContext", "finished-span-error");
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
     assert!(
         executor
@@ -642,7 +802,7 @@ async fn search_oplog_1(
         .store()
         .await?;
 
-    let repo_id = agent_id!("Repository", "search-oplog-1");
+    let repo_id = agent_key!("Repository", "search-oplog-1");
     let worker_id = executor.start_agent(&component.id, repo_id.clone()).await?;
 
     executor
@@ -732,7 +892,7 @@ async fn get_oplog_with_api_changing_updates(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -761,7 +921,7 @@ async fn get_oplog_with_api_changing_updates(
         .invoke_and_await_agent(&component, &agent_id, "f4", data_value!())
         .await?;
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let oplog = crate::http::settled_oplog(&executor, &worker_id).await?;
 
     // there might be a pending invocation entry before the update entry. Filter it out to make the test more robust
     let oplog = oplog
@@ -779,7 +939,16 @@ async fn get_oplog_with_api_changing_updates(
 
     let _ = executor.check_oplog_is_queryable(&worker_id).await;
 
-    assert_eq!(oplog.len(), 16, "unexpected oplog: {oplog:#?}");
+    // The constructor and each of the three method invocations end with a settlement entry.
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationSettled(_)))
+            .count(),
+        4,
+        "unexpected oplog: {oplog:#?}"
+    );
+    assert_eq!(oplog.len(), 20, "unexpected oplog: {oplog:#?}");
 
     Ok(())
 }
@@ -807,7 +976,7 @@ async fn get_oplog_starting_with_updated_component(
         updated_component.revision
     );
 
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -818,15 +987,23 @@ async fn get_oplog_starting_with_updated_component(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let oplog = executor
-        .get_oplog(&worker_id, OplogIndex::INITIAL)
+    let oplog = crate::http::settled_oplog(&executor, &worker_id)
         .await?
         .into_iter()
         .filter(|entry| !matches!(entry.entry, PublicOplogEntry::GrowMemory(_)))
         .collect::<Vec<_>>();
 
     assert_eq!(result.into_typed::<u64>()?, 11);
-    assert_eq!(oplog.len(), 11);
+    // The constructor and the method invocation each end with a settlement entry.
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationSettled(_)))
+            .count(),
+        2,
+        "unexpected oplog: {oplog:#?}"
+    );
+    assert_eq!(oplog.len(), 13, "unexpected oplog: {oplog:#?}");
 
     Ok(())
 }
@@ -881,9 +1058,19 @@ async fn invocation_context_test(
         .store()
         .await?;
 
-    let agent_id = agent_id!("InvocationContext", "w1");
+    let agent_id = agent_key!("InvocationContext", "w1");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .start_agent_with(&component.id, agent_id.clone(), env.clone(), Vec::new())
+        .await?;
+    // An agent that RPC creates does not inherit the caller's environment, so the agent that
+    // `test1` calls must already exist with the port of the HTTP server.
+    executor
+        .start_agent_with(
+            &component.id,
+            agent_key!("InvocationContext", "w2"),
+            env,
+            Vec::new(),
+        )
         .await?;
 
     executor

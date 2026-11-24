@@ -12,7 +12,7 @@ var _ = Exports.HandleRaw(func(_ context.Context,
             Body: golem.StreamOf[[]byte]()} //@
     }
     // that user's agent builds the CSV now and streams it:
-    csv := ExportCsv.MustCall(Analyst.Get(AnalystID{Chat: m[1]}), //@
+    csv := ExportCsv.MustCall(Analyst.Upsert(AnalystID{Chat: m[1]}), //@
         ExportIn{ID: m[2]})
     return golem.HTTPResponse{
         Status: 200,

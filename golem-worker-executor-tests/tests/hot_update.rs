@@ -22,7 +22,7 @@ use futures::stream::BoxStream;
 use futures::{StreamExt as _, TryStreamExt as _};
 use golem_common::base_model::oplog::PublicUpdateDescription;
 use golem_common::model::agent::{
-    AgentUpdateMode, RevertToOplogIndex, RevertWorkerTarget, UpdateRecord,
+    AgentUpdateMode, ParsedAgentKey, RevertToOplogIndex, RevertWorkerTarget, UpdateRecord,
 };
 use golem_common::model::component::{ComponentDto, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
@@ -31,10 +31,12 @@ use golem_common::model::oplog::{
     DurableFunctionType, OplogEntry, OplogErrorKind, OplogIndex, PublicAgentInvocation,
     PublicOplogEntry, UpdateFailureClass,
 };
-use golem_common::model::{AgentEvent, AgentId, AgentStatus, OwnedAgentId, ScanCursor, Timestamp};
-use golem_common::{agent_id, data_value, phantom_agent_id};
+use golem_common::model::{AgentEvent, AgentStatus, OwnedAgentId, ScanCursor, Timestamp};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::{TestDsl, update_counts};
 
+use golem_common::model::account::AccountId;
+use golem_common::model::caller::{Caller, ClaimVisibility, PublicCaller};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::replayable_stream::ErasedReplayableStream;
@@ -52,6 +54,7 @@ use golem_worker_executor::services::golem_config::{
     FilesystemSnapshotUploadConfig, OplogConfig, SnapshotPolicy,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start, start_customized, start_with_overrides,
@@ -60,7 +63,7 @@ use golem_worker_executor_test_utils::{
 use http::StatusCode;
 use log::info;
 use pretty_assertions::{assert_eq, assert_ne};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -85,6 +88,10 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("http_update_effect")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("constructor_parameter_echo")]
     PrecompiledComponent
 );
 inherit_test_dep!(Tracing);
@@ -209,14 +216,14 @@ impl AgentFiles {
     async fn reject_record_after(
         &self,
         executor: &TestWorkerExecutor,
-        worker_id: &AgentId,
+        worker_id: &OwnedAgentId,
         method: &str,
     ) -> anyhow::Result<()> {
         if self.snapshotted() {
             let after = last_start_of(executor, worker_id, method).await?;
             let record = wait_for_snapshot_after(executor, worker_id, after).await?;
             executor
-                .reject_automatic_snapshots(worker_id, [record])
+                .reject_automatic_snapshots(&worker_id.agent_id, [record])
                 .await?;
         }
         Ok(())
@@ -283,21 +290,22 @@ impl AgentFiles {
         &self,
         executor: &TestWorkerExecutor,
         component: &ComponentDto,
-        agent_id: &golem_common::model::agent::ParsedAgentKey,
+        agent_id: &OwnedAgentId,
         paths: &[&str],
     ) -> anyhow::Result<()> {
         if self.snapshotted() {
             let read = futures::stream::iter(paths)
                 .then(|path| async move {
-                    executor
-                        .invoke_and_await_agent(
-                            component,
-                            agent_id,
-                            "read_file",
-                            data_value!(path.to_string()),
-                        )
-                        .await?
-                        .into_typed::<Option<String>>()
+                    crate::agent::invoke_and_await_agent_by_id(
+                        executor,
+                        component,
+                        agent_id,
+                        None,
+                        "read_file",
+                        data_value!(path.to_string()),
+                    )
+                    .await?
+                    .into_typed::<Option<String>>()
                 })
                 .try_collect::<Vec<_>>()
                 .await?;
@@ -318,7 +326,7 @@ impl AgentFiles {
     async fn selected_record(
         &self,
         executor: &TestWorkerExecutor,
-        worker_id: &AgentId,
+        worker_id: &OwnedAgentId,
         untouched_after: OplogIndex,
         method: &str,
     ) -> anyhow::Result<OplogIndex> {
@@ -334,7 +342,7 @@ impl AgentFiles {
 /// The index of the last start of an invocation of `method`.
 async fn last_start_of(
     executor: &TestWorkerExecutor,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
     method: &str,
 ) -> anyhow::Result<OplogIndex> {
     executor
@@ -359,7 +367,7 @@ async fn last_start_of(
 
 pub(crate) async fn wait_for_snapshot_after(
     executor: &TestWorkerExecutor,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
     after: OplogIndex,
 ) -> anyhow::Result<OplogIndex> {
     tokio::time::timeout(Duration::from_secs(30), async {
@@ -378,7 +386,7 @@ pub(crate) async fn wait_for_snapshot_after(
 
 async fn wait_for_update_counts(
     executor: &TestWorkerExecutor,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
     expected: (usize, usize, usize),
 ) -> anyhow::Result<golem_common::model::agent::AgentMetadataDto> {
     tokio::time::timeout(Duration::from_secs(30), async {
@@ -412,7 +420,7 @@ async fn auto_update_on_running(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -490,7 +498,7 @@ async fn auto_update_on_idle(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -573,7 +581,7 @@ async fn incompatible_http_timeout_update_rejects_and_recovers_queued_work(
         .component_dep(&context.default_environment_id, baseline)
         .store()
         .await?;
-    let id = agent_id!("HttpUpdateProbe", "http-history");
+    let id = agent_key!("HttpUpdateProbe", "http-history");
     let worker = executor.start_agent(&component.id, id.clone()).await?;
     let result = executor
         .invoke_and_await_agent(&component, &id, "run", data_value!(url.clone()))
@@ -581,7 +589,7 @@ async fn incompatible_http_timeout_update_rejects_and_recovers_queued_work(
     assert_eq!(result.into_typed::<String>()?, "response-1");
     assert_eq!(requests.load(Ordering::SeqCst), 1);
 
-    let control_id = agent_id!("HttpUpdateProbe", "no-http-history");
+    let control_id = agent_key!("HttpUpdateProbe", "no-http-history");
     let control = executor
         .start_agent(&component.id, control_id.clone())
         .await?;
@@ -607,9 +615,9 @@ async fn incompatible_http_timeout_update_rejects_and_recovers_queued_work(
     fetch_entered.await?;
     let ping_key = golem_common::model::IdempotencyKey::fresh();
     let stored_ping_key = executor
-        .external_invocation_key(&worker, &ping_key, "ping")
+        .external_invocation_key(&worker.agent_id, &ping_key, "ping")
         .await?;
-    let mut result_wait = crate::invocation_waits::result_wait(&worker, &stored_ping_key);
+    let mut result_wait = crate::invocation_waits::result_wait(&worker.agent_id, &stored_ping_key);
     let ping = {
         let executor = executor.clone();
         let component = component.clone();
@@ -722,7 +730,7 @@ async fn automatic_update_promotes_snapshot_from_previous_revision(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -817,7 +825,7 @@ async fn snapshot_after_auto_update_recovers_with_updated_component_context(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -933,7 +941,7 @@ async fn skips_pre_snapshot_history_and_replays_in_flight_tail(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -1111,13 +1119,16 @@ async fn skips_pre_snapshot_history_and_replays_in_flight_tail(
         PublicOplogEntry::FailedUpdate(_) | PublicOplogEntry::Error(_)
     )));
 
-    let fork = phantom_agent_id!("SnapshotUpdateTest", uuid::Uuid::new_v4());
-    executor
-        .fork_worker(&worker_id, &fork.to_string(), success_index)
-        .await?;
-    let fork_value = executor
-        .invoke_and_await_agent(&component, &fork, "accumulated_value", data_value!())
-        .await?;
+    let fork = executor.fork_worker(&worker_id, success_index).await?;
+    let fork_value = crate::agent::invoke_and_await_agent_by_id(
+        &executor,
+        &component,
+        &fork,
+        None,
+        "accumulated_value",
+        data_value!(),
+    )
+    .await?;
     assert_eq!(fork_value.into_typed::<u32>()?, 111);
     files
         .assert_files(&executor, &component, &fork, &["/before.txt", "/tail.txt"])
@@ -1125,9 +1136,9 @@ async fn skips_pre_snapshot_history_and_replays_in_flight_tail(
 
     let later_snapshot = wait_for_snapshot_after(&executor, &worker_id, success_index).await?;
     executor
-        .return_empty_snapshot_payload(&worker_id, later_snapshot)
+        .return_empty_snapshot_payload(&worker_id.agent_id, later_snapshot)
         .await?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id.agent_id);
     tokio::time::timeout(Duration::from_secs(10), async {
         while !executor.stop_worker_if_idle(&owned).await? {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1166,7 +1177,7 @@ async fn skips_pre_snapshot_history_and_replays_in_flight_tail(
         .assert_files(
             &executor,
             &component,
-            &agent_id,
+            &crate::agent::keyed_agent_id(component.environment_id, &agent_id),
             &["/before.txt", "/tail.txt"],
         )
         .await?;
@@ -1282,7 +1293,7 @@ async fn gol838_save_hook_mutations_publish_owner_wallet_before_snapshot(
             })
             .store()
             .await?;
-        let agent = agent_id!("WalletSnapshotProbe", format!("save-hook-{revoke}"));
+        let agent = agent_key!("WalletSnapshotProbe", format!("save-hook-{revoke}"));
         let worker = executor.start_agent(&component.id, agent.clone()).await?;
         let card_id = CardId::new();
         let schema_id = SchemaCardId { uuid: card_id.0 };
@@ -1309,29 +1320,35 @@ async fn gol838_save_hook_mutations_publish_owner_wallet_before_snapshot(
                 card.clone(),
                 CardManagedByRuntimeDerived {
                     environment_id: context.default_environment_id,
-                    agent_id: worker.clone(),
+                    agent_id: worker.agent_id,
                     invocation_key: golem_common::model::InvocationId(uuid::Uuid::new_v4()),
                     oplog_index: OplogIndex::INITIAL,
                 },
             )
             .await?;
-        executor.queue_card_install(&worker, card).await?;
+        executor.queue_card_install(&worker.agent_id, card).await?;
+        // A transfer reaches only an existing agent, so the target exists before the change.
         let target = if revoke {
-            String::new()
+            None
         } else {
-            agent_id!("WalletSnapshotProbe", "target").to_string()
+            Some(
+                executor
+                    .start_agent(&component.id, agent_key!("WalletSnapshotProbe", "target"))
+                    .await?
+                    .agent_id,
+            )
         };
         executor
             .invoke_and_await_agent(
                 &component,
                 &agent,
                 "arm_snapshot_change",
-                data_value!(schema_id, component.id, target),
+                data_value!(schema_id, target),
             )
             .await?;
         let before = last_start_of(&executor, &worker, "arm_snapshot_change").await?;
         let snapshot_index = wait_for_snapshot_after(&executor, &worker, before).await?;
-        let entries = executor.stored_oplog(&worker).await;
+        let entries = executor.stored_oplog(&worker.agent_id).await;
         let OplogEntry::Snapshot {
             active_cards,
             wallet_generation,
@@ -1433,7 +1450,7 @@ async fn gol838_primary_reconstruction_retains_cancelled_accessor_preparation(
                 })
                 .store()
                 .await?;
-        let agent = agent_id!("WalletReplayProbe", "primary-preparation-cancellation");
+        let agent = agent_key!("WalletReplayProbe", "primary-preparation-cancellation");
         let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
         let promise = executor
             .invoke_and_await_agent(&component, &agent, "create_release_promise", data_value!())
@@ -1441,7 +1458,7 @@ async fn gol838_primary_reconstruction_retains_cancelled_accessor_preparation(
             .into_typed::<PromiseId>()?;
         let key = IdempotencyKey::fresh();
         let params = data_value!(promise);
-        let mut end = executor.gate_next_call_end(&worker_id, true).await;
+        let mut end = executor.gate_next_call_end(&worker_id.agent_id, true).await;
         executor
             .invoke_agent_with_key(
                 &component,
@@ -1455,7 +1472,7 @@ async fn gol838_primary_reconstruction_retains_cancelled_accessor_preparation(
         let clock_start = end.start_index();
         let invocation_start = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
-                executor.commit_oplog(&worker_id).await?;
+                executor.commit_oplog(&worker_id.agent_id).await?;
                 let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
                 assert!(entries.iter().any(|entry| entry.oplog_index == clock_start
                     && matches!(&entry.entry, PublicOplogEntry::Start(call) if call.function_name == CLOCK)));
@@ -1526,12 +1543,12 @@ async fn gol838_primary_reconstruction_retains_cancelled_accessor_preparation(
         let executor = start_with_overrides(deps, &context, overrides).await?;
         tokio::time::timeout(Duration::from_secs(30), startup_entered).await??;
         let mut a = executor.gate_next_replay_access_admission(
-            &worker_id,
+            &worker_id.agent_id,
             PROMISE,
             ReplayAdmissionStage::AfterStart,
         );
         let mut c = executor.gate_next_replay_access_admission(
-            &worker_id,
+            &worker_id.agent_id,
             CLOCK,
             ReplayAdmissionStage::AfterStart,
         );
@@ -1557,7 +1574,7 @@ async fn gol838_primary_reconstruction_retains_cancelled_accessor_preparation(
             anyhow::bail!("log stream ended before the guest dropped its accessor")
         })
         .await??;
-        executor.commit_oplog(&worker_id).await?;
+        executor.commit_oplog(&worker_id.agent_id).await?;
         let held = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
         assert!(
             !held.iter().any(|entry| entry.oplog_index > invocation_start
@@ -1655,7 +1672,7 @@ async fn gol838_primary_reconstruction_retains_cancelled_accessor_preparation(
                 creations_before,
                 "the same Store must finish after helping"
             );
-            executor.commit_oplog(&worker_id).await?;
+            executor.commit_oplog(&worker_id.agent_id).await?;
             let completed = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
             assert_eq!(
                 completed
@@ -1694,7 +1711,7 @@ async fn automatic_update_without_snapshot_falls_back_to_full_replay(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1765,7 +1782,7 @@ async fn an_interrupt_during_the_full_replay_of_a_pending_automatic_update_of_an
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -1787,7 +1804,7 @@ async fn an_interrupt_during_the_full_replay_of_a_pending_automatic_update_of_an
         .await?;
 
     let mut replaying = executor.gate_next_replay_access_admission(
-        &worker_id,
+        &worker_id.agent_id,
         "client::send",
         golem_worker_executor_test_utils::ReplayAdmissionStage::BeforeScope,
     );
@@ -1843,7 +1860,7 @@ async fn assert_automatic_update_rejects_agent_mode_change(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1888,9 +1905,17 @@ async fn assert_automatic_update_rejects_agent_mode_change(
     } else {
         assert!(failure.snapshot_assisted_details.is_none());
     }
-    let source_value = executor
-        .invoke_and_await_agent(&component, &agent_id, "replay_revision", data_value!())
-        .await?;
+    // The latest revision declares the type ephemeral, so a key no longer names the agent;
+    // its ID still reaches the existing durable agent at its original revision.
+    let source_value = crate::agent::invoke_and_await_agent_by_id(
+        &executor,
+        &component,
+        &worker_id,
+        None,
+        "replay_revision",
+        data_value!(),
+    )
+    .await?;
     assert_eq!(source_value.into_typed::<u32>()?, 0);
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     assert_eq!(
@@ -1957,7 +1982,7 @@ async fn snapshot_assisted_replay_mismatch_fails_once_and_preserves_source(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2049,7 +2074,7 @@ async fn assert_snapshot_assisted_suffix_failure(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -2163,7 +2188,7 @@ async fn assert_snapshot_assisted_suffix_failure(
         .assert_files(
             &executor,
             &component,
-            &agent_id,
+            &crate::agent::keyed_agent_id(component.environment_id, &agent_id),
             &["/before.txt", "/before-2.txt", "/tail.txt"],
         )
         .await?;
@@ -2265,7 +2290,7 @@ async fn snapshot_assisted_schema_rejection_fails_once_and_allows_later_update(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2333,7 +2358,7 @@ async fn snapshot_assisted_payload_download_failure_retries_the_same_record(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("ExternalSnapshotUpdateTest");
+    let agent_id = agent_key!("ExternalSnapshotUpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2347,7 +2372,7 @@ async fn snapshot_assisted_payload_download_failure_retries_the_same_record(
         .await?;
     let snapshot_index =
         wait_for_snapshot_after(&executor, &worker_id, OplogIndex::INITIAL).await?;
-    executor.fail_snapshot_download_once(&worker_id, snapshot_index);
+    executor.fail_snapshot_download_once(&worker_id.agent_id, snapshot_index);
 
     let updated_component = executor
         .update_component(&component.id, "it_agent_update_v2_release")
@@ -2399,7 +2424,7 @@ async fn snapshot_assisted_missing_payload_fails_the_update_once(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("ExternalSnapshotUpdateTest");
+    let agent_id = agent_key!("ExternalSnapshotUpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2413,7 +2438,7 @@ async fn snapshot_assisted_missing_payload_fails_the_update_once(
         .await?;
     let snapshot_index =
         wait_for_snapshot_after(&executor, &worker_id, OplogIndex::INITIAL).await?;
-    executor.lose_snapshot_payload(&worker_id, snapshot_index);
+    executor.lose_snapshot_payload(&worker_id.agent_id, snapshot_index);
 
     let updated_component = executor
         .update_component(&component.id, "it_agent_update_v2_release")
@@ -2488,7 +2513,7 @@ async fn automatic_and_manual_update_contracts_remain_distinct(
         .component_dep(&strict_context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let strict_worker = strict
         .start_agent(&strict_component.id, agent_id.clone())
         .await?;
@@ -2581,6 +2606,150 @@ async fn automatic_and_manual_update_contracts_remain_distinct(
 
 #[test]
 #[timeout("120s")]
+async fn queued_methods_validate_against_the_selected_update_revision(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::caller::Caller;
+    use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::model::{AgentInvocation, InvocationId};
+    use golem_common::schema::SchemaValue;
+    use golem_worker_executor::worker::ResultOrSubscription;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let mut http_server = TestHttpServer::start().await;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_key!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), http_server.port().to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "revision_one_only", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        1
+    );
+    let target = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    let mut control = http_server.f1_control(2117).await;
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_clone = agent_id.clone();
+    let held = spawn(async move {
+        executor_clone
+            .invoke_and_await_agent(
+                &component_clone,
+                &agent_clone,
+                "blocking_stable",
+                data_value!(2117u64),
+            )
+            .await
+    });
+    control.await_reached().await;
+    executor
+        .manual_update_worker(&worker_id, target.revision, false)
+        .await?;
+    let pending = wait_for_update_counts(&executor, &worker_id, (1, 0, 0)).await?;
+    assert_eq!(pending.component_revision, component.revision);
+
+    let invocation = |method_name: &str| AgentInvocation::AgentMethod {
+        idempotency_key: InvocationId(uuid::Uuid::new_v4()),
+        method_name: method_name.to_string(),
+        allow_streams: false,
+        input: SchemaValue::Record { fields: vec![] }.try_into().unwrap(),
+        invocation_context: InvocationContextStack::fresh(),
+        caller: Caller::anonymous(),
+        scope_card: None,
+    };
+    let removed = invocation("revision_one_only");
+    let added = invocation("revision_two_only");
+    let worker = executor.active_agent(&worker_id).await.unwrap().primary();
+    for request in [&removed, &added] {
+        assert!(matches!(
+            worker.clone().invoke(request.clone()).await?,
+            ResultOrSubscription::Pending(_)
+        ));
+    }
+    // Both observations use revision one's read-only policy while the update is
+    // pending. Revision two makes the method mutating, so neither caller may
+    // borrow the other key's execution result.
+    let mut reads = [
+        Box::pin(
+            worker
+                .clone()
+                .invoke_and_await(invocation("revision_cache_probe")),
+        ),
+        Box::pin(
+            worker
+                .clone()
+                .invoke_and_await(invocation("revision_cache_probe")),
+        ),
+    ];
+    for read in &mut reads {
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), read)
+                .await
+                .is_err(),
+            "a cache miss cannot complete while the gate is held"
+        );
+    }
+    assert!(!held.is_finished());
+    control.resume();
+    assert_eq!(held.await??.into_typed::<u32>()?, 100);
+
+    assert!(matches!(
+        worker.clone().invoke_and_await(removed).await,
+        Err(WorkerExecutorError::InvalidRequest { details })
+            if details.contains("revision_one_only") && details.contains("not found")
+    ));
+    let output = worker.clone().invoke_and_await(added).await?;
+    assert_eq!(output.component_revision, Some(target.revision));
+    assert!(matches!(
+        output.result,
+        golem_common::model::AgentInvocationResult::AgentMethod {
+            output: SchemaValue::U32(2)
+        }
+    ));
+    let mut values = Vec::new();
+    for read in reads {
+        let output = read.await?;
+        assert_eq!(output.component_revision, Some(target.revision));
+        let golem_common::model::AgentInvocationResult::AgentMethod {
+            output: SchemaValue::U32(value),
+        } = output.result
+        else {
+            panic!("expected the selected revision's counter result");
+        };
+        values.push(value);
+    }
+    values.sort();
+    assert_eq!(values, vec![101, 102]);
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "accumulated_value", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        102
+    );
+    http_server.abort();
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
 async fn snapshot_assisted_restart_before_attempt_and_later_update_modes_succeed(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2630,7 +2799,7 @@ async fn restart_before_attempt_and_later_update_modes_succeed(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let mut http_server = TestHttpServer::start().await;
     let worker_id = executor
         .start_agent_with(
@@ -2695,8 +2864,17 @@ async fn restart_before_attempt_and_later_update_modes_succeed(
     let assisted = executor
         .update_component(&component.id, "it_agent_update_v2_release")
         .await?;
-    executor
-        .auto_update_worker(&worker_id, assisted.revision, true)
+    // The strategy entry of this update is written after the restart: it must still name the
+    // requester of the admission.
+    let assisted_requester = callers::account(AccountId::new());
+    let assisted_attempt = executor
+        .update_worker_as_caller(
+            &worker_id,
+            AgentUpdateMode::Automatic,
+            assisted.revision,
+            true,
+            assisted_requester.clone(),
+        )
         .await?;
     let pending = wait_for_update_counts(&executor, &worker_id, (1, 0, 0)).await?;
     assert_eq!(pending.component_revision, component.revision);
@@ -2741,8 +2919,15 @@ async fn restart_before_attempt_and_later_update_modes_succeed(
     let manual = executor
         .update_component(&component.id, "it_agent_update_v2_release")
         .await?;
-    executor
-        .manual_update_worker(&worker_id, manual.revision, false)
+    let manual_requester = callers::account(AccountId::new());
+    let manual_attempt = executor
+        .update_worker_as_caller(
+            &worker_id,
+            AgentUpdateMode::Manual,
+            manual.revision,
+            false,
+            manual_requester.clone(),
+        )
         .await?;
     executor
         .wait_for_component_revision(&worker_id, manual.revision, Duration::from_secs(30))
@@ -2773,11 +2958,16 @@ async fn restart_before_attempt_and_later_update_modes_succeed(
         update_counts(&executor.get_worker_metadata(&worker_id).await?),
         (0, 4, 0)
     );
+    // The admission and the strategy entry of the first update, and the queued manual update
+    // and its `PendingUpdate`, each name their own requester.
+    let requesters = update_requesters(&executor, &worker_id).await?;
+    assert_requested_by(&requesters, assisted_attempt, &assisted_requester, 2);
+    assert_requested_by(&requesters, manual_attempt, &manual_requester, 2);
     files
         .assert_files(
             &executor,
             &component,
-            &agent_id,
+            &crate::agent::keyed_agent_id(component.environment_id, &agent_id),
             &["/before.txt", "/before-2.txt", "/tail.txt"],
         )
         .await?;
@@ -2804,7 +2994,7 @@ async fn queued_automatic_targets_select_strategy_when_each_reaches_queue_head(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let mut http_server = TestHttpServer::start().await;
     let worker_id = executor
         .start_agent_with(
@@ -2854,11 +3044,27 @@ async fn queued_automatic_targets_select_strategy_when_each_reaches_queue_head(
     let revision_three = executor
         .update_component(&component.id, "it_agent_update_v2_release")
         .await?;
-    executor
-        .auto_update_worker(&worker_id, revision_two.revision, true)
+    // Two accounts each queue one update. The executor writes the strategy entry of each when it
+    // reaches the head of the queue, with the requester of that update's own admission.
+    let first_requester = callers::account(AccountId::new());
+    let second_requester = callers::account(AccountId::new());
+    let first_attempt = executor
+        .update_worker_as_caller(
+            &worker_id,
+            AgentUpdateMode::Automatic,
+            revision_two.revision,
+            true,
+            first_requester.clone(),
+        )
         .await?;
-    executor
-        .auto_update_worker(&worker_id, revision_three.revision, true)
+    let second_attempt = executor
+        .update_worker_as_caller(
+            &worker_id,
+            AgentUpdateMode::Automatic,
+            revision_three.revision,
+            true,
+            second_requester.clone(),
+        )
         .await?;
 
     let pending = wait_for_update_counts(&executor, &worker_id, (2, 0, 0)).await?;
@@ -2899,6 +3105,9 @@ async fn queued_automatic_targets_select_strategy_when_each_reaches_queue_head(
             .collect::<HashSet<_>>(),
         pending_attempts,
     );
+    let requesters = update_requesters(&executor, &worker_id).await?;
+    assert_requested_by(&requesters, first_attempt, &first_requester, 2);
+    assert_requested_by(&requesters, second_attempt, &second_requester, 2);
     http_server.abort();
     Ok(())
 }
@@ -2959,7 +3168,7 @@ async fn revert_retries_retained_successful_and_failed_requests(
             .component_dep(&context.default_environment_id, agent_update_v1)
             .store()
             .await?;
-        let agent_id = agent_id!("SnapshotUpdateTest");
+        let agent_id = agent_key!("SnapshotUpdateTest");
         let worker_id = executor
             .start_agent(&component.id, agent_id.clone())
             .await?;
@@ -3102,7 +3311,7 @@ async fn revert_retries_retained_successful_and_failed_requests(
             .assert_files(
                 &executor,
                 &component,
-                &agent_id,
+                &crate::agent::keyed_agent_id(component.environment_id, &agent_id),
                 &["/before.txt", "/tail.txt"],
             )
             .await?;
@@ -3120,12 +3329,12 @@ async fn manual_update_with_periodic_snapshot(
     executor: &TestWorkerExecutor,
     context: &TestContext,
     agent_update_v1: &PrecompiledComponent,
-) -> anyhow::Result<(ComponentDto, AgentId, OplogIndex)> {
+) -> anyhow::Result<(ComponentDto, OwnedAgentId, OplogIndex)> {
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3215,7 +3424,7 @@ async fn snapshot_only_recovery_reconciles_memory_before_subsequent_growth(
             .component_dep(&context.default_environment_id, agent_update_v1)
             .store()
             .await?;
-        let agent_id = agent_id!("SnapshotUpdateTest");
+        let agent_id = agent_key!("SnapshotUpdateTest");
         let worker_id = executor
             .start_agent(&component.id, agent_id.clone())
             .await?;
@@ -3371,7 +3580,7 @@ async fn manual_periodic_snapshot_valid_tail_recovers(
     let executor = start_with_snapshot_policy(deps, &context, policy.clone()).await?;
     let (component, worker_id, snapshot_index) =
         manual_update_with_periodic_snapshot(&executor, &context, agent_update_v1).await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let tail = executor
         .invoke_and_await_agent(&component, &agent_id, "revision_two_only", data_value!())
         .await?;
@@ -3420,7 +3629,7 @@ async fn manual_periodic_snapshot_result_divergence_uses_manual_baseline(
     let executor = start_with_snapshot_policy(deps, &context, policy.clone()).await?;
     let (component, worker_id, snapshot_index) =
         manual_update_with_periodic_snapshot(&executor, &context, agent_update_v1).await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let tail = executor
         .invoke_and_await_agent(
             &component,
@@ -3511,11 +3720,11 @@ async fn assert_manual_periodic_snapshot_rejection(
         start_customized(deps, &context, None, None, None, None, Some(config.clone())).await?;
     let (component, worker_id, rejected_index) =
         manual_update_with_periodic_snapshot(&executor, &context, agent_update_v1).await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     executor
-        .return_empty_snapshot_payload(&worker_id, rejected_index)
+        .return_empty_snapshot_payload(&worker_id.agent_id, rejected_index)
         .await?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id.agent_id);
     tokio::time::timeout(Duration::from_secs(10), async {
         while !executor.stop_worker_if_idle(&owned).await? {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -3559,7 +3768,7 @@ async fn assert_manual_periodic_snapshot_rejection(
             }
         })
         .await??;
-        let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let owned = OwnedAgentId::new(context.default_environment_id, &worker_id.agent_id);
         tokio::time::timeout(Duration::from_secs(10), async {
             while !executor.stop_worker_if_idle(&owned).await? {
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -3669,12 +3878,12 @@ async fn manual_periodic_snapshot_failed_manual_baseline_returns_error_without_l
         .unwrap()
         .oplog_index;
     executor
-        .return_empty_snapshot_payload(&worker_id, periodic_index)
+        .return_empty_snapshot_payload(&worker_id.agent_id, periodic_index)
         .await?;
     executor
-        .return_empty_snapshot_payload(&worker_id, manual_index)
+        .return_empty_snapshot_payload(&worker_id.agent_id, manual_index)
         .await?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id.agent_id);
     tokio::time::timeout(Duration::from_secs(10), async {
         while !executor.stop_worker_if_idle(&owned).await? {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -3684,7 +3893,7 @@ async fn manual_periodic_snapshot_failed_manual_baseline_returns_error_without_l
     .await??;
 
     let mut events = executor.capture_output(&worker_id).await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let invocation =
         executor.invoke_and_await_agent(&component, &agent_id, "revision_two_only", data_value!());
     tokio::pin!(invocation);
@@ -3747,11 +3956,11 @@ async fn manual_periodic_snapshot_temporary_download_failure_is_retryable_on_cac
         .unwrap()
         .oplog_index;
     executor
-        .return_empty_snapshot_payload(&worker_id, manual_index)
+        .return_empty_snapshot_payload(&worker_id.agent_id, manual_index)
         .await?;
-    executor.fail_snapshot_download_once(&worker_id, periodic_index);
+    executor.fail_snapshot_download_once(&worker_id.agent_id, periodic_index);
 
-    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id.agent_id);
     tokio::time::timeout(Duration::from_secs(10), async {
         while !executor.stop_worker_if_idle(&owned).await? {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -3760,7 +3969,7 @@ async fn manual_periodic_snapshot_temporary_download_failure_is_retryable_on_cac
     })
     .await??;
 
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let mut events = executor.capture_output(&worker_id).await?;
     let first = executor
         .invoke_and_await_agent(&component, &agent_id, "revision_two_only", data_value!())
@@ -3879,7 +4088,7 @@ async fn assert_promoted_automatic_snapshot_load_failure_retries_required_baseli
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3932,7 +4141,7 @@ async fn assert_promoted_automatic_snapshot_load_failure_retries_required_baseli
     })
     .await??;
 
-    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id.agent_id);
     tokio::time::timeout(Duration::from_secs(10), async {
         while !executor.stop_worker_if_idle(&owned).await? {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -3944,11 +4153,11 @@ async fn assert_promoted_automatic_snapshot_load_failure_retries_required_baseli
     let expected_error = match failure {
         AutomaticSnapshotLoadFailure::InvalidEntry => {
             // Context initialization reads the snapshot boundary once before recovery loads it.
-            executor.return_non_snapshot_after_oplog_reads(&worker_id, snapshot_index, 1);
+            executor.return_non_snapshot_after_oplog_reads(&worker_id.agent_id, snapshot_index, 1);
             "Expected Snapshot entry"
         }
         AutomaticSnapshotLoadFailure::PayloadDownload => {
-            executor.fail_snapshot_download_once(&worker_id, snapshot_index);
+            executor.fail_snapshot_download_once(&worker_id.agent_id, snapshot_index);
             "Failed to download snapshot payload"
         }
     };
@@ -4030,7 +4239,7 @@ async fn automatic_update_does_not_fallback_after_selected_snapshot_is_rejected(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -4136,7 +4345,7 @@ async fn failing_auto_update_on_idle(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -4196,7 +4405,7 @@ async fn auto_update_on_idle_with_non_diverging_history(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -4262,7 +4471,7 @@ async fn failing_auto_update_on_running(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -4350,7 +4559,7 @@ async fn manual_update_on_idle(
         .component_dep(&context.default_environment_id, agent_update_v2)
         .store()
         .await?;
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -4373,8 +4582,17 @@ async fn manual_update_on_idle(
         .invoke_and_await_agent(&component, &agent_id, "f2", data_value!())
         .await?;
 
-    executor
-        .manual_update_worker(&worker_id, updated_component.revision, false)
+    // An account requests the update: the queued manual update and its `PendingUpdate` both
+    // record it.
+    let requester = callers::account(AccountId::new());
+    let attempt = executor
+        .update_worker_as_caller(
+            &worker_id,
+            AgentUpdateMode::Manual,
+            updated_component.revision,
+            false,
+            requester.clone(),
+        )
         .await?;
 
     let after_update = executor
@@ -4382,6 +4600,7 @@ async fn manual_update_on_idle(
         .await?;
 
     let metadata = executor.get_worker_metadata(&worker_id).await?;
+    let requesters = update_requesters(&executor, &worker_id).await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -4395,6 +4614,7 @@ async fn manual_update_on_idle(
     assert_eq!(before_update, after_update);
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));
+    assert_requested_by(&requesters, attempt, &requester, 2);
 
     Ok(())
 }
@@ -4425,7 +4645,7 @@ async fn a_stop_racing_a_manual_update_never_deadlocks(
         .component_dep(&context.default_environment_id, agent_update_v2)
         .store()
         .await?;
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -4442,7 +4662,9 @@ async fn a_stop_racing_a_manual_update_never_deadlocks(
 
     // The loop is held inside its enqueue of the update, under the worker lifecycle lock, and
     // the interrupt is issued while it waits there.
-    let mut gate = executor.gate_next_pending_update_enqueue(&worker_id).await;
+    let mut gate = executor
+        .gate_next_pending_update_enqueue(&worker_id.agent_id)
+        .await;
     let update = {
         let executor = executor.clone();
         let worker_id = worker_id.clone();
@@ -4526,7 +4748,7 @@ async fn manual_update_on_idle_without_save_snapshot(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -4545,8 +4767,17 @@ async fn manual_update_on_idle_without_save_snapshot(
         .invoke_and_await_agent(&component, &agent_id, "f1", data_value!(0u64))
         .await?;
 
-    executor
-        .manual_update_worker(&worker_id, updated_component.revision, false)
+    // The save fails, so no `PendingUpdate` exists: the queued manual update alone records the
+    // requester.
+    let requester = callers::account(AccountId::new());
+    let attempt = executor
+        .update_worker_as_caller(
+            &worker_id,
+            AgentUpdateMode::Manual,
+            updated_component.revision,
+            false,
+            requester.clone(),
+        )
         .await?;
 
     let result = executor
@@ -4554,6 +4785,7 @@ async fn manual_update_on_idle_without_save_snapshot(
         .await?;
 
     let metadata = executor.get_worker_metadata(&worker_id).await?;
+    let requesters = update_requesters(&executor, &worker_id).await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -4563,10 +4795,12 @@ async fn manual_update_on_idle_without_save_snapshot(
     // Explanation: We are trying to update v1 to v3 using snapshots, but v1 does not
     // export a save function, so the update attempt fails and the worker continues running
     // the original version which we can invoke.
-    // f3 returns args.len() + env_vars.len(); agents get an extra GOLEM_AGENT_ID env var
-    assert_eq!(result.into_typed::<u64>()?, 6);
+    // f3 returns args.len() + env_vars.len(): no args, PORT, and the GOLEM_AGENT_ID,
+    // GOLEM_AGENT_KEY, GOLEM_AGENT_TYPE and GOLEM_COMPONENT_REVISION that Golem sets
+    assert_eq!(result.into_typed::<u64>()?, 5);
     assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
     assert_eq!(update_counts(&metadata), (0, 0, 1));
+    assert_requested_by(&requesters, attempt, &requester, 1);
 
     Ok(())
 }
@@ -4590,7 +4824,7 @@ async fn auto_update_on_running_followed_by_manual(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -4689,7 +4923,7 @@ async fn manual_update_on_idle_with_failing_load(
         .component_dep(&context.default_environment_id, agent_update_v2)
         .store()
         .await?;
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -4725,11 +4959,222 @@ async fn manual_update_on_idle_with_failing_load(
 
     // Explanation: We try to update v2 to v4, but v4's load function always fails. So
     // the component must stay on v2, on which we can invoke f3.
-    // f3 returns args.len() + env_vars.len(); agents get an extra GOLEM_AGENT_ID env var
-    assert_eq!(result.into_typed::<u64>()?, 6);
+    // f3 returns args.len() + env_vars.len(): no args, PORT, and the GOLEM_AGENT_ID,
+    // GOLEM_AGENT_KEY, GOLEM_AGENT_TYPE and GOLEM_COMPONENT_REVISION that Golem sets
+    assert_eq!(result.into_typed::<u64>()?, 5);
     assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
     assert_eq!(update_counts(&metadata), (0, 0, 1));
 
+    Ok(())
+}
+
+/// Starts a resident `SaveFaultAgent` whose save hook asks a local server whether to fail: the
+/// server answers with `faults` in order and "ok" after them. Gives the agent, a new revision of
+/// its component to update to, and the count of saves that asked the server.
+async fn start_save_fault_agent(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    constructor_parameter_echo: &PrecompiledComponent,
+    faults: &'static [&'static str],
+) -> anyhow::Result<SaveFaultAgent> {
+    let saves = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let fault_server = spawn({
+        let saves = saves.clone();
+        async move {
+            let route = Router::new().route(
+                "/save-fault",
+                axum::routing::get(move || {
+                    let save = saves.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    async move { faults.get(save).copied().unwrap_or("ok") }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+    });
+
+    let executor = start_with_overrides(
+        deps,
+        context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.memory.system_memory_override = Some(256 * 1024 * 1024);
+                config.memory.worker_memory_ratio = 1.0;
+                config.memory.component_size_coefficient = 0.0;
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, constructor_parameter_echo)
+        .store()
+        .await?;
+    let agent_id = agent_key!("SaveFaultAgent", "resident");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "setFaultPort",
+            data_value!(port as f64),
+        )
+        .await?;
+    for _ in 0..2 {
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+            .await?;
+    }
+    let target = executor
+        .update_component(&component.id, "golem_it_constructor_parameter_echo")
+        .await?;
+    Ok(SaveFaultAgent {
+        executor,
+        component,
+        agent_id,
+        worker_id,
+        target_revision: target.revision,
+        saves,
+        fault_server,
+    })
+}
+
+struct SaveFaultAgent {
+    executor: TestWorkerExecutor,
+    component: ComponentDto,
+    agent_id: ParsedAgentKey,
+    worker_id: OwnedAgentId,
+    target_revision: ComponentRevision,
+    saves: Arc<std::sync::atomic::AtomicUsize>,
+    fault_server: JoinHandle<()>,
+}
+
+impl SaveFaultAgent {
+    /// Requests a manual update, waits until it fails, and gives the details of the failure.
+    async fn failed_update(&self) -> anyhow::Result<String> {
+        self.executor
+            .manual_update_worker(&self.worker_id, self.target_revision, false)
+            .await?;
+        let failed = wait_for_update_counts(&self.executor, &self.worker_id, (0, 0, 1)).await?;
+        Ok(failed
+            .updates
+            .iter()
+            .find_map(|record| match record {
+                UpdateRecord::FailedUpdate(update) => update.details.clone(),
+                _ => None,
+            })
+            .unwrap_or_default())
+    }
+
+    /// Requests the manual update again at once and checks that it succeeds with the second save.
+    async fn retried_update_succeeds(&self) -> anyhow::Result<()> {
+        self.executor
+            .manual_update_worker(&self.worker_id, self.target_revision, false)
+            .await?;
+        let settled = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let metadata = self.executor.get_worker_metadata(&self.worker_id).await?;
+                let (pending, successful, failed) = update_counts(&metadata);
+                if pending == 0 && successful + failed == 2 {
+                    break anyhow::Ok(metadata);
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await??;
+        let failures: Vec<_> = settled
+            .updates
+            .iter()
+            .filter_map(|record| match record {
+                UpdateRecord::FailedUpdate(update) => update.details.clone(),
+                _ => None,
+            })
+            .collect();
+        let saves = self.saves.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            update_counts(&settled),
+            (0, 1, 1),
+            "{failures:?}, saves: {saves}"
+        );
+        assert_eq!(settled.component_revision, self.target_revision);
+        assert_eq!(saves, 2);
+
+        let count = self
+            .executor
+            .invoke_and_await_agent(&self.component, &self.agent_id, "get", data_value!())
+            .await?;
+        assert_eq!(count.into_typed::<f64>()?, 2.0);
+        self.executor
+            .check_oplog_is_queryable(&self.worker_id)
+            .await?;
+        self.fault_server.abort();
+        Ok(())
+    }
+}
+
+/// A save hook that runs out of memory fails the manual update. A second manual update requested
+/// right after it, with no invocation, interrupt or eviction in between, takes its snapshot and
+/// succeeds: the agent restarts with new memory permits, so the save does not run on the instance
+/// that trapped.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_manual_update_after_a_save_hook_ran_out_of_memory_succeeds(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let agent =
+        start_save_fault_agent(deps, &context, constructor_parameter_echo, &["oom"]).await?;
+    assert_eq!(
+        agent.failed_update().await?,
+        "failed to get a snapshot for manual update: Out of memory"
+    );
+    agent.retried_update_succeeds().await
+}
+
+/// A save hook that throws traps the guest (the SDK turns the uncaught error into a panic), and
+/// it throws on every save: a restart would not heal it. So the agent keeps its instance after the
+/// failed update, and a second update requested right after it fails without running the hook
+/// again, as before the out-of-memory restart. The server counts each save that reached the hook.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_manual_update_whose_save_hook_threw_keeps_the_instance(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let agent = start_save_fault_agent(
+        deps,
+        &context,
+        constructor_parameter_echo,
+        &["throw", "throw"],
+    )
+    .await?;
+    let failure = agent.failed_update().await?;
+    assert!(
+        failure.starts_with("failed to get a snapshot for manual update: ")
+            && failure.contains("save fault"),
+        "{failure}"
+    );
+
+    agent
+        .executor
+        .manual_update_worker(&agent.worker_id, agent.target_revision, false)
+        .await?;
+    let settled = wait_for_update_counts(&agent.executor, &agent.worker_id, (0, 0, 2)).await?;
+    let saves = agent.saves.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(saves, 1, "{:?}", settled.updates);
+    assert_ne!(settled.component_revision, agent.target_revision);
+    agent.fault_server.abort();
     Ok(())
 }
 
@@ -4834,14 +5279,14 @@ async fn manual_update_agent_with_snapshot_env(
 ) -> anyhow::Result<(
     ComponentDto,
     golem_common::model::agent::ParsedAgentKey,
-    AgentId,
+    OwnedAgentId,
     ComponentDto,
 )> {
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v2)
         .store()
         .await?;
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -4906,7 +5351,7 @@ async fn an_interrupted_snapshot_load_keeps_a_manual_update_pending_and_the_next
         .invoke_and_await_agent(&component, &agent_id, "f2", data_value!())
         .await?;
 
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id.agent_id);
     let snapshot_key = before_update.clone().into_typed::<u64>()?.to_string();
     executor
         .manual_update_worker(&worker_id, target.revision, false)
@@ -4917,7 +5362,7 @@ async fn an_interrupted_snapshot_load_keeps_a_manual_update_pending_and_the_next
     );
     executor
         .interrupt_loaded_worker(
-            &worker_id,
+            &worker_id.agent_id,
             golem_service_base::error::worker_executor::InterruptKind::Interrupt(
                 golem_common::model::Timestamp::now_utc(),
             ),
@@ -5092,7 +5537,7 @@ async fn manual_update_on_idle_using_v11(
         .component_dep(&context.default_environment_id, agent_update_v2)
         .store()
         .await?;
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -5160,7 +5605,7 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
         .component_dep(&context.default_environment_id, agent_update_v2)
         .store()
         .await?;
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -5224,7 +5669,7 @@ async fn auto_update_on_idle_to_non_existing(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5649,7 +6094,7 @@ async fn target_get_regression(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5813,7 +6258,7 @@ async fn refused_shared_target_readmits_the_next_queued_target(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let mut http_server = TestHttpServer::start().await;
     let worker_id = executor
         .start_agent_with(
@@ -5940,7 +6385,7 @@ async fn an_unavailable_component_service_delays_the_update_and_fails_nothing(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6027,7 +6472,7 @@ async fn a_failure_at_the_update_point_fails_the_update_once_and_keeps_the_sourc
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6114,7 +6559,7 @@ async fn an_unavailable_component_service_at_a_host_call_update_point_retries_an
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -6225,7 +6670,7 @@ async fn a_transient_initial_file_download_at_a_host_call_update_point_retries_a
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -6365,12 +6810,12 @@ async fn cold_initial_file_starts_wait_for_an_outage_but_fail_for_a_refusal(
             )
             .store()
             .await?;
-        let id = agent_id!("RevisionEnvAgent");
+        let id = agent_key!("RevisionEnvAgent");
         let worker = executor.start_agent(&component.id, id.clone()).await?;
         executor
             .invoke_and_await_agent(&component, &id, "get_revision_from_env_var", data_value!())
             .await?;
-        let owned = OwnedAgentId::new(context.default_environment_id, &worker);
+        let owned = OwnedAgentId::new(context.default_environment_id, &worker.agent_id);
         tokio::time::timeout(Duration::from_secs(10), async {
             while !executor.stop_worker_if_idle(&owned).await? {
                 tokio::task::yield_now().await;
@@ -6501,7 +6946,7 @@ async fn refusing_initial_files_of_both_revisions_fails_the_update_then_the_sour
         .with_files("UpdateTest", std::slice::from_ref(&source_file))
         .store()
         .await?;
-    let id = agent_id!("UpdateTest");
+    let id = agent_key!("UpdateTest");
     let worker = executor
         .start_agent_with(&component.id, id.clone(), env, Vec::new())
         .await?;
@@ -6600,7 +7045,7 @@ async fn a_manual_update_whose_target_initial_file_does_not_load_fails_only_the_
             .component_dep(&context.default_environment_id, agent_update_v2)
             .store()
             .await?;
-        let agent_id = agent_id!("UpdateTest");
+        let agent_id = agent_key!("UpdateTest");
         let worker_id = executor
             .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
             .await?;
@@ -6702,11 +7147,8 @@ async fn a_start_with_an_initial_file_under_another_declared_file_fails_once_and
         .with_files("RevisionEnvAgent", &nested_initial_files()?)
         .store()
         .await?;
-    let id = agent_id!("RevisionEnvAgent");
-    let worker = AgentId {
-        component_id: component.id,
-        agent_id: id.to_string(),
-    };
+    let id = agent_key!("RevisionEnvAgent");
+    let worker = crate::agent::keyed_agent_id(component.environment_id, &id);
 
     let error = tokio::time::timeout(
         Duration::from_secs(20),
@@ -6751,7 +7193,7 @@ async fn an_update_to_an_initial_file_under_another_declared_file_fails_only_the
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let id = agent_id!("RevisionEnvAgent");
+    let id = agent_key!("RevisionEnvAgent");
     let worker = executor.start_agent(&component.id, id.clone()).await?;
     let before = executor
         .invoke_and_await_agent(&component, &id, "get_revision_from_env_var", data_value!())
@@ -7126,7 +7568,7 @@ async fn update_component_revision_environment_variable(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("RevisionEnvAgent");
+    let agent_id = agent_key!("RevisionEnvAgent");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7170,19 +7612,22 @@ async fn update_component_revision_environment_variable(
 
     // agent created on the new version sees correct component version
     {
-        let agent_id_2 = phantom_agent_id!("RevisionEnvAgent", uuid::Uuid::new_v4());
-        let _worker2 = executor
-            .start_agent(&component.id, agent_id_2.clone())
-            .await?;
+        let worker2 = crate::agent::create_unkeyed_agent(
+            &executor,
+            &component,
+            &agent_key!("RevisionEnvAgent"),
+        )
+        .await?;
 
-        let result = executor
-            .invoke_and_await_agent(
-                &component,
-                &agent_id_2,
-                "get_revision_from_env_var",
-                data_value!(),
-            )
-            .await?;
+        let result = crate::agent::invoke_and_await_agent_by_id(
+            &executor,
+            &component,
+            &worker2,
+            None,
+            "get_revision_from_env_var",
+            data_value!(),
+        )
+        .await?;
 
         assert_eq!(result.into_typed::<String>()?, "1");
     }
@@ -7231,7 +7676,7 @@ async fn auto_update_with_disable_wakeup_keeps_worker_interrupted(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -7324,7 +7769,7 @@ async fn agent_can_be_invoked_after_manual_snapshot_update_and_restart(
         .store()
         .await?;
 
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
 
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
@@ -7400,7 +7845,7 @@ async fn assert_manual_snapshot_load_failure_fails_the_start_and_keeps_the_basel
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("ExternalSnapshotUpdateTest");
+    let agent_id = agent_key!("ExternalSnapshotUpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7455,11 +7900,11 @@ async fn assert_manual_snapshot_load_failure_fails_the_start_and_keeps_the_basel
         ManualSnapshotLoadFailure::InvalidEntry => {
             // The start reads the update entry for its filesystem baseline, and context
             // initialization reads the snapshot boundary, before recovery loads it.
-            executor.return_non_snapshot_after_oplog_reads(&worker_id, snapshot_index, 2);
+            executor.return_non_snapshot_after_oplog_reads(&worker_id.agent_id, snapshot_index, 2);
             "Expected Snapshot entry"
         }
         ManualSnapshotLoadFailure::PayloadDownload => {
-            executor.fail_next_oplog_download(&worker_id);
+            executor.fail_next_oplog_download(&worker_id.agent_id);
             "Failed to download snapshot payload"
         }
     };
@@ -7494,7 +7939,17 @@ async fn assert_manual_snapshot_load_failure_fails_the_start_and_keeps_the_basel
     );
 
     let (_, listed) = executor
-        .get_workers_metadata(&component.id, None, ScanCursor::default(), 100, true)
+        .get_workers_metadata(
+            &component.environment_id,
+            failed_metadata
+                .agent_type_name
+                .as_ref()
+                .expect("a component agent has an agent type"),
+            None,
+            ScanCursor::default(),
+            100,
+            true,
+        )
         .await?;
     let listed = listed
         .iter()
@@ -7629,7 +8084,7 @@ async fn manual_update_on_idle_twice(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7716,7 +8171,7 @@ async fn manual_update_on_idle_to_earlier_component(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7808,7 +8263,7 @@ async fn auto_update_on_idle_after_manual_update(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let counter_id = agent_id!("SnapshotCounter", "auto-after-manual");
+    let counter_id = agent_key!("SnapshotCounter", "auto-after-manual");
     let worker_id = executor
         .start_agent(&component.id, counter_id.clone())
         .await?;
@@ -7942,7 +8397,7 @@ async fn a_snapshot_based_update_runs_a_target_initializer_that_makes_durable_ca
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotCounter", "initializer-calls");
+    let agent_id = agent_key!("SnapshotCounter", "initializer-calls");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -8033,7 +8488,7 @@ async fn a_restart_right_after_a_snapshot_based_update_recovers_the_target_initi
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotCounter", "restart-after-update");
+    let agent_id = agent_key!("SnapshotCounter", "restart-after-update");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -8094,7 +8549,7 @@ async fn a_periodic_snapshot_after_a_snapshot_based_update_recovers_from_that_sn
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotCounter", "periodic-after-manual");
+    let agent_id = agent_key!("SnapshotCounter", "periodic-after-manual");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -8199,7 +8654,7 @@ async fn a_failed_snapshot_based_update_keeps_the_source_and_its_initializer_sta
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotCounter", "failed-update");
+    let agent_id = agent_key!("SnapshotCounter", "failed-update");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -8225,7 +8680,7 @@ async fn a_failed_snapshot_based_update_keeps_the_source_and_its_initializer_sta
         |entry| matches!(entry, PublicOplogEntry::PendingUpdate(_)),
     );
     executor
-        .return_empty_snapshot_payload(&worker_id, pending_update)
+        .return_empty_snapshot_payload(&worker_id.agent_id, pending_update)
         .await?;
     release_fetch.send(()).unwrap();
     let failed = wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
@@ -8298,7 +8753,7 @@ async fn an_interrupted_snapshot_based_update_attempt_replays_its_initializer_ca
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotCounter", "interrupted-update");
+    let agent_id = agent_key!("SnapshotCounter", "interrupted-update");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -8311,7 +8766,7 @@ async fn an_interrupted_snapshot_based_update_attempt_replays_its_initializer_ca
         .await?;
     // Holds the first attempt at the End of the last durable call of the target initializer,
     // after the gate committed the prefix and that End, and before the snapshot load.
-    let mut gate = executor.gate_next_call_end(&worker_id, true).await;
+    let mut gate = executor.gate_next_call_end(&worker_id.agent_id, true).await;
     executor
         .manual_update_worker(&worker_id, target.revision, false)
         .await?;
@@ -8326,7 +8781,7 @@ async fn an_interrupted_snapshot_based_update_attempt_replays_its_initializer_ca
         }) {
             break start;
         }
-        let next = executor.gate_next_call_end(&worker_id, true).await;
+        let next = executor.gate_next_call_end(&worker_id.agent_id, true).await;
         drop(gate);
         gate = next;
     };
@@ -8453,7 +8908,7 @@ async fn a_divergent_bootstrap_block_fails_the_snapshot_based_update(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotCounter", "divergent-update");
+    let agent_id = agent_key!("SnapshotCounter", "divergent-update");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -8467,7 +8922,7 @@ async fn a_divergent_bootstrap_block_fails_the_snapshot_based_update(
         .update_component(&component.id, "it_agent_counters_v2_release")
         .await?;
     // Holds the first attempt at the End of the first durable call of the target initializer.
-    let mut gate = executor.gate_next_call_end(&worker_id, true).await;
+    let mut gate = executor.gate_next_call_end(&worker_id.agent_id, true).await;
     executor
         .manual_update_worker(&worker_id, target.revision, false)
         .await?;
@@ -8489,19 +8944,20 @@ async fn a_divergent_bootstrap_block_fails_the_snapshot_based_update(
         {
             break pending_update;
         }
-        let next = executor.gate_next_call_end(&worker_id, true).await;
+        let next = executor.gate_next_call_end(&worker_id.agent_id, true).await;
         drop(gate);
         gate = next;
     };
     let foreign = executor
         .add_and_commit_oplog_entry(
-            &worker_id,
+            &worker_id.agent_id,
             OplogEntry::Start {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index: None,
                 function_name: HostFunctionName::WallClockNow,
                 invocation_id: None,
                 observational_owner: None,
+                driver: None,
                 request: None,
                 durable_function_type: DurableFunctionType::ReadLocal,
                 span_started: None,
@@ -8574,14 +9030,14 @@ async fn assisted_update_source(
 ) -> anyhow::Result<(
     ComponentDto,
     golem_common::model::agent::ParsedAgentKey,
-    AgentId,
+    OwnedAgentId,
     OplogIndex,
 )> {
     let component = executor
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotCounter", name);
+    let agent_id = agent_key!("SnapshotCounter", name);
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -8861,7 +9317,7 @@ async fn a_failed_snapshot_assisted_update_keeps_the_source_and_its_initializer_
         snapshot_counter_u64(&executor, &component, &agent_id, "initializer_seed_hash").await?;
     // The target cannot load an empty snapshot.
     executor
-        .return_empty_snapshot_payload(&worker_id, record)
+        .return_empty_snapshot_payload(&worker_id.agent_id, record)
         .await?;
 
     let target = executor
@@ -8939,7 +9395,7 @@ async fn a_snapshot_assisted_update_replays_a_source_tail_that_depends_on_the_in
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotCounter", "assisted-seed-tail");
+    let agent_id = agent_key!("SnapshotCounter", "assisted-seed-tail");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -9025,7 +9481,7 @@ async fn a_manual_update_whose_target_initializer_makes_a_write_fails_and_keeps_
         )
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotCounter", "manual-initializer-write");
+    let agent_id = agent_key!("SnapshotCounter", "manual-initializer-write");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -9093,13 +9549,13 @@ async fn agent_with_a_written_file(
 ) -> anyhow::Result<(
     ComponentDto,
     golem_common::model::agent::ParsedAgentKey,
-    AgentId,
+    OwnedAgentId,
 )> {
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -9140,7 +9596,7 @@ async fn written_file(
 /// snapshot record.
 async fn update_entries(
     executor: &TestWorkerExecutor,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
 ) -> anyhow::Result<(Vec<PublicUpdateDescription>, bool)> {
     let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
     Ok((
@@ -9457,7 +9913,7 @@ async fn a_revert_of_an_automatic_update_after_a_file_write_without_filesystem_s
 /// entry, in oplog order.
 async fn failures_and_strategies(
     executor: &TestWorkerExecutor,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
 ) -> anyhow::Result<(Vec<String>, Vec<PublicUpdateDescription>)> {
     let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
     Ok((
@@ -9499,7 +9955,7 @@ async fn a_snapshot_the_target_cannot_load_makes_the_next_request_of_the_same_up
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -9510,7 +9966,7 @@ async fn a_snapshot_the_target_cannot_load_makes_the_next_request_of_the_same_up
         wait_for_snapshot_after(&executor, &worker_id, OplogIndex::INITIAL).await?;
     // The target cannot load an empty snapshot; a full replay does not read it.
     executor
-        .return_empty_snapshot_payload(&worker_id, snapshot_index)
+        .return_empty_snapshot_payload(&worker_id.agent_id, snapshot_index)
         .await?;
     let target = executor
         .update_component(&component.id, "it_agent_update_v2_release")
@@ -9572,7 +10028,7 @@ async fn an_automatic_update_from_a_promoted_snapshot_that_the_target_cannot_loa
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -9620,6 +10076,48 @@ async fn an_automatic_update_from_a_promoted_snapshot_that_the_target_cannot_loa
     Ok(())
 }
 
+/// The requester of every `PendingUpdate` and of every queued manual update of the agent, by the
+/// update attempt that each belongs to, in oplog order.
+async fn update_requesters(
+    executor: &impl TestDsl,
+    worker_id: &OwnedAgentId,
+) -> anyhow::Result<BTreeMap<OplogIndex, Vec<PublicCaller>>> {
+    let mut requesters: BTreeMap<OplogIndex, Vec<PublicCaller>> = BTreeMap::new();
+    for entry in executor.get_oplog(worker_id, OplogIndex::INITIAL).await? {
+        match entry.entry {
+            PublicOplogEntry::PendingUpdate(params) => requesters
+                .entry(params.update_attempt_index)
+                .or_default()
+                .push(params.requester),
+            PublicOplogEntry::PendingAgentInvocation(params) => {
+                if let PublicAgentInvocation::ManualUpdate(manual) = params.invocation {
+                    requesters
+                        .entry(entry.oplog_index)
+                        .or_default()
+                        .push(manual.requester);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(requesters)
+}
+
+/// Every record of update attempt `attempt` names `requester`, and there are `count` of them.
+fn assert_requested_by(
+    requesters: &BTreeMap<OplogIndex, Vec<PublicCaller>>,
+    attempt: OplogIndex,
+    requester: &Caller,
+    count: usize,
+) {
+    let expected = PublicCaller::new(requester, ClaimVisibility::Hidden);
+    assert_eq!(
+        requesters.get(&attempt).cloned().unwrap_or_default(),
+        vec![expected; count],
+        "the requesters of update attempt {attempt}"
+    );
+}
+
 /// An automatic update whose target makes a different host call than the recorded one fails with
 /// the class `Divergence` and the divergence at the recorded `Start`. After a real restart, the
 /// agent metadata and the public oplog still show the class, the index, both calls and the
@@ -9640,7 +10138,7 @@ async fn a_diverging_automatic_update_keeps_its_class_and_divergence_across_a_re
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotUpdateTest");
+    let agent_id = agent_key!("SnapshotUpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;

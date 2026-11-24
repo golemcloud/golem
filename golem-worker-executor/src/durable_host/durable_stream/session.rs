@@ -713,7 +713,7 @@ impl DurableStreamStore {
         }
     }
 
-    /// Atomically persists input bindings and topology intents with the queued invocation.
+    /// Atomically persists bindings and topology with method start or tool acceptance.
     pub async fn prepare_session(
         &self,
         context: Option<&StreamWriteContext>,
@@ -846,16 +846,20 @@ impl DurableStreamStore {
         }
 
         let environment_id = self.environment_id;
-        let producer = self.producer.clone();
+        let producer = self.producer;
         let producer_fingerprint = self.producer_fingerprint;
         let generation = self.generation();
         let records = requests.clone();
+        let selected_start = matches!(
+            &pending_invocation,
+            OplogEntry::AgentInvocationStarted { .. }
+        );
         if !matches!(
             &pending_invocation,
-            OplogEntry::PendingAgentInvocation { .. }
+            OplogEntry::PendingAgentInvocation { .. } | OplogEntry::AgentInvocationStarted { .. }
         ) {
             return Err(StreamStoreError::CorruptHistory(
-                "stream preparation requires a pending invocation".into(),
+                "stream preparation requires an invocation acceptance or start".into(),
             ));
         }
         let epoch = self.attachment_epoch_floor();
@@ -879,7 +883,7 @@ impl DurableStreamStore {
                     let record = registration_record(
                         oplog_index,
                         environment_id,
-                        producer.clone(),
+                        producer,
                         producer_fingerprint,
                         request,
                         None,
@@ -938,16 +942,19 @@ impl DurableStreamStore {
                     attempt_id: prepared.attempt.attempt_id,
                     epoch,
                     pending_invocation_oplog_index,
+                    acceptance: prepared.acceptance(),
                 };
                 result.push(DurableStreamOplogRecord::Session(
                     entity_parent_start_index,
                     Box::new(prepared_record),
                 ));
                 result.push(DurableStreamOplogRecord::InlineEntry(pending_invocation));
-                result.push(DurableStreamOplogRecord::Session(
-                    entity_parent_start_index,
-                    Box::new(StreamSessionRecord::Attached(attached)),
-                ));
+                if !selected_start {
+                    result.push(DurableStreamOplogRecord::Session(
+                        entity_parent_start_index,
+                        Box::new(StreamSessionRecord::Attached(attached)),
+                    ));
+                }
                 for topology in foreign_topologies {
                     result.push(DurableStreamOplogRecord::Session(
                         entity_parent_start_index,
@@ -994,7 +1001,8 @@ impl DurableStreamStore {
                         }
                     }
                 }
-                OplogEntry::PendingAgentInvocation { .. } => {}
+                OplogEntry::PendingAgentInvocation { .. }
+                | OplogEntry::AgentInvocationStarted { .. } => {}
                 _ => {
                     return Err(StreamStoreError::CorruptHistory(
                         "preparation batch contains an unexpected oplog entry".to_string(),
@@ -1023,8 +1031,7 @@ impl DurableStreamStore {
                 &self.producer,
                 self.producer_fingerprint,
                 oplog_index,
-            )
-            .map_err(|error| StreamStoreError::CorruptHistory(error.to_string()))?;
+            );
             buses.push((
                 stream_id,
                 Arc::new(DurableLiveStreamBus::new(self.live_join_capacity)?),
@@ -1053,6 +1060,7 @@ impl DurableStreamStore {
             .write()
             .expect("durable stream bus map lock poisoned")
             .extend(buses);
+        self.notify_session_records_changed(Some(context));
         self.record_registered_streams(requests.len());
         crate::metrics::durable_stream::record_producer_operation("prepare_session", false);
         tracing::debug!(

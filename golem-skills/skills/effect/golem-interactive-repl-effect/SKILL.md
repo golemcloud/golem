@@ -29,14 +29,15 @@ agent's exact `defineAgent` `name`. For example, the default Effect project defi
 `CounterAgent`, so its client is `CounterAgent`:
 
 ```typescript
-const c1 = await CounterAgent.get("c1")
+const c1 = CounterAgent.upsert("c1")
 await c1.increment()
 await c1.increment()
 const value = await c1.value()
 ```
 
-No imports are needed. `get(...)` gets or creates a durable agent, and generated client methods
-return promises, so await both client creation and method calls.
+No imports are needed. `upsert(...)` returns a client of the keyed durable agent of the
+constructor parameters without contacting the server; the first invocation creates the agent when
+it is missing. Generated client methods return promises, so await the method calls.
 
 ### TypeScript Names and Values
 
@@ -67,7 +68,7 @@ Write a TypeScript file; the generated clients are globals here too:
 
 ```typescript
 // test.ts
-const c2 = await CounterAgent.get("c2")
+const c2 = CounterAgent.upsert("c2")
 await c2.increment()
 await c2.increment()
 ```

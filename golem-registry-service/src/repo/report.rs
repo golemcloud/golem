@@ -42,6 +42,7 @@ impl<Repo: ReportRepo> LoggedReportRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: ReportRepo> ReportRepo for LoggedReportRepo<Repo> {
     async fn list_account_summaries(&self) -> RepoResult<Vec<AccountSummaryRecord>> {
         self.repo
@@ -85,6 +86,7 @@ impl<DBP: Pool> DbReportRepo<DBP> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ReportRepo for DbReportRepo<PostgresPool> {
     async fn list_account_summaries(&self) -> RepoResult<Vec<AccountSummaryRecord>> {
         let result = self

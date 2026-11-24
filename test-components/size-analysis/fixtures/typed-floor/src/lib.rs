@@ -65,7 +65,7 @@ mod unified {
     }
 
     impl bindings::exports::golem::api::load_snapshot::Guest for Component {
-        async fn load(_: Snapshot) -> Result<(), String> {
+        async fn load(_: Snapshot, _: SchemaValueTree) -> Result<(), String> {
             Ok(())
         }
     }

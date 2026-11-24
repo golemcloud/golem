@@ -6,6 +6,27 @@ Build durable, fault-tolerant agents on the [Golem](https://golem.cloud) platfor
 
 This SDK lets you write Golem agents in MoonBit with minimal boilerplate. Agents are compiled to WebAssembly components and run on Golem, which provides automatic durable execution, persistent state, and agent-to-agent communication.
 
+## WebAssembly backends
+
+The SDK supports `wasm` and the opt-in `wasm-gc` backend in the same package.
+`wasm` remains the preferred target. Regenerating the bindings produces both
+implementations; MoonBit selects the source files for the requested target.
+The code generation tools emit exports for both targets without applying the
+linear runtime's heap-start setting to `wasm-gc`.
+
+Use `moon build --target wasm-gc` to select the GC backend in a consumer with
+generated Golem exports. Component embedding still uses UTF-16. GC objects live
+outside linear memory; the generated bindings copy canonical ABI values across
+that boundary. No Wasmtime changes are required.
+
+GC components can have smaller code without compiling or starting faster.
+Keep `wasm` unless measurements of your workload justify opting in.
+
+Run SDK tests with `GOLEM_MOONBIT_TARGET=wasm-gc scripts/run-sdk-tests.sh` to
+exercise GC, or omit the variable for `wasm`. Packages whose tests use the fake
+host explicitly export their canonical ABI memory on GC; the compiler does not
+export it by default for that backend.
+
 ## Persistent permission derivation
 
 `@permissions.derive_from_wallet` and both typed cards' `derive_child` methods
@@ -49,8 +70,8 @@ Pure initialization does not implicitly read self metadata. Keep metadata reads 
 of an untrusted evaluator instead of granting self-view for bootstrap. Declare no
 tools or secrets and admit only the host operations the evaluator needs.
 Self metadata is a host operation, not a pure source of identity. Snapshot restoration reads
-`GOLEM_AGENT_ID` through the WASI environment API rather than self metadata, so it
-requires the separate environment-read permission for that variable. Granting
+`GOLEM_AGENT_ID` and `GOLEM_AGENT_TYPE` through the WASI environment API rather than self
+metadata, so it requires the separate environment-read permission for those variables. Granting
 self-view does not grant environment-read permission, and granting environment-read
 permission does not grant self-view.
 

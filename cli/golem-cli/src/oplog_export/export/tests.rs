@@ -13,10 +13,9 @@
 // limitations under the License.
 
 use super::*;
-use crate::oplog_export::model::{COVERAGE_LIST_CAP, ReportNode};
+use crate::oplog_export::model::{COVERAGE_LIST_CAP, ReportAgentRef, ReportNode};
 use base64::Engine;
 use golem_common::model::account::AccountId;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::public_oplog_entry::{
     CreateParams, EndParams, LogParams, StartParams,
@@ -47,6 +46,12 @@ enum Event {
     Entry {
         index: u64,
         revision: u64,
+    },
+    RangePage {
+        from: u64,
+        to: u64,
+        cursor: Option<u64>,
+        allowance: Option<OplogScanAllowance>,
     },
     SinkHeader,
     SinkEntry(u64),
@@ -81,6 +86,13 @@ struct FakeReads {
     instance_ids: Vec<Uuid>,
     root_reads: AtomicUsize,
     fail_root_read_at: Option<usize>,
+    /// The configured scan allowance of the fake server.
+    scan: OplogScanAllowance,
+    /// The time that each range read charges.
+    millis_per_read: u64,
+    /// The range read, counted from 0, that spends the whole allowance before it reads anything.
+    exhaust_range_read_at: Option<usize>,
+    range_reads: AtomicUsize,
 }
 
 impl FakeReads {
@@ -92,7 +104,22 @@ impl FakeReads {
             instance_ids: vec![instance(1)],
             root_reads: AtomicUsize::new(0),
             fail_root_read_at: None,
+            scan: OplogScanAllowance {
+                entries: 1000,
+                millis: 1000,
+            },
+            millis_per_read: 1,
+            exhaust_range_read_at: None,
+            range_reads: AtomicUsize::new(0),
         }
+    }
+
+    fn last_index(&self) -> u64 {
+        self.entries
+            .iter()
+            .map(|e| e.entry.oplog_index.as_u64())
+            .max()
+            .unwrap_or(0)
     }
 
     fn page_entry(&self, fake: &FakeEntry, instance_id: Uuid) -> PublicOplogPageEntry {
@@ -144,6 +171,7 @@ impl OplogReads for FakeReads {
             return Ok(OplogPage {
                 entries: vec![],
                 next: Some(cursor.clone()),
+                last_index: self.last_index(),
             });
         }
         let matching: Vec<&FakeEntry> = self
@@ -164,6 +192,78 @@ impl OplogReads for FakeReads {
                 .map(|e| self.page_entry(e, instance_id))
                 .collect(),
             next,
+            last_index: self.last_index(),
+        })
+    }
+
+    /// Accounts the scan as the server does: a read without a cursor charges the entries before
+    /// `from`, which it reads to find the component revision, and every read charges the entries
+    /// of its page and `millis_per_read`. The allowance is clamped to the configured one.
+    async fn read_range_page(
+        &self,
+        from: u64,
+        to: u64,
+        count: u64,
+        cursor: Option<&OplogCursor>,
+        allowance: Option<OplogScanAllowance>,
+    ) -> anyhow::Result<OplogRangePage> {
+        self.log.lock().unwrap().push(Event::RangePage {
+            from,
+            to,
+            cursor: cursor.map(|c| c.next_oplog_index),
+            allowance,
+        });
+        let limit = allowance.map_or(self.scan, |a| OplogScanAllowance {
+            entries: a.entries.min(self.scan.entries),
+            millis: a.millis.min(self.scan.millis),
+        });
+        let start = cursor.map_or(from, |c| c.next_oplog_index);
+        let cursor_at = |index: u64| OplogCursor {
+            next_oplog_index: index,
+            current_component_revision: REVISION,
+            query_hash: OplogCursor::query_hash(None),
+        };
+        let scan = |charged_entries: u64, charged_millis: u64, exhausted: bool| OplogScan {
+            limit,
+            charged_entries,
+            charged_millis,
+            exhausted,
+        };
+        if self.range_reads.fetch_add(1, Ordering::SeqCst)
+            == self.exhaust_range_read_at.unwrap_or(usize::MAX)
+        {
+            return Ok(OplogRangePage {
+                entries: vec![],
+                next: Some(cursor_at(start)),
+                scan: scan(limit.entries, limit.millis, true),
+            });
+        }
+        let mut charged = 0;
+        if cursor.is_none() {
+            charged = from - 1;
+            if charged > limit.entries {
+                return Ok(OplogRangePage {
+                    entries: vec![],
+                    next: None,
+                    scan: scan(limit.entries, self.millis_per_read, true),
+                });
+            }
+        }
+        let end = to.min(self.last_index());
+        let read = count.min(end + 1 - start).min(limit.entries - charged);
+        charged += read;
+        let entries = self
+            .entries
+            .iter()
+            .filter(|e| (start..start + read).contains(&e.entry.oplog_index.as_u64()))
+            .map(|e| self.page_entry(e, self.instance_ids[0]))
+            .collect();
+        let complete = start + read > end;
+        let spent = charged >= limit.entries || self.millis_per_read >= limit.millis;
+        Ok(OplogRangePage {
+            entries,
+            next: (!complete).then(|| cursor_at(start + read)),
+            scan: scan(charged, self.millis_per_read, !complete && spent),
         })
     }
 
@@ -265,10 +365,7 @@ fn entry_type(entry: &PublicOplogEntry) -> String {
 }
 
 fn root_agent() -> AgentId {
-    AgentId {
-        component_id: ComponentId(instance(77)),
-        agent_id: "root-agent(\"ROOT-MARKER\")".to_string(),
-    }
+    AgentId::from_parts(77, 0x7007)
 }
 
 fn full(index: u64, entry: PublicOplogEntry) -> FakeEntry {
@@ -294,6 +391,9 @@ fn create() -> FakeEntry {
         PublicOplogEntry::Create(CreateParams {
             timestamp: Timestamp::from(0),
             agent_id: root_agent(),
+            agent_type_name: Some(golem_common::model::agent::AgentTypeName(
+                "Counter".to_string(),
+            )),
             owner_kind: Default::default(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
             component_revision: ComponentRevision::new(REVISION).unwrap(),
@@ -305,7 +405,6 @@ fn create() -> FakeEntry {
             initial_total_linear_memory_size: 20,
             initial_active_plugins: Default::default(),
             local_agent_config: vec![],
-            original_phantom_id: None,
             instance_id: instance(1),
             never_live: false,
         }),
@@ -334,6 +433,7 @@ fn start_entry(index: u64, function: &str, request: Option<TypedSchemaValue>) ->
             function_name: function.to_string(),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request,
             durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
             span_started: None,
@@ -889,12 +989,51 @@ async fn two_keys_give_the_same_structure_and_other_tokens() {
             .iter()
             .find(|f| f.name.as_deref() == Some("agentId"))
             .map(|f| &f.value);
-        assert_eq!(agent, Some(&ReportNode::Agent(root)));
-        assert!(!sink.text().contains("ROOT-MARKER"));
+        assert_eq!(agent, Some(&ReportNode::Agent(root.clone())));
+        assert_eq!(
+            root,
+            ReportAgentRef {
+                agent_id: root_agent(),
+                agent_type: Some(golem_common::model::agent::AgentTypeName(
+                    "Counter".to_string()
+                )),
+            }
+        );
         texts.push(sink.text());
     }
     assert_ne!(texts[0], texts[1]);
     assert_eq!(without_tokens(&texts[0]), without_tokens(&texts[1]));
+}
+
+#[test]
+async fn no_environment_or_component_id_in_documents() {
+    for query in [None, Some("hello")] {
+        let reads = FakeReads::new(sample_oplog());
+        let log = reads.log.clone();
+        let mut sink = RecordingSink::new(&log);
+        let options = OplogExportOptions {
+            query: query.map(str::to_string),
+            ..options()
+        };
+        export_oplog(reads, key_from([3; 32]), options, &mut sink)
+            .await
+            .unwrap();
+        assert!(sink.coverage.is_some());
+        let text = sink.text();
+        let root = root_agent().0.hyphenated().to_string();
+        assert_eq!(
+            sink.header.as_ref().unwrap().root.agent_id.to_string(),
+            root
+        );
+        assert!(text.contains(&root), "{text}");
+        // The environment ID and the account ID of the `Create` entry.
+        for id in [instance(6), instance(5)] {
+            assert!(!text.contains(&id.hyphenated().to_string()), "{text}");
+            assert!(!text.contains(&id.simple().to_string()), "{text}");
+        }
+        assert!(!text.contains("hello"), "{text}");
+        assert!(!text.contains("http"), "{text}");
+    }
 }
 
 #[test]
@@ -938,4 +1077,310 @@ async fn session_pages_check_the_root_before_and_after() {
         error.downcast::<OplogExportError>().unwrap(),
         OplogExportError::RootChanged
     );
+}
+
+fn range_oplog() -> Vec<FakeEntry> {
+    vec![
+        create(),
+        log_entry(2, "SAME-MARKER"),
+        log_entry(3, "OTHER-MARKER"),
+        log_entry(4, "SAME-MARKER"),
+        log_entry(5, "THIRD-MARKER"),
+        log_entry(6, "SAME-MARKER"),
+        log_entry(7, "FOURTH-MARKER"),
+        log_entry(8, "FIFTH-MARKER"),
+        log_entry(9, "SIXTH-MARKER"),
+    ]
+}
+
+async fn run_range(
+    reads: FakeReads,
+    from: u64,
+    to: u64,
+    limit_bytes: usize,
+) -> (anyhow::Result<OplogExportReport>, Log) {
+    let log = reads.log.clone();
+    let result = export_oplog_range(
+        reads,
+        key(),
+        options(),
+        OplogRange { from, to },
+        limit_bytes,
+        document_bytes,
+    )
+    .await;
+    (result, log)
+}
+
+/// The size of the document of `report` in these tests: its JSON and a newline.
+fn document_bytes(report: &OplogExportReport) -> anyhow::Result<usize> {
+    Ok(serde_json::to_vec(report)?.len() + 1)
+}
+
+fn range_reads(log: &Log) -> Vec<Event> {
+    events(log)
+        .into_iter()
+        .filter(|e| matches!(e, Event::RangePage { .. }))
+        .collect()
+}
+
+fn range_error(result: anyhow::Result<OplogExportReport>) -> OplogExportError {
+    result
+        .unwrap_err()
+        .downcast::<OplogExportError>()
+        .expect("an OplogExportError")
+}
+
+#[test]
+async fn a_range_report_holds_exactly_the_range_in_index_order() {
+    let (result, log) = run_range(FakeReads::new(range_oplog()), 3, 6, usize::MAX).await;
+    let report = result.unwrap();
+
+    let indexes = report.entries.iter().map(|e| e.index).collect::<Vec<_>>();
+    assert_eq!(indexes, vec![3, 4, 5, 6]);
+    assert_eq!((report.header.from, report.header.to), (3, 6));
+    assert!(!report.header.export.filtered);
+    assert!(report.header.export.obfuscate);
+    assert!(!report.coverage.incomplete);
+
+    // Equal customer values have equal tokens inside the report, and no value is in clear.
+    let body = |index: u64| {
+        let entry = report.entries.iter().find(|e| e.index == index).unwrap();
+        serde_json::to_string(&entry.body).unwrap()
+    };
+    assert_eq!(body(4), body(6));
+    assert_ne!(body(3), body(4));
+    let text = serde_json::to_string(&report).unwrap();
+    assert!(!text.contains("MARKER"), "{text}");
+
+    // Two pages of two entries, both bounded by `to`, between the two root reads.
+    assert_eq!(
+        range_reads(&log)
+            .iter()
+            .map(|e| match e {
+                Event::RangePage { to, cursor, .. } => (*to, *cursor),
+                _ => unreachable!(),
+            })
+            .collect::<Vec<_>>(),
+        vec![(6, None), (6, Some(5))]
+    );
+    let pages = page_reads(&log);
+    assert_eq!(pages, vec![root_read(), root_read()]);
+}
+
+#[test]
+async fn a_range_needs_valid_bounds_within_the_oplog() {
+    for (from, to) in [(0, 3), (5, 4)] {
+        let (result, log) = run_range(FakeReads::new(range_oplog()), from, to, usize::MAX).await;
+        assert_eq!(
+            range_error(result),
+            OplogExportError::RangeInvalid { from, to }
+        );
+        assert!(events(&log).is_empty());
+    }
+    let (result, log) = run_range(FakeReads::new(range_oplog()), 2, 10, usize::MAX).await;
+    assert_eq!(
+        range_error(result),
+        OplogExportError::RangePastEnd {
+            to: 10,
+            last_index: 9
+        }
+    );
+    assert!(range_reads(&log).is_empty());
+    // The last index itself is in the oplog.
+    let (result, _) = run_range(FakeReads::new(range_oplog()), 9, 9, usize::MAX).await;
+    assert_eq!(result.unwrap().entries.len(), 1);
+}
+
+#[test]
+async fn small_pages_share_one_allowance_and_completion_at_the_allowance_succeeds() {
+    // From 2, the server reads entry 1 for the revision, then the 8 entries of the range: 9.
+    let mut reads = FakeReads::new(range_oplog());
+    reads.scan = OplogScanAllowance {
+        entries: 9,
+        millis: 1000,
+    };
+    reads.millis_per_read = 10;
+    let (result, log) = run_range(reads, 2, 9, usize::MAX).await;
+    assert_eq!(result.unwrap().entries.len(), 8);
+    let allowances = range_reads(&log)
+        .into_iter()
+        .map(|e| match e {
+            Event::RangePage { allowance, .. } => allowance.map(|a| (a.entries, a.millis)),
+            _ => unreachable!(),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        allowances,
+        vec![None, Some((6, 990)), Some((4, 980)), Some((2, 970))]
+    );
+}
+
+#[test]
+async fn a_range_that_the_entry_allowance_does_not_cover_fails_without_a_report() {
+    let mut reads = FakeReads::new(range_oplog());
+    reads.scan = OplogScanAllowance {
+        entries: 8,
+        millis: 1000,
+    };
+    let (result, log) = run_range(reads, 2, 9, usize::MAX).await;
+    assert_eq!(
+        range_error(result),
+        OplogExportError::ScanBudgetExceeded { from: 2, to: 9 }
+    );
+    // No root check after the failure: the export stopped at the spent allowance.
+    assert_eq!(page_reads(&log), vec![root_read()]);
+    assert_eq!(range_reads(&log).len(), 4);
+}
+
+#[test]
+async fn a_range_that_the_time_allowance_does_not_cover_fails() {
+    let mut reads = FakeReads::new(range_oplog());
+    reads.scan = OplogScanAllowance {
+        entries: 1000,
+        millis: 25,
+    };
+    reads.millis_per_read = 10;
+    let (result, log) = run_range(reads, 2, 9, usize::MAX).await;
+    assert_eq!(
+        range_error(result),
+        OplogExportError::ScanBudgetExceeded { from: 2, to: 9 }
+    );
+    assert_eq!(range_reads(&log).len(), 3);
+}
+
+#[test]
+async fn an_empty_page_that_spent_the_allowance_fails() {
+    for at in [0, 1] {
+        let mut reads = FakeReads::new(range_oplog());
+        reads.exhaust_range_read_at = Some(at);
+        let (result, _) = run_range(reads, 2, 9, usize::MAX).await;
+        assert_eq!(
+            range_error(result),
+            OplogExportError::ScanBudgetExceeded { from: 2, to: 9 },
+            "{at}"
+        );
+    }
+    // The allowance runs out before the server finds the revision at `from`.
+    let mut reads = FakeReads::new(range_oplog());
+    reads.scan = OplogScanAllowance {
+        entries: 5,
+        millis: 1000,
+    };
+    let (result, log) = run_range(reads, 8, 9, usize::MAX).await;
+    assert_eq!(
+        range_error(result),
+        OplogExportError::ScanBudgetExceeded { from: 8, to: 9 }
+    );
+    assert_eq!(range_reads(&log).len(), 1);
+}
+
+#[test]
+async fn a_report_that_does_not_fit_stops_reading() {
+    // The complete report of 2 to 3, which one page reads, fits exactly in its own size.
+    let (complete, _) = run_range(FakeReads::new(range_oplog()), 2, 3, usize::MAX).await;
+    let complete = complete.unwrap();
+    let exact = document_bytes(&complete).unwrap();
+    let (result, _) = run_range(FakeReads::new(range_oplog()), 2, 3, exact).await;
+    assert_eq!(result.unwrap().entries.len(), 2);
+    // One byte less fails at the last entry, which makes the count known, before the root check.
+    let (result, log) = run_range(FakeReads::new(range_oplog()), 2, 3, exact - 1).await;
+    assert_eq!(
+        range_error(result),
+        OplogExportError::OutputTooLarge {
+            limit_bytes: exact - 1,
+            matched_entries: Some(2),
+        }
+    );
+    assert_eq!(page_reads(&log), vec![root_read()]);
+
+    // The first page of 2 to 9 holds the same two entries. With their separators they fit in the
+    // limit, but the header and the coverage do not fit beside them: the export reads no more.
+    let limit = complete
+        .entries
+        .iter()
+        .map(|entry| serde_json::to_vec(entry).unwrap().len() + 1)
+        .sum::<usize>();
+    let (result, log) = run_range(FakeReads::new(range_oplog()), 2, 9, limit).await;
+    assert_eq!(
+        range_error(result),
+        OplogExportError::OutputTooLarge {
+            limit_bytes: limit,
+            matched_entries: None,
+        }
+    );
+    assert_eq!(range_reads(&log).len(), 1);
+    assert_eq!(page_reads(&log), vec![root_read()]);
+}
+
+#[test]
+async fn coverage_that_the_entries_add_counts_toward_the_size() {
+    // Entry 3 stays omitted with a hydration failure, which adds a coverage item.
+    let oplog = || {
+        let mut oplog = range_oplog();
+        let mut failing = omitted(log_entry(3, "OTHER-MARKER"), 10);
+        failing.hydration_fails = true;
+        oplog[2] = failing;
+        oplog
+    };
+    let (first_page, _) = run_range(FakeReads::new(oplog()), 2, 3, usize::MAX).await;
+    let first_page = first_page.unwrap();
+    assert_eq!(first_page.coverage.hydration_failures.discovered, 1);
+    // The entries of the first page and the document with the empty coverage fit exactly; the
+    // coverage item does not fit beside them.
+    let empty_frame = OplogExportReport {
+        header: first_page.header.clone(),
+        entries: Vec::new(),
+        coverage: OplogExportCoverage::new(first_page.coverage.notes.clone()),
+    };
+    let entry_bytes = first_page
+        .entries
+        .iter()
+        .map(|entry| serde_json::to_vec(entry).unwrap().len())
+        .sum::<usize>()
+        + first_page.entries.len()
+        - 1;
+    let limit = document_bytes(&empty_frame).unwrap() + entry_bytes;
+
+    // The second range read would spend the allowance: the export must fail on size before it.
+    let mut reads = FakeReads::new(oplog());
+    reads.exhaust_range_read_at = Some(1);
+    let (result, log) = run_range(reads, 2, 9, limit).await;
+    assert_eq!(
+        range_error(result),
+        OplogExportError::OutputTooLarge {
+            limit_bytes: limit,
+            matched_entries: None,
+        }
+    );
+    assert_eq!(range_reads(&log).len(), 1);
+}
+
+#[test]
+async fn a_range_with_a_missing_index_fails_without_a_report() {
+    // A gap inside the range, and a range whose last index the server does not return.
+    for (missing, from, to) in [(5, 2, 9), (8, 7, 8)] {
+        let mut oplog = range_oplog();
+        oplog.retain(|e| e.entry.oplog_index.as_u64() != missing);
+        let (result, _) = run_range(FakeReads::new(oplog), from, to, usize::MAX).await;
+        assert_eq!(
+            range_error(result),
+            OplogExportError::RangePageInvalid,
+            "{missing}"
+        );
+    }
+}
+
+#[test]
+async fn a_range_report_fails_when_the_root_changes_or_goes() {
+    let mut reads = FakeReads::new(range_oplog());
+    reads.instance_ids = vec![instance(1), instance(2)];
+    let (result, _) = run_range(reads, 2, 5, usize::MAX).await;
+    assert_eq!(range_error(result), OplogExportError::RootChanged);
+
+    let mut reads = FakeReads::new(range_oplog());
+    reads.fail_root_read_at = Some(1);
+    let (result, _) = run_range(reads, 2, 5, usize::MAX).await;
+    let error = result.unwrap_err();
+    assert!(!format!("{error:#}").contains("MARKER"), "{error:#}");
 }

@@ -577,8 +577,10 @@ async fn direct_claim_with_a_wrong_invocation_id_does_not_consume_the_start() {
     use golem_common::model::oplog::HostRequestGolemContextSpanResource;
     use golem_common::model::oplog::host_functions::GolemContextSpanFinish;
 
-    let recorded_invocation_id = DurableInvocationId::new(OplogIndex::from_u64(1), 7);
-    for parent_start_index in [None, Some(OplogIndex::from_u64(19))] {
+    let invocation_anchor = OplogIndex::from_u64(2);
+    let recorded_invocation_id = DurableInvocationId::new(invocation_anchor, 7);
+    let parent_invocation_id = DurableInvocationId::new(invocation_anchor, 6);
+    for recorded_parent in [false, true] {
         let request = HostRequestGolemContextSpanResource {
             creation_index: Some(OplogIndex::from_u64(7)),
         };
@@ -589,6 +591,53 @@ async fn direct_claim_with_a_wrong_invocation_id_does_not_consume_the_start() {
             })
             .await
             .unwrap();
+        oplog
+            .add(OplogEntry::AgentInvocationStarted {
+                timestamp: Timestamp::now_utc(),
+                invocation_id: uuid::Uuid::from_u128(1).into(),
+                operation: Box::new(golem_common::model::InvocationRequestOperation::SaveSnapshot),
+                payload: OplogPayload::Inline(Box::new(
+                    golem_common::model::StoredAgentInvocationPayload::SaveSnapshot {
+                        caller: golem_common::model::caller::Caller::anonymous(),
+                    },
+                )),
+                trace_id: golem_common::model::invocation_context::TraceId::generate(),
+                trace_states: Vec::new(),
+                invocation_context: Vec::new(),
+                wallet_pin: Box::new(golem_common::model::card::InvocationWalletPin {
+                    wallet_token: golem_common::model::card::WalletVersionToken {
+                        wallet_id_hash: [3; 32],
+                        generation: 0,
+                    },
+                    pinned_card_ids: Vec::new(),
+                    scope_card_id: None,
+                }),
+            })
+            .await
+            .unwrap();
+        let parent_start_index = if recorded_parent {
+            Some(
+                oplog
+                    .add(OplogEntry::Start {
+                        timestamp: Timestamp::now_utc(),
+                        parent_start_index: None,
+                        function_name: HostFunctionName::MonotonicClockNow,
+                        invocation_id: Some(parent_invocation_id),
+                        observational_owner: None,
+                        driver: None,
+                        request: Some(OplogPayload::Inline(Box::new(
+                            golem_common::model::oplog::HostRequestNoInput {}.into(),
+                        ))),
+                        durable_function_type: DurableFunctionType::ReadLocal,
+                        span_started: None,
+                        denial: None,
+                    })
+                    .await
+                    .unwrap(),
+            )
+        } else {
+            None
+        };
         let start_index = oplog
             .add(OplogEntry::Start {
                 timestamp: Timestamp::now_utc(),
@@ -596,6 +645,7 @@ async fn direct_claim_with_a_wrong_invocation_id_does_not_consume_the_start() {
                 function_name: GolemContextSpanFinish::HOST_FUNCTION_NAME,
                 invocation_id: Some(recorded_invocation_id),
                 observational_owner: None,
+                driver: None,
                 request: Some(OplogPayload::Inline(Box::new(request.clone().into()))),
                 durable_function_type: DurableFunctionType::ReadLocal,
                 span_started: None,
@@ -617,10 +667,7 @@ async fn direct_claim_with_a_wrong_invocation_id_does_not_consume_the_start() {
         let replay_state = ReplayState::new_for_owner(
             golem_common::model::OwnedAgentId {
                 environment_id: golem_common::model::environment::EnvironmentId::new(),
-                agent_id: golem_common::model::AgentId {
-                    component_id: golem_common::model::component::ComponentId::new(),
-                    agent_id: "direct-claim-test".to_string(),
-                },
+                agent_id: golem_common::model::AgentId::from_parts(7, 1),
             },
             oplog.clone(),
             golem_common::model::regions::DeletedRegions::default(),
@@ -631,6 +678,29 @@ async fn direct_claim_with_a_wrong_invocation_id_does_not_consume_the_start() {
         )
         .await
         .unwrap();
+        replay_state
+            .get_oplog_entry_agent_invocation_started()
+            .await
+            .unwrap()
+            .expect("an invocation starts");
+        let _parent = if recorded_parent {
+            let ReplayStartClaimOutcome::Claimed { handle, .. } = replay_state
+                .claim_start_or_replay_end(
+                    StartClaim::unowned(
+                        &HostFunctionName::MonotonicClockNow,
+                        &DurableFunctionType::ReadLocal,
+                    )
+                    .with_invocation_id(Some(parent_invocation_id)),
+                )
+                .await
+                .unwrap()
+            else {
+                panic!("expected the recorded parent Start to be claimed");
+            };
+            Some(handle)
+        } else {
+            None
+        };
         let claim = |invocation_id| {
             DurableCallSession::<GolemContextSpanFinish, NotCancellable>::replay_start_claim(
                 &AccessClaimOptions::default(),
@@ -638,6 +708,7 @@ async fn direct_claim_with_a_wrong_invocation_id_does_not_consume_the_start() {
                     entity_parent_start_index: parent_start_index,
                     parent_start_index,
                     observational_owner: None,
+                    driver: None,
                     invocation_id: Some(invocation_id),
                     logical_key_position: None,
                     agent_invocation: None,
@@ -656,14 +727,25 @@ async fn direct_claim_with_a_wrong_invocation_id_does_not_consume_the_start() {
             .unwrap()
         };
         let wrong = replay_state
-            .claim_start_or_replay_end(claim(DurableInvocationId::new(OplogIndex::from_u64(1), 8)))
+            .claim_start_or_replay_end(claim(DurableInvocationId::new(invocation_anchor, 8)))
             .await;
         // A top-level Start with another invocation id belongs to a concurrent sibling call,
-        // so the claim retains it and goes live; under an unknown parent it is divergence.
+        // so the claim retains it and goes live; under the claim's own recorded parent it is
+        // divergence.
         if parent_start_index.is_none() {
             assert!(matches!(wrong, Ok(ReplayStartClaimOutcome::ReplayEnded)));
         } else {
-            assert!(wrong.is_err());
+            assert!(
+                matches!(
+                    &wrong,
+                    Err(WorkerExecutorError::UnexpectedOplogEntry { divergence })
+                        if divergence.oplog_index == start_index
+                            && divergence.mismatched
+                                == [golem_common::model::oplog::StartIdentityField::InvocationId]
+                ),
+                "unexpected error: {:?}",
+                wrong.as_ref().err()
+            );
         }
         let claimed = replay_state
             .claim_start_or_replay_end(claim(recorded_invocation_id))
@@ -724,10 +806,7 @@ async fn replay_state_with(
     crate::durable_host::replay_state::ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: "required-claim-test".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 1),
         },
         oplog.clone(),
         deleted,
@@ -749,6 +828,7 @@ fn clock_start(
         function_name,
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
             golem_common::model::oplog::HostRequestNoInput {},
         )))),

@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use golem_common::base_model::agent::AgentMode;
 use golem_common::model::agent::{AgentConfigEntryDto, InvocationFreshnessDisposition};
 use golem_common::model::caller::Caller;
-use golem_common::model::component::ComponentRevision;
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
@@ -114,6 +114,7 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
     async fn enqueue_oplog_processor(
         &self,
         owned_agent_id: &OwnedAgentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
         invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError>;
@@ -142,6 +143,7 @@ impl<Ctx: WorkerCtx> Default for LazyWorkerActivator<Ctx> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
     async fn archive_oplog(
         &self,
@@ -343,6 +345,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
     async fn enqueue_oplog_processor(
         &self,
         owned_agent_id: &OwnedAgentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
         invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
@@ -356,7 +359,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
                 WorkerExecutorError::runtime("WorkerActivator is disabled, not invoking processor")
             })?;
         activator
-            .enqueue_oplog_processor(owned_agent_id, component_revision, invocation)
+            .enqueue_oplog_processor(owned_agent_id, component_id, component_revision, invocation)
             .await
     }
 }
@@ -377,6 +380,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerActivator<Ctx, Svcs> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<Ctx>
     for DefaultWorkerActivator<Ctx, Svcs>
 {
@@ -389,7 +393,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         match self
             .all
             .active_agents()
-            .get_existing(&self.all, owned_agent_id, Caller::anonymous())
+            .get_existing(&self.all, owned_agent_id)
             .await
         {
             Ok(worker) => worker.archive_oplog(last_oplog_index, wait).await,
@@ -409,7 +413,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         let worker = match self
             .all
             .active_agents()
-            .get_existing(&self.all, owned_agent_id, Caller::anonymous())
+            .get_existing(&self.all, owned_agent_id)
             .await
         {
             Ok(worker) => worker,
@@ -432,7 +436,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
                 match self
                     .all
                     .active_agents()
-                    .get_existing(&self.all, owned_agent_id, Caller::anonymous())
+                    .get_existing(&self.all, owned_agent_id)
                     .await
                 {
                     Ok(worker) => worker,
@@ -574,12 +578,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         let worker = match self
             .all
             .active_agents()
-            .get_existing_with_fingerprint(
-                &self.all,
-                owned_agent_id,
-                Caller::anonymous(),
-                Some(expected_fingerprint),
-            )
+            .get_existing_with_fingerprint(&self.all, owned_agent_id, Some(expected_fingerprint))
             .await
         {
             Ok(worker) => worker,
@@ -626,7 +625,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
                 }
                 self.all
                     .promise_service()
-                    .complete_without_wakeup(promise_id, vec![])
+                    .complete_without_wakeup(owned_agent_id.environment_id, promise_id, vec![])
                     .await?;
                 drop(lifecycle);
             }
@@ -638,10 +637,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
     async fn enqueue_oplog_processor(
         &self,
         owned_agent_id: &OwnedAgentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
         invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
-        Worker::enqueue_oplog_processor(&self.all, owned_agent_id, component_revision, invocation)
-            .await
+        Worker::enqueue_oplog_processor(
+            &self.all,
+            owned_agent_id,
+            component_id,
+            component_revision,
+            invocation,
+        )
+        .await
     }
 }

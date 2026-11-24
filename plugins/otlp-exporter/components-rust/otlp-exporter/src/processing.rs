@@ -61,6 +61,10 @@ pub(crate) fn process_entries_from(
             OplogEntry::AgentInvocationFinished(params) => {
                 handle_invocation_finished(state, params, &mut completed_spans, &mut metrics);
             }
+            OplogEntry::AgentInvocationSettled(params) => {
+                let time_ns = datetime_to_nanos(&params.timestamp).to_string();
+                push_fuel_consumed(&mut metrics, time_ns, params.consumed_fuel);
+            }
             OplogEntry::AgentInvocationFailed(params) => {
                 let time_ns = datetime_to_nanos(&params.timestamp);
                 handle_error(
@@ -886,9 +890,13 @@ fn handle_invocation_finished(
 ) {
     let end_time_ns = datetime_to_nanos(&params.timestamp);
     finish_invocation(state, end_time_ns, false, completed, metrics);
-    let time_ns = end_time_ns.to_string();
+    push_fuel_consumed(metrics, end_time_ns.to_string(), params.consumed_fuel);
+}
 
-    if params.consumed_fuel > 0 {
+/// The fuel an invocation consumed up to its result is recorded in `AgentInvocationFinished`,
+/// and the fuel its background work consumed after the result in `AgentInvocationSettled`.
+fn push_fuel_consumed(metrics: &mut Vec<OtlpMetric>, time_ns: String, consumed_fuel: i64) {
+    if consumed_fuel > 0 {
         metrics.push(OtlpMetric {
             name: "golem.invocation.fuel_consumed".to_string(),
             unit: "1".to_string(),
@@ -899,7 +907,7 @@ fn handle_invocation_finished(
                 data_points: vec![OtlpNumberDataPoint {
                     start_time_unix_nano: time_ns.clone(),
                     time_unix_nano: time_ns,
-                    as_int: Some(params.consumed_fuel.to_string()),
+                    as_int: Some(consumed_fuel.to_string()),
                     as_double: None,
                     attributes: Vec::new(),
                 }],
@@ -1121,11 +1129,12 @@ mod tests {
     use golem_rust::bindings::golem::api::context::{Attribute, AttributeValue};
     use golem_rust::bindings::golem::api::oplog::{
         EnvironmentId, JumpParameters, LocalSpanData, OplogErrorKind, OplogPayload, OplogRegion,
-        RawCreateResourceParameters, RawErrorParameters, RawInvocationWalletPin,
-        RawSpanClosedParameters, ResourceTypeId, RevertParameters, SpanLink, Timestamp,
-        WalletVersionToken, WorkerError, WrappedFunctionType,
+        RawAgentInvocationSettledParameters, RawCreateResourceParameters, RawErrorParameters,
+        RawInvocationRequestOperation, RawInvocationWalletPin, RawSpanClosedParameters,
+        ResourceTypeId, RevertParameters, SpanLink, Timestamp, WalletVersionToken, WorkerError,
+        WrappedFunctionType,
     };
-    use golem_rust::schema::wit::wire::{AccountId, AgentId, ComponentId, Uuid};
+    use golem_rust::schema::wit::wire::{AccountId, AgentId, Uuid};
     use golem_rust::wasip3::clocks::system_clock::Instant;
 
     fn instant(seconds: i64, nanoseconds: u32) -> Instant {
@@ -1171,6 +1180,41 @@ mod tests {
             attributes: vec![attribute("name", "embedded")],
             kind: SpanKind::Client,
         }
+    }
+
+    #[test]
+    fn fuel_after_the_result_is_exported_with_the_fuel_up_to_the_result() {
+        let mut state = state();
+        let OplogEntry::AgentInvocationFinished(mut finished) = invocation_finished() else {
+            unreachable!()
+        };
+        finished.consumed_fuel = 5;
+        let output = process_entries(
+            &mut state,
+            vec![
+                OplogEntry::AgentInvocationFinished(finished),
+                OplogEntry::AgentInvocationSettled(RawAgentInvocationSettledParameters {
+                    timestamp: instant(21, 0),
+                    invocation_id: Uuid {
+                        high_bits: 0,
+                        low_bits: 1,
+                    },
+                    consumed_fuel: 7,
+                }),
+            ],
+        );
+        let fuel: Vec<_> = output
+            .metrics
+            .iter()
+            .filter(|metric| metric.name == "golem.invocation.fuel_consumed")
+            .map(|metric| {
+                metric.sum.as_ref().unwrap().data_points[0]
+                    .as_int
+                    .clone()
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(fuel, vec!["5".to_string(), "7".to_string()]);
     }
 
     #[test]
@@ -1292,6 +1336,7 @@ mod tests {
             function_name: function_name.to_string(),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Vec::new())),
             durable_function_type: WrappedFunctionType::ReadLocal,
             span_started: span,
@@ -1306,10 +1351,8 @@ mod tests {
         };
         OplogEntry::Create(RawCreateParameters {
             timestamp: instant(10, 0),
-            agent_id: AgentId {
-                component_id: ComponentId { uuid: uuid(1) },
-                agent_id: "agent".to_string(),
-            },
+            agent_id: AgentId { uuid: uuid(1) },
+            agent_type_name: Some("Agent".to_string()),
             owner_kind: OwnerKind::ComponentAgent,
             agent_mode: AgentMode::Durable,
             component_revision: 1,
@@ -1321,7 +1364,6 @@ mod tests {
             initial_total_linear_memory_size: initial_memory,
             initial_active_plugins: Vec::new(),
             local_agent_config: Vec::new(),
-            original_phantom_id: None,
             instance_id: uuid(instance),
             never_live: false,
         })
@@ -1413,21 +1455,32 @@ mod tests {
         })
     }
 
+    const INVOCATION: Uuid = Uuid {
+        high_bits: 0,
+        low_bits: 1,
+    };
+    const FAILED_INVOCATION: Uuid = Uuid {
+        high_bits: 0,
+        low_bits: 2,
+    };
+    const NEXT_INVOCATION: Uuid = Uuid {
+        high_bits: 0,
+        low_bits: 3,
+    };
+
     fn invocation_started(trace_id: &str, context: Vec<SpanData>) -> OplogEntry {
-        invocation_started_with_id(1, trace_id, context)
+        invocation_started_with_id(INVOCATION, trace_id, context)
     }
 
     fn invocation_started_with_id(
-        invocation_id: u64,
+        invocation_id: Uuid,
         trace_id: &str,
         context: Vec<SpanData>,
     ) -> OplogEntry {
         OplogEntry::AgentInvocationStarted(RawAgentInvocationStartedParameters {
             timestamp: instant(12, 0),
-            invocation_id: Uuid {
-                high_bits: 0,
-                low_bits: invocation_id,
-            },
+            invocation_id,
+            operation: RawInvocationRequestOperation::AgentMethod("run".to_string()),
             payload: OplogPayload::Inline(Vec::new()),
             trace_id: trace_id.to_string(),
             trace_states: Vec::new(),
@@ -1446,10 +1499,7 @@ mod tests {
     fn invocation_finished() -> OplogEntry {
         OplogEntry::AgentInvocationFinished(RawAgentInvocationFinishedParameters {
             timestamp: instant(20, 0),
-            invocation_id: Uuid {
-                high_bits: 0,
-                low_bits: 1,
-            },
+            invocation_id: INVOCATION,
             result: OplogPayload::Inline(Vec::new()),
             method_name: None,
             consumed_fuel: 0,
@@ -1767,7 +1817,7 @@ mod tests {
             &mut state,
             90,
             vec![start(
-                "golem::rpc::wasm-rpc::new",
+                "golem::rpc::wasm-rpc::upsert",
                 Some(opening("rpc-connection")),
             )],
         );
@@ -1844,6 +1894,7 @@ mod tests {
                     function_name: "golem::api::context::start-span".to_string(),
                     invocation_id: None,
                     observational_owner: None,
+                    driver: None,
                     request: Some(OplogPayload::Inline(Vec::new())),
                     durable_function_type: WrappedFunctionType::ReadLocal,
                     span_started: Some(opening("reverted")),
@@ -1904,6 +1955,7 @@ mod tests {
                     function_name: "rpc".to_string(),
                     invocation_id: None,
                     observational_owner: None,
+                    driver: None,
                     request: None,
                     durable_function_type: WrappedFunctionType::ReadLocal,
                     span_started: Some(opening("explicit-a")),
@@ -2018,27 +2070,21 @@ mod tests {
 
     #[test]
     fn next_invocation_start_closes_failed_implicit_span_after_revert() {
-        for (next_id, kind, expected_kind) in [
-            (1, OplogErrorKind::Invocation, "invocation"),
-            (2, OplogErrorKind::Invocation, "invocation"),
-        ] {
+        for next_invocation in [FAILED_INVOCATION, NEXT_INVOCATION] {
             let mut state = state();
             handle_span_started(&mut state, opening("explicit"), None);
             let failed = process_entries(
                 &mut state,
                 vec![
                     invocation_started_with_id(
-                        1,
+                        FAILED_INVOCATION,
                         "trace-failed",
                         vec![local_span("failed-invocation", None, false)],
                     ),
                     OplogEntry::Error(RawErrorParameters {
                         timestamp: instant(18, 0),
-                        kind,
-                        invocation_id: Some(Uuid {
-                            high_bits: 0,
-                            low_bits: 1,
-                        }),
+                        kind: OplogErrorKind::Invocation,
+                        invocation_id: Some(FAILED_INVOCATION),
                         error: WorkerError::Unknown("boom".to_string()),
                         retry_from: 0,
                         retry_policy_state: None,
@@ -2049,7 +2095,7 @@ mod tests {
             );
 
             assert!(failed.log_records[0].attributes.iter().any(|attribute| {
-                attribute.key == "error.kind" && attribute.value.string_value == expected_kind
+                attribute.key == "error.kind" && attribute.value.string_value == "invocation"
             }));
             assert!(failed.spans.is_empty());
             assert_eq!(state.implicit_spans.len(), 1);
@@ -2060,7 +2106,7 @@ mod tests {
                 vec![
                     revert_original_start(),
                     invocation_started_with_id(
-                        next_id,
+                        next_invocation,
                         "trace-retry",
                         vec![local_span("retry-invocation", None, false)],
                     ),

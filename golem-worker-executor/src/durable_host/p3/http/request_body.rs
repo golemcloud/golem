@@ -16,6 +16,7 @@ use super::response_body::{HttpFutureDelivery, HttpFutureDeliveryGuard};
 use super::serialization::{
     deserialize_error_code, deserialize_headers, serialize_error_code, serialize_headers,
 };
+use crate::durable_host::attribution::with_import_access;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, DeferredCallReplayOutcome, DurableCallSession, InvocationIdSource,
     LeaveIncompleteOnDrop, import_invocation_id, resolve_current_observational_owner,
@@ -1444,7 +1445,7 @@ where
             activity,
             false,
         );
-        let captured = store.with(|mut access| {
+        let captured = with_import_access(store, |mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut())
                 .attribution
                 .capture()
@@ -2538,13 +2539,10 @@ mod tests {
         use crate::services::oplog::{OplogReadError, OplogReadSource, UnreadableOplog};
         use golem_service_base::error::worker_executor::WorkerExecutorError;
 
-        let agent_id = golem_common::model::AgentId {
-            component_id: golem_common::model::component::ComponentId::new(),
-            agent_id: "request-body".to_string(),
-        };
+        let agent_id = golem_common::model::AgentId::from_parts(7, 1);
         let archive_write = RecordedFrameError::from(OplogError::ArchiveWrite(
             crate::services::oplog::ArchiveWriteFailure {
-                agent_id: agent_id.clone(),
+                agent_id,
                 level: 1,
                 details: "archive refused the write".to_string(),
             },

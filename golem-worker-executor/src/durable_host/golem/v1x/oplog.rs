@@ -33,6 +33,7 @@ use crate::preview2::golem_api_1_x::oplog::SearchOplog;
 use crate::services::HasOplogService;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
+use golem_common::base_model::caller::ClaimVisibility;
 use golem_common::model::AgentId;
 use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
@@ -49,6 +50,7 @@ use golem_common::model::oplog::host_functions::GolemApiEnrichOplogEntries;
 use golem_common::model::oplog::host_functions::GolemApiGetOplogNext;
 use golem_common::model::oplog::host_functions::GolemApiSearchOplogNext;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use std::num::NonZeroU64;
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::IoView;
@@ -59,15 +61,12 @@ async fn oplog_read_denied<Ctx: WorkerCtx>(
     start: OplogIndex,
     page_size: usize,
 ) -> Result<bool, WorkerExecutorError> {
-    let (owner, environment_id) = resolve_agent_owner(
-        ctx,
-        &owned_agent_id.component_id(),
-        Some(&owned_agent_id.agent_id.agent_id),
-    )
-    .await?;
-    if owned_agent_id.environment_id != environment_id {
+    if owned_agent_id.environment_id != ctx.owned_agent_id.environment_id {
         return Ok(true);
     }
+    let Some(owner) = resolve_agent_owner(ctx, &owned_agent_id.agent_id).await? else {
+        return Ok(true);
+    };
     let Some(end) = (page_size as u64)
         .checked_sub(1)
         .and_then(|offset| start.as_u64().checked_add(offset))
@@ -87,15 +86,12 @@ async fn oplog_entries_denied<Ctx: WorkerCtx>(
     owned_agent_id: &OwnedAgentId,
     indexes: &[OplogIndex],
 ) -> Result<bool, WorkerExecutorError> {
-    let (owner, environment_id) = resolve_agent_owner(
-        ctx,
-        &owned_agent_id.component_id(),
-        Some(&owned_agent_id.agent_id.agent_id),
-    )
-    .await?;
-    if owned_agent_id.environment_id != environment_id {
+    if owned_agent_id.environment_id != ctx.owned_agent_id.environment_id {
         return Ok(true);
     }
+    let Some(owner) = resolve_agent_owner(ctx, &owned_agent_id.agent_id).await? else {
+        return Ok(true);
+    };
     let targets = indexes
         .iter()
         .map(|index| oplog_target(owner.clone(), Some((*index).into()), Some((*index).into())))
@@ -149,7 +145,7 @@ async fn oplog_enrichment_denial<Ctx: WorkerCtx>(
     let _ = crate::model::public_oplog::wit::reject_quota_handles_in_oplog_entries(entries, ctx);
     let request = HostRequestGolemApiOplogEnrich {
         environment_id: owned_agent_id.environment_id,
-        agent_id: owned_agent_id.agent_id.clone(),
+        agent_id: owned_agent_id.agent_id,
         entries: entry_indexes,
         component_revision,
     };
@@ -211,6 +207,11 @@ fn prepare_oplog_enrichment_entries<Ctx: WorkerCtx>(
     }
 }
 
+/// Guests that read an oplog never get the users' verified claims. The `golem:api/oplog` records
+/// have no place for them, and a guest's own oplog keeps a copy of every chunk that it reads, so
+/// claims in a chunk would reach every reader of that oplog without being asked for.
+const GUEST_CLAIM_VISIBILITY: ClaimVisibility = ClaimVisibility::Hidden;
+
 async fn get_oplog_chunk<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     entry: &GetOplogEntry,
@@ -247,6 +248,7 @@ async fn get_oplog_chunk<Ctx: WorkerCtx>(
         current_component_revision,
         entry.next_oplog_index,
         entry.page_size,
+        GUEST_CLAIM_VISIBILITY,
     )
     .await
 }
@@ -276,6 +278,12 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         .map_err(|error| error.to_string())?
     };
     let agent_type = &identity.create_parameters().agent_type_name;
+    // The grant covers page_size indexes, not page_size matches. The scanner caps each
+    // storage read at the remaining entry budget, even when a chunk has no matches.
+    let mut budget = ctx.state.config.limits.scan_budget;
+    budget.entries = budget
+        .entries
+        .min(NonZeroU64::new(entry.page_size as u64).expect("search page size is nonzero"));
     search_public_oplog(
         ctx.state.component_service.clone(),
         ctx.state.oplog_service(),
@@ -289,7 +297,8 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         entry.last_oplog_index,
         entry.page_size,
         &entry.query,
-        ctx.state.config.limits.scan_budget,
+        budget,
+        GUEST_CLAIM_VISIBILITY,
     )
     .await
 }
@@ -833,6 +842,7 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
                             identity.create_parameters().owner_kind,
                             agent_type.as_ref(),
                             current_revision,
+                            GUEST_CLAIM_VISIBILITY,
                         )
                         .await?,
                     );

@@ -14,7 +14,7 @@ Complete code-first endpoints take precedence over those mounted fallback behavi
 
 ## Mount Points
 
-Every agent that wants to expose HTTP endpoints must first define a **mount point** — the base URL prefix under which all its endpoints are available. The mount path can contain placeholders like `{name}` that map to the agent's constructor parameters.
+Every agent that wants to expose HTTP endpoints must first define a **mount point** — the base URL prefix under which all its endpoints are available. A **key mount** uses placeholders like `{name}` to bind the agent's constructor parameters, as below. An [ID mount](#selecting-an-agent-by-its-id) instead binds only a required agent ID, without constructor inputs in the URL.
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
@@ -82,7 +82,7 @@ Mount path variables bind the `ID` fields by their schema name (`Name` is `{name
 </Tabs.Tab>
 </Tabs>
 
-If there are multiple agent constructor parameters, they all have to be mapped in the mount path.
+On a key mount, all user-supplied constructor parameters must be mapped in the mount path. Host-injected parameters are not URL bindings.
 
 ## Endpoints
 
@@ -262,7 +262,7 @@ Repeated outer options express one presence decision, not separate nullable stat
 
 A required list or map must have at least one entry. An absent optional collection is none, not an empty collection. A present empty string is still a value and must satisfy the scalar schema. Collection elements, map keys, and map values cannot be optional or themselves collections. Records, tuples, general variants, JSON values, and rich payloads require a body binding rather than a query binding. Maps are query-only and cannot bind from headers.
 
-Map syntax is flat: `?label=x`, `?label[env][region]=west`, malformed brackets, and duplicate keys are errors. Keys are compared after scalar parsing, so numeric keys `1` and `01` also conflict. Schema constraints apply to scalars, list elements, and map keys and values. Invalid requests return `400` with the input name. Conflicting query names, including explicit aliases, map bracket namespaces, and phantom selectors, fail route compilation.
+Map syntax is flat: `?label=x`, `?label[env][region]=west`, malformed brackets, and duplicate keys are errors. Keys are compared after scalar parsing, so numeric keys `1` and `01` also conflict. Schema constraints apply to scalars, list elements, and map keys and values. Invalid requests return `400` with the input name. Conflicting query names, including explicit aliases, map bracket namespaces, and agent ID bindings, fail route compilation. A query ID name is reserved and cannot also bind an implicit method input.
 
 The TypeScript and Effect SDKs check concrete schema constructors at compile time, including child schemas retained by SDK options and maps. A scalar-like JavaScript output type does not establish query eligibility. Widened or dynamic schemas can erase the constructor information: examples include `StandardSchemaV1`, lazy schemas, ArkType public types, Effect 3's Standard Schema conversion, and widened or suspended Effect 4 schemas. These cases still undergo schema-graph validation at registration and route compilation; they do not have the same compile-time guarantee. See the SDK READMEs for the adapter-specific limits.
 
@@ -270,9 +270,9 @@ The TypeScript and Effect SDKs check concrete schema constructors at compile tim
 
 Typed agent endpoints now reject unknown query parameters with `400`, naming the offending parameter. Earlier versions ignored them. Remove unused query keys from typed-endpoint requests, including cache-busting keys such as `?v=3`. Validation happens after authentication and route/resource classification, but before conditional-cache responses, body reads, or invocation and session effects.
 
-Declared phantom selectors and applicable Durable Streams protocol controls remain recognized. Durable Streams infers invocation arguments from the **declared endpoint method**, not the verbs of its expanded resource routes. Invocation arguments belong to session creation; resource reads do not require them. Controls such as `offset`, `live`, and `cursor` belong only to stream `GET` reads, not arbitrary session operations.
+Declared agent ID bindings and applicable Durable Streams protocol controls remain recognized. Durable Streams infers invocation arguments from the **declared endpoint method**, not the verbs of its expanded resource routes. Invocation arguments belong to session creation; resource reads do not require them. Controls such as `offset`, `live`, and `cursor` belong only to stream `GET` reads, not arbitrary session operations.
 
-File routes still ignore the query string, so `/assets/app.js?v=3` continues to work. Raw handlers still receive the query unchanged. Constructor inputs remain bound through the mount path, not inferred as method query inputs.
+File routes ignore unrelated query parameters, so `/assets/app.js?v=3` continues to work; a declared query ID still selects the target agent. Raw handlers still receive the query unchanged. Key mounts bind constructor inputs through the mount path, not inferred method queries. ID mounts do not bind constructor inputs from the URL.
 
 ### Header Mapping
 
@@ -732,9 +732,9 @@ The host fills a `golem.Principal` input field; it is never bound from the path,
 
 When authentication is enabled, agent constructors and methods can optionally receive a `Principal` parameter containing information about the authenticated caller.
 
-## Phantom Agents
+## Agents without a key
 
-Endpoints can be served by **phantom agents** — separate instances with the same constructor parameters and an additional UUID. Without an explicit selector, `phantomAgent: true` creates a fresh phantom for each ordinary HTTP request. This is useful for gateway-like agents that dispatch to internal agents, allowing requests to be processed completely in parallel. Phantom identity is distinct from the agent's durable or ephemeral execution mode; a durable phantom can retain state and be addressed again by its UUID.
+By default, an endpoint is served by the **keyed agent** of the constructor parameters that the mount path captures. On a key mount, `phantomAgent: true` instead creates a new agent **without a key** for each ordinary HTTP request: an agent with the same constructor parameters and a new agent ID. This is useful for gateway-like agents that dispatch to internal agents, allowing requests to be processed completely in parallel. A durable agent without a key can retain state and be addressed again by its agent ID. Ephemeral execution remains a separate per-request lifecycle mode. Neither ephemeral mode nor `phantomAgent` can be combined with an ID mount.
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
@@ -799,75 +799,93 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 </Tabs.Tab>
 </Tabs>
 
-### Selecting a known phantom UUID
+### Selecting an agent by its ID
 
-A mount can declare a path or query selector to address an exact phantom instead of choosing a fresh one. For example, `/decisions/d7/state?instance=dc7f9909-2975-42b3-9635-2f5ba7c73782` addresses that phantom of `DecisionAgent("d7")`. The UUID is scoped to the component and constructor parameters: using the same UUID with `d8` selects a different agent.
+A durable, non-router mount can bind a required agent ID from a path capture or query parameter. This is an **ID mount**, not a key mount with an override. It contains no constructor parameter bindings, even when the agent has required constructor parameters. For example, `/decisions/state?instance=dc7f9909-2975-82b3-9635-2f5ba7c73782` addresses an existing agent of the mount's type in the deployed environment.
 
-Selection is **not cloning**. If the selected UUID has not been used, Golem follows normal agent creation. To copy existing state, fork through the SDK or [Durable Streams fork operation](/next/invoke/making-custom-apis/durable-streams/forks), then select the resulting phantom UUID. Subsequent requests with the same constructor parameters and UUID reconnect to that instance.
+Selection **never creates** an agent. An unknown agent ID, or the ID of an agent of another type, is not found. To create an agent to select, create it with `create` from agent code or `golem agent create`, or copy existing state by forking through the SDK or the [Durable Streams fork operation](/next/invoke/making-custom-apis/durable-streams/forks), then select the resulting agent ID. Subsequent requests with the same agent ID reconnect to that agent.
 
-The following mount fragments declare an optional query selector. Omit the optional flag to make it required:
+The following mount fragments declare a required query ID and an optional creation route:
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
-http: http.mount('/decisions/{decision}', {
-  phantomId: http.phantomId.query('instance', { optional: true }),
+http: http.mount('/decisions', {
+  agentId: http.agentId.query('instance'),
+  create: '/decisions/create',
 })
 ```
 </Tabs.Tab>
 <Tabs.Tab>
 ```typescript
-http: Http.mount('/decisions/{decision}', {
-  phantomId: Http.phantomId.query('instance', { optional: true }),
+http: Http.mount('/decisions', {
+  agentIdBinding: Http.agentId.query('instance'),
+  createRoute: '/decisions/create',
 })
 ```
 </Tabs.Tab>
 <Tabs.Tab>
 ```rust
 #[agent_definition(
-    mount = "/decisions/{decision}",
-    phantom_id(query = "instance", optional = true)
+    mount = "/decisions",
+    agent_id(query = "instance"),
+    create_route = "/decisions/create"
 )]
 ```
 </Tabs.Tab>
 <Tabs.Tab>
 ```scala
 @agentDefinition(
-  mount = "/decisions/{decision}",
-  phantomIdQuery = "instance",
-  phantomIdOptional = true
+  mount = "/decisions",
+  agentIdQuery = "instance",
+  createRoute = "/decisions/create"
 )
 ```
 </Tabs.Tab>
 <Tabs.Tab>
 ```moonbit
-#derive.mount("/decisions/{decision}")
-#derive.mount_phantom_id(query = "instance", optional = true)
+#derive.mount("/decisions")
+#derive.mount_agent_id(query = "instance")
+#derive.mount_create("/decisions/create")
 ```
 </Tabs.Tab>
 <Tabs.Tab>
 ```go
 HTTP: &golem.Mount{
-	Path:      "/decisions/{decision}",
-	PhantomID: golem.PhantomIDQuery("instance").Optional(),
+	Path:        "/decisions",
+	AgentID:     golem.AgentIDQuery("instance"),
+	CreateRoute: "/decisions/create",
 },
 ```
 </Tabs.Tab>
 </Tabs>
 
-For path selection, use `/decisions/{decision}/{instance}` and change `query` to `path` in TypeScript, Effect, Rust and MoonBit; in Scala, use `phantomIdPath` instead of `phantomIdQuery`; in Go, use `golem.PhantomIDPath` instead of `golem.PhantomIDQuery`. Only `decision` is a constructor parameter. The declared `instance` capture belongs to phantom selection, not to the constructor or endpoint inputs. An optional path selector generates both `/decisions/{decision}/{instance}` and `/decisions/{decision}` before endpoint suffixes are appended; the whole selector segment disappears when omitted.
+For path addressing, use `/decisions/{instance}` and change `query` to `path` in TypeScript, Effect, Rust and MoonBit; in Scala, use `agentIdPath` instead of `agentIdQuery`; in Go, use `golem.AgentIDPath` instead of `golem.AgentIDQuery`. The `instance` capture belongs only to agent addressing, not to constructor or endpoint inputs. There is no optional ID binding or fallback to a keyed agent.
 
 | Request | Result |
 | --- | --- |
-| Valid UUID supplied | Select that exact phantom. |
-| Optional selector omitted | Select the original agent, **even with `phantomAgent: true`**. |
-| Required query selector omitted | `400 Bad Request`. |
-| Required path selector omitted | No matching route (`404`). |
-| Empty, malformed, or repeated query selector (even repeated identical UUIDs) | `400 Bad Request`. |
+| Valid UUID supplied | Select the existing agent with that agent ID. |
+| Required query ID omitted | `400 Bad Request`. |
+| Required path ID omitted | No matching route (`404`). |
+| Empty, malformed, or repeated query ID (even repeated identical UUIDs) | `400 Bad Request`. |
 
-Uppercase UUIDs are accepted and returned links use canonical lowercase spelling. A selector must belong to the mount; it cannot collide with endpoint inputs or protocol controls. Optional path expansion must not introduce ambiguous routes. Explicit selectors are supported only on durable, non-router mounts without filesystem exposure (including static bindings).
+Uppercase UUIDs are accepted and returned links use canonical lowercase spelling. An ID binding must belong to the mount; it cannot collide with endpoint bindings or protocol controls. Query ID names are reserved from implicit query bindings as well as explicit ones.
 
-Authentication and authorization run before selection; a UUID is an address, not a credential. Requests, conditional-response caches, streams and callbacks remain scoped to the selected identity. Without a declared selector, all existing original, fresh-phantom, ephemeral and Durable Streams session-selection policies remain unchanged.
+Authentication and authorization run before selection; a UUID is an address, not a credential. Requests, conditional-response caches, streams and callbacks remain scoped to the selected identity. Key mounts retain their separate keyed-agent, new-agent-per-request, ephemeral and Durable Streams session-selection policies.
+
+### Creating an agent through an ID mount
+
+The creation option declares a full, exact **POST** path, not a suffix relative to the mount. It is valid only on an ID mount. Its path accepts literals and system variables, not constructor or agent ID captures. Creation inherits the mount's authentication and CORS settings.
+
+Send only `parameters`, containing the constructor inputs as canonical tagged SchemaValue JSON, and optionally `keyed: false`. Mounted creation rejects `env`, `config`, and other unknown fields with `400 Bad Request`, even when their values are empty or null. `keyed: true` is also rejected. Route authentication does not grant configuration authority; use authorized operator REST creation or SDK creation for overrides. This is not the ordinary endpoint body format with one field per method parameter.
+
+Creation waits for the constructor to complete and returns `201 Created` with an `AgentReference` JSON body (`agentId` and `agentFingerprint`). The `Location` header addresses the new agent through the ID mount: `/decisions?instance=<agentId>` for the query example, or `/decisions/<agentId>` for a path ID mount. Insert the method suffix before the query string to call an endpoint: `/decisions/state?instance=<agentId>` or `/decisions/<agentId>/state`.
+
+`Idempotency-Key` uses the shared creation policy. Current HTTP route callers have no caller scope, including authenticated callers, so the header is ignored: repeating a create request creates another unkeyed agent. Authentication does not turn the OIDC subject or deployment account into an idempotency scope.
+
+### Files on key and ID mounts
+
+Both key and ID mounts can expose files from a durable agent. File requests are **lookup-only**: they never create an agent. Key mounts resolve the exact existing constructor key with ownership checks; ID mounts resolve the exact existing agent of the deployed type and environment. Missing keys and unknown, deleted, wrong-type, or wrong-environment IDs return terminal `404` responses, without falling back to a handler. A missing file on an existing agent retains the file mapping's normal fallback behavior.
 
 ## Customizing Durable Stream Routes
 

@@ -15,11 +15,14 @@
 use crate::Tracing;
 use crate::execution_observations::WorkerObservations;
 use golem_api_grpc::proto::golem::workerexecutor::v1::get_file_contents_response;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::CanonicalFilePath;
+use golem_common::model::component::ComponentId;
 use golem_common::model::filesystem::{FileByteSelection, FileReadExtent, FileReadHead};
 use golem_common::model::oplog::{PublicAgentInvocation, PublicOplogEntry};
-use golem_common::model::{AgentId, OplogIndex, OwnedAgentId};
-use golem_common::{agent_id, data_value};
+use golem_common::model::{OplogIndex, OwnedAgentId};
+use golem_common::{agent_key, data_value};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::FileReadResponse;
 use golem_test_framework::dsl::{TestDsl, count_agent_invocation_pair_since};
 use golem_worker_executor_test_utils::callers;
@@ -75,22 +78,16 @@ async fn body(mut response: FileReadResponse) -> anyhow::Result<Vec<u8>> {
 }
 
 /// Creates the agent without starting it, so that the next read drives its initialization.
-async fn prepare(executor: &TestWorkerExecutor, agent: &AgentId) -> anyhow::Result<()> {
-    use golem_api_grpc::proto::golem::workerexecutor::v1::{
-        CreateWorkerRequest, create_worker_response,
-    };
+async fn prepare(
+    executor: &TestWorkerExecutor,
+    component_id: &ComponentId,
+    key: &ParsedAgentKey,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::create_worker_response;
     let response = executor
         .client
         .clone()
-        .prepare_worker(CreateWorkerRequest {
-            agent_id: Some(agent.clone().into()),
-            component_owner_account_id: Some(executor.context.account_id.into()),
-            environment_id: Some(executor.context.default_environment_id.into()),
-            ignore_already_existing: true,
-            auth_ctx: Some(executor.auth_ctx().into()),
-            caller: Some(callers::anonymous().into()),
-            ..Default::default()
-        })
+        .prepare_worker(executor.create_keyed_worker_request(component_id, key)?)
         .await?
         .into_inner();
     match response.result {
@@ -102,7 +99,7 @@ async fn prepare(executor: &TestWorkerExecutor, agent: &AgentId) -> anyhow::Resu
 /// The first frame of an exact file read, and whether more frames follow it.
 pub(crate) async fn first_read_frame(
     executor: &TestWorkerExecutor,
-    agent: &AgentId,
+    agent: &OwnedAgentId,
     path: &str,
 ) -> anyhow::Result<(Option<get_file_contents_response::Result>, bool)> {
     use golem_api_grpc::proto::golem::workerexecutor::v1::GetFileContentsRequest;
@@ -110,9 +107,10 @@ pub(crate) async fn first_read_frame(
         .client
         .clone()
         .get_file_contents(GetFileContentsRequest {
-            agent_id: Some(agent.clone().into()),
+            target: Some(crate::agent::id_target(agent)),
+            component_id: None,
             component_owner_account_id: Some(executor.context.account_id.into()),
-            environment_id: Some(executor.context.default_environment_id.into()),
+            environment_id: Some(agent.environment_id.into()),
             file_path: path.into(),
             auth_ctx: Some(executor.auth_ctx().into()),
             caller: Some(callers::anonymous().into()),
@@ -125,9 +123,24 @@ pub(crate) async fn first_read_frame(
     Ok((first, more))
 }
 
+pub(crate) async fn assert_read_agent_not_found(
+    executor: &TestWorkerExecutor,
+    agent: &OwnedAgentId,
+    path: &str,
+) -> anyhow::Result<()> {
+    let (frame, more) = first_read_frame(executor, agent, path).await?;
+    let Some(get_file_contents_response::Result::Failure(error)) = frame else {
+        anyhow::bail!("expected AgentNotFound, got {frame:?}");
+    };
+    let error = WorkerExecutorError::try_from(error).map_err(|error| anyhow::anyhow!(error))?;
+    assert_eq!(error, WorkerExecutorError::worker_not_found(agent.agent_id));
+    assert!(!more, "an AgentNotFound failure must end the stream");
+    Ok(())
+}
+
 pub(crate) async fn read_head(
     executor: &TestWorkerExecutor,
-    agent: &AgentId,
+    agent: &OwnedAgentId,
     path: &str,
 ) -> anyhow::Result<FileReadHead> {
     match first_read_frame(executor, agent, path).await? {
@@ -141,6 +154,87 @@ pub(crate) async fn read_head(
         }
         (other, _) => anyhow::bail!("expected a file head, got {other:?}"),
     }
+}
+
+#[test]
+#[timeout("2m")]
+async fn a_key_bound_file_read_rejects_another_keys_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::GetFileContentsRequest;
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let owner = agent_key!(
+        "Inspection",
+        "file-owner",
+        "/a.txt",
+        b"private".to_vec(),
+        false
+    );
+    let owner_id = executor.start_agent(&component.id, owner).await?;
+    assert_eq!(
+        executor
+            .get_file_contents(&owner_id, "/a.txt")
+            .await?
+            .as_ref(),
+        b"private"
+    );
+    let requested = agent_key!(
+        "Inspection",
+        "file-requested",
+        "/a.txt",
+        Vec::<u8>::new(),
+        false
+    );
+    let collided = executor.keyed_agent_id(context.default_environment_id, &requested)?;
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    golem_worker_executor_test_utils::copy_create_entry_to(deps, &context, &owner_id, &collided)
+        .await?;
+
+    let executor = start(deps, &context).await?;
+    let mut stream = executor
+        .client
+        .clone()
+        .get_file_contents(GetFileContentsRequest {
+            target: Some(crate::agent::key_target(&requested)?),
+            component_id: Some(component.id.into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(context.default_environment_id.into()),
+            file_path: "/a.txt".into(),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            caller: Some(callers::anonymous().into()),
+            selection: Some(FileByteSelection::Full.into()),
+        })
+        .await?
+        .into_inner();
+    let first = stream
+        .message()
+        .await?
+        .expect("a collision returns one error frame");
+    let Some(get_file_contents_response::Result::Failure(error)) = first.result else {
+        panic!("a colliding file read must not return a header or body: {first:?}");
+    };
+    assert!(matches!(
+        WorkerExecutorError::try_from(error).map_err(anyhow::Error::msg)?,
+        WorkerExecutorError::AgentKeyCollision { .. }
+    ));
+    assert!(stream.message().await?.is_none());
+    assert_eq!(
+        golem_worker_executor_test_utils::agent_oplog_length(deps, &context, &collided,).await?,
+        1
+    );
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    Ok(())
 }
 
 #[test]
@@ -182,26 +276,19 @@ async fn live_file_inspection_initializes_once_and_restores_without_exports(
                 .unwrap();
             bytes(event)
         };
-        let parsed = agent_id!("Inspection", id, "/a.txt", contents, false);
-        let agent = AgentId {
-            component_id: component.id,
-            agent_id: parsed.to_string(),
-        };
+        let parsed = agent_key!("Inspection", id, "/a.txt", contents, false);
+        let agent = executor.keyed_agent_id(context.default_environment_id, &parsed)?;
         assert!(
             executor.get_worker_metadata_opt(&agent).await?.is_none(),
             "{id}"
         );
-        // A read never creates the agent: a missing agent is an absent file.
-        assert_eq!(
-            read_head(&executor, &agent, "/a.txt").await?,
-            FileReadHead::Absent,
-            "{id}"
-        );
+        // A missing agent is an error, not an absent file, and a read never creates it.
+        assert_read_agent_not_found(&executor, &agent, "/a.txt").await?;
         assert!(
             executor.get_worker_metadata_opt(&agent).await?.is_none(),
             "{id}"
         );
-        prepare(&executor, &agent).await?;
+        prepare(&executor, &component.id, &parsed).await?;
         let (first, second) = tokio::join!(
             executor.get_file_contents(&agent, "/a.txt"),
             executor.get_file_contents(&agent, "/a.txt")
@@ -244,7 +331,7 @@ async fn live_file_inspection_initializes_once_and_restores_without_exports(
             )
             .await?;
         let before = executor.oplog_max_index(&agent).await?;
-        let owned = OwnedAgentId::new(context.default_environment_id, &agent);
+        let owned = agent.clone();
         let worker = executor.active_agent(&owned).await.unwrap().primary();
         tokio::time::timeout(Duration::from_secs(10), async {
             while !worker.stop_if_idle().await {
@@ -288,12 +375,9 @@ async fn live_file_inspection_initializer_failure_is_not_a_miss(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let parsed = agent_id!("Inspection", id, "/a.txt", Vec::<u8>::new(), true);
-    let agent = AgentId {
-        component_id: component.id,
-        agent_id: parsed.to_string(),
-    };
-    prepare(&executor, &agent).await?;
+    let parsed = agent_key!("Inspection", id, "/a.txt", Vec::<u8>::new(), true);
+    let agent = executor.keyed_agent_id(context.default_environment_id, &parsed)?;
+    prepare(&executor, &component.id, &parsed).await?;
     let error = tokio::time::timeout(
         Duration::from_secs(30),
         executor.get_file_contents(&agent, "/a.txt"),
@@ -448,9 +532,9 @@ async fn live_file_inspection_corpus_byte_selections(
         let vector = case(id);
         let contents = bytes(vector["input"]["body_hex"].as_str().unwrap());
         let total_size = contents.len() as u64;
-        let parsed = agent_id!("Inspection", id, "/a.txt", contents, false);
+        let parsed = agent_key!("Inspection", id, "/a.txt", contents, false);
         let agent = executor.start_agent(&component.id, parsed).await?;
-        let owned = OwnedAgentId::new(context.default_environment_id, &agent);
+        let owned = agent.clone();
         let worker = executor.active_agent(&owned).await.unwrap().primary();
         let response = worker
             .read_file(
@@ -498,9 +582,9 @@ async fn live_file_inspection_releases_ownership_after_production(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let parsed = agent_id!("Inspection", id, "/a.txt", initial, false);
+    let parsed = agent_key!("Inspection", id, "/a.txt", initial, false);
     let agent = executor.start_agent(&component.id, parsed.clone()).await?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &agent);
+    let owned = agent.clone();
     let worker = executor.active_agent(&owned).await.unwrap().primary();
     let target = CanonicalFilePath::from_abs_str("/a.txt").unwrap();
     let mut response = worker
@@ -578,9 +662,9 @@ async fn live_file_inspection_drop_releases_update_without_changing_selected_roo
         )
         .store()
         .await?;
-    let parsed = agent_id!("P3FileSystem", id);
+    let parsed = agent_key!("P3FileSystem", id);
     let agent = executor.start_agent(&component.id, parsed).await?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &agent);
+    let owned = agent.clone();
     let worker = executor.active_agent(&owned).await.unwrap().primary();
     let target = CanonicalFilePath::from_abs_str("/selected/a.txt").unwrap();
     let response = worker
@@ -677,13 +761,13 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let parsed = agent_id!("Inspection", id, "/a.txt", b"before".to_vec(), false);
+    let parsed = agent_key!("Inspection", id, "/a.txt", b"before".to_vec(), false);
     let agent = executor.start_agent(&component.id, parsed.clone()).await?;
     assert_eq!(
         executor.get_file_contents(&agent, "/a.txt").await?.as_ref(),
         b"before"
     );
-    let owned = OwnedAgentId::new(context.default_environment_id, &agent);
+    let owned = agent.clone();
     let worker = executor
         .production_active_agent(&owned)
         .await
@@ -763,11 +847,11 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
         "read completed before the active write"
     );
 
-    let permit_agent = AgentId {
-        component_id: component.id,
-        agent_id: agent_id!("Inspection", "inspection-permit-holder").to_string(),
-    };
-    let permit_waiter = executor.acquire_account_concurrent_agent_permit(permit_agent);
+    let permit_agent = executor.keyed_agent_id(
+        context.default_environment_id,
+        &agent_key!("Inspection", "inspection-permit-holder"),
+    )?;
+    let permit_waiter = executor.acquire_account_concurrent_agent_permit(permit_agent.agent_id);
     tokio::pin!(permit_waiter);
     // Poll the waiter into the scheduler before Suspend releases this worker's permit. This makes
     // the holder precede reconstruction in the permit scheduler without a timing sleep.
@@ -835,7 +919,7 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
     .context("file inspection pending startup and resident unload after second Suspend")??;
     let released_permit = tokio::time::timeout(
         Duration::from_secs(10),
-        executor.acquire_account_concurrent_agent_permit(agent.clone()),
+        executor.acquire_account_concurrent_agent_permit(agent.agent_id),
     )
     .await
     .context("file inspection account permit released after second Suspend")?;
@@ -903,7 +987,7 @@ async fn grpc_read_waits_for_blocking_invocation_and_completes(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let parsed = agent_id!("Inspection", id, "/a.txt", b"before".to_vec(), false);
+    let parsed = agent_key!("Inspection", id, "/a.txt", b"before".to_vec(), false);
     let agent = executor.start_agent(&component.id, parsed.clone()).await?;
     // Complete initialization before starting the invocation that blocks inspection.
     executor
@@ -945,7 +1029,8 @@ async fn grpc_read_waits_for_blocking_invocation_and_completes(
     .await?;
     let mut client = executor.client.clone();
     let mut read = Box::pin(client.get_file_contents(GetFileContentsRequest {
-        agent_id: Some(agent.clone().into()),
+        target: Some(crate::agent::id_target(&agent)),
+        component_id: None,
         component_owner_account_id: Some(component.account_id.into()),
         environment_id: Some(context.default_environment_id.into()),
         file_path: "/a.txt".into(),
@@ -1020,23 +1105,21 @@ async fn exact_file_read_grpc_rejects_unsafe_paths_before_activation(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let parsed = agent_id!(
+    let parsed = agent_key!(
         "Inspection",
         "exact-path",
         "/%2e%2e",
         b"literal-percent-path".to_vec(),
         false
     );
-    let agent = AgentId {
-        component_id: component.id,
-        agent_id: parsed.to_string(),
-    };
+    let agent = executor.keyed_agent_id(context.default_environment_id, &parsed)?;
     for path in ["", "relative", "/sub/../%2e%2e", "//%2e%2e", "/%2e%2e/"] {
         let mut stream = executor
             .client
             .clone()
             .get_file_contents(GetFileContentsRequest {
-                agent_id: Some(agent.clone().into()),
+                target: Some(crate::agent::id_target(&agent)),
+                component_id: None,
                 component_owner_account_id: Some(component.account_id.into()),
                 environment_id: Some(context.default_environment_id.into()),
                 file_path: path.into(),
@@ -1057,7 +1140,7 @@ async fn exact_file_read_grpc_rejects_unsafe_paths_before_activation(
         assert!(stream.message().await?.is_none());
         assert!(executor.get_worker_metadata_opt(&agent).await?.is_none());
     }
-    prepare(&executor, &agent).await?;
+    prepare(&executor, &component.id, &parsed).await?;
     assert_eq!(
         executor
             .get_file_contents(&agent, "/%2e%2e")
@@ -1070,7 +1153,7 @@ async fn exact_file_read_grpc_rejects_unsafe_paths_before_activation(
 
 pub(crate) async fn file_system_node_is_not_found(
     executor: &TestWorkerExecutor,
-    agent: &AgentId,
+    agent: &OwnedAgentId,
     path: &str,
 ) -> anyhow::Result<bool> {
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
@@ -1080,9 +1163,9 @@ pub(crate) async fn file_system_node_is_not_found(
         .client
         .clone()
         .get_file_system_node(GetFileSystemNodeRequest {
-            agent_id: Some(agent.clone().into()),
+            agent_id: Some(agent.agent_id.into()),
             path: path.into(),
-            environment_id: Some(executor.context.default_environment_id.into()),
+            environment_id: Some(agent.environment_id.into()),
             component_owner_account_id: Some(executor.context.account_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
             caller: Some(callers::anonymous().into()),
@@ -1117,14 +1200,14 @@ async fn file_reads_and_listings_of_a_missing_or_deleted_agent_are_not_found_and
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let missing = AgentId {
-        component_id: component.id,
-        agent_id: agent_id!("Inspection", "missing", "/a.txt", b"abc".to_vec(), false).to_string(),
-    };
+    let missing = executor.keyed_agent_id(
+        context.default_environment_id,
+        &agent_key!("Inspection", "missing", "/a.txt", b"abc".to_vec(), false),
+    )?;
     let deleted = executor
         .start_agent(
             &component.id,
-            agent_id!("Inspection", "deleted", "/a.txt", b"abc".to_vec(), false),
+            agent_key!("Inspection", "deleted", "/a.txt", b"abc".to_vec(), false),
         )
         .await?;
     assert_eq!(
@@ -1135,6 +1218,11 @@ async fn file_reads_and_listings_of_a_missing_or_deleted_agent_are_not_found_and
         b"abc"
     );
     assert!(!file_system_node_is_not_found(&executor, &deleted, "/").await?);
+    assert_eq!(
+        read_head(&executor, &deleted, "/missing.txt").await?,
+        FileReadHead::Absent,
+        "a missing file on an existing agent is absent"
+    );
     executor.delete_worker(&deleted).await?;
 
     for (name, agent) in [("missing", &missing), ("deleted", &deleted)] {
@@ -1142,11 +1230,7 @@ async fn file_reads_and_listings_of_a_missing_or_deleted_agent_are_not_found_and
             executor.get_worker_metadata_opt(agent).await?.is_none(),
             "{name}"
         );
-        assert_eq!(
-            read_head(&executor, agent, "/a.txt").await?,
-            FileReadHead::Absent,
-            "{name}"
-        );
+        assert_read_agent_not_found(&executor, agent, "/a.txt").await?;
         assert!(
             file_system_node_is_not_found(&executor, agent, "/").await?,
             "{name}"

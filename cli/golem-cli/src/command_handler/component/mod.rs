@@ -32,13 +32,13 @@ use crate::model::app_raw;
 use crate::model::cascade::property::Property;
 use crate::model::cascade::property::tool_bindings::ToolBindingState;
 use crate::model::component::{
-    AGENT_ID_ENV_VAR, AGENT_ID_READ_GRANT, AgentTypeManifestProvisionConfig,
-    ComponentDeployProperties, ComponentNameMatchKind, ComponentRevisionSelection, ComponentView,
-    PendingRemoteInitialFile, RemoteToolDeploymentPlan, ResolvedManifestComponentsAndTools,
-    SelectedComponents, ToolManifestDeploymentConfig, ToolManifestProvisionConfig,
-    agent_type_reads_agent_id_from_env, component_initial_permission_recipient_context,
-    initial_permission_allows_agent_id_read, initial_permission_from_manifest_card,
-    initial_permission_recipient_context,
+    AgentTypeManifestProvisionConfig, ComponentDeployProperties, ComponentNameMatchKind,
+    ComponentRevisionSelection, ComponentView, PendingRemoteInitialFile, RemoteToolDeploymentPlan,
+    ResolvedManifestComponentsAndTools, SelectedComponents, ToolManifestDeploymentConfig,
+    ToolManifestProvisionConfig, agent_type_reads_identity_from_env,
+    component_initial_permission_recipient_context, initial_permission_from_manifest_card,
+    initial_permission_recipient_context, own_env_var_read_grant,
+    unreadable_agent_identity_env_vars,
 };
 use crate::model::component::{ComponentGetView, ComponentListView, ComponentManifestTraceView};
 use crate::model::config::{collect_unused_leaf_paths, value_at_path};
@@ -390,8 +390,7 @@ impl ComponentCommandHandler {
                 .ctx
                 .agent_handler()
                 .update_component_agents(
-                    &component.component_name,
-                    &component.id,
+                    component,
                     update,
                     component.revision,
                     await_updates,
@@ -431,12 +430,13 @@ impl ComponentCommandHandler {
             let result = self
                 .ctx
                 .agent_handler()
-                .redeploy_component_agents(&component.component_name, &component.id)
+                .redeploy_component_agents(component)
                 .await?;
-            for (agent_id, from_revision) in result.succeeded {
+            for (agent_id, recreated_agent_id, from_revision) in result.succeeded {
                 agents.push(AgentRedeploymentMeta {
                     component_name: component.component_name.clone(),
                     agent_id,
+                    recreated_agent_id,
                     from_revision,
                     revision: component.revision,
                 });
@@ -484,7 +484,7 @@ impl ComponentCommandHandler {
                 let result = self
                     .ctx
                     .agent_handler()
-                    .delete_component_agents(&component.component_name, &component.id, first_round)
+                    .delete_component_agents(component, first_round)
                     .await?;
                 if !result.succeeded.is_empty() {
                     deleted_any = true;
@@ -699,7 +699,7 @@ impl ComponentCommandHandler {
         environment: &ResolvedEnvironmentIdentity,
         component_match_kind: ComponentNameMatchKind,
         component_name: &ComponentName,
-        component_revision_selection: Option<ComponentRevisionSelection<'_>>,
+        component_revision_selection: Option<ComponentRevisionSelection>,
         post_deploy_args: Option<&PostDeployArgs>,
         repl_bridge_sdk_target: Option<GuestLanguage>,
         skip_build: bool,
@@ -800,7 +800,7 @@ impl ComponentCommandHandler {
         &self,
         environment: &ResolvedEnvironmentIdentity,
         component_name: &ComponentName,
-        component_revision_selection: Option<ComponentRevisionSelection<'_>>,
+        component_revision_selection: Option<ComponentRevisionSelection>,
     ) -> anyhow::Result<Option<ComponentDto>> {
         let component = self
             .get_current_deployed_server_component_by_name(environment, component_name)
@@ -809,10 +809,10 @@ impl ComponentCommandHandler {
         match (component, component_revision_selection) {
             (Some(component), Some(component_revision_selection)) => {
                 let revision = match component_revision_selection {
-                    ComponentRevisionSelection::ByAgentId(agent_id) => self
+                    ComponentRevisionSelection::ByAgentId(environment_id, agent_id) => self
                         .ctx
                         .agent_handler()
-                        .agent_metadata(component.id.0, &component.component_name, agent_id)
+                        .agent_metadata(environment_id, &component.component_name, &agent_id)
                         .await?
                         .map(|worker_metadata| worker_metadata.component_revision),
                     ComponentRevisionSelection::ByExplicitRevision(revision) => Some(revision),
@@ -840,7 +840,7 @@ impl ComponentCommandHandler {
         resolved_tool_grants: &ResolvedToolGrants,
         ambient_tools: &[golem_common::model::deployment::DeploymentPlanAmbientToolEntry],
     ) -> anyhow::Result<ResolvedManifestComponentsAndTools> {
-        let (component_names, declared_agents, has_remote_tools) = {
+        let (component_names, declared_agents, has_remote_tools, package_calls) = {
             let app_ctx = self.ctx.app_context_lock().await;
             let app = app_ctx.some_or_err()?;
             (
@@ -853,13 +853,14 @@ impl ComponentCommandHandler {
                     .remote_release_references()
                     .next()
                     .is_some(),
+                app.installed_package_calls.clone(),
             )
         };
 
         let mut components = BTreeMap::<ComponentName, ComponentDeployProperties>::new();
         for component_name in component_names {
             let properties = self.component_deploy_properties(&component_name).await?;
-            warn_about_initial_cards_without_agent_id_read(
+            warn_about_initial_cards_without_identity_read(
                 environment,
                 &component_name,
                 &properties,
@@ -879,6 +880,20 @@ impl ComponentCommandHandler {
                     .push(component_name.clone());
             }
         }
+
+        let mut missing_calls = Vec::new();
+        for (package, calls) in package_calls {
+            for agent in calls {
+                if !exported_agents.contains_key(&agent) {
+                    missing_calls.push(format!("{agent} (required by {package:?})"));
+                }
+            }
+        }
+        anyhow::ensure!(
+            missing_calls.is_empty(),
+            "Missing agent types required by installed packages: {}",
+            missing_calls.join(", ")
+        );
 
         let unknown_declared_agents = declared_agents
             .into_iter()
@@ -1704,7 +1719,7 @@ impl ComponentCommandHandler {
                         owner_account_email: grant.release_owner.email.clone(),
                         metadata_version: grant.release.metadata_version.clone(),
                         metadata_digest: grant.release.metadata_digest,
-                        provision,
+                        provision: (&provision).into(),
                         component_bindings: manifest_config
                             .component_bindings
                             .iter()
@@ -1813,6 +1828,7 @@ impl ComponentCommandHandler {
         provision: &ToolManifestProvisionConfig,
         plugin_grants: &HashMap<PluginGrantKey, EnvironmentPluginGrantWithDetails>,
     ) -> anyhow::Result<(ToolProvisionConfig, Vec<PendingRemoteInitialFile>)> {
+        let installed_by = self.ctx.account_id().await?;
         let plugins = provision
             .plugins
             .iter()
@@ -1840,6 +1856,7 @@ impl ComponentCommandHandler {
                     plugin_version: grant.plugin.version.clone(),
                     oplog_processor_component_id: Some(spec.component_id),
                     oplog_processor_component_revision: Some(spec.component_revision),
+                    installed_by,
                 })
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
@@ -1942,7 +1959,9 @@ impl ComponentCommandHandler {
         let tools = extracted_metadata.tools;
         let tool_middlewares = extracted_metadata.tool_middlewares;
         let component = app_ctx.application().component(component_name);
-        let wasm_path = component.wasm();
+        let installed = app_ctx.installed_components.get(component_name);
+        let wasm_path =
+            installed.map_or_else(|| component.wasm(), |installed| installed.wasm_path.clone());
 
         let mut agent_type_configs =
             BTreeMap::<AgentTypeName, AgentTypeManifestProvisionConfig>::new();
@@ -1998,7 +2017,6 @@ impl ComponentCommandHandler {
                                 component_name.0, agent_type.type_name.0
                             )
                         })?,
-                    files_source: component.source().to_path_buf(),
                     files: resolved_agent.files().to_vec(),
                     plugins: plugins(resolved_agent.plugins())?,
                 },
@@ -2031,6 +2049,7 @@ impl ComponentCommandHandler {
 
         Ok(ComponentDeployProperties {
             wasm_path,
+            package_metadata: installed.map(|installed| installed.package_metadata.clone()),
             config_schema: component.config_schema().clone(),
             component_config: config(
                 &AgentTypeName("component".to_string()),
@@ -2107,27 +2126,8 @@ impl ComponentCommandHandler {
                 .files
                 .iter()
                 .map(|f| {
-                    crate::model::app::InitialComponentFileSource::new(
-                        &f.source_path,
-                        &manifest_config.files_source,
-                    )
-                    .map_err(|err| {
-                        anyhow!(
-                            "Failed to resolve source path '{}' for component {} and agent {}: {}",
-                            f.source_path,
-                            component_name.0,
-                            agent_type_name.0,
-                            err
-                        )
-                    })
-                    .map(|source| crate::model::app::InitialComponentFile {
-                        source,
-                        target: crate::model::app::CanonicalFilePathWithPermissions {
-                            path: f.target_path.clone(),
-                            permissions: f.permissions.unwrap_or(
-                                golem_common::model::component::AgentFilePermissions::ReadOnly,
-                            ),
-                        },
+                    staging::resolve_provision_file(f).with_context(|| {
+                        format!("Failed to resolve initial file for component {component_name} and agent {agent_type_name}")
                     })
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?;
@@ -2477,6 +2477,7 @@ impl ComponentCommandHandler {
 
         Ok(diff::Component {
             wasm_hash: component_binary_hash.into(),
+            package_metadata: properties.package_metadata.clone(),
             agent_types: properties
                 .agent_types
                 .iter()
@@ -2552,6 +2553,7 @@ impl ComponentCommandHandler {
                 &environment.environment_id.0,
                 &ComponentCreation {
                     component_name: component_name.clone(),
+                    package_metadata: component_deploy_properties.package_metadata.clone(),
                     config_schema: component_deploy_properties.config_schema.clone(),
                     component_provision_config: component_stager
                         .component_provision_config(None, environment, component_name)
@@ -2669,6 +2671,9 @@ impl ComponentCommandHandler {
                 &component.id.0,
                 &ComponentUpdate {
                     current_revision: component.revision,
+                    package_metadata: wasm
+                        .as_ref()
+                        .and(component_deploy_properties.package_metadata.clone()),
                     config_schema: component_stager
                         .component_config_changed()
                         .then(|| component_deploy_properties.config_schema.clone()),
@@ -3708,25 +3713,19 @@ fn collect_unused_agent_config_paths(
     unused
 }
 
-/// Warns about each agent type whose explicit initial card does not let the agent read
-/// [`AGENT_ID_ENV_VAR`]. The card replaces the default card, and the Golem SDKs make the agent
-/// fail without that read.
-fn warn_about_initial_cards_without_agent_id_read(
+/// Warns about each agent type whose explicit initial card does not let the agent read one of the
+/// [`AGENT_IDENTITY_ENV_VARS`](crate::model::component::AGENT_IDENTITY_ENV_VARS). The card
+/// replaces the default card, and the Golem SDKs make the agent fail without those reads.
+fn warn_about_initial_cards_without_identity_read(
     environment: &ResolvedEnvironmentIdentity,
     component_name: &ComponentName,
     properties: &ComponentDeployProperties,
 ) {
-    let warning = format!(
-        "the initialCard does not allow the agent to read {AGENT_ID_ENV_VAR}, which the Golem SDKs \
-         need, so the agent fails at its first call or at snapshot load. Grant \
-         {AGENT_ID_READ_GRANT} in the card, and do not exclude it in the upper bound."
-    );
-
     for agent_type in &properties.agent_types {
         let Some(config) = properties.agent_type_configs.get(&agent_type.type_name) else {
             continue;
         };
-        if config.initial_card.is_none() || !agent_type_reads_agent_id_from_env(agent_type) {
+        if config.initial_card.is_none() || !agent_type_reads_identity_from_env(agent_type) {
             continue;
         }
         let context = initial_permission_recipient_context(
@@ -3734,19 +3733,34 @@ fn warn_about_initial_cards_without_agent_id_read(
             component_name,
             &agent_type.type_name,
         );
-        if !initial_permission_allows_agent_id_read(
-            &config.to_initial_permission(&context),
-            &context,
-        ) {
+        let unreadable =
+            unreadable_agent_identity_env_vars(&config.to_initial_permission(&context), &context);
+        if !unreadable.is_empty() {
             log_warn_action(
                 "Agent type",
                 format!(
-                    "{}: {warning}",
-                    agent_type.type_name.0.log_color_highlight()
+                    "{}: {}",
+                    agent_type.type_name.0.log_color_highlight(),
+                    identity_read_warning(&unreadable)
                 ),
             );
         }
     }
+}
+
+fn identity_read_warning(unreadable: &[&str]) -> String {
+    let grants = unreadable
+        .iter()
+        .map(|var| own_env_var_read_grant(var))
+        .collect::<Vec<_>>();
+    format!(
+        "the initialCard does not allow the agent to read {}, which the Golem SDKs need, so the \
+         agent fails at its first call, at snapshot load or when it binds a client to itself. Grant \
+         {} in the card, and do not exclude {} in the upper bound.",
+        unreadable.join(" and "),
+        grants.join(" and "),
+        if grants.len() == 1 { "it" } else { "them" }
+    )
 }
 
 #[cfg(test)]

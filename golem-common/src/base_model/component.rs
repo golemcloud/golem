@@ -117,6 +117,14 @@ impl AsRef<str> for ComponentName {
 }
 
 declare_structs! {
+    /// Package origin supplied by the client. Only the Wasm layer digest is verified by Golem.
+    #[derive(Eq)]
+    pub struct ComponentPackageMetadata {
+        pub source: String,
+        pub package_digest: String,
+        pub layer_digest: String,
+    }
+
     pub struct ComponentDto {
         pub id: ComponentId,
         pub revision: ComponentRevision,
@@ -129,10 +137,14 @@ declare_structs! {
         pub metadata: ComponentMetadataDto,
         pub created_at: chrono::DateTime<chrono::Utc>,
         pub wasm_hash: diff::Hash,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub package_metadata: Option<ComponentPackageMetadata>,
     }
 
     pub struct ComponentCreation {
         pub component_name: ComponentName,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub package_metadata: Option<ComponentPackageMetadata>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub config_schema: ComponentConfigSchema,
@@ -161,6 +173,9 @@ declare_structs! {
 
     pub struct ComponentUpdate {
         pub current_revision: ComponentRevision,
+        /// Only valid with a Wasm upload. A new Wasm upload without this field clears the origin.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub package_metadata: Option<ComponentPackageMetadata>,
         pub config_schema: Option<ComponentConfigSchema>,
         pub component_provision_config: Option<ComponentProvisionConfigCreation>,
         pub agent_types: Option<Vec<AgentTypeSchema>>,
@@ -355,6 +370,10 @@ declare_structs! {
         // oplog processor only
         pub oplog_processor_component_id: Option<ComponentId>,
         pub oplog_processor_component_revision: Option<ComponentRevision>,
+
+        /// The account that installed the plugin. An oplog processor processes each batch with
+        /// this account as its original caller.
+        pub installed_by: AccountId,
     }
 
     #[derive(Eq)]
@@ -488,6 +507,7 @@ mod tests {
     #[test]
     fn component_creation_with_initial_permission_parses_from_openapi_json() {
         let creation = ComponentCreation {
+            package_metadata: None,
             component_name: ComponentName("counter:ts-main".to_string()),
             config_schema: Default::default(),
             component_provision_config: Default::default(),

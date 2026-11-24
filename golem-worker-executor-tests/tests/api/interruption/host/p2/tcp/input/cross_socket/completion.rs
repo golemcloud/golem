@@ -37,11 +37,11 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let name = agent_id!("Networking", "p2-cross-splice-completion-history");
+    let name = agent_key!("Networking", "p2-cross-splice-completion-history");
     let id = executor.start_agent(&component.id, name.clone()).await?;
-    wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &id.agent_id, OplogIndex::INITIAL).await?;
     let worker = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
+        .production_active_agent(&id.clone())
         .await
         .unwrap()
         .primary();
@@ -76,10 +76,12 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
     })));
     let result = async {
         let (mut input, mut output) = peers(&source, &destination).await?;
-        let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
+        let (selected, release) = executor
+            .gate_next_invocation_outcome_append(&id.agent_id)
+            .await;
         echo(&mut input, &mut output).await?;
         tokio::time::timeout(Duration::from_secs(10), selected).await??;
-        executor.commit_oplog(&id).await?;
+        executor.commit_oplog(&id.agent_id).await?;
         let starts = cross_setup(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, 2)?;
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy.clone();
@@ -102,8 +104,8 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
         ensure!(
             join_request(&mut invocation, "invocation result")
                 .await??
-                .into_typed::<Result<u64, String>>()?
-                == Ok(1)
+                .into_typed::<Result<(u32, u64), String>>()?
+                == Ok((0, 1))
         );
         ensure!(matches!(
             tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??,
@@ -138,8 +140,8 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
                     data_value!(source_port, destination_port)
                 )
                 .await?
-                .into_typed::<Result<u64, String>>()?
-                == Ok(1)
+                .into_typed::<Result<(u32, u64), String>>()?
+                == Ok((0, 1))
         );
         ensure!(
             tokio::time::timeout(Duration::from_millis(100), source.accept())
@@ -163,9 +165,7 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
             data_value!(source_port, destination_port),
         );
         let peer_work = async {
-            // The completed historical raw splice re-executes against fresh sockets.
-            let (mut old_input, mut old_output) = peers(&source, &destination).await?;
-            echo(&mut old_input, &mut old_output).await?;
+            // The completed historical splice replays from the oplog without connecting.
             let (mut new_input, mut new_output) = peers(&source, &destination).await?;
             echo(&mut new_input, &mut new_output).await?;
             Ok::<_, anyhow::Error>(())
@@ -174,7 +174,7 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
             tokio::try_join!(fresh, peer_work)
         })
         .await??;
-        ensure!(fresh.into_typed::<Result<u64, String>>()? == Ok(1));
+        ensure!(fresh.into_typed::<Result<(u32, u64), String>>()? == Ok((0, 1)));
         ensure!(
             tokio::time::timeout(Duration::from_millis(100), source.accept())
                 .await
@@ -197,7 +197,7 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
     finish_input_test(
         result,
         &executor,
-        &id,
+        &id.agent_id,
         &worker,
         &mut invocation,
         &mut refresh,

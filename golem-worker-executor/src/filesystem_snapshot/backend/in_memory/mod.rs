@@ -214,16 +214,17 @@ async fn blocking<T: Send + 'static>(
         .map_err(|error| Failed::new(anyhow::Error::new(error)))
 }
 
-#[async_trait]
-impl FilesystemSnapshotStore for InMemorySnapshotStore {
-    async fn save(
+impl InMemorySnapshotStore {
+    /// Reads the tree, then lets `publication` delay its atomic publication. Once publication
+    /// starts, cancellation cannot withdraw it, as with a storage PUT already in flight.
+    pub(crate) async fn save_with_publication(
         &self,
         agent: &AgentSnapshots,
         name: &SnapshotName,
         tree: &Path,
-        _parent: Option<(&SnapshotName, ChangeDetection)>,
         cancel: &CancellationToken,
         slots: &dyn RunSlots,
+        publication: impl Future<Output = ()> + Send,
     ) -> Result<SnapshotInfo, SaveError> {
         let _work = self.operations.begin(agent);
         if let Some(misuse) = self.refuse_write_after_delete_all(agent, "save") {
@@ -247,6 +248,7 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         if cancel.is_cancelled() {
             return Err(SaveError::Stopped(Withdrawal::Stopped));
         }
+        publication.await;
         // A save of the same name can finish during the read, so the check runs again in the
         // step that publishes the snapshot.
         let mut agents = self.agents();
@@ -261,6 +263,23 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         )?;
         agents.insert(agent.clone(), saved);
         Ok(info)
+    }
+}
+
+#[async_trait]
+#[golem_async_trait::region_simple]
+impl FilesystemSnapshotStore for InMemorySnapshotStore {
+    async fn save(
+        &self,
+        agent: &AgentSnapshots,
+        name: &SnapshotName,
+        tree: &Path,
+        _parent: Option<(&SnapshotName, ChangeDetection)>,
+        cancel: &CancellationToken,
+        slots: &dyn RunSlots,
+    ) -> Result<SnapshotInfo, SaveError> {
+        self.save_with_publication(agent, name, tree, cancel, slots, std::future::ready(()))
+            .await
     }
 
     async fn restore(

@@ -14,11 +14,10 @@
 
 use super::{
     AcceptedInvocation, AccountId, AgentId, AgentInvocation, AgentInvocationOutput,
-    AgentInvocationResult, AgentMode, ComponentRevision, DateTime, Future, HasAll,
-    HasComponentService, InvocationFreshnessDisposition, InvocationStart, InvocationStatus,
-    ParsedAgentKey, Pin, SchemaValue, ScopeCard, UsesAllDeps, Utc, Worker, WorkerCtx,
-    WorkerExecutorError, WorkerExecutorImpl, build_durable_streaming_request,
-    extract_owned_agent_id, from_proto_invocation_context, golem, validate_agent_method_invocation,
+    AgentInvocationResult, ComponentRevision, DateTime, Future, HasAll, HasComponentService,
+    InvocationFreshnessDisposition, InvocationStart, InvocationStatus, Pin, ScopeCard, UsesAllDeps,
+    Utc, Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl,
+    build_durable_streaming_request, from_proto_invocation_context, golem,
 };
 use golem_common::model::InvocationRequestKey;
 use golem_common::model::caller::Caller;
@@ -29,8 +28,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     pub(super) async fn invoke_agent_internal(
         &self,
         request: &InvocationStart,
-        method_parameters: Option<SchemaValue>,
-        input_encoded_len: Option<usize>,
         acceptance_committed: tokio::sync::oneshot::Sender<()>,
         accepted: tokio::sync::oneshot::Sender<AcceptedInvocation>,
         scope: &crate::worker::tasks::TaskScope,
@@ -76,12 +73,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ));
         }
 
-        let final_agent_id: AgentId = request
-            .agent_id
-            .clone()
-            .ok_or(WorkerExecutorError::invalid_request("agent_id not found"))?
-            .try_into()
-            .map_err(WorkerExecutorError::invalid_request)?;
+        let resolved = self.resolve_request_target(request).await?;
+        let final_agent_id: AgentId = resolved.owned_agent_id.agent_id;
 
         if matches!(
             mode,
@@ -106,7 +99,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ));
             }
             let inv_status = match self
-                .get_or_create_pending_for_lookup(request, expected_fingerprint)
+                .get_or_create_pending_for_lookup(request, &resolved, expected_fingerprint)
                 .await?
             {
                 Some((worker, _response_lease)) => {
@@ -117,7 +110,22 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .deleted_incarnation_as_not_found(expected_fingerprint, bound)
                         .await?;
                     match worker.lookup_invocation_result(&ik).await {
-                        crate::model::LookupResult::Complete(Ok(_)) => InvocationStatus::Complete,
+                        crate::model::LookupResult::Complete(Ok(mut output)) => {
+                            publish_acceptance(
+                                acceptance_committed,
+                                accepted,
+                                &final_agent_id,
+                                &ik,
+                                None,
+                            )?;
+                            output.agent_id = Some(final_agent_id);
+                            output.idempotency_key = Some(ik);
+                            output.invocation_status = Some(InvocationStatus::Complete);
+                            return Ok(output);
+                        }
+                        crate::model::LookupResult::Complete(Err(
+                            WorkerExecutorError::InvocationCancelled,
+                        )) => InvocationStatus::Cancelled,
                         crate::model::LookupResult::Complete(Err(err)) => return Err(err),
                         crate::model::LookupResult::Pending => InvocationStatus::Pending,
                         crate::model::LookupResult::New
@@ -126,7 +134,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 }
                 None => InvocationStatus::Unknown,
             };
-            publish_acceptance(acceptance_committed, accepted, &ik, None)?;
+            publish_acceptance(acceptance_committed, accepted, &final_agent_id, &ik, None)?;
             return Ok(AgentInvocationOutput {
                 result: AgentInvocationResult::AgentInitialization,
                 consumed_fuel: None,
@@ -136,6 +144,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 idempotency_key: Some(ik),
                 oplog_index: None,
                 agent_fingerprint: None,
+                background_failure: None,
             });
         }
 
@@ -146,10 +155,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .ok_or(WorkerExecutorError::invalid_request(
                     "method_name is required for non-lookup invocations",
                 ))?;
-
-        let method_parameters = method_parameters.ok_or(WorkerExecutorError::invalid_request(
-            "input is required for non-lookup invocations",
-        ))?;
 
         let request_key: InvocationRequestKey = request
             .request_key
@@ -172,14 +177,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 WorkerExecutorError::invalid_request(format!("Invalid account id: {e}"))
             })?;
 
-        let owned_agent_id =
-            extract_owned_agent_id(request, |r| &r.agent_id, |r| &r.environment_id)?;
+        let owned_agent_id = resolved.owned_agent_id.clone();
 
         Worker::<Ctx>::validate_invocation_freshness(
             self,
             &owned_agent_id,
             &owner_key,
             freshness_disposition,
+            resolved.new_owner.as_ref(),
         )
         .await?;
 
@@ -193,36 +198,46 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let acquisition = self
                     .get_or_create_pending_with_freshness(
                         request,
+                        &resolved,
                         freshness_disposition,
                         expected_fingerprint,
                     )
                     .await;
                 let (worker, _response_lease) = match acquisition {
-                    Err(error @ WorkerExecutorError::PreviousInvocationFailed { .. })
-                        if request.origin_invocation.is_some()
-                            && freshness_disposition
-                                == InvocationFreshnessDisposition::MayExist =>
-                    {
+                    // A same-key retry that the agent's health refuses observes the recorded
+                    // success of its invocation: an invocation that recorded its result keeps it
+                    // when the agent gave up during its background work.
+                    Err(
+                        error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
+                        | WorkerExecutorError::PreviousInvocationExited),
+                    ) if freshness_disposition == InvocationFreshnessDisposition::MayExist => {
                         match self
-                            .get_or_create_pending_for_lookup(request, expected_fingerprint)
+                            .get_or_create_pending_for_lookup(
+                                request,
+                                &resolved,
+                                expected_fingerprint,
+                            )
                             .await?
                         {
                             Some((worker, lease)) => {
                                 let metadata = worker.get_initial_worker_metadata();
                                 let ik = request_key
-                                    .finalize(
-                                        metadata.agent_id.clone(),
-                                        metadata.fingerprint,
-                                        &method_name,
-                                    )
+                                    .finalize(metadata.agent_id, metadata.fingerprint, &method_name)
                                     .id();
                                 // The scope is not bound yet, so a deletion can stop this
                                 // generation's state actor; that read fails with the original
                                 // error rather than panicking.
-                                if matches!(
-                                    worker.try_lookup_invocation_result(&ik).await,
-                                    Ok(crate::model::LookupResult::New) | Err(_)
-                                ) {
+                                // Another caller observes only a recorded success; a recorded
+                                // failure keeps the agent's health error. Only an RPC caller
+                                // waits for accepted work without a result on a failed agent:
+                                // it is attached to that work.
+                                let observable =
+                                    match worker.try_lookup_invocation_result(&ik).await {
+                                        Ok(crate::model::LookupResult::Complete(Ok(_))) => true,
+                                        Ok(crate::model::LookupResult::New) | Err(_) => false,
+                                        Ok(_) => request.origin_invocation.is_some(),
+                                    };
+                                if !observable {
                                     return worker
                                         .deleted_incarnation_as_not_found(
                                             expected_fingerprint,
@@ -246,76 +261,85 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .deleted_incarnation_as_not_found(expected_fingerprint, bound)
                     .await?;
                 let metadata = worker.get_initial_worker_metadata();
-                let final_agent_id = metadata.agent_id.clone();
+                let final_agent_id = metadata.agent_id;
                 let ik = request_key
-                    .finalize(final_agent_id.clone(), metadata.fingerprint, &method_name)
+                    .finalize(final_agent_id, metadata.fingerprint, &method_name)
                     .id();
-                let status = worker.get_last_known_status().await;
-                let queued_manual_update_revision = status
-                    .pending_invocations
-                    .iter()
-                    .rev()
-                    .find_map(|invocation| invocation.manual_update_target_revision);
-                let pending_update_revision = queued_manual_update_revision.or_else(|| {
-                    status
-                        .pending_updates
-                        .back()
-                        .map(|update| update.target_revision)
-                });
-                let current_component = self
-                    .component_service()
-                    .get_metadata(metadata.component_id, Some(status.component_revision))
-                    .await?;
-                let (component, streaming) = if let Some(pending_revision) = pending_update_revision
-                    && pending_revision != status.component_revision
-                    && let Ok(pending_component) = self
-                        .component_service()
-                        .get_metadata(metadata.component_id, Some(pending_revision))
-                        .await
-                    && let Ok(parsed_agent_id) =
-                        metadata.parse_agent_id(&pending_component.metadata)
-                    && let Ok(streaming) = validate_agent_method_invocation(
-                        &pending_component.metadata,
-                        Some(&parsed_agent_id),
-                        &method_name,
-                        &method_parameters,
-                    ) {
-                    (pending_component, streaming)
-                } else {
-                    let parsed_agent_id = metadata
-                        .parse_agent_id(&current_component.metadata)
-                        .map_err(WorkerExecutorError::invalid_request)?;
-                    let streaming = validate_agent_method_invocation(
-                        &current_component.metadata,
-                        Some(&parsed_agent_id),
-                        &method_name,
-                        &method_parameters,
-                    )?;
-                    (current_component, streaming)
-                };
-                let accepted_revision =
-                    (worker.agent_mode() == AgentMode::Ephemeral).then_some(component.revision);
                 let invocation = AgentInvocation::AgentMethod {
                     idempotency_key: ik,
                     method_name: method_name.clone(),
-                    input: method_parameters,
+                    allow_streams: request.allow_streams,
+                    input: super::capture_method_input(request)?,
                     invocation_context,
                     caller,
                     scope_card,
                 };
-                let mut invocation_output = if streaming {
-                    let input_encoded_len = input_encoded_len.ok_or_else(|| {
-                        WorkerExecutorError::invalid_request(
-                            "durable streaming invocation is missing its encoded input length",
-                        )
-                    })?;
-                    let request = build_durable_streaming_request(
+                let retained_origin = if request.allow_streams
+                    && request.origin_invocation.is_some()
+                {
+                    let producer = worker.durable_stream_producer().await?;
+                    let key = producer.qualify_session(
+                        &golem_common::model::durable_stream::StreamRegistrationInvocation::Local(
+                            ik,
+                        ),
+                    );
+                    if worker.prepared_stream_session(&ik).await?.is_none()
+                        && let Some(attached) = worker
+                        .stream_session_records(&key, None)
+                        .await?
+                        .into_iter()
+                        .find_map(|record| {
+                            if let golem_common::model::durable_stream::StreamSessionRecord::Attached(record) = record { Some(record) } else { None }
+                        })
+                    {
+                        let requested = super::request::capture_session_acceptance(request,
+                            self.services.config().limits.live_stream_event_broadcast_capacity.get())?;
+                        let original = worker.accepted_invocation_payload(&ik).await?
+                            .ok_or_else(|| WorkerExecutorError::runtime("stream attachment has no retained request"))?;
+                        if !crate::worker::same_origin_queued_request(&original, &invocation.clone().into_parts().1, &attached.acceptance, &requested) {
+                            return Err(WorkerExecutorError::invalid_request("IdempotencyConflict: queued observer differs from the retained origin request"));
+                        }
+                        let streams = worker.queued_method_session(ik, attached.epoch, attached.attempt_id).await?;
+                        let _ = acceptance_committed.send(());
+                        accepted.send(AcceptedInvocation {
+                            agent_id: final_agent_id, idempotency_key: ik,
+                            component_revision: None, durable_streams: Some(streams), prepared: None,
+                            durable_replayed: true, joined_origin_observer: true,
+                            queued: Some((attached, Box::pin(worker.clone().wait_method_session_ready(ik)))),
+                        }).map_err(|_| WorkerExecutorError::runtime("invocation session ended before observer acceptance"))?;
+                        let mut output = worker.await_enqueued_invocation(ik).await?;
+                        output.agent_id = Some(final_agent_id);
+                        output.idempotency_key = Some(ik);
+                        return Ok(output);
+                    }
+                    worker.prepared_stream_session(&ik).await?
+                } else {
+                    None
+                };
+                if request.allow_streams
+                    && request.origin_invocation.is_some()
+                    && let Some(prepared) = retained_origin
+                {
+                    // A same-origin fork observes the retained execution. Its descriptor and
+                    // authority comparison belong to the existing stream-join path.
+                    let revision = prepared.attempt.invocation.target_component_revision;
+                    let component = self
+                        .component_service()
+                        .get_metadata(metadata.component_id, Some(revision))
+                        .await?;
+                    let durable = build_durable_streaming_request(
                         request,
+                        final_agent_id,
+                        metadata.agent_type_name.as_ref(),
                         &component.metadata,
-                        component.revision,
-                        worker.get_initial_worker_metadata().fingerprint,
+                        revision,
+                        metadata.fingerprint,
                         invocation,
-                        input_encoded_len,
+                        request
+                            .input
+                            .as_ref()
+                            .map(prost::Message::encoded_len)
+                            .unwrap_or_default(),
                         acceptance_committed,
                         self.services
                             .config()
@@ -323,40 +347,166 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             .live_stream_event_broadcast_capacity
                             .get(),
                     )?;
-                    let acceptance = worker
-                        .clone()
-                        .accept_durable_streaming_invocation(request)
-                        .await?;
-                    let streams = acceptance.streams;
+                    let acceptance = worker.accept_durable_streaming_invocation(durable).await?;
                     accepted
                         .send(AcceptedInvocation {
+                            agent_id: final_agent_id,
                             idempotency_key: ik,
-                            component_revision: Some(component.revision),
-                            durable_streams: Some(streams.clone()),
+                            component_revision: Some(revision),
+                            durable_streams: Some(acceptance.streams),
                             prepared: Some(acceptance.prepared),
                             durable_replayed: acceptance.replayed,
                             joined_origin_observer: acceptance.joined_origin_observer,
+                            queued: None,
+                        })
+                        .map_err(|_| {
+                            WorkerExecutorError::runtime(
+                                "invocation session ended before retained acceptance",
+                            )
+                        })?;
+                    let mut output = worker.await_enqueued_invocation(ik).await?;
+                    output.agent_id = Some(final_agent_id);
+                    output.idempotency_key = Some(ik);
+                    return Ok(output);
+                }
+                let mut invocation_output = if request.allow_streams {
+                    let attempt_id = golem_common::model::durable_stream::AttemptId(
+                        request
+                            .attempt_id
+                            .ok_or_else(|| {
+                                WorkerExecutorError::invalid_request(
+                                    "streaming invocation requires an attempt ID",
+                                )
+                            })?
+                            .into(),
+                    );
+                    if attempt_id.0.is_nil()
+                        || attempt_id.0.get_version() != Some(uuid::Version::Random)
+                    {
+                        return Err(WorkerExecutorError::invalid_request(
+                            "streaming attempt must be a non-nil UUIDv4",
+                        ));
+                    }
+                    let mut descriptor = super::request::capture_session_acceptance(
+                        request,
+                        self.services
+                            .config()
+                            .limits
+                            .live_stream_event_broadcast_capacity
+                            .get(),
+                    )?;
+                    descriptor.public_session_id = ik.to_string();
+                    let producer = worker.durable_stream_producer().await?;
+                    let session_key = producer.qualify_session(
+                        &golem_common::model::durable_stream::StreamRegistrationInvocation::Local(
+                            ik,
+                        ),
+                    );
+                    let attached =
+                        golem_common::model::durable_stream::StreamSessionAttachedRecord {
+                            format_version:
+                                golem_common::model::durable_stream::DURABLE_STREAM_FORMAT_VERSION,
+                            session_key: ik,
+                            attachment_id:
+                                golem_common::model::durable_stream::AttachmentId::primary(
+                                    resolved.owned_agent_id.environment_id,
+                                    &final_agent_id,
+                                    &ik,
+                                )
+                                .map_err(|error| {
+                                    WorkerExecutorError::invalid_request(error.to_string())
+                                })?,
+                            attempt_id,
+                            epoch: producer.attachment_epoch_floor(),
+                            pending_invocation_oplog_index:
+                                golem_common::model::oplog::OplogIndex::NONE,
+                            acceptance: descriptor,
+                        };
+                    let replayed = worker.try_lookup_invocation_result(&ik).await?
+                        != crate::model::LookupResult::New;
+                    let (admission_tx, mut admission_rx) = tokio::sync::oneshot::channel();
+                    let invocation = worker.clone().invoke_and_await_with_attachment(
+                        invocation,
+                        Some(admission_tx),
+                        Some(attached.clone()),
+                    );
+                    tokio::pin!(invocation);
+                    let completed = tokio::select! {
+                        biased;
+                        signal = &mut admission_rx => {
+                            if let Ok(crate::worker::read_only_cache::AdmissionSignal::Failure(error)) = signal { return Err(error); }
+                            None
+                        },
+                        result = &mut invocation => {
+                            if result.is_err() && !matches!(admission_rx.try_recv(), Ok(crate::worker::read_only_cache::AdmissionSignal::Queued | crate::worker::read_only_cache::AdmissionSignal::Immediate)) {
+                                return result;
+                            }
+                            Some(result)
+                        },
+                    };
+                    let retained = worker.stream_session_records(&session_key, None).await?
+                        .into_iter().find_map(|record| if let golem_common::model::durable_stream::StreamSessionRecord::Attached(record) = record { Some(record) } else { None });
+                    let (streams, queued) = if let Some(retained) = retained {
+                        if retained.acceptance != attached.acceptance
+                            || retained.attempt_id != attempt_id
+                        {
+                            return Err(WorkerExecutorError::invalid_request(
+                                "AttemptConflict: retained stream acceptance differs",
+                            ));
+                        }
+                        (
+                            Some(
+                                worker
+                                    .queued_method_session(ik, retained.epoch, retained.attempt_id)
+                                    .await?,
+                            ),
+                            Some((
+                                retained,
+                                Box::pin(worker.clone().wait_method_session_ready(ik))
+                                    as Pin<
+                                        Box<
+                                            dyn Future<Output = Result<_, WorkerExecutorError>>
+                                                + Send,
+                                        >,
+                                    >,
+                            )),
+                        )
+                    } else {
+                        (None, None)
+                    };
+                    let _ = acceptance_committed.send(());
+                    accepted
+                        .send(AcceptedInvocation {
+                            agent_id: final_agent_id,
+                            idempotency_key: ik,
+                            component_revision: None,
+                            durable_streams: streams,
+                            prepared: None,
+                            durable_replayed: replayed,
+                            joined_origin_observer: false,
+                            queued,
                         })
                         .map_err(|_| {
                             WorkerExecutorError::runtime(
                                 "invocation session ended before durable acceptance",
                             )
                         })?;
-                    if !acceptance.joined_origin_observer {
-                        streams
-                            .recover_nested_input_mappings()
-                            .await
-                            .map_err(|error| {
-                                error.into_worker_executor_error(WorkerExecutorError::runtime)
-                            })?;
+                    match completed {
+                        Some(result) => result?,
+                        None => invocation.await?,
                     }
-                    worker.await_enqueued_invocation(ik).await?
                 } else {
                     let (admission_tx, admission_rx) = tokio::sync::oneshot::channel();
                     let invocation =
                         worker.invoke_and_await_with_notifier(invocation, Some(admission_tx));
                     crate::worker::await_scalar_invocation(invocation, admission_rx, || {
-                        publish_acceptance(acceptance_committed, accepted, &ik, accepted_revision)
+                        publish_acceptance(
+                            acceptance_committed,
+                            accepted,
+                            &final_agent_id,
+                            &ik,
+                            None,
+                        )
                     })
                     .await?
                 };
@@ -370,18 +520,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let pinned = match (expected_fingerprint, schedule_at) {
                     // A delayed schedule for a named incarnation is not refused because that
                     // incarnation failed, the same as a guest's local scheduled call.
-                    (Some(expected), Some(_)) => Some(
-                        Worker::get_exact_existing_suspended_for_response(
+                    (Some(expected), Some(_)) => {
+                        let pinned = Worker::get_exact_existing_suspended_for_response(
                             self,
                             &owned_agent_id,
-                            caller.clone(),
                             Some(expected),
                         )
-                        .await?,
-                    ),
+                        .await?;
+                        pinned.0.ensure_owns_key(resolved.new_owner.as_ref())?;
+                        Some(pinned)
+                    }
                     (Some(_), None) => Some(
                         self.get_or_create_pending_with_freshness(
                             request,
+                            &resolved,
                             freshness_disposition,
                             expected_fingerprint,
                         )
@@ -389,69 +541,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                     (None, _) => None,
                 };
-                let existing_metadata = if let Some((worker, _)) = &pinned {
-                    Some(
-                        worker
-                            .deleted_incarnation_as_not_found(
-                                expected_fingerprint,
-                                worker.try_get_latest_worker_metadata().await,
-                            )
-                            .await?,
-                    )
-                } else if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
-                    None
-                } else {
-                    Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await?
-                };
-                let component_revision = existing_metadata.as_ref().map(|metadata| {
-                    let status = &metadata.last_known_status;
-                    status
-                        .pending_invocations
-                        .iter()
-                        .rev()
-                        .find_map(|invocation| invocation.manual_update_target_revision)
-                        .or_else(|| {
-                            status
-                                .pending_updates
-                                .back()
-                                .map(|update| update.target_revision)
-                        })
-                        .unwrap_or(status.component_revision)
-                });
-                let component = self
-                    .component_service()
-                    .get_metadata(
-                        existing_metadata.as_ref().map_or_else(
-                            || owned_agent_id.component_id(),
-                            |metadata| metadata.component_id,
-                        ),
-                        component_revision,
-                    )
-                    .await?;
-                let parsed_agent_id = match &existing_metadata {
-                    Some(metadata) => metadata.parse_agent_id(&component.metadata),
-                    None => ParsedAgentKey::parse(
-                        &owned_agent_id.agent_id.agent_id,
-                        &component.metadata,
-                    ),
-                }
-                .map_err(WorkerExecutorError::invalid_request)?;
-                let streaming = validate_agent_method_invocation(
-                    &component.metadata,
-                    Some(&parsed_agent_id),
-                    &method_name,
-                    &method_parameters,
-                )?;
-                if streaming {
-                    return Err(WorkerExecutorError::invalid_request(
-                        "live streams require an attached Await invocation session",
-                    ));
-                }
                 let (worker, _response_lease) = match pinned {
                     Some(pinned) => pinned,
                     None => {
                         self.get_or_create_pending_with_freshness(
                             request,
+                            &resolved,
                             freshness_disposition,
                             None,
                         )
@@ -467,12 +562,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let metadata = worker.get_initial_worker_metadata();
                 let final_agent_id = metadata.agent_id;
                 let ik = request_key
-                    .finalize(final_agent_id.clone(), metadata.fingerprint, &method_name)
+                    .finalize(final_agent_id, metadata.fingerprint, &method_name)
                     .id();
                 let invocation = AgentInvocation::AgentMethod {
                     idempotency_key: ik,
                     method_name,
-                    input: method_parameters,
+                    allow_streams: false,
+                    input: super::capture_method_input(request)?,
                     invocation_context,
                     caller,
                     scope_card,
@@ -487,8 +583,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         publish_acceptance(
                             acceptance_committed,
                             accepted,
+                            &final_agent_id,
                             &ik,
-                            Some(component.revision),
+                            None,
                         )?;
                         Ok(AgentInvocationOutput {
                             result: AgentInvocationResult::AgentInitialization,
@@ -499,6 +596,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             idempotency_key: Some(ik),
                             oplog_index: None,
                             agent_fingerprint: Some(metadata.fingerprint),
+                            background_failure: None,
                         })
                     }
                     None => {
@@ -509,8 +607,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         publish_acceptance(
                             acceptance_committed,
                             accepted,
+                            &final_agent_id,
                             &ik,
-                            Some(component.revision),
+                            None,
                         )?;
                         match result {
                             crate::worker::ResultOrSubscription::Finished(Err(err)) => {
@@ -530,6 +629,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             idempotency_key: Some(ik),
                             oplog_index: None,
                             agent_fingerprint: None,
+                            background_failure: None,
                         })
                     }
                 }
@@ -564,18 +664,21 @@ pub(super) fn decode_invocation_freshness_disposition(
 pub(super) fn publish_acceptance(
     acceptance_committed: tokio::sync::oneshot::Sender<()>,
     accepted: tokio::sync::oneshot::Sender<AcceptedInvocation>,
+    agent_id: &AgentId,
     idempotency_key: &golem_common::model::InvocationId,
     component_revision: Option<ComponentRevision>,
 ) -> Result<(), WorkerExecutorError> {
     let _ = acceptance_committed.send(());
     accepted
         .send(AcceptedInvocation {
+            agent_id: *agent_id,
             idempotency_key: *idempotency_key,
             component_revision,
             durable_streams: None,
             prepared: None,
             durable_replayed: false,
             joined_origin_observer: false,
+            queued: None,
         })
         .map_err(|_| WorkerExecutorError::runtime("invocation session ended before acceptance"))
 }

@@ -52,7 +52,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         http_connection_pool: Option<HttpConnectionPool>,
         websocket_connection_pool: websocket::WebSocketConnectionPool,
         pending_update: Option<HydratedUpdate>,
-        original_phantom_id: Option<Uuid>,
         per_invocation_http_call_limit: u64,
         per_invocation_rpc_call_limit: u64,
         runtime: OwnerRuntime,
@@ -201,7 +200,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .is_some_and(|component| component.metadata.has_shared_linear_memory())
         {
             return Err(WorkerExecutorError::worker_creation_failed(
-                owned_agent_id.agent_id.clone(),
+                owned_agent_id.agent_id,
                 SHARED_LINEAR_MEMORY_ERROR,
             ));
         }
@@ -211,7 +210,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .unwrap_or(0);
         if initial_linear_memory > resource_limits.max_memory_limit() as u64 {
             return Err(WorkerExecutorError::worker_creation_failed(
-                owned_agent_id.agent_id.clone(),
+                owned_agent_id.agent_id,
                 format!(
                     "Linear memories require {initial_linear_memory} bytes, exceeding the per-agent limit of {} bytes",
                     resource_limits.max_memory_limit()
@@ -338,7 +337,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             worker_config.entity_start_index,
             shard_service,
             pending_update,
-            original_phantom_id,
             worker_config.replay.snapshot.map(|(index, _)| index),
             worker_config.replay.role.clone(),
             per_invocation_http_call_limit,
@@ -456,7 +454,6 @@ impl PrivateDurableWorkerState {
         entity_start_index: Option<OplogIndex>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<HydratedUpdate>,
-        original_phantom_id: Option<Uuid>,
         last_snapshot_index: Option<OplogIndex>,
         baseline_role: BaselineRole,
         per_invocation_http_call_limit: u64,
@@ -501,7 +498,8 @@ impl PrivateDurableWorkerState {
             ),
         };
         let wallet_id_hash = CardHolder::Agent(golem_common::model::card::AgentCardHolder {
-            agent_id: owned_agent_id.agent_id.clone(),
+            environment_id: owned_agent_id.environment_id,
+            agent_id: owned_agent_id.agent_id,
         })
         .wallet_id_hash();
         let agent_effective_surface = match (&runtime, &owner_context) {
@@ -596,7 +594,6 @@ impl PrivateDurableWorkerState {
             open_filesystem_output_streams: HashMap::new(),
             open_filesystem_input_streams: HashSet::new(),
             file_stream_pollables: HashSet::new(),
-            tcp_connect_replay: sockets::tcp::TcpConnectReplay::default(),
             resolved_names,
             dns_resolver: None,
             open_tcp_input_streams: HashSet::new(),
@@ -646,10 +643,12 @@ impl PrivateDurableWorkerState {
             tail_work,
             invocation_deadline_exceeded: Arc::new(AtomicBool::new(false)),
             tail_work_deadline_exceeded: Arc::new(AtomicBool::new(false)),
+            open_invocation_anchor: None,
+            replayed_invocation_terminal: None,
+            result_recorded_at_return: false,
             dropped_call_events,
             dropped_call_event_backlog: VecDeque::new(),
             completion_marker_recorder,
-            current_phantom_id: original_phantom_id,
             last_snapshot_index,
             baseline_role,
             snapshot_replay_purpose,

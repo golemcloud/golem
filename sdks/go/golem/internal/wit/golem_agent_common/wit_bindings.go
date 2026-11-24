@@ -45,7 +45,6 @@ type TypedSchemaValue = golem_core_types.TypedSchemaValue
 type MetadataEnvelope = golem_core_types.MetadataEnvelope
 type AgentId = golem_core_types.AgentId
 type AccountId = golem_core_types.AccountId
-type ComponentId = golem_core_types.ComponentId
 type EnvironmentId = golem_core_types.EnvironmentId
 type Uuid = golem_core_types.Uuid
 type Datetime = golem_core_types.Datetime
@@ -189,43 +188,42 @@ type ReadOnlyConfig struct {
 	CachePolicy CachePolicy
 }
 
-type PhantomIdBindingDetails struct {
-	Name     string
-	Optional bool
+type AgentIdBindingDetails struct {
+	Name string
 }
 
 const (
-	PhantomIdBindingPath  uint8 = 0
-	PhantomIdBindingQuery uint8 = 1
+	AgentIdBindingPath  uint8 = 0
+	AgentIdBindingQuery uint8 = 1
 )
 
-type PhantomIdBinding struct {
+type AgentIdBinding struct {
 	tag   uint8
 	value any
 }
 
-func (self PhantomIdBinding) Tag() uint8 {
+func (self AgentIdBinding) Tag() uint8 {
 	return self.tag
 }
 
-func (self PhantomIdBinding) Path() PhantomIdBindingDetails {
-	if self.tag != PhantomIdBindingPath {
+func (self AgentIdBinding) Path() AgentIdBindingDetails {
+	if self.tag != AgentIdBindingPath {
 		panic("tag mismatch")
 	}
-	return self.value.(PhantomIdBindingDetails)
+	return self.value.(AgentIdBindingDetails)
 }
-func (self PhantomIdBinding) Query() PhantomIdBindingDetails {
-	if self.tag != PhantomIdBindingQuery {
+func (self AgentIdBinding) Query() AgentIdBindingDetails {
+	if self.tag != AgentIdBindingQuery {
 		panic("tag mismatch")
 	}
-	return self.value.(PhantomIdBindingDetails)
+	return self.value.(AgentIdBindingDetails)
 }
 
-func MakePhantomIdBindingPath(value PhantomIdBindingDetails) PhantomIdBinding {
-	return PhantomIdBinding{PhantomIdBindingPath, value}
+func MakeAgentIdBindingPath(value AgentIdBindingDetails) AgentIdBinding {
+	return AgentIdBinding{AgentIdBindingPath, value}
 }
-func MakePhantomIdBindingQuery(value PhantomIdBindingDetails) PhantomIdBinding {
-	return PhantomIdBinding{PhantomIdBindingQuery, value}
+func MakeAgentIdBindingQuery(value AgentIdBindingDetails) AgentIdBinding {
+	return AgentIdBinding{AgentIdBindingQuery, value}
 }
 
 type CorsOptions struct {
@@ -309,7 +307,8 @@ type HttpMountDetails struct {
 	PathPrefix         []PathSegment
 	AuthDetails        witTypes.Option[AuthDetails]
 	PhantomAgent       bool
-	PhantomIdBinding   witTypes.Option[PhantomIdBinding]
+	AgentIdBinding     witTypes.Option[AgentIdBinding]
+	CreateRoute        witTypes.Option[[]PathSegment]
 	CorsOptions        CorsOptions
 	WebhookSuffix      []PathSegment
 	StaticBindings     []golem_core_http.FileMapping
@@ -581,10 +580,9 @@ type AgentType struct {
 	Config         []AgentConfigDeclaration
 }
 
-// Associates an agent type with a component that implements it
+// An agent type deployed in the current environment
 type RegisteredAgentType struct {
-	AgentType     AgentType
-	ImplementedBy golem_core_types.ComponentId
+	AgentType AgentType
 }
 
 type TypedAgentConfigValue struct {

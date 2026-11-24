@@ -13,13 +13,13 @@ use super::{
     DurableStreamsHandler, MAX_ITEMS, body_response, has_header, rejection_response, response,
     route_method, route_stream_load_key,
 };
+use crate::service::worker::RoutedTarget;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     AppendToStreamSlotRequest, ExternalStreamProducer, StreamSessionCreationIntent,
     StreamSessionExpiryPolicy, TypedStreamSlotItems, append_to_stream_slot_request::Payload,
     append_to_stream_slot_response::Result as Outcome,
 };
-use golem_common::model::AgentId;
-use golem_common::schema::{FieldSource, SchemaGraph, SchemaType};
+use golem_common::schema::{SchemaGraph, SchemaType};
 use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_schema::schema::render::from_untrusted_json_value;
 use golem_service_base::custom_api::CallAgentBehaviour;
@@ -36,13 +36,14 @@ impl DurableStreamsHandler {
         request: &mut RichRequest,
         route: &ResolvedRouteEntry,
         behaviour: &CallAgentBehaviour,
-        agent_id: &AgentId,
+        target: &RoutedTarget,
         session: &str,
         slot: &str,
         allow_create: bool,
         allow: &str,
         expiry_policy: Option<StreamSessionExpiryPolicy>,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
+        let agent_id = &target.agent_id;
         let Some(declared_slot) = declared_slot(behaviour, slot)? else {
             return Ok(response(StatusCode::NOT_FOUND));
         };
@@ -62,7 +63,7 @@ impl DurableStreamsHandler {
         if let Err(rejection) = self.limiter.check_append(&route_key, route_limit) {
             return Ok(rejection_response(rejection));
         }
-        let metadata = self
+        let mut metadata = self
             .read_slot(route, agent_id, session, slot, Vec::new(), 0, 0)
             .await?;
         if metadata.is_none() && !allow_create {
@@ -71,17 +72,51 @@ impl DurableStreamsHandler {
         if metadata.as_ref().is_some_and(|m| m.tombstoned) {
             return Ok(response(StatusCode::GONE));
         }
-        if metadata.as_ref().is_some_and(|m| !m.writable) {
-            return Ok(read_only_response(allow));
-        }
-        let graph: SchemaGraph = match &metadata {
-            Some(metadata) => metadata
-                .element_schema
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("input stream schema missing"))?
-                .try_into()
-                .map_err(anyhow::Error::msg)?,
-            None => {
+        // A missing session must not be created by an invalid append. Existing sessions keep
+        // their readiness and read-only response precedence.
+        let prepared = if metadata.is_none() {
+            match self
+                .prepare_append(request, &declared_slot, None, allow)
+                .await?
+            {
+                Ok(prepared) => {
+                    let field = behaviour
+                        .method_input
+                        .input_schema
+                        .fields()
+                        .iter()
+                        .find(|field| field.name == declared_slot.canonical_name)
+                        .ok_or_else(|| anyhow::anyhow!("compiled input stream field missing"))?;
+                    let mut graph = behaviour.method_input.graph.clone();
+                    let SchemaType::Stream {
+                        inner: Some(element),
+                        ..
+                    } = graph
+                        .resolve_ref(&field.schema)
+                        .map_err(|error| anyhow::anyhow!(error.to_string()))?
+                    else {
+                        return Err(anyhow::anyhow!(
+                            "compiled input stream element schema missing"
+                        )
+                        .into());
+                    };
+                    graph.root = (**element).clone();
+                    if let Err((path, detail)) = prepared.2.encode(&graph) {
+                        return Ok(problem(StatusCode::BAD_REQUEST, &path, &detail));
+                    }
+                    Some(prepared)
+                }
+                Err(response) => return Ok(response),
+            }
+        } else {
+            None
+        };
+        let _waiting = if metadata.as_ref().is_none_or(|metadata| metadata.queued) {
+            let permit = match self.limiter.try_acquire_reader(&route_key, None) {
+                Ok(permit) => permit,
+                Err(rejection) => return Ok(rejection_response(rejection)),
+            };
+            if metadata.is_none() {
                 if self
                     .read_slot(route, agent_id, session, "", Vec::new(), 0, 0)
                     .await?
@@ -89,28 +124,6 @@ impl DurableStreamsHandler {
                 {
                     return Ok(response(StatusCode::NOT_FOUND));
                 }
-                let Some(field) =
-                    behaviour
-                        .method_input
-                        .input_schema
-                        .fields()
-                        .iter()
-                        .find(|field| {
-                            field.name == slot && matches!(field.source, FieldSource::UserSupplied)
-                        })
-                else {
-                    return Ok(read_only_response(allow));
-                };
-                let SchemaType::Stream {
-                    inner: Some(inner), ..
-                } = behaviour
-                    .method_input
-                    .graph
-                    .resolve_ref(&field.schema)
-                    .map_err(|e| anyhow::anyhow!(e.to_string()))?
-                else {
-                    return Ok(response(StatusCode::NOT_FOUND));
-                };
                 if !arguments_come_from_url(behaviour) {
                     let path = request
                         .underlying
@@ -128,88 +141,58 @@ impl DurableStreamsHandler {
                         ),
                     ));
                 }
-                let mut graph = behaviour.method_input.graph.clone();
-                graph.root = (**inner).clone();
-                graph
+                self.create(
+                    request,
+                    route,
+                    behaviour,
+                    target,
+                    session,
+                    StreamSessionCreationIntent::LazyPost,
+                    expiry_policy,
+                )
+                .await?;
             }
+            metadata = self.read_slot_admitted(route, agent_id, session, slot, Vec::new(), 0, 0,
+                golem_api_grpc::proto::golem::workerexecutor::v1::StreamSlotReadAdmission::WaitReady, None).await?;
+            Some(permit)
+        } else {
+            None
         };
-        let producer = match producer_headers(request.headers()) {
-            Ok(producer) => producer,
-            Err(message) => return Ok(problem(StatusCode::BAD_REQUEST, "$headers", &message)),
+        let Some(metadata) = metadata else {
+            return Ok(response(StatusCode::NOT_FOUND));
         };
-        let close = request
-            .header_string_value("stream-closed")?
-            .is_some_and(|v| v.eq_ignore_ascii_case("true"));
-        let mut body = Vec::new();
-        request
-            .underlying
-            .take_body()
-            .into_async_read()
-            .take((self.max_append_body_bytes as u64).saturating_add(1))
-            .read_to_end(&mut body)
-            .await
-            .map_err(anyhow::Error::from)?;
-        if body.len() > self.max_append_body_bytes {
-            return Ok(problem(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "$",
-                "Append body exceeds the configured limit",
-            ));
+        if metadata.tombstoned {
+            return Ok(response(StatusCode::GONE));
         }
-        let binary = declared_slot.representation
-            == golem_service_base::custom_api::DurableStreamRepresentation::Bytes;
-        if !body.is_empty() {
-            if !has_header(request, "content-type") {
-                return Ok(problem(
-                    StatusCode::BAD_REQUEST,
-                    "$headers.content-type",
-                    "Content-Type is required for an append body",
-                ));
-            }
-            if content_type_mismatch(request, &declared_slot.content_type)? {
-                if let Some(metadata) = metadata.as_ref().filter(|metadata| metadata.closed) {
-                    return append_response(
-                        Outcome::Closed(Default::default()),
-                        producer.as_ref(),
-                        metadata.head_offset.clone(),
-                        Some(metadata.closed),
-                        allow,
-                    );
-                }
-                return Ok(response(StatusCode::CONFLICT));
-            }
+        if !metadata.writable {
+            return Ok(read_only_response(allow));
         }
-        let payload = match decode_body(&graph, binary, &body, close) {
+        let (producer, close, body) = match prepared {
+            Some(prepared) => prepared,
+            None => match self
+                .prepare_append(request, &declared_slot, Some(&metadata), allow)
+                .await?
+            {
+                Ok(prepared) => prepared,
+                Err(response) => return Ok(response),
+            },
+        };
+        let graph: SchemaGraph = metadata
+            .element_schema
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("ready input stream schema missing"))?
+            .try_into()
+            .map_err(anyhow::Error::msg)?;
+        let payload = match body.encode(&graph) {
             Ok(payload) => payload,
             Err((path, detail)) => return Ok(problem(StatusCode::BAD_REQUEST, &path, &detail)),
         };
-        if let Some(Payload::Values(items)) = &payload
-            && items.values.len() > MAX_ITEMS as usize
-        {
-            return Ok(problem(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "$",
-                &format!("An append may contain at most {MAX_ITEMS} JSON messages"),
-            ));
-        }
-        if metadata.is_none() {
-            self.create(
-                request,
-                route,
-                behaviour,
-                agent_id,
-                session,
-                StreamSessionCreationIntent::LazyPost,
-                expiry_policy,
-            )
-            .await?;
-        }
         let append = self
             .worker_service
             .append_to_stream_slot(
                 agent_id,
                 AppendToStreamSlotRequest {
-                    agent_id: Some(agent_id.clone().into()),
+                    agent_id: Some((*agent_id).into()),
                     environment_id: Some(route.route.environment_id.into()),
                     auth_ctx: Some(AuthCtx::System.into()),
                     route_scope: super::route_scope(route),
@@ -235,6 +218,81 @@ impl DurableStreamsHandler {
             append.stream_closed,
             allow,
         )
+    }
+
+    async fn prepare_append(
+        &self,
+        request: &mut RichRequest,
+        declared_slot: &golem_service_base::custom_api::DurableStreamSlot,
+        metadata: Option<&golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotSuccess>,
+        allow: &str,
+    ) -> Result<
+        Result<(Option<ExternalStreamProducer>, bool, AppendBody), RouteExecutionResult>,
+        RequestHandlerError,
+    > {
+        let producer = match producer_headers(request.headers()) {
+            Ok(producer) => producer,
+            Err(message) => return Ok(Err(problem(StatusCode::BAD_REQUEST, "$headers", &message))),
+        };
+        let close = request
+            .header_string_value("stream-closed")?
+            .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+        let mut body = Vec::new();
+        request
+            .underlying
+            .take_body()
+            .into_async_read()
+            .take((self.max_append_body_bytes as u64).saturating_add(1))
+            .read_to_end(&mut body)
+            .await
+            .map_err(anyhow::Error::from)?;
+        if body.len() > self.max_append_body_bytes {
+            return Ok(Err(problem(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "$",
+                "Append body exceeds the configured limit",
+            )));
+        }
+        let binary = declared_slot.representation
+            == golem_service_base::custom_api::DurableStreamRepresentation::Bytes;
+        if !body.is_empty() {
+            if !has_header(request, "content-type") {
+                return Ok(Err(problem(
+                    StatusCode::BAD_REQUEST,
+                    "$headers.content-type",
+                    "Content-Type is required for an append body",
+                )));
+            }
+            if content_type_mismatch(request, &declared_slot.content_type)? {
+                if let Some(metadata) = metadata.filter(|metadata| metadata.closed) {
+                    return append_response(
+                        Outcome::Closed(Default::default()),
+                        producer.as_ref(),
+                        metadata.head_offset.clone(),
+                        Some(metadata.closed),
+                        allow,
+                    )
+                    .map(Err);
+                }
+                return Ok(Err(response(StatusCode::CONFLICT)));
+            }
+        }
+        let body = match AppendBody::parse(binary, body, close) {
+            Ok(body) => body,
+            Err((path, detail)) => {
+                return Ok(Err(problem(StatusCode::BAD_REQUEST, &path, &detail)));
+            }
+        };
+        if let AppendBody::Json(items) = &body
+            && items.len() > MAX_ITEMS as usize
+        {
+            return Ok(Err(problem(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "$",
+                &format!("An append may contain at most {MAX_ITEMS} JSON messages"),
+            )));
+        }
+        Ok(Ok((producer, close, body)))
     }
 }
 
@@ -278,47 +336,59 @@ fn producer_headers(headers: &http::HeaderMap) -> Result<Option<ExternalStreamPr
     }))
 }
 
-fn decode_body(
-    graph: &SchemaGraph,
-    binary: bool,
-    body: &[u8],
-    close: bool,
-) -> Result<Option<Payload>, (String, String)> {
-    if body.is_empty() {
-        return if close {
-            Ok(None)
-        } else {
-            Err((
-                "$".into(),
-                "Empty append requires Stream-Closed: true".into(),
-            ))
+enum AppendBody {
+    Empty,
+    Bytes(Vec<u8>),
+    Json(Vec<serde_json::Value>),
+}
+
+impl AppendBody {
+    fn parse(binary: bool, body: Vec<u8>, close: bool) -> Result<Self, (String, String)> {
+        if body.is_empty() {
+            return if close {
+                Ok(Self::Empty)
+            } else {
+                Err((
+                    "$".into(),
+                    "Empty append requires Stream-Closed: true".into(),
+                ))
+            };
+        }
+        if binary {
+            return Ok(Self::Bytes(body));
+        }
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).map_err(|e| ("$".into(), e.to_string()))?;
+        let values = match json {
+            serde_json::Value::Array(values) => values,
+            value => vec![value],
         };
+        if values.is_empty() {
+            return Err(("$".into(), "An append array must not be empty".into()));
+        }
+        Ok(Self::Json(values))
     }
-    if binary {
-        return Ok(Some(Payload::PackedU8(body.to_vec())));
+
+    fn encode(&self, graph: &SchemaGraph) -> Result<Option<Payload>, (String, String)> {
+        let values = match self {
+            Self::Empty => return Ok(None),
+            Self::Bytes(bytes) => return Ok(Some(Payload::PackedU8(bytes.clone()))),
+            Self::Json(values) => values,
+        };
+        let values = values
+            .iter()
+            .enumerate()
+            .map(|(index, json)| {
+                let value = from_untrusted_json_value(graph, &graph.root, json)
+                    .map_err(|e| (format!("$[{index}]"), e.to_string()))?;
+                let proto: ProtoSchemaValue = value
+                    .try_into()
+                    .map_err(|e: String| (format!("$[{index}]"), e))?;
+                Ok(proto.encode_to_vec())
+            })
+            .collect::<Result<Vec<_>, (String, String)>>()?;
+        Ok(Some(Payload::Values(TypedStreamSlotItems { values })))
     }
-    let json: serde_json::Value =
-        serde_json::from_slice(body).map_err(|e| ("$".into(), e.to_string()))?;
-    let values = match json {
-        serde_json::Value::Array(values) => values,
-        value => vec![value],
-    };
-    if values.is_empty() {
-        return Err(("$".into(), "An append array must not be empty".into()));
-    }
-    let values = values
-        .iter()
-        .enumerate()
-        .map(|(index, json)| {
-            let value = from_untrusted_json_value(graph, &graph.root, json)
-                .map_err(|e| (format!("$[{index}]"), e.to_string()))?;
-            let proto: ProtoSchemaValue = value
-                .try_into()
-                .map_err(|e: String| (format!("$[{index}]"), e))?;
-            Ok(proto.encode_to_vec())
-        })
-        .collect::<Result<Vec<_>, (String, String)>>()?;
-    Ok(Some(Payload::Values(TypedStreamSlotItems { values })))
 }
 
 fn append_response(
@@ -419,7 +489,15 @@ fn problem(status: StatusCode, path: &str, detail: &str) -> RouteExecutionResult
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::schema::SchemaValue;
+    fn decode_body(
+        graph: &SchemaGraph,
+        binary: bool,
+        body: &[u8],
+        close: bool,
+    ) -> Result<Option<Payload>, (String, String)> {
+        AppendBody::parse(binary, body.to_vec(), close)?.encode(graph)
+    }
+    use golem_common::schema::{SchemaType, SchemaValue};
     use golem_schema::schema::render::to_json_value;
     use test_r::test;
 

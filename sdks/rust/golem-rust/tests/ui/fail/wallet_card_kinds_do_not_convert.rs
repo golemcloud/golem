@@ -43,14 +43,14 @@ fn wallet_card_as_concrete(card: WalletCard) -> PermissionCard {
 }
 
 async fn lend_template_card(card: &PolymorphicPermissionCard) {
-    ReceiverClient::get("target".to_string())
+    ReceiverClient::upsert("target".to_string())
         .with_scope_card(card)
         .call()
         .await;
 }
 
 fn default_template_card(card: &PolymorphicPermissionCard) {
-    let mut client = ReceiverClient::get("target".to_string());
+    let mut client = ReceiverClient::upsert("target".to_string());
     client.set_default_scope_card(card);
 }
 

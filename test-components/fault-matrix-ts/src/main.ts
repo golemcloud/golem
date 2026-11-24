@@ -14,10 +14,7 @@ import {
 import type { PromiseId } from "golem:api/host@1.5.0";
 
 const PromiseIdSchema = z.object({
-  agentId: z.object({
-    componentId: z.object({ uuid: s.uuid() }),
-    agentId: z.string(),
-  }),
+  agentId: z.object({ uuid: s.uuid() }),
   fingerprint: s.uuid(),
   oplogIdx: s.u64(),
 });
@@ -84,10 +81,7 @@ export const FaultMatrixFixtureImpl = FaultMatrixFixture.implement({
       const id = createPromise();
       return {
         ...id,
-        agentId: {
-          ...id.agentId,
-          componentId: { uuid: Uuid.from(id.agentId.componentId.uuid) },
-        },
+        agentId: { uuid: Uuid.from(id.agentId.uuid) },
         fingerprint: Uuid.from(id.fingerprint),
       };
     },
@@ -125,14 +119,14 @@ export const FaultMatrixFixtureImpl = FaultMatrixFixture.implement({
           for (let seq = 1; seq <= count; seq++) yield record(run, seq);
         })(),
       );
-      const client = FaultMatrixFixture.client.get({ name: target });
+      const client = FaultMatrixFixture.client.upsert({ name: target });
       return keep >= count
         ? client.consume({ input })
         : client.consume_then_drop({ input, keep });
     },
     async read_remote({ target, run, count, pause_after, gate }) {
       const output = await FaultMatrixFixture.client
-        .get({ name: target })
+        .upsert({ name: target })
         .produce({ run, count, pause_after, gate });
       return collect(output);
     },

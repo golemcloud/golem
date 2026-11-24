@@ -24,7 +24,7 @@ inherit_test_dep!(
 );
 
 const WASM_RPC_DROP: &str = "golem::rpc::wasm-rpc::drop";
-const WASM_RPC_NEW: &str = "golem::rpc::wasm-rpc::new";
+const WASM_RPC_NEW: &str = "golem::rpc::wasm-rpc::upsert";
 const REPLAY_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, IntoSchema)]
@@ -95,7 +95,7 @@ struct Caller {
     executor: TestWorkerExecutor,
     component: ComponentDto,
     id: ParsedAgentKey,
-    agent: AgentId,
+    agent: OwnedAgentId,
     target: ParsedAgentKey,
 }
 
@@ -112,14 +112,14 @@ impl Caller {
             .component_dep(&context.default_environment_id, fixture)
             .store()
             .await?;
-        let id = agent_id!("GcTimingCaller", name);
+        let id = agent_key!("GcTimingCaller", name);
         let agent = executor.start_agent(&component.id, id.clone()).await?;
         Ok(Self {
             executor,
             component,
             id,
             agent,
-            target: agent_id!("GcTimingTarget", name),
+            target: agent_key!("GcTimingTarget", name),
         })
     }
 
@@ -217,15 +217,8 @@ impl Caller {
 
     async fn oplog(&self) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
         // An unloaded (suspended) agent has committed its whole oplog.
-        if self
-            .executor
-            .worker_is_loaded(&OwnedAgentId::new(
-                self.component.environment_id,
-                &self.agent,
-            ))
-            .await
-        {
-            self.executor.commit_oplog(&self.agent).await?;
+        if self.executor.worker_is_loaded(&self.agent).await {
+            self.executor.commit_oplog(&self.agent.agent_id).await?;
         }
         self.executor
             .get_oplog(&self.agent, OplogIndex::INITIAL)
@@ -248,7 +241,7 @@ fn starts_named<'a>(
 }
 
 /// The settled-history rules every test in this file checks: no `wasm-rpc::drop` call, every
-/// `Start` has a terminal, every `SpanClosed` refers to a `wasm-rpc::new` span, and nothing
+/// `Start` has a terminal, every `SpanClosed` refers to a `wasm-rpc::upsert` span, and nothing
 /// positional follows the last `AgentInvocationFinished`.
 fn assert_settled_history(oplog: &[PublicOplogEntryWithIndex]) {
     assert_eq!(
@@ -264,7 +257,7 @@ fn assert_settled_history(oplog: &[PublicOplogEntryWithIndex]) {
                 .expect("a recorded SpanClosed names the Start that opened the span");
             assert!(
                 clients.contains(&start),
-                "the SpanClosed at {} names {start}, which is not a wasm-rpc::new Start",
+                "the SpanClosed at {} names {start}, which is not a wasm-rpc::upsert Start",
                 entry.oplog_index
             );
         }
@@ -289,15 +282,26 @@ fn assert_settled_history(oplog: &[PublicOplogEntryWithIndex]) {
         .find(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
         .map(|entry| entry.oplog_index)
         .expect("the history has a finished invocation");
+    // The background work of an invocation that records its result at the export's return lies
+    // between its terminal and its `AgentInvocationSettled`.
+    let last_settled = oplog
+        .iter()
+        .filter(|entry| {
+            entry.oplog_index > last_finished
+                && matches!(&entry.entry, PublicOplogEntry::AgentInvocationSettled(_))
+        })
+        .map(|entry| entry.oplog_index)
+        .max()
+        .unwrap_or(last_finished);
     assert!(
-        !oplog.iter().any(|entry| entry.oplog_index > last_finished
+        !oplog.iter().any(|entry| entry.oplog_index > last_settled
             && matches!(
                 &entry.entry,
                 PublicOplogEntry::Start(_)
                     | PublicOplogEntry::End(_)
                     | PublicOplogEntry::Cancelled(_)
             )),
-        "no positional entry may follow the last AgentInvocationFinished"
+        "no positional entry may follow the last invocation's settlement"
     );
 }
 
@@ -380,7 +384,14 @@ async fn crash_while_awaiting(
     let caller = caller
         .restart(deps, context, snapshot_every_invocation())
         .await?;
-    caller.executor.complete_promise(&promise, vec![]).await?;
+    caller
+        .executor
+        .complete_promise(
+            &caller.executor.context.default_environment_id,
+            &promise,
+            vec![],
+        )
+        .await?;
     let report = caller.inspect().await?;
     assert_eq!(report.completed, scenario.completed);
     assert_eq!(
@@ -586,7 +597,7 @@ async fn multiple_owners_release_in_different_order(
         },
     )
     .await?;
-    let second = agent_id!("GcTimingTarget", "owners-b");
+    let second = agent_key!("GcTimingTarget", "owners-b");
     assert_eq!(caller.target_count(&second).await?, 3);
     Ok(())
 }
@@ -790,7 +801,14 @@ async fn assert_divergent_snapshot_rejected(
     };
     let caller = caller.restart(deps, &context, overrides).await?;
     let mut events = caller.executor.capture_output(&caller.agent).await?;
-    caller.executor.complete_promise(&promise, vec![]).await?;
+    caller
+        .executor
+        .complete_promise(
+            &caller.executor.context.default_environment_id,
+            &promise,
+            vec![],
+        )
+        .await?;
     let result = tokio::time::timeout(
         REPLAY_TIMEOUT,
         caller.executor.invoke_and_await_agent_with_key(
@@ -832,7 +850,7 @@ async fn assert_divergent_snapshot_rejected(
         "snapshot rejection and full replay must not dispatch another awaited increment"
     );
     if kind == "owner" {
-        let other = agent_id!("GcTimingTarget", format!("{name}-other"));
+        let other = agent_key!("GcTimingTarget", format!("{name}-other"));
         assert_eq!(caller.target_count(&other).await?, 0);
     }
     let history = caller.oplog().await?;
@@ -884,7 +902,14 @@ async fn abandon_while_awaiting(
     let caller = caller
         .restart(deps, context, snapshot_every_invocation())
         .await?;
-    caller.executor.complete_promise(&promise, vec![]).await?;
+    caller
+        .executor
+        .complete_promise(
+            &caller.executor.context.default_environment_id,
+            &promise,
+            vec![],
+        )
+        .await?;
     let report = caller.inspect().await?;
     assert_eq!(report.completed, 1);
     assert_eq!(report.checksum, 1);
@@ -1030,7 +1055,14 @@ async fn replay_drops_future_an_invocation_earlier_than_recorded(
         .await?;
     let gate = caller.create_promise().await?;
     let completed = caller.create_promise().await?;
-    caller.executor.complete_promise(&completed, vec![]).await?;
+    caller
+        .executor
+        .complete_promise(
+            &caller.executor.context.default_environment_id,
+            &completed,
+            vec![],
+        )
+        .await?;
     caller
         .invoke(
             "abandon_then_await",
@@ -1076,7 +1108,14 @@ async fn replay_drops_future_an_invocation_earlier_than_recorded(
     );
 
     let caller = caller.restart(deps, &context, overrides()).await?;
-    caller.executor.complete_promise(&promise, vec![]).await?;
+    caller
+        .executor
+        .complete_promise(
+            &caller.executor.context.default_environment_id,
+            &promise,
+            vec![],
+        )
+        .await?;
     let report = caller.inspect().await?;
     assert_eq!(report.completed, 1);
     assert!(report.restored, "the agent was restored from a snapshot");
@@ -1126,7 +1165,14 @@ async fn cache_futures_replay_with_changed_drop_schedule(
         let caller = caller
             .restart(deps, &context, snapshot_every_invocation())
             .await?;
-        caller.executor.complete_promise(&promise, vec![]).await?;
+        caller
+            .executor
+            .complete_promise(
+                &caller.executor.context.default_environment_id,
+                &promise,
+                vec![],
+            )
+            .await?;
         assert!(
             caller
                 .invoke("inspect_cache", data_value!())
@@ -1163,7 +1209,14 @@ async fn cache_futures_replay_drop_in_an_earlier_invocation(
         .invoke("configure_abandon", data_value!(NEVER, BEFORE_NEXT_CALL))
         .await?;
     let completed = caller.create_promise().await?;
-    caller.executor.complete_promise(&completed, vec![]).await?;
+    caller
+        .executor
+        .complete_promise(
+            &caller.executor.context.default_environment_id,
+            &completed,
+            vec![],
+        )
+        .await?;
     let promise = caller.create_promise().await?;
     caller
         .invoke("abandon_cache_then_await", data_value!(completed))
@@ -1203,7 +1256,14 @@ async fn cache_futures_replay_drop_in_an_earlier_invocation(
     let caller = caller
         .restart(deps, &context, snapshot_every_nth_invocation(2))
         .await?;
-    caller.executor.complete_promise(&promise, vec![]).await?;
+    caller
+        .executor
+        .complete_promise(
+            &caller.executor.context.default_environment_id,
+            &promise,
+            vec![],
+        )
+        .await?;
     assert!(
         caller
             .invoke("inspect_cache", data_value!())
@@ -1248,7 +1308,14 @@ async fn cache_fill_replay_with_changed_drop_schedule(
         let promise = caller.create_promise().await?;
         if cross_invocation {
             let completed = caller.create_promise().await?;
-            caller.executor.complete_promise(&completed, vec![]).await?;
+            caller
+                .executor
+                .complete_promise(
+                    &caller.executor.context.default_environment_id,
+                    &completed,
+                    vec![],
+                )
+                .await?;
             caller
                 .invoke("fill_cache_then_await", data_value!(completed))
                 .await?;
@@ -1323,7 +1390,14 @@ async fn cache_fill_replay_with_changed_drop_schedule(
         let caller = caller
             .restart(deps, &context, snapshot_every_nth_invocation(frequency))
             .await?;
-        caller.executor.complete_promise(&promise, vec![]).await?;
+        caller
+            .executor
+            .complete_promise(
+                &caller.executor.context.default_environment_id,
+                &promise,
+                vec![],
+            )
+            .await?;
         assert!(caller.inspect().await?.restored);
         let observed = caller
             .executor
@@ -1387,7 +1461,14 @@ async fn completed_invocation_cache_drops_repair_inside_next_invocation(
             .invoke("configure_abandon", data_value!(NEVER, BEFORE_NEXT_CALL))
             .await?;
         let completed = caller.create_promise().await?;
-        caller.executor.complete_promise(&completed, vec![]).await?;
+        caller
+            .executor
+            .complete_promise(
+                &caller.executor.context.default_environment_id,
+                &completed,
+                vec![],
+            )
+            .await?;
         caller.invoke(method, data_value!(completed)).await?;
         let original = caller.oplog().await?;
         let a_started = original
@@ -1402,13 +1483,37 @@ async fn completed_invocation_cache_drops_repair_inside_next_invocation(
             .find(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
             .unwrap()
             .oplog_index;
+        let a_invocation = original
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::AgentInvocationFinished(finished)
+                    if entry.oplog_index == a_finished =>
+                {
+                    Some(finished.invocation_id)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let settlements_of = |oplog: &[PublicOplogEntryWithIndex], invocation_id| {
+            oplog
+                .iter()
+                .filter(|entry| {
+                    matches!(&entry.entry, PublicOplogEntry::AgentInvocationSettled(settled)
+                        if settled.invocation_id == invocation_id)
+                })
+                .map(|entry| entry.oplog_index)
+                .collect::<Vec<_>>()
+        };
+        let a_settlements = settlements_of(&original, a_invocation);
+        assert_eq!(a_settlements.len(), 1, "{name}: A settles once");
+        let a_settled = a_settlements[0];
         let baseline = original
             .iter()
             .rev()
             .find(|entry| is_snapshot(entry))
             .unwrap()
             .oplog_index;
-        assert!(baseline < a_started && a_started < a_finished);
+        assert!(baseline < a_started && a_started < a_finished && a_finished < a_settled);
         let pending = original
             .iter()
             .filter_map(|entry| {
@@ -1431,7 +1536,8 @@ async fn completed_invocation_cache_drops_repair_inside_next_invocation(
         assert!(
             pending
                 .iter()
-                .all(|start| a_started < *start && *start < a_finished)
+                .all(|start| a_started < *start && *start < a_settled),
+            "{name}: A's drain records its pending Starts before A settles"
         );
         let key = format!("{name}-{suffix}");
         let before = caller
@@ -1458,7 +1564,22 @@ async fn completed_invocation_cache_drops_repair_inside_next_invocation(
             .restart(deps, &context, snapshot_every_nth_invocation(1_000))
             .await?;
         assert!(caller.inspect().await?.restored);
-        let repaired = caller.oplog().await?;
+        // B returns its result before its drain, which drives the parked cleanup. The caller's
+        // next invocation, C, starts only after B settled, so the history before C's start holds
+        // B's whole drain and its `AgentInvocationSettled`.
+        caller.inspect().await?;
+        let oplog = caller.oplog().await?;
+        let c_started = oplog
+            .iter()
+            .rev()
+            .find(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+            .unwrap()
+            .oplog_index;
+        assert!(a_settled < c_started);
+        let repaired = oplog
+            .into_iter()
+            .filter(|entry| entry.oplog_index < c_started)
+            .collect::<Vec<_>>();
         let b_started = repaired
             .iter()
             .filter(|entry| {
@@ -1477,6 +1598,25 @@ async fn completed_invocation_cache_drops_repair_inside_next_invocation(
             .collect::<Vec<_>>();
         assert_eq!(b_started.len(), 1);
         assert_eq!(b_finished.len(), 1);
+        let b_invocation = repaired
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::AgentInvocationFinished(finished)
+                    if entry.oplog_index == b_finished[0] =>
+                {
+                    Some(finished.invocation_id)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let b_settlements = settlements_of(&repaired, b_invocation);
+        assert_eq!(b_settlements.len(), 1, "{name}: B settles once");
+        let b_settled = b_settlements[0];
+        assert_eq!(
+            settlements_of(&repaired, a_invocation),
+            vec![a_settled],
+            "{name}: A keeps its one settlement"
+        );
         for start in &pending {
             let terminals = repaired
                 .iter()
@@ -1492,8 +1632,12 @@ async fn completed_invocation_cache_drops_repair_inside_next_invocation(
                 "{name}: exactly one terminal for original Start {start}"
             );
             assert!(
-                b_started[0] < terminals[0].oplog_index && terminals[0].oplog_index < b_finished[0],
-                "{name}: fresh B drives the parked cleanup between its Started and Finished"
+                b_started[0] < terminals[0].oplog_index && terminals[0].oplog_index < b_settled,
+                "{name}: fresh B drives the parked cleanup before its settlement \
+                 (terminal at {}, B started at {}, finished at {}, settled at {b_settled})",
+                terminals[0].oplog_index,
+                b_started[0],
+                b_finished[0]
             );
             assert!(if suffix == "fill" {
                 matches!(&terminals[0].entry, PublicOplogEntry::End(_))
@@ -1504,7 +1648,7 @@ async fn completed_invocation_cache_drops_repair_inside_next_invocation(
         assert_eq!(
             repaired
                 .iter()
-                .filter(|entry| entry.oplog_index > a_finished)
+                .filter(|entry| entry.oplog_index > a_settled)
                 .filter_map(|entry| match &entry.entry {
                     PublicOplogEntry::Start(start) => Some(start.function_name.as_str()),
                     _ => None,
@@ -1612,8 +1756,8 @@ async fn ts_snapshot_restore_replays_gc_released_clients(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let id = agent_id!("TsGcSnapshotDriver", "ts-gc-snapshot");
-    let target = agent_id!("TsCounter", "ts-gc-snapshot-target");
+    let id = agent_key!("TsGcSnapshotDriver", "ts-gc-snapshot");
+    let target = agent_key!("TsCounter", "ts-gc-snapshot-target");
     let agent = executor.start_agent(&component.id, id.clone()).await?;
     let last_index = |oplog: &[PublicOplogEntryWithIndex], pred: fn(&PublicOplogEntry) -> bool| {
         oplog
@@ -1721,8 +1865,8 @@ async fn ts_snapshot_restore_replays_gc_released_clients(
 
 async fn ts_oplog(
     executor: &TestWorkerExecutor,
-    agent: &AgentId,
+    agent: &OwnedAgentId,
 ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
-    executor.commit_oplog(agent).await?;
+    executor.commit_oplog(&agent.agent_id).await?;
     executor.get_oplog(agent, OplogIndex::INITIAL).await
 }

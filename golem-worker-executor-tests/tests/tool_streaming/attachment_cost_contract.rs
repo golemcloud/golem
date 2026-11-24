@@ -65,7 +65,7 @@ async fn component_attachment_payloads_follow_consumption_across_restart(
                 metadata.tools,
             )),
         );
-        let agent = agent_id!("ToolStreamingCaller", label);
+        let agent = agent_key!("ToolStreamingCaller", label);
         let worker = executor
             .start_agent(&caller_component.id, agent.clone())
             .await?;
@@ -135,12 +135,12 @@ async fn component_attachment_payloads_follow_consumption_across_restart(
         );
         drop(executor);
         let executor = start_with_overrides(deps, &context, overrides).await?;
-        assert_eq!(executor.instance_load_count(&worker), 0);
+        assert_eq!(executor.instance_load_count(&worker.agent_id), 0);
         let _: String = executor
             .invoke_and_await_agent(&caller_component, &agent, "replay_probe", data_value!())
             .await?
             .into_typed()?;
-        assert!(executor.instance_load_count(&worker) > 0);
+        assert!(executor.instance_load_count(&worker.agent_id) > 0);
         let replayed = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
         assert_eq!(
             replayed

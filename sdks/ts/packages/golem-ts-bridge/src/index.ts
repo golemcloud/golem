@@ -16,8 +16,6 @@ import WebSocket, { type RawData } from 'ws';
 
 export { Datetime } from './datetime';
 
-export type PhantomId = string;
-
 export type GolemServer =
   | { type: 'local' }
   | { type: 'cloud'; token: string }
@@ -284,12 +282,15 @@ export function schemaType(
   return { body, metadata };
 }
 
+export type PublicAgentTarget =
+  | { kind: 'key'; constructorParameters: PublicValue }
+  | { kind: 'id'; agentId: AgentId; expectedFingerprint?: AgentFingerprint };
+
 export interface StreamingInvocationDescriptor {
   application: string;
   environment: string;
   agentType: string;
-  constructorParameters: PublicValue;
-  phantomId?: string;
+  target: PublicAgentTarget;
   config: Array<{ path: string[]; value: PublicValue }>;
   method: string;
   idempotencyKey?: string;
@@ -374,17 +375,23 @@ export interface TypedSchemaValue {
 
 export type AgentInvocationMode = 'await' | 'schedule';
 
+/**
+ * Invokes a method of an agent of `agentTypeName`. It names the agent by exactly one of `agentId`
+ * or `parameters`: with `parameters`, a durable agent is upserted, and an ephemeral invocation
+ * runs on an instance of its own.
+ */
 export interface AgentInvocationRequest {
   appName: ApplicationName;
   envName: EnvironmentName;
   agentTypeName: AgentTypeName;
-  parameters: SchemaValue;
-  phantomId?: PhantomId;
-  config?: AgentConfigEntry[];
+  agentId?: AgentId;
+  parameters?: SchemaValue;
   methodName: string;
   methodParameters: SchemaValue;
   mode: AgentInvocationMode;
   scheduleAt?: string; // ISO 8601 datetime
+  /** Fails the invocation when the agent is missing or is another incarnation of it. */
+  expectedFingerprint?: AgentFingerprint;
   idempotencyKey?: IdempotencyKey;
 }
 
@@ -414,23 +421,39 @@ export interface AgentConfigEntry {
   value: PublicValue;
 }
 
-export interface CreateAgentRequest {
+/** The agent type `agentTypeName` in the environment `envName` of the application `appName`. */
+export interface AgentTypeRequest {
   appName: ApplicationName;
   envName: EnvironmentName;
   agentTypeName: AgentTypeName;
+}
+
+/** The constructor parameters of a keyed agent of `agentTypeName`. */
+export interface AgentKeyRequest extends AgentTypeRequest {
   parameters: SchemaValue;
-  phantomId?: PhantomId;
+}
+
+export interface CreateAgentRequest extends AgentKeyRequest {
+  /**
+   * Creates the keyed agent of `parameters`, which fails with 409 when that key is current.
+   * Without it, each create makes a new agent with a new ID.
+   */
+  keyed?: boolean;
+  /** Overrides of the agent type's local configuration values. */
   config?: AgentConfigEntry[];
+  /** Environment variables added to the ones the manifest defines. */
+  env?: Record<string, string>;
 }
 
-export interface AgentId {
-  componentId: string;
-  agentId: string;
-}
+/** The ID of an agent: the text form of its UUID. */
+export type AgentId = string;
 
-export interface CreateAgentResponse {
+/** Identifies one incarnation of an agent: the text form of its UUID. */
+export type AgentFingerprint = string;
+
+export interface AgentReference {
   agentId: AgentId;
-  componentRevision: number;
+  agentFingerprint: AgentFingerprint;
 }
 
 export interface GolemAgentErrorDetails {
@@ -442,15 +465,33 @@ export type GolemErrorBody =
   | { code: string; error: string; agentError?: GolemAgentErrorDetails }
   | { code: string; errors: string[] };
 
+/** The REST operation that a {@link GolemServiceError} reports. */
+export type GolemServiceOperation =
+  | 'resolveEnvironment'
+  | 'createAgent'
+  | 'upsertAgent'
+  | 'lookupAgent'
+  | 'getAgent'
+  | 'invokeAgent';
+
+const GOLEM_SERVICE_ACTIONS: Record<GolemServiceOperation, string> = {
+  resolveEnvironment: 'Environment resolution',
+  createAgent: 'Agent creation',
+  upsertAgent: 'Agent upsert',
+  lookupAgent: 'Agent lookup',
+  getAgent: 'Agent retrieval',
+  invokeAgent: 'Agent invocation',
+};
+
 export class GolemServiceError extends Error {
-  readonly operation: 'createAgent' | 'invokeAgent';
+  readonly operation: GolemServiceOperation;
   readonly status: number;
   readonly statusText: string;
   readonly bodyText?: string;
   readonly body?: GolemErrorBody;
 
   constructor(params: {
-    operation: 'createAgent' | 'invokeAgent';
+    operation: GolemServiceOperation;
     status: number;
     statusText: string;
     bodyText?: string;
@@ -474,14 +515,24 @@ export class GolemServiceError extends Error {
   }
 }
 
+/** A keyed create found a current agent with the same key. */
+export class GolemConflictError extends GolemServiceError {
+  readonly _tag = 'GolemConflictError';
+
+  constructor(params: ConstructorParameters<typeof GolemServiceError>[0]) {
+    super(params);
+    Object.defineProperty(this, 'name', { value: 'GolemConflictError', configurable: true });
+  }
+}
+
 function formatGolemServiceErrorMessage(params: {
-  operation: 'createAgent' | 'invokeAgent';
+  operation: GolemServiceOperation;
   status: number;
   statusText: string;
   bodyText?: string;
   body?: GolemErrorBody;
 }): string {
-  const action = params.operation === 'createAgent' ? 'Agent creation' : 'Agent invocation';
+  const action = GOLEM_SERVICE_ACTIONS[params.operation];
   const status = [params.status, params.statusText].filter(Boolean).join(' ');
   const lines = [`${action} failed: ${status}`];
 
@@ -575,11 +626,13 @@ function trimEmptyLines(lines: string[]): string[] {
 }
 
 async function throwGolemServiceError(
-  operation: 'createAgent' | 'invokeAgent',
+  operation: GolemServiceOperation,
   response: Response,
 ): Promise<never> {
   const bodyText = await response.text().catch(() => undefined);
-  throw new GolemServiceError({
+  const ErrorType =
+    operation === 'createAgent' && response.status === 409 ? GolemConflictError : GolemServiceError;
+  throw new ErrorType({
     operation,
     status: response.status,
     statusText: response.statusText,
@@ -771,47 +824,192 @@ function restoreJsonIntegers(
   );
 }
 
+function serverEndpoint(server: GolemServer): { baseUrl: string; token: string } {
+  switch (server.type) {
+    case 'local':
+      return { baseUrl: 'http://localhost:9881', token: LOCAL_WELL_KNOWN_TOKEN };
+    case 'cloud':
+      return { baseUrl: 'https://release.api.golem.cloud', token: server.token };
+    case 'custom':
+      return { baseUrl: server.url, token: server.token };
+  }
+}
+
+function restHeaders(token: string): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  return headers;
+}
+
+const environmentIds = new Map<string, string>();
+
+/**
+ * Resolves the ID of the environment `envName` of the application `appName` in the account of the
+ * server token. A successful resolution is cached for the server, token and names.
+ */
+async function resolveEnvironmentId(
+  server: GolemServer,
+  appName: ApplicationName,
+  envName: EnvironmentName,
+  signal?: AbortSignal,
+): Promise<string> {
+  const { baseUrl, token } = serverEndpoint(server);
+  const key = JSON.stringify([baseUrl, token, appName, envName]);
+  const cached = environmentIds.get(key);
+  if (cached !== undefined) return cached;
+  const resolved = await fetchEnvironmentId(baseUrl, token, appName, envName, signal);
+  environmentIds.set(key, resolved);
+  return resolved;
+}
+
+async function fetchEnvironmentId(
+  baseUrl: string,
+  token: string,
+  appName: ApplicationName,
+  envName: EnvironmentName,
+  signal?: AbortSignal,
+): Promise<string> {
+  const headers = restHeaders(token);
+  const query = new URLSearchParams({ app_name: appName, env_name: envName });
+  const [tokenResponse, environmentsResponse] = await Promise.all([
+    fetch(`${baseUrl}/v1/me/token`, { headers, signal }),
+    fetch(`${baseUrl}/v1/me/visible-environments?${query}`, { headers, signal }),
+  ]);
+  if (!tokenResponse.ok) await throwGolemServiceError('resolveEnvironment', tokenResponse);
+  if (!environmentsResponse.ok)
+    await throwGolemServiceError('resolveEnvironment', environmentsResponse);
+  const tokenAnswer: unknown = await tokenResponse.json();
+  const environmentsAnswer: unknown = await environmentsResponse.json();
+  const accountId = isRecord(tokenAnswer) ? tokenAnswer['accountId'] : undefined;
+  const values = isRecord(environmentsAnswer) ? environmentsAnswer['values'] : undefined;
+  if (typeof accountId !== 'string' || !Array.isArray(values))
+    throw new Error('The environment lookup answer does not decode');
+  const match = values.find(
+    (candidate: unknown) =>
+      isRecord(candidate) &&
+      isRecord(candidate['account']) &&
+      isRecord(candidate['application']) &&
+      isRecord(candidate['environment']) &&
+      candidate['account']['id'] === accountId &&
+      candidate['application']['name'] === appName &&
+      candidate['environment']['name'] === envName &&
+      typeof candidate['environment']['id'] === 'string',
+  ) as { environment: { id: string } } | undefined;
+  if (match === undefined)
+    throw new Error(
+      `Environment '${envName}' of application '${appName}' does not exist in the account of the token`,
+    );
+  return match.environment.id;
+}
+
+async function agentTypeUrl(
+  server: GolemServer,
+  request: { appName: ApplicationName; envName: EnvironmentName; agentTypeName: AgentTypeName },
+  suffix: string,
+  signal?: AbortSignal,
+): Promise<{ url: string; token: string }> {
+  const { baseUrl, token } = serverEndpoint(server);
+  const environmentId = await resolveEnvironmentId(
+    server,
+    request.appName,
+    request.envName,
+    signal,
+  );
+  return {
+    url: `${baseUrl}/v1/runtime/envs/${environmentId}/agent-types/${encodeURIComponent(request.agentTypeName)}/${suffix}`,
+    token,
+  };
+}
+
+/**
+ * Creates an agent and resolves after its initialization. A keyed create rejects with a 409
+ * {@link GolemConflictError} when the keyed agent of the parameters exists.
+ */
 export async function createAgent(
   server: GolemServer,
   request: CreateAgentRequest,
-): Promise<CreateAgentResponse> {
-  let baseUrl: string;
-  let token: string;
-
-  switch (server.type) {
-    case 'local':
-      baseUrl = 'http://localhost:9881';
-      token = LOCAL_WELL_KNOWN_TOKEN;
-      break;
-    case 'cloud':
-      baseUrl = 'https://release.api.golem.cloud';
-      token = server.token;
-      break;
-    case 'custom':
-      baseUrl = server.url;
-      token = server.token;
-      break;
-  }
-
-  const headers: HeadersInit = {
-    'Content-Type': 'application/json',
-  };
-
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
-  const rawResponse = await fetch(`${baseUrl}/v1/agents/create-agent`, {
+): Promise<AgentReference> {
+  const { url, token } = await agentTypeUrl(server, request, 'agents');
+  const response = await fetch(url, {
     method: 'POST',
-    headers,
-    body: restJson(request),
+    headers: restHeaders(token),
+    body: restJson({
+      parameters: request.parameters,
+      config: request.config ?? [],
+      env: request.env ?? {},
+      keyed: request.keyed ?? false,
+    }),
   });
+  if (!response.ok) await throwGolemServiceError('createAgent', response);
+  return (await response.json()) as AgentReference;
+}
 
-  if (!rawResponse.ok) {
-    await throwGolemServiceError('createAgent', rawResponse);
+/** Returns the keyed agent of the parameters, and creates it when it is missing. */
+export async function upsertAgent(
+  server: GolemServer,
+  request: AgentKeyRequest,
+): Promise<AgentReference> {
+  const { url, token } = await agentTypeUrl(server, request, 'agents/upsert');
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: restHeaders(token),
+    body: restJson({ parameters: request.parameters }),
+  });
+  if (!response.ok) await throwGolemServiceError('upsertAgent', response);
+  return (await response.json()) as AgentReference;
+}
+
+/**
+ * Returns the keyed agent of the parameters, or `undefined` when the server answers 404. It never
+ * creates the agent.
+ */
+export async function lookupAgent(
+  server: GolemServer,
+  request: AgentKeyRequest,
+): Promise<AgentReference | undefined> {
+  const { url, token } = await agentTypeUrl(server, request, 'agents/lookup');
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: restHeaders(token),
+    body: restJson({ parameters: request.parameters }),
+  });
+  if (response.status === 404) return undefined;
+  if (!response.ok) await throwGolemServiceError('lookupAgent', response);
+  return (await response.json()) as AgentReference;
+}
+
+/**
+ * Returns the existing agent with the ID, with its current fingerprint. It never creates the
+ * agent. An unknown ID, or the ID of an agent whose type is not `agentTypeName`, rejects with a
+ * 404 {@link GolemServiceError}.
+ */
+export async function getAgent(
+  server: GolemServer,
+  request: AgentTypeRequest,
+  agentId: AgentId,
+): Promise<AgentReference> {
+  const { baseUrl, token } = serverEndpoint(server);
+  const environmentId = await resolveEnvironmentId(server, request.appName, request.envName);
+  const response = await fetch(
+    `${baseUrl}/v1/runtime/envs/${environmentId}/agents/${encodeURIComponent(agentId)}`,
+    { headers: restHeaders(token) },
+  );
+  if (!response.ok) await throwGolemServiceError('getAgent', response);
+  const metadata = (await response.json()) as {
+    agentId: AgentId;
+    agentTypeName?: AgentTypeName;
+    fingerprint: AgentFingerprint;
+  };
+  if (metadata.agentTypeName !== request.agentTypeName) {
+    const error = `Agent ${agentId} is not of the agent type '${request.agentTypeName}'`;
+    throw new GolemServiceError({
+      operation: 'getAgent',
+      status: 404,
+      statusText: 'Not Found',
+      body: { code: 'AGENT_NOT_FOUND', error },
+    });
   }
-
-  return await (rawResponse.json() as Promise<CreateAgentResponse>);
+  return { agentId: metadata.agentId, agentFingerprint: metadata.fingerprint };
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -834,34 +1032,10 @@ export async function invokeAgent(
 ): Promise<AgentInvocationResult> {
   throwIfAborted(signal);
 
-  let baseUrl: string;
-  let token: string;
-
-  switch (server.type) {
-    case 'local':
-      baseUrl = 'http://localhost:9881';
-      token = LOCAL_WELL_KNOWN_TOKEN;
-      break;
-    case 'cloud':
-      baseUrl = 'https://release.api.golem.cloud';
-      token = server.token;
-      break;
-    case 'custom':
-      baseUrl = server.url;
-      token = server.token;
-      break;
-  }
-
-  const headers: HeadersInit = {
-    'Content-Type': 'application/json',
-  };
-
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
-  if (request.idempotencyKey) {
-    headers['Idempotency-Key'] = request.idempotencyKey!;
+  if ((request.agentId === undefined) === (request.parameters === undefined)) {
+    throw new TypeError(
+      'An agent invocation names its agent by exactly one of agentId or parameters',
+    );
   }
 
   if (aroundInvokeHook) {
@@ -871,10 +1045,26 @@ export async function invokeAgent(
   throwIfAborted(signal);
 
   try {
-    const rawResponse = await fetch(`${baseUrl}/v1/agents/invoke-agent`, {
+    const { url, token } = await agentTypeUrl(server, request, 'invoke', signal);
+    throwIfAborted(signal);
+
+    const headers = restHeaders(token);
+    if (request.idempotencyKey) {
+      headers['Idempotency-Key'] = request.idempotencyKey;
+    }
+
+    const rawResponse = await fetch(url, {
       method: 'POST',
       headers,
-      body: restJson(request),
+      body: restJson({
+        agentId: request.agentId,
+        parameters: request.parameters,
+        method: request.methodName,
+        methodParameters: request.methodParameters,
+        mode: request.mode,
+        scheduleAt: request.scheduleAt,
+        expectedFingerprint: request.expectedFingerprint,
+      }),
       signal,
     });
 
@@ -1451,7 +1641,6 @@ export function decodeFlags<T extends Record<string, boolean>>(
 }
 
 const STREAM_SUBPROTOCOL = 'golem.agent-invocation.v1';
-const STREAM_ENDPOINT = '/v1/agents/invoke-agent-session';
 
 export type StreamOutcome =
   | { kind: 'finished' }
@@ -1482,8 +1671,9 @@ export class StreamingProtocolError extends Error {
 /**
  * A streaming call that could not reach the server within its reconnect window. `lastCause` is
  * the last failure: a `StreamingProtocolError` for a refused upgrade (`handshake-failed`) or a
- * retryable rejection, or an `Error` for a connection failure or a start or resume the server
- * never answered.
+ * retryable rejection, a `GolemServiceError` for an HTTP 429 or 5xx answer to the environment
+ * resolution, or an `Error` for a connection failure or a start or resume the server never
+ * answered.
  */
 export class StreamingUnreachableError extends Error {
   constructor(
@@ -1494,6 +1684,11 @@ export class StreamingUnreachableError extends Error {
     super(`${endpoint} was unreachable for ${reconnectWindowMs} ms: ${lastCause.message}`);
     this.name = 'StreamingUnreachableError';
   }
+}
+
+/** Whether an HTTP status answered within a connection attempt is retried like a failed one. */
+function isRetryableConnectionStatus(status: number): boolean {
+  return status === 429 || status >= 500;
 }
 
 class RetryableStreamingConnectionError extends Error {
@@ -3593,6 +3788,7 @@ class OutputStream<T> implements AgentStream<T> {
 class StreamingSession {
   private socket?: WebSocket;
   private accepted = false;
+  private executionReady = false;
   private everAccepted = false;
   private pendingResume = false;
   private resumeOperation: 'resume' | 'takeover' = 'resume';
@@ -3621,6 +3817,7 @@ class StreamingSession {
   private outputCancelReasons = new Map<string, 'consumer-drop'>();
   private startParameters?: PublicValue;
   private readonly server: GolemServer;
+  private environmentId?: string;
   private reconnectWindowMs?: number;
   /** When the session last made progress: its start, or when it lost a stable connection. */
   private progressAt = Date.now();
@@ -3674,14 +3871,6 @@ class StreamingSession {
         if (typeof value !== 'string' || value.length === 0)
           throw new StreamingProtocolError('validation-error', `invalid ${name}`);
       }
-      if (
-        this.descriptor.phantomId !== undefined &&
-        (typeof this.descriptor.phantomId !== 'string' ||
-          !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
-            this.descriptor.phantomId,
-          ))
-      )
-        throw new StreamingProtocolError('validation-error', 'invalid phantom id');
       this.idempotencyKey = this.descriptor.idempotencyKey ?? crypto.randomUUID();
       if (
         typeof this.idempotencyKey !== 'string' ||
@@ -3740,11 +3929,8 @@ class StreamingSession {
         application: this.descriptor.application,
         environment: this.descriptor.environment,
         agentType: this.descriptor.agentType,
-        constructorParameters: this.descriptor.constructorParameters,
+        target: this.descriptor.target,
         method: this.descriptor.method,
-        ...(this.descriptor.phantomId === undefined
-          ? {}
-          : { phantomId: this.descriptor.phantomId }),
       },
       config: this.descriptor.config,
       methodParameters: this.startParameters,
@@ -3775,12 +3961,50 @@ class StreamingSession {
           ? 'https://release.api.golem.cloud'
           : this.server.url;
     const token = this.server.type === 'local' ? LOCAL_WELL_KNOWN_TOKEN : this.server.token;
-    const url = new URL(STREAM_ENDPOINT, base);
+    const url = new URL(
+      this.environmentId === undefined
+        ? '/'
+        : `/v1/runtime/envs/${this.environmentId}/invoke-agent-session`,
+      base,
+    );
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     return { url: url.toString(), token };
   }
 
-  private connect(timeoutMs: number): Promise<void> {
+  private async connect(timeoutMs: number): Promise<void> {
+    this.environmentId ??= await this.resolveEnvironment(timeoutMs);
+    return this.openSocket(timeoutMs);
+  }
+
+  /**
+   * Resolves the environment of the descriptor within one connection attempt. A network failure,
+   * a timeout, and an HTTP 429 or 5xx answer are retryable; any other answer of the server that
+   * names no environment is final.
+   */
+  private async resolveEnvironment(timeoutMs: number): Promise<string> {
+    const timeout = AbortSignal.timeout(timeoutMs);
+    try {
+      return await resolveEnvironmentId(
+        this.server,
+        this.descriptor.application,
+        this.descriptor.environment,
+        this.signal ? AbortSignal.any([timeout, this.signal]) : timeout,
+      );
+    } catch (error) {
+      throwIfAborted(this.signal);
+      if (timeout.aborted)
+        throw new RetryableStreamingConnectionError(
+          new Error(`no environment resolution within ${timeoutMs} ms`),
+          true,
+        );
+      if (error instanceof TypeError) throw new RetryableStreamingConnectionError(error);
+      if (error instanceof GolemServiceError && isRetryableConnectionStatus(error.status))
+        throw new RetryableStreamingConnectionError(error);
+      throw error;
+    }
+  }
+
+  private openSocket(timeoutMs: number): Promise<void> {
     const { url, token } = this.endpoint();
     return new Promise((resolve, reject) => {
       let operationSent = false;
@@ -3853,7 +4077,7 @@ class StreamingSession {
           `WebSocket upgrade failed with HTTP ${status ?? 'error'}`,
         );
         rejectOnce(
-          status !== undefined && (status === 429 || status >= 500)
+          status !== undefined && isRetryableConnectionStatus(status)
             ? new RetryableStreamingConnectionError(failure)
             : failure,
         );
@@ -4002,9 +4226,13 @@ class StreamingSession {
         'message received after invocation finish',
       );
     switch (message.type) {
-      case 'invocationAccepted': {
-        if (this.accepted)
+      case 'invocationAccepted':
+      case 'invocationReady': {
+        const ready = message.type === 'invocationReady';
+        if (this.accepted && !ready)
           throw new StreamingProtocolError('protocol-error', 'duplicate invocation acceptance');
+        if (ready && (!this.accepted || this.executionReady))
+          throw new StreamingProtocolError('protocol-error', 'unexpected invocation readiness');
         object(message, [
           'version',
           'type',
@@ -4016,14 +4244,9 @@ class StreamingSession {
         ]);
         if (message.attemptId !== this.attemptId)
           throw new StreamingProtocolError('protocol-error', 'unexpected attempt acceptance');
-        if (!isRecord(message.agentId))
-          throw new StreamingProtocolError('malformed-message', 'invalid accepted agent identity');
-        object(message.agentId, ['componentId', 'agentId']);
         if (
-          typeof message.agentId.componentId !== 'string' ||
-          !HYPHENATED_UUID.test(message.agentId.componentId) ||
-          typeof message.agentId.agentId !== 'string' ||
-          message.agentId.agentId.length === 0 ||
+          typeof message.agentId !== 'string' ||
+          !HYPHENATED_UUID.test(message.agentId) ||
           typeof message.idempotencyKey !== 'string' ||
           message.idempotencyKey.length === 0
         )
@@ -4031,11 +4254,10 @@ class StreamingSession {
             'malformed-message',
             'invalid accepted invocation identity',
           );
-        const agentId = message.agentId as unknown as AgentId;
+        const agentId: AgentId = message.agentId;
         if (
           this.acceptedInvocation &&
-          (this.acceptedInvocation.agentId.componentId !== agentId.componentId ||
-            this.acceptedInvocation.agentId.agentId !== agentId.agentId ||
+          (this.acceptedInvocation.agentId !== agentId ||
             this.acceptedInvocation.idempotencyKey !== message.idempotencyKey)
         )
           throw new StreamingProtocolError(
@@ -4043,10 +4265,11 @@ class StreamingSession {
             'accepted invocation identity changed',
           );
         validateOpaqueToken(message.sessionToken, 'session token');
-        this.install(message.mappings, true);
+        this.install(message.mappings, ready || message.mappings.length !== 0);
         this.acceptedInvocation = { agentId, idempotencyKey: message.idempotencyKey };
         this.sessionToken = message.sessionToken;
         this.accepted = true;
+        this.executionReady = ready || message.mappings.length !== 0;
         this.everAccepted = true;
         this.pendingResume = false;
         this.acceptedAt = Date.now();
@@ -4947,6 +5170,7 @@ class StreamingSession {
         });
       }
       this.accepted = false;
+      this.executionReady = false;
       await this.connectRetry();
     } catch (error) {
       this.fail(error);

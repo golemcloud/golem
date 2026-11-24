@@ -123,6 +123,6 @@ Each agent incarnation has its own repository. Deleting and recreating an agent 
 | SQLite (`Sqlite` and `KVStoreSqlite`) | Namespace `filesystem_snapshots-<environment id>-<agent>-<incarnation id>` in the `blob_storage` table |
 | In memory | Executor memory; lost when the executor stops. For tests only. |
 
-`<agent>` is the agent name with characters other than ASCII letters, digits, `-`, or `_` replaced by `_`, truncated to 32 characters (`agent` for an empty name). It is followed by `-` and the hexadecimal BLAKE3 hash of `<component id>/<agent name>`. `<incarnation id>` is a UUID. Incarnations of the same agent share the `<agent>` segment.
+`<agent>` is the agent ID, a UUID. `<incarnation id>` is the fingerprint of the agent incarnation, also a UUID. Incarnations of the same agent share the `<agent>` segment.
 
 An incarnation whose agent no longer exists contains only snapshots that no agent uses. Use these locations to investigate leftover storage; do not delete snapshots from a live agent's repository to resolve a recovery failure.

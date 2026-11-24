@@ -151,7 +151,7 @@ const GOLEM_SERVER: &str = "_root_.golem.bridge.runtime.GolemServer";
 /// The time argument of `scheduleAt`, in both bridge modes.
 const SCHEDULE_TIME: &str = "_root_.java.time.Instant";
 
-/// Fully-qualified UUID type, used for native `uuid` values and phantom ids in
+/// Fully-qualified UUID type, used for native `uuid` values in
 /// both bridge modes.
 const UUID: &str = "_root_.java.util.UUID";
 
@@ -165,7 +165,11 @@ const GUEST_AGENT_CONFIG_ENTRY: &str = "_root_.golem.config.ConfigOverride";
 const GUEST_REMOTE_AGENT_CLIENT: &str = "_root_.golem.runtime.rpc.RemoteAgentClient";
 const GUEST_CONFIGURATION: &str = "_root_.golem.runtime.rpc.RemoteAgentClient";
 const GUEST_RESOLVED_AGENT: &str = "_root_.golem.runtime.rpc.RemoteAgentClient";
-const GUEST_AGENT_ID: &str = "_root_.scala.Predef.String";
+const GUEST_AGENT_ID: &str = "_root_.golem.AgentId";
+const GUEST_AGENT_IDENTITY: &str = "_root_.golem.runtime.rpc.AgentIdentity";
+const GUEST_AGENT_RPC_EXCEPTION: &str = "_root_.golem.runtime.rpc.AgentRpcException";
+const GUEST_CREATE_OPTIONS: &str = "_root_.golem.runtime.rpc.CreateOptions";
+const GUEST_JS_QUEUE: &str = "_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue";
 const GUEST_GOLEM_SERVER: &str = "_root_.golem.runtime.rpc.RemoteAgentClient";
 const GUEST_PERMISSION_CARD: &str = "_root_.golem.host.PermissionsApi.PermissionCard";
 const GUEST_POLYMORPHIC_PERMISSION_CARD: &str =
@@ -207,6 +211,43 @@ fn guest_permission_card_type(polymorphic: bool) -> &'static str {
 }
 
 /// The two `AgentInvocationMode` wire strings (server OpenAPI enum).
+const AGENT_ID_DOC: &str =
+    "/** The ID of the agent. On a client of `upsert` the first call creates a missing agent. */";
+
+const CREATE_DOC: &str = "/** Creates an agent. With `keyed` it is the keyed agent of the constructor parameters, and an existing one fails with a conflict; otherwise the new agent has no key and a new ID. `env` adds environment variables to the ones the manifest defines. */";
+
+const GET_BY_ID_DOC: &str = "/** A client of the existing agent with the ID. It never creates the agent: an unknown ID, or the ID of an agent of another type, fails with not-found. */";
+
+fn upsert_doc(mode: AgentMode) -> &'static str {
+    match mode {
+        AgentMode::Durable => {
+            "/** A client of the keyed agent of the constructor parameters. The first call creates the agent when it is missing. */"
+        }
+        AgentMode::Ephemeral => {
+            "/** A client of the agent type with the constructor parameters. Every call runs on a new one-shot instance. */"
+        }
+    }
+}
+
+/// The parameter list of `create`: the constructor parameters, `keyed`, the
+/// local config overrides and `env`, each option with a default.
+fn create_decls(param_decls: &str, config_param_defs: &[(String, String)]) -> String {
+    let mut decls = Vec::new();
+    if !param_decls.is_empty() {
+        decls.push(param_decls.to_string());
+    }
+    decls.push("keyed: _root_.scala.Boolean = false".to_string());
+    decls.extend(
+        config_param_defs
+            .iter()
+            .map(|(name, ty)| format!("{name}: {ty}")),
+    );
+    decls.push(format!(
+        "env: _root_.scala.Predef.Map[{STRING}, {STRING}] = _root_.scala.Predef.Map.empty"
+    ));
+    decls.join(", ")
+}
+
 const MODE_AWAIT: &str = "await";
 const MODE_SCHEDULE: &str = "schedule";
 
@@ -215,7 +256,7 @@ const MAX_TUPLE_ARITY: usize = 22;
 
 /// Internal identifiers emitted alongside user-supplied parameters in the
 /// generated client (constructor/method helper defs, locals, inherited trait
-/// members referenced unqualified, and the synthetic `when`/`phantom`
+/// members referenced unqualified, and the synthetic `when`, `keyed` and `env`
 /// parameters). User parameter names are disambiguated away from these so a
 /// parameter can never shadow or collide with generated code. The set is the
 /// union of all constructor and method contexts so the names chosen for an
@@ -234,17 +275,16 @@ const RESERVED_PARAM_NAMES: &[&str] = &[
     "when",
     "configuration",
     "parameters",
-    "phantomId",
-    "phantom",
     "agentId",
     "agentTypeName",
     "bindRemote",
-    "get",
-    "getPhantom",
-    "newPhantom",
-    "getWithConfig",
-    "getPhantomWithConfig",
-    "newPhantomWithConfig",
+    "upsert",
+    "create",
+    "getById",
+    "keyed",
+    "env",
+    "options",
+    "constructorPayload",
     "agentConfig",
     "configValue",
 ];
@@ -308,6 +348,9 @@ const RESERVED_RUNTIME_TYPE_NAMES: &[&str] = &[
     "Json",
     "BridgeException",
     "BridgeInvocationRejectedException",
+    "BridgeHttpException",
+    "BridgeNotFoundException",
+    "BridgeConflictException",
     "GolemServer",
     "Configuration",
     "AgentId",
@@ -325,7 +368,7 @@ const RESERVED_RUNTIME_TYPE_NAMES: &[&str] = &[
     "BridgeProtocol",
     "AgentConfigEntry",
     "CreateAgentRequest",
-    "CreateAgentResponse",
+    "AgentReference",
     "AgentInvocationRequest",
     "AgentInvocationResult",
     "ResolvedAgent",
@@ -340,6 +383,9 @@ const RESERVED_GUEST_RUNTIME_TYPE_NAMES: &[&str] = &[
     "CancellationToken",
     "ConfigOverride",
     "RemoteAgentClient",
+    "AgentIdentity",
+    "AgentRpcException",
+    "CreateOptions",
     "ToolRpcClient",
 ];
 
@@ -1207,7 +1253,8 @@ impl ScalaBridgeGenerator {
         writer.line(format!("trait {remote_name} {{"));
         writer.indent();
         if self.agent_type.mode == AgentMode::Durable {
-            writer.line(format!("def agentId: {GUEST_AGENT_ID}"));
+            writer.line(AGENT_ID_DOC);
+            writer.line(format!("def agentId(): {FUTURE}[{GUEST_AGENT_ID}]"));
         }
         writer.line(format!("def agentTypeName: {STRING}"));
         for (val_name, class_name) in method_val_names.iter().zip(method_class_names) {
@@ -1230,7 +1277,9 @@ impl ScalaBridgeGenerator {
         ));
         writer.indent();
         if self.agent_type.mode == AgentMode::Durable {
-            writer.line(format!("def agentId: {GUEST_AGENT_ID} = resolved.agentId"));
+            writer.line(format!(
+                "def agentId(): {FUTURE}[{GUEST_AGENT_ID}] = resolved.agentId()"
+            ));
         }
         writer.line(format!(
             "def agentTypeName: {STRING} = resolved.agentTypeName"
@@ -1268,18 +1317,6 @@ impl ScalaBridgeGenerator {
             .collect::<Vec<_>>();
         let invoke_args = param_names.join(", ");
 
-        let local_configs = self.local_configs();
-        let config_param_defs = self.config_param_defs(&param_names, &local_configs)?;
-        let config_decls = config_param_defs
-            .iter()
-            .map(|(name, ty)| format!("{name}: {ty}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let config_param_names = config_param_defs
-            .iter()
-            .map(|(name, _)| name.clone())
-            .collect::<Vec<_>>();
-
         let direct = self.guest_direct_input(&input);
         let parameter_type = if direct {
             "_root_.golem.schema.wire.WitSchemaValueTree"
@@ -1303,113 +1340,80 @@ impl ScalaBridgeGenerator {
         writer.dedent();
         writer.line("}");
         writer.blank();
-
-        if self.agent_type.mode == AgentMode::Durable {
-            writer.line(format!("def get({param_decls}): {remote_name} = {{"));
-            writer.indent();
-            self.write_guest_resolve_body(writer, &invoke_args, "_root_.scala.None", LIST_EMPTY);
-            writer.dedent();
-            writer.line("}");
-            writer.blank();
-        }
-
-        if self.agent_type.mode == AgentMode::Durable {
-            let phantom_decls = if param_decls.is_empty() {
-                format!("phantom: {UUID}")
-            } else {
-                format!("{param_decls}, phantom: {UUID}")
-            };
-            writer.line(format!(
-                "def getPhantom({phantom_decls}): {remote_name} = {{"
-            ));
-            writer.indent();
-            self.write_guest_resolve_body(
-                writer,
-                &invoke_args,
-                "_root_.scala.Some(phantom)",
-                LIST_EMPTY,
-            );
-            writer.dedent();
-            writer.line("}");
-            writer.blank();
-
-            let new_phantom_args = if invoke_args.is_empty() {
-                "_root_.golem.HostApi.generateIdempotencyKey()".to_string()
-            } else {
-                format!("{invoke_args}, _root_.golem.HostApi.generateIdempotencyKey()")
-            };
-            writer.line(format!(
-                "def newPhantom({param_decls}): {remote_name} = getPhantom({new_phantom_args})"
-            ));
+        let encoder = if direct {
+            "_root_.golem.host.SchemaWireInterop.valueTreeToJs".to_string()
         } else {
-            writer.line(format!("def newPhantom({param_decls}): {remote_name} = {{"));
-            writer.indent();
-            self.write_guest_resolve_body(writer, &invoke_args, "_root_.scala.None", LIST_EMPTY);
-            writer.dedent();
-            writer.line("}");
+            format!("{GUEST_CODEC}.encodeValue")
+        };
+
+        writer.line(upsert_doc(self.agent_type.mode));
+        writer.line(format!("def upsert({param_decls}): {remote_name} = {{"));
+        writer.indent();
+        writer.line(format!(
+            "val constructorPayload = {encoder}(constructorParameters({invoke_args}))"
+        ));
+        writer.line(format!(
+            "{GUEST_AGENT_IDENTITY}.upsert(agentTypeName, constructorPayload) match {{"
+        ));
+        writer.indent();
+        writer.line("case _root_.scala.Right(resolved) => bindRemote(resolved)");
+        writer.line(format!(
+            "case _root_.scala.Left(err) => throw {GUEST_AGENT_RPC_EXCEPTION}(err)"
+        ));
+        writer.dedent();
+        writer.line("}");
+        writer.dedent();
+        writer.line("}");
+
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            return Ok(());
         }
 
-        if !local_configs.is_empty() {
-            let with_config_decls = |extra: &str| {
-                [param_decls.as_str(), extra, config_decls.as_str()]
-                    .into_iter()
-                    .filter(|s| !s.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            };
-
-            if self.agent_type.mode == AgentMode::Durable {
-                writer.blank();
-                writer.line(format!(
-                    "def getWithConfig({}): {remote_name} = {{",
-                    with_config_decls("")
-                ));
-                writer.indent();
-                self.write_guest_config_list(writer, &config_param_names, &local_configs)?;
-                self.write_guest_resolve_body(
-                    writer,
-                    &invoke_args,
-                    "_root_.scala.None",
-                    "agentConfig",
-                );
-                writer.dedent();
-                writer.line("}");
-            }
-
-            if self.agent_type.mode == AgentMode::Durable {
-                writer.blank();
-                writer.line(format!(
-                    "def getPhantomWithConfig({}): {remote_name} = {{",
-                    with_config_decls(&format!("phantom: {UUID}"))
-                ));
-                writer.indent();
-                self.write_guest_config_list(writer, &config_param_names, &local_configs)?;
-                self.write_guest_resolve_body(
-                    writer,
-                    &invoke_args,
-                    "_root_.scala.Some(phantom)",
-                    "agentConfig",
-                );
-                writer.dedent();
-                writer.line("}");
-            }
-
-            writer.blank();
-            writer.line(format!(
-                "def newPhantomWithConfig({}): {remote_name} = {{",
-                with_config_decls("")
-            ));
-            writer.indent();
+        let local_configs = self.local_configs();
+        let config_param_defs = self.config_param_defs(&param_names, &local_configs)?;
+        let config_param_names = config_param_defs
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        writer.blank();
+        writer.line(CREATE_DOC);
+        writer.line(format!(
+            "def create({}): {FUTURE}[{remote_name}] =",
+            create_decls(&param_decls, &config_param_defs)
+        ));
+        writer.indent();
+        writer.line(format!("{FUTURE}.fromTry(_root_.scala.util.Try {{"));
+        writer.indent();
+        if local_configs.is_empty() {
+            writer.line(format!("val agentConfig = {LIST_EMPTY}"));
+        } else {
             self.write_guest_config_list(writer, &config_param_names, &local_configs)?;
-            let phantom = if self.agent_type.mode == AgentMode::Durable {
-                "_root_.scala.Some(_root_.golem.HostApi.generateIdempotencyKey())"
-            } else {
-                "_root_.scala.None"
-            };
-            self.write_guest_resolve_body(writer, &invoke_args, phantom, "agentConfig");
-            writer.dedent();
-            writer.line("}");
         }
+        writer.line(format!(
+            "val constructorPayload = {encoder}(constructorParameters({invoke_args}))"
+        ));
+        writer.line(format!(
+            "(constructorPayload, {GUEST_CREATE_OPTIONS}(keyed, agentConfig, env))"
+        ));
+        writer.dedent();
+        writer.line(format!(
+            "}}).flatMap {{ case (constructorPayload, options) => {GUEST_AGENT_IDENTITY}.create(agentTypeName, constructorPayload, options) }}({GUEST_JS_QUEUE})"
+        ));
+        writer.line(format!(
+            "  .map(resolved => bindRemote(resolved))({GUEST_JS_QUEUE})"
+        ));
+        writer.dedent();
+        writer.blank();
+
+        writer.line(GET_BY_ID_DOC);
+        writer.line(format!(
+            "def getById(agentId: {GUEST_AGENT_ID}): {FUTURE}[{remote_name}] ="
+        ));
+        writer.indent();
+        writer.line(format!(
+            "{GUEST_AGENT_IDENTITY}.getById(agentTypeName, agentId).map(resolved => bindRemote(resolved))({GUEST_JS_QUEUE})"
+        ));
+        writer.dedent();
         Ok(())
     }
 
@@ -1463,33 +1467,6 @@ impl ScalaBridgeGenerator {
             root: typ.clone(),
         };
         self.schema_graphs.borrow_mut().intern(graph)
-    }
-
-    fn write_guest_resolve_body(
-        &self,
-        writer: &mut ScalaWriter,
-        invoke_args: &str,
-        phantom_expr: &str,
-        config_expr: &str,
-    ) {
-        let encoder = if self.guest_direct_input(&self.agent_type.constructor.input_schema) {
-            "_root_.golem.host.SchemaWireInterop.valueTreeToJs".to_string()
-        } else {
-            format!("{GUEST_CODEC}.encodeValue")
-        };
-        writer.line(format!(
-            "val constructorPayload = {encoder}(constructorParameters({invoke_args}))"
-        ));
-        writer.line(format!(
-            "{GUEST_REMOTE_AGENT_CLIENT}.resolve(agentTypeName, constructorPayload, {phantom_expr}, {config_expr}) match {{"
-        ));
-        writer.indent();
-        writer.line("case _root_.scala.Right(resolved) => bindRemote(resolved)");
-        writer.line(
-            "case _root_.scala.Left(err) => throw _root_.scala.scalajs.js.JavaScriptException(err)",
-        );
-        writer.dedent();
-        writer.line("}");
     }
 
     fn guest_output_return(&self, output: &OutputSchema) -> anyhow::Result<(String, String)> {
@@ -1775,9 +1752,8 @@ impl ScalaBridgeGenerator {
                     || "_root_.scala.None".to_string(),
                     |codec| format!("_root_.scala.Some({codec})"),
                 );
-            let config_codecs = self.public_config_codecs()?;
             writer.line(format!(
-                "val (__invocation, __cancellation) = {BRIDGE}.invokeStreamingAgentCancelable(resolved, {method_name_lit}, () => methodParameters({invoke_args}), {constructor_codec}, {input_codec}, {output_codec}, {config_codecs})"
+                "val (__invocation, __cancellation) = {BRIDGE}.invokeStreamingAgentCancelable(resolved, {method_name_lit}, () => methodParameters({invoke_args}), {constructor_codec}, {input_codec}, {output_codec})"
             ));
             writer.line("(__invocation.map { __result =>");
         } else {
@@ -1868,7 +1844,8 @@ impl ScalaBridgeGenerator {
         writer.line(format!("trait {remote_name} {{"));
         writer.indent();
         if self.agent_type.mode == AgentMode::Durable {
-            writer.line(format!("def agentId: {AGENT_ID}"));
+            writer.line(AGENT_ID_DOC);
+            writer.line(format!("def agentId(): {FUTURE}[{AGENT_ID}]"));
         }
         writer.line(format!("def agentTypeName: {STRING}"));
         for (val_name, class_name) in method_val_names.iter().zip(method_class_names) {
@@ -1883,7 +1860,9 @@ impl ScalaBridgeGenerator {
         ));
         writer.indent();
         if self.agent_type.mode == AgentMode::Durable {
-            writer.line(format!("def agentId: {AGENT_ID} = resolved.agentId.get"));
+            writer.line(format!(
+                "def agentId(): {FUTURE}[{AGENT_ID}] = {BRIDGE}.agentId(resolved)"
+            ));
         }
         writer.line(format!(
             "def agentTypeName: {STRING} = resolved.agentTypeName"
@@ -1897,12 +1876,11 @@ impl ScalaBridgeGenerator {
         writer.line("}");
     }
 
-    /// Emits the mode-aware constructors. Every agent gets `getPhantom` and
-    /// `newPhantom`; durable agents additionally get `get`. When the agent
-    /// declares local config overrides, the matching `getWithConfig` /
-    /// `getPhantomWithConfig` / `newPhantomWithConfig` variants are emitted too
-    /// (mirroring the Scala SDK's RPC clients). Each constructor returns a
-    /// `Future[<Agent>Remote]`.
+    /// Emits the constructors. Every agent gets `upsert`, which names the keyed
+    /// agent of the constructor parameters and contacts the server only on the
+    /// first invocation. Durable agents also get `create`, which creates an
+    /// agent with optional local config overrides and environment variables,
+    /// and `getById`, which reaches an existing agent by its ID.
     fn write_constructors(
         &self,
         writer: &mut ScalaWriter,
@@ -1921,21 +1899,6 @@ impl ScalaBridgeGenerator {
             .collect::<Vec<_>>();
         let invoke_args = param_names.join(", ");
 
-        // Local config overrides this agent declares (if any). The matching
-        // `…WithConfig` constructors are only emitted when this is non-empty.
-        let local_configs = self.local_configs();
-        let config_param_defs = self.config_param_defs(&param_names, &local_configs)?;
-        let config_decls = config_param_defs
-            .iter()
-            .map(|(name, ty)| format!("{name}: {ty}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let config_param_names = config_param_defs
-            .iter()
-            .map(|(name, _)| name.clone())
-            .collect::<Vec<_>>();
-
-        // Shared parameter-packing helper.
         writer.line(format!(
             "private def constructorParameters({param_decls}): {SCHEMA_VALUE_TYPE} = {{"
         ));
@@ -1945,150 +1908,81 @@ impl ScalaBridgeGenerator {
         writer.line("}");
         writer.blank();
 
-        // `get` (durable only): resolve by constructor parameters, no phantom.
-        if self.agent_type.mode == AgentMode::Durable {
-            writer.line(format!(
-                "def get({param_decls}): {FUTURE}[{remote_name}] = {{"
-            ));
-            writer.indent();
-            self.write_create_agent_body(writer, &invoke_args, "_root_.scala.None", LIST_EMPTY);
-            writer.dedent();
-            writer.line("}");
-            writer.blank();
-        }
-
-        let phantom_some = "_root_.scala.Some(phantom.toString)".to_string();
-        if self.agent_type.mode == AgentMode::Durable {
-            // `getPhantom`: resolve with an explicit phantom UUID.
-            let phantom_decls = if param_decls.is_empty() {
-                format!("phantom: {UUID}")
-            } else {
-                format!("{param_decls}, phantom: {UUID}")
-            };
-            writer.line(format!(
-                "def getPhantom({phantom_decls}): {FUTURE}[{remote_name}] = {{"
-            ));
-            writer.indent();
-            self.write_create_agent_body(writer, &invoke_args, &phantom_some, LIST_EMPTY);
-            writer.dedent();
-            writer.line("}");
-            writer.blank();
-
-            // `newPhantom`: like `getPhantom` but with a fresh random phantom id.
-            let new_phantom_args = if invoke_args.is_empty() {
-                format!("{UUID}.randomUUID()")
-            } else {
-                format!("{invoke_args}, {UUID}.randomUUID()")
-            };
-            writer.line(format!(
-            "def newPhantom({param_decls}): {FUTURE}[{remote_name}] = getPhantom({new_phantom_args})"
+        writer.line(upsert_doc(self.agent_type.mode));
+        writer.line(format!("def upsert({param_decls}): {remote_name} ="));
+        writer.indent();
+        writer.line(format!(
+            "bindRemote({RESOLVED_AGENT}({CONFIGURATION}.get, agentTypeName, _root_.scala.Some(constructorParameters({invoke_args})), _root_.scala.None))"
         ));
-        } else {
-            writer.line(format!(
-                "def newPhantom({param_decls}): {FUTURE}[{remote_name}] = {{"
-            ));
-            writer.indent();
-            self.write_local_ephemeral_body(writer, &invoke_args, "_root_.scala.None", LIST_EMPTY);
-            writer.dedent();
-            writer.line("}");
+        writer.dedent();
+
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            return Ok(());
         }
 
-        // Config-override constructors, emitted only when the agent declares
-        // local config. Each builds the `List[AgentConfigEntry]` inline from the
-        // non-`None` config parameters and creates the agent with it.
-        if !local_configs.is_empty() {
-            let with_config_decls = |extra: &str| {
-                [param_decls.as_str(), extra, config_decls.as_str()]
-                    .into_iter()
-                    .filter(|s| !s.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            };
-
-            // `getWithConfig` (durable only).
-            if self.agent_type.mode == AgentMode::Durable {
-                writer.blank();
-                writer.line(format!(
-                    "def getWithConfig({}): {FUTURE}[{remote_name}] = {{",
-                    with_config_decls("")
-                ));
-                writer.indent();
-                self.write_config_list(writer, &config_param_names, &local_configs)?;
-                self.write_create_agent_body(
-                    writer,
-                    &invoke_args,
-                    "_root_.scala.None",
-                    "agentConfig",
-                );
-                writer.dedent();
-                writer.line("}");
-            }
-
-            if self.agent_type.mode == AgentMode::Durable {
-                // `getPhantomWithConfig`.
-                writer.blank();
-                writer.line(format!(
-                    "def getPhantomWithConfig({}): {FUTURE}[{remote_name}] = {{",
-                    with_config_decls(&format!("phantom: {UUID}"))
-                ));
-                writer.indent();
-                self.write_config_list(writer, &config_param_names, &local_configs)?;
-                self.write_create_agent_body(writer, &invoke_args, &phantom_some, "agentConfig");
-                writer.dedent();
-                writer.line("}");
-            } else {
-                writer.blank();
-                writer.line(format!(
-                    "def newPhantomWithConfig({}): {FUTURE}[{remote_name}] = {{",
-                    with_config_decls("")
-                ));
-                writer.indent();
-                self.write_config_list(writer, &config_param_names, &local_configs)?;
-                self.write_local_ephemeral_body(
-                    writer,
-                    &invoke_args,
-                    "_root_.scala.None",
-                    "agentConfig",
-                );
-                writer.dedent();
-                writer.line("}");
-            }
-
-            if self.agent_type.mode == AgentMode::Durable {
-                // `newPhantomWithConfig`: like `getPhantomWithConfig` but with a fresh phantom id.
-                writer.blank();
-                writer.line(format!(
-                    "def newPhantomWithConfig({}): {FUTURE}[{remote_name}] = {{",
-                    with_config_decls("")
-                ));
-                writer.indent();
-                self.write_config_list(writer, &config_param_names, &local_configs)?;
-                self.write_create_agent_body(
-                    writer,
-                    &invoke_args,
-                    &format!("_root_.scala.Some({UUID}.randomUUID().toString)"),
-                    "agentConfig",
-                );
-                writer.dedent();
-                writer.line("}");
-            }
-        }
-
-        Ok(())
-    }
-
-    fn write_local_ephemeral_body(
-        &self,
-        writer: &mut ScalaWriter,
-        invoke_args: &str,
-        phantom: &str,
-        config: &str,
-    ) {
+        let local_configs = self.local_configs();
+        let config_param_defs = self.config_param_defs(&param_names, &local_configs)?;
+        let config_param_names = config_param_defs
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        writer.blank();
+        writer.line(CREATE_DOC);
+        writer.line(format!(
+            "def create({}): {FUTURE}[{remote_name}] = {{",
+            create_decls(&param_decls, &config_param_defs)
+        ));
+        writer.indent();
         writer.line(format!("val configuration = {CONFIGURATION}.get"));
         writer.line(format!(
-            "val parameters = constructorParameters({invoke_args})"
+            "implicit val ec: {EXECUTION_CONTEXT} = configuration.executionContext"
         ));
-        writer.line(format!("{FUTURE}.successful(bindRemote({RESOLVED_AGENT}(configuration, agentTypeName, parameters, {phantom}, {config}, _root_.scala.None)))"));
+        writer.line(format!("{FUTURE}.fromTry(_root_.scala.util.Try {{"));
+        writer.indent();
+        if local_configs.is_empty() {
+            writer.line(format!("val agentConfig = {LIST_EMPTY}"));
+        } else {
+            self.write_config_list(writer, &config_param_names, &local_configs)?;
+        }
+        writer.line(format!(
+            "(constructorParameters({invoke_args}), agentConfig)"
+        ));
+        writer.dedent();
+        writer.line("}).flatMap { case (parameters, agentConfig) =>");
+        writer.indent();
+        writer.line(format!(
+            "{BRIDGE}.createAgent(configuration, agentTypeName, parameters, keyed, agentConfig, env).map {{ __response =>"
+        ));
+        writer.indent();
+        writer.line(format!(
+            "bindRemote({RESOLVED_AGENT}(configuration, agentTypeName, _root_.scala.None, _root_.scala.Some(__response)))"
+        ));
+        writer.dedent();
+        writer.line("}");
+        writer.dedent();
+        writer.line("}");
+        writer.dedent();
+        writer.line("}");
+        writer.blank();
+
+        writer.line(GET_BY_ID_DOC);
+        writer.line(format!(
+            "def getById(agentId: {AGENT_ID}): {FUTURE}[{remote_name}] = {{"
+        ));
+        writer.indent();
+        writer.line(format!("val configuration = {CONFIGURATION}.get"));
+        writer.line(format!(
+            "{BRIDGE}.getAgent(configuration, agentTypeName, agentId).map {{ __response =>"
+        ));
+        writer.indent();
+        writer.line(format!(
+            "bindRemote({RESOLVED_AGENT}(configuration, agentTypeName, _root_.scala.None, _root_.scala.Some(__response)))"
+        ));
+        writer.dedent();
+        writer.line("}(configuration.executionContext)");
+        writer.dedent();
+        writer.line("}");
+        Ok(())
     }
 
     /// The agent's local (caller-overridable) config declarations, in order.
@@ -2179,37 +2073,6 @@ impl ScalaBridgeGenerator {
         Ok(())
     }
 
-    /// Emits the shared body of a constructor: build the parameter record, call
-    /// `Bridge.createAgent`, and bind the resolved agent into a remote. The
-    /// `phantom_expr` is the `Option[String]` phantom id expression and
-    /// `config_expr` is the `List[AgentConfigEntry]` of local config overrides
-    /// (`List()` for the plain constructors that do not take config overrides).
-    fn write_create_agent_body(
-        &self,
-        writer: &mut ScalaWriter,
-        invoke_args: &str,
-        phantom_expr: &str,
-        config_expr: &str,
-    ) {
-        writer.line(format!("val configuration = {CONFIGURATION}.get"));
-        writer.line(format!(
-            "implicit val ec: {EXECUTION_CONTEXT} = configuration.executionContext"
-        ));
-        writer.line(format!(
-            "val parameters = constructorParameters({invoke_args})"
-        ));
-        writer.line(format!("val phantomId = {phantom_expr}"));
-        writer.line(format!(
-            "{BRIDGE}.createAgent(configuration, agentTypeName, parameters, phantomId, {config_expr}).map {{ __response =>"
-        ));
-        writer.indent();
-        writer.line(format!(
-            "bindRemote({RESOLVED_AGENT}(configuration, agentTypeName, parameters, phantomId, {LIST_EMPTY}, _root_.scala.Some(__response.agentId)))"
-        ));
-        writer.dedent();
-        writer.line("}");
-    }
-
     /// Emits the body of a parameter-packing helper: encodes each user-supplied
     /// field positionally and wraps them in a record `SchemaValue`. A multimodal
     /// input is still packed as a single-field record whose only field is the
@@ -2257,26 +2120,6 @@ impl ScalaBridgeGenerator {
             "{RUNTIME_PKG}.PublicValueCodec.fromSchemaGraphJson({})",
             scala_string_literal(&json)
         ))
-    }
-
-    fn public_config_codecs(&self) -> anyhow::Result<String> {
-        let entries = self
-            .local_configs()
-            .into_iter()
-            .map(|config| {
-                let path = config
-                    .path
-                    .iter()
-                    .map(|part| scala_string_literal(part))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                Ok(format!(
-                    "{LIST}({path}) -> {}",
-                    self.public_codec(&config.value_type)?
-                ))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        Ok(format!("{LIST}({})", entries.join(", ")))
     }
 
     /// The `(name, type)` parameter declarations for a constructor or method's
@@ -2448,7 +2291,7 @@ impl ScalaBridgeGenerator {
     ///
     /// Names are disambiguated away from each other and from the internal
     /// identifiers emitted alongside them in constructor/method bodies (helper
-    /// defs, locals, inherited members, and the synthetic `when`/`phantom`
+    /// defs, locals, inherited members, and the synthetic `when`, `keyed` and `env`
     /// parameters), so a user parameter can never shadow or collide with
     /// generated code. A single combined reserved set is used for both
     /// constructors and methods, keeping the names produced here identical at
@@ -4140,7 +3983,9 @@ mod tests {
             "_root_.golem.runtime.rpc.AgentClientRuntime.awaitedWireInput(__scopeCard)(methodParameters(message))"
         ));
         assert!(!client_source.contains("_root_.golem.schema.SchemaValue.StringValue(message)"));
-        assert!(client_source.contains("_root_.golem.runtime.rpc.RemoteAgentClient.resolve"));
+        assert!(client_source.contains(
+            "_root_.golem.runtime.rpc.AgentIdentity.upsert(agentTypeName, constructorPayload)"
+        ));
         assert!(client_source.contains("resolved.asyncInvokeAndAwait"));
         assert!(client_source.contains("def cancelable("));
         assert!(client_source.contains("resolved.cancelableAsyncInvokeAndAwait"));
@@ -4401,11 +4246,21 @@ mod tests {
         )
         .unwrap();
         assert!(
-            client_source.contains("def getWithConfig("),
-            "guest client should expose the same local-config override constructor API as the Scala bridge generator emits for REST clients:\n{client_source}"
+            client_source.contains("def create(keyed: _root_.scala.Boolean = false, apiKey: _root_.scala.Option[_root_.scala.Predef.String] = _root_.scala.None, env: _root_.scala.Predef.Map[_root_.scala.Predef.String, _root_.scala.Predef.String] = _root_.scala.Predef.Map.empty): _root_.scala.concurrent.Future[AlphaAgentRemote] ="),
+            "guest client should take local config overrides in create:\n{client_source}"
         );
-        assert!(client_source.contains("def getPhantomWithConfig("));
-        assert!(client_source.contains("def newPhantomWithConfig("));
+        assert!(
+            client_source
+                .contains("_root_.golem.runtime.rpc.CreateOptions(keyed, agentConfig, env)")
+        );
+        assert!(client_source.contains(
+            "def getById(agentId: _root_.golem.AgentId): _root_.scala.concurrent.Future[AlphaAgentRemote] ="
+        ));
+        assert!(client_source.contains(
+            "def agentId(): _root_.scala.concurrent.Future[_root_.golem.AgentId] = resolved.agentId()"
+        ));
+        assert!(!client_source.contains("WithConfig"));
+        assert!(!client_source.contains("Phantom"));
         assert!(client_source.contains("_root_.golem.config.ConfigOverride("));
         assert!(client_source.contains(
             "apiKey: _root_.scala.Option[_root_.scala.Predef.String] = _root_.scala.None"

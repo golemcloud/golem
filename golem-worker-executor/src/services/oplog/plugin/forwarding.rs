@@ -35,7 +35,7 @@ impl ForwardingOplog {
                 state.insert(
                     *grant_id,
                     LivePluginState {
-                        target_agent_id: cp.target_agent_id.clone(),
+                        target_agent_id: cp.target_agent_id,
                         confirmed_up_to: cp.confirmed_up_to,
                         sending_up_to: cp.sending_up_to,
                         send_in_progress: false,
@@ -61,7 +61,7 @@ impl ForwardingOplog {
         // Captured here, where the caller's context is still current: each flush
         // tick links back to it rather than running inside it.
         let flush_origin = TraceOrigin::capture_current();
-        let agent_id = initial_worker_metadata.agent_id.clone();
+        let agent_id = initial_worker_metadata.agent_id;
 
         let forwarding_retired = CancellationToken::new();
         let forwarding_activity = ActivityGate::new();
@@ -385,6 +385,7 @@ impl Drop for ForwardingOplog {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Oplog for ForwardingOplog {
     fn executor_shutdown_handle(&self) -> super::super::OplogShutdownHandle {
         let forwarding_retired = self.forwarding_retired.clone();

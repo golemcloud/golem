@@ -1,0 +1,5272 @@
+{
+  "tier": "sweep",
+  "description": "Grammar sweep: quoting, word splitting and IFS, `read`, brace and tilde expansion, and command\nsubstitution, generated from fixed tables (see sweep_grammar_param.py for the scheme).",
+  "cases": [
+    {
+      "name": "gram words ansi-c alert",
+      "script": "x=$'<\\a>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c backspace",
+      "script": "x=$'<\\b>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c escape e",
+      "script": "x=$'<\\e>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c escape E",
+      "script": "x=$'<\\E>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c form feed",
+      "script": "x=$'<\\f>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c newline",
+      "script": "x=$'<\\n>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c return",
+      "script": "x=$'<\\r>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c tab",
+      "script": "x=$'<\\t>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c vertical tab",
+      "script": "x=$'<\\v>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c backslash",
+      "script": "x=$'<\\\\>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c single quote",
+      "script": "x=$'<\\'>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c double quote",
+      "script": "x=$'<\\\">'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c question",
+      "script": "x=$'<\\?>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c octal one digit",
+      "script": "x=$'<\\7>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c octal three digits",
+      "script": "x=$'<\\101>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c octal four digits",
+      "script": "x=$'<\\1011>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c octal overflow",
+      "script": "x=$'<\\777>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c hex two",
+      "script": "x=$'<\\x41>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c hex one",
+      "script": "x=$'<\\x4>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c hex then letter",
+      "script": "x=$'<\\x41g>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c hex none",
+      "script": "x=$'<\\xZ>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c hex three",
+      "script": "x=$'<\\x414>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c unicode four",
+      "script": "x=$'<\\u00e9>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c unicode short",
+      "script": "x=$'<\\u41>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c unicode smiley",
+      "script": "x=$'<\\u263A>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c unicode eight",
+      "script": "x=$'<\\U0001F600>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c unicode surrogate",
+      "script": "x=$'<\\ud800>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c control A",
+      "script": "x=$'<\\cA>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c control lower",
+      "script": "x=$'<\\ca>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c control question",
+      "script": "x=$'<\\c?>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c control at",
+      "script": "x=$'<\\c@>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c control bracket",
+      "script": "x=$'<\\c[>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c control backslash",
+      "script": "x=$'<\\c\\\\>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c unknown escape",
+      "script": "x=$'<\\z>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c trailing backslash",
+      "script": "x=$'<x\\\\>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c nul",
+      "script": "x=$'<a\\0b>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c hex nul",
+      "script": "x=$'<a\\x00b>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c dollar",
+      "script": "x=$'<\\$>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c literal dollar brace",
+      "script": "x=$'<${x}>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c backquote",
+      "script": "x=$'<`>'; echo ${#x}; printf '%q\\n' \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c as a case pattern",
+      "script": "case $'a\\tb' in $'a\\tb') echo tab-match;; *) echo none;; esac",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c in a here-document is literal",
+      "script": "cat <<EOF\n$'a\\tb'\nEOF",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c inside double quotes is literal",
+      "script": "echo \"$'a\\tb'\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c in an array",
+      "script": "a=($'x\\ty' $'z'); echo ${#a[0]} ${#a[@]}",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c in a default word",
+      "script": "unset u; x=${u:-$'a\\tb'}; echo ${#x}",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c in a double quoted default word",
+      "script": "unset u; x=\"${u:-$'a\\tb'}\"; echo \"$x\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c as a redirect target",
+      "script": "cd /tmp; echo hi > $'f\\x41'; cat fA",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c as an IFS",
+      "script": "IFS=$'\\t'; v=$'a\\tb c'; set -- $v; echo $#",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c in arithmetic",
+      "script": "echo $(( $'1' + 2 ))",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c adjacent to other quotes",
+      "script": "echo $'a'\"b\"'c'd$'e'",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c empty",
+      "script": "x=$''; echo \"[${x}]\" ${#x}",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c in a [[ pattern",
+      "script": "[[ $'a\\nb' == a?b ]] && echo q-match",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c in a function name call",
+      "script": "f() { echo called; }; $'f'",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c as an assignment name",
+      "script": "$'x'=1 2>&1; echo status=$?",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ansi-c locale string",
+      "script": "echo $\"plain\" $\"with $HOSTNAME_UNSET\"",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash unquoted letters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p \\a\\b",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment unquoted letters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=\\a\\b; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash unquoted backslash",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p \\\\",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment unquoted backslash",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=\\\\; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash unquoted dollar",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p \\$x",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment unquoted dollar",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=\\$x; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash unquoted double quote",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p \\\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment unquoted double quote",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=\\\"; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash unquoted single quote",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p \\'",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment unquoted single quote",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=\\'; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash unquoted space",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p a\\ b",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment unquoted space",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=a\\ b; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash unquoted glob",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p \\*",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment unquoted glob",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=\\*; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash unquoted newline",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p a\\\nb",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment unquoted newline",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=a\\\nb; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash unquoted tab",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p a\\\tb",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment unquoted tab",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=a\\\tb; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash double quoted letters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p \"\\a\\b\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment double quoted letters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=\"\\a\\b\"; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash double quoted backslash",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p \"\\\\\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment double quoted backslash",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=\"\\\\\"; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash double quoted dollar",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p \"\\$x\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment double quoted dollar",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=\"\\$x\"; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash double quoted backquote",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p \"\\`\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment double quoted backquote",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=\"\\`\"; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash double quoted quote",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p \"\\\"\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment double quoted quote",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=\"\\\"\"; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash double quoted newline",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p \"a\\\nb\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment double quoted newline",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=\"a\\\nb\"; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash double quoted single quote",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p \"\\'\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment double quoted single quote",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=\"\\'\"; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash single quoted backslash",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p '\\\\'",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment single quoted backslash",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v='\\\\'; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash single quoted backslash n",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p 'a\\nb'",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment single quoted backslash n",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v='a\\nb'; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash mixed",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p a\\'b\"c\\\"d\"'e\\f'",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment mixed",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=a\\'b\"c\\\"d\"'e\\f'; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash backslash before brace",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p \\{a,b}",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment backslash before brace",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=\\{a,b}; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash backslash tilde",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p \\~",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment backslash tilde",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=\\~; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash backslash hash",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p \\#x",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment backslash hash",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=\\#x; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash backslash semicolon",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p a\\;b",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment backslash semicolon",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=a\\;b; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash backslash pipe",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p a\\|b",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment backslash pipe",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=a\\|b; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash backslash ampersand",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p a\\&b",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment backslash ampersand",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=a\\&b; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash backslash parenthesis",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p \\(x\\)",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment backslash parenthesis",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=\\(x\\); p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash backslash less",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p \\<x",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment backslash less",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=\\<x; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash backslash equals",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p x\\=y",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment backslash equals",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=x\\=y; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash double quoted exclamation",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p \"a!b\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment double quoted exclamation",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=\"a!b\"; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash double quoted history like",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; p \"!!\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words backslash in assignment double quoted history like",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; x=X; v=\"!!\"; p \"$v\"",
+      "tags": [
+        "syntax.quote.escape"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal empty quotes are words filled",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- 'one two' ''; a=('a b' '' c); v='x  y'; e=; p '' \"\" $'' a''b",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal empty quotes are words empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set --; a=(); unset v; e=; IFS=:; p '' \"\" $'' a''b",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal adjacent quote kinds filled",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- 'one two' ''; a=('a b' '' c); v='x  y'; e=; p 'a'\"b\"$'c'd\\e",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal adjacent quote kinds empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set --; a=(); unset v; e=; IFS=:; p 'a'\"b\"$'c'd\\e",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal quoted empty variable filled",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- 'one two' ''; a=('a b' '' c); v='x  y'; e=; p \"$e\" $e \"${e}\"x",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal quoted empty variable empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set --; a=(); unset v; e=; IFS=:; p \"$e\" $e \"${e}\"x",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal dollar at in the middle of a word filled",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- 'one two' ''; a=('a b' '' c); v='x  y'; e=; p x\"$@\"y",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal dollar at in the middle of a word empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set --; a=(); unset v; e=; IFS=:; p x\"$@\"y",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal dollar star in the middle of a word filled",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- 'one two' ''; a=('a b' '' c); v='x  y'; e=; p x\"$*\"y",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal dollar star in the middle of a word empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set --; a=(); unset v; e=; IFS=:; p x\"$*\"y",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal array at in the middle of a word filled",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- 'one two' ''; a=('a b' '' c); v='x  y'; e=; p x\"${a[@]}\"y",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal array at in the middle of a word empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set --; a=(); unset v; e=; IFS=:; p x\"${a[@]}\"y",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal array at unquoted in a word filled",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- 'one two' ''; a=('a b' '' c); v='x  y'; e=; p x${a[@]}y",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal array at unquoted in a word empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set --; a=(); unset v; e=; IFS=:; p x${a[@]}y",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal quoted and unquoted halves filled",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- 'one two' ''; a=('a b' '' c); v='x  y'; e=; p \"$v\"$v",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal quoted and unquoted halves empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set --; a=(); unset v; e=; IFS=:; p \"$v\"$v",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal single quotes inside double quotes filled",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- 'one two' ''; a=('a b' '' c); v='x  y'; e=; p \"'$v'\"",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal single quotes inside double quotes empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set --; a=(); unset v; e=; IFS=:; p \"'$v'\"",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal double quotes inside single quotes filled",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- 'one two' ''; a=('a b' '' c); v='x  y'; e=; p '\"$v\"'",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal double quotes inside single quotes empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set --; a=(); unset v; e=; IFS=:; p '\"$v\"'",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal dollar before quotes filled",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- 'one two' ''; a=('a b' '' c); v='x  y'; e=; p \"$\"'$' $",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal dollar before quotes empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set --; a=(); unset v; e=; IFS=:; p \"$\"'$' $",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal dollar at end of a quoted word filled",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- 'one two' ''; a=('a b' '' c); v='x  y'; e=; p \"a$\"",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal dollar at end of a quoted word empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set --; a=(); unset v; e=; IFS=:; p \"a$\"",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal braces with quotes inside filled",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- 'one two' ''; a=('a b' '' c); v='x  y'; e=; p \"${v:-'x'}\" ${v:-\"x\"}",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal braces with quotes inside empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set --; a=(); unset v; e=; IFS=:; p \"${v:-'x'}\" ${v:-\"x\"}",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal quoted pattern chars filled",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- 'one two' ''; a=('a b' '' c); v='x  y'; e=; p \"*\" '?' \\[a]",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal quoted pattern chars empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set --; a=(); unset v; e=; IFS=:; p \"*\" '?' \\[a]",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal unquoted empty at filled",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- 'one two' ''; a=('a b' '' c); v='x  y'; e=; p $@",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal unquoted empty at empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set --; a=(); unset v; e=; IFS=:; p $@",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal quoted at with empty elements filled",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- 'one two' ''; a=('a b' '' c); v='x  y'; e=; p \"${a[@]}\"",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal quoted at with empty elements empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set --; a=(); unset v; e=; IFS=:; p \"${a[@]}\"",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal quoted star with custom IFS filled",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- 'one two' ''; a=('a b' '' c); v='x  y'; e=; p \"${a[*]}\"",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words quote removal quoted star with custom IFS empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set --; a=(); unset v; e=; IFS=:; p \"${a[*]}\"",
+      "tags": [
+        "syntax.quote.double",
+        "syntax.quote.single"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS unset, colon list",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a:b:c'; unset IFS; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS unset, colon edges",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':a::b:'; unset IFS; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS unset, spaces",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='  a  b  '; unset IFS; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS unset, space colon mix",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=' : a : b : '; unset IFS; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS unset, newlines",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=$'a\\nb c\\n'; unset IFS; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS unset, newlines",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=$'a\\nb c\\n'; unset IFS; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read array: IFS unset, newlines",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=$'a\\nb c\\n'; unset IFS; read -ra arr <<< \"$v\"; p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS unset, letters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='xaybz'; unset IFS; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split set: IFS unset, star",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a*b'; unset IFS; set -- $v; p \"$@\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS unset, empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=''; unset IFS; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS unset, multibyte",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='aébéc'; unset IFS; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS unset, only delimiters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':::'; unset IFS; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS empty, colon list",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a:b:c'; IFS=; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split set: IFS empty, colon edges",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':a::b:'; IFS=; set -- $v; p \"$@\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS empty, spaces",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='  a  b  '; IFS=; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split set: IFS empty, space colon mix",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=' : a : b : '; IFS=; set -- $v; p \"$@\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS empty, newlines",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=$'a\\nb c\\n'; IFS=; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS empty, newlines",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=$'a\\nb c\\n'; IFS=; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS empty, letters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='xaybz'; IFS=; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read array: IFS empty, letters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='xaybz'; IFS=; read -ra arr <<< \"$v\"; p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS empty, star",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a*b'; IFS=; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split set: IFS empty, empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=''; IFS=; set -- $v; p \"$@\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS empty, multibyte",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='aébéc'; IFS=; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split set: IFS empty, only delimiters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':::'; IFS=; set -- $v; p \"$@\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS empty, only delimiters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':::'; IFS=; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS default, colon list",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a:b:c'; IFS=$' \\t\\n'; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS default, colon edges",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':a::b:'; IFS=$' \\t\\n'; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read array: IFS default, spaces",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='  a  b  '; IFS=$' \\t\\n'; read -ra arr <<< \"$v\"; p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS default, space colon mix",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=' : a : b : '; IFS=$' \\t\\n'; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS default, newlines",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=$'a\\nb c\\n'; IFS=$' \\t\\n'; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split set: IFS default, letters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='xaybz'; IFS=$' \\t\\n'; set -- $v; p \"$@\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS default, letters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='xaybz'; IFS=$' \\t\\n'; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read array: IFS default, letters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='xaybz'; IFS=$' \\t\\n'; read -ra arr <<< \"$v\"; p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS default, star",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a*b'; IFS=$' \\t\\n'; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read array: IFS default, empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=''; IFS=$' \\t\\n'; read -ra arr <<< \"$v\"; p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS default, multibyte",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='aébéc'; IFS=$' \\t\\n'; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read array: IFS default, only delimiters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':::'; IFS=$' \\t\\n'; read -ra arr <<< \"$v\"; p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS colon, colon list",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a:b:c'; IFS=:; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS colon, colon list",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a:b:c'; IFS=:; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS colon, colon list",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a:b:c'; IFS=:; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split set: IFS colon, colon edges",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':a::b:'; IFS=:; set -- $v; p \"$@\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS colon, spaces",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='  a  b  '; IFS=:; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read array: IFS colon, space colon mix",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=' : a : b : '; IFS=:; read -ra arr <<< \"$v\"; p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS colon, newlines",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=$'a\\nb c\\n'; IFS=:; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS colon, letters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='xaybz'; IFS=:; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS colon, star",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a*b'; IFS=:; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split set: IFS colon, empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=''; IFS=:; set -- $v; p \"$@\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS colon, empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=''; IFS=:; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read array: IFS colon, empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=''; IFS=:; read -ra arr <<< \"$v\"; p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS colon, multibyte",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='aébéc'; IFS=:; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS colon, only delimiters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':::'; IFS=:; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split set: IFS space colon, colon list",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a:b:c'; IFS=' :'; set -- $v; p \"$@\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read array: IFS space colon, colon list",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a:b:c'; IFS=' :'; read -ra arr <<< \"$v\"; p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS space colon, colon edges",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':a::b:'; IFS=' :'; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS space colon, spaces",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='  a  b  '; IFS=' :'; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS space colon, space colon mix",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=' : a : b : '; IFS=' :'; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS space colon, space colon mix",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=' : a : b : '; IFS=' :'; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split set: IFS space colon, newlines",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=$'a\\nb c\\n'; IFS=' :'; set -- $v; p \"$@\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS space colon, newlines",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=$'a\\nb c\\n'; IFS=' :'; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS space colon, letters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='xaybz'; IFS=' :'; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS space colon, star",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a*b'; IFS=' :'; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS space colon, empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=''; IFS=' :'; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS space colon, multibyte",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='aébéc'; IFS=' :'; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS space colon, only delimiters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':::'; IFS=' :'; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS colon comma, colon list",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a:b:c'; IFS=:,; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read array: IFS colon comma, colon list",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a:b:c'; IFS=:,; read -ra arr <<< \"$v\"; p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS colon comma, colon edges",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':a::b:'; IFS=:,; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS colon comma, spaces",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='  a  b  '; IFS=:,; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS colon comma, space colon mix",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=' : a : b : '; IFS=:,; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS colon comma, newlines",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=$'a\\nb c\\n'; IFS=:,; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS colon comma, letters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='xaybz'; IFS=:,; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split set: IFS colon comma, star",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a*b'; IFS=:,; set -- $v; p \"$@\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS colon comma, star",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a*b'; IFS=:,; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS colon comma, empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=''; IFS=:,; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS colon comma, multibyte",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='aébéc'; IFS=:,; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read array: IFS colon comma, only delimiters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':::'; IFS=:,; read -ra arr <<< \"$v\"; p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split set: IFS newline, colon list",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a:b:c'; IFS=$'\\n'; set -- $v; p \"$@\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS newline, colon list",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a:b:c'; IFS=$'\\n'; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read array: IFS newline, colon list",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a:b:c'; IFS=$'\\n'; read -ra arr <<< \"$v\"; p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS newline, colon edges",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':a::b:'; IFS=$'\\n'; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS newline, spaces",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='  a  b  '; IFS=$'\\n'; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS newline, space colon mix",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=' : a : b : '; IFS=$'\\n'; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS newline, newlines",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=$'a\\nb c\\n'; IFS=$'\\n'; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS newline, letters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='xaybz'; IFS=$'\\n'; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS newline, letters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='xaybz'; IFS=$'\\n'; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS newline, star",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a*b'; IFS=$'\\n'; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read array: IFS newline, empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=''; IFS=$'\\n'; read -ra arr <<< \"$v\"; p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS newline, multibyte",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='aébéc'; IFS=$'\\n'; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS newline, only delimiters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':::'; IFS=$'\\n'; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS letters, colon list",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a:b:c'; IFS=ab; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS letters, colon edges",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':a::b:'; IFS=ab; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read array: IFS letters, colon edges",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':a::b:'; IFS=ab; read -ra arr <<< \"$v\"; p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read array: IFS letters, spaces",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='  a  b  '; IFS=ab; read -ra arr <<< \"$v\"; p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS letters, space colon mix",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=' : a : b : '; IFS=ab; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split set: IFS letters, newlines",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=$'a\\nb c\\n'; IFS=ab; set -- $v; p \"$@\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS letters, letters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='xaybz'; IFS=ab; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS letters, letters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='xaybz'; IFS=ab; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS letters, star",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a*b'; IFS=ab; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS letters, empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=''; IFS=ab; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split set: IFS letters, multibyte",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='aébéc'; IFS=ab; set -- $v; p \"$@\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS letters, only delimiters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':::'; IFS=ab; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS star, colon list",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a:b:c'; IFS='*'; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split set: IFS star, colon edges",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':a::b:'; IFS='*'; set -- $v; p \"$@\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS star, colon edges",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':a::b:'; IFS='*'; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS star, colon edges",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':a::b:'; IFS='*'; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS star, spaces",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='  a  b  '; IFS='*'; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS star, space colon mix",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=' : a : b : '; IFS='*'; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS star, newlines",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=$'a\\nb c\\n'; IFS='*'; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split set: IFS star, letters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='xaybz'; IFS='*'; set -- $v; p \"$@\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS star, star",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a*b'; IFS='*'; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS star, empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=''; IFS='*'; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS star, empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=''; IFS='*'; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read array: IFS star, multibyte",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='aébéc'; IFS='*'; read -ra arr <<< \"$v\"; p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS star, only delimiters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':::'; IFS='*'; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS space, colon list",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a:b:c'; IFS=' '; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS space, colon edges",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':a::b:'; IFS=' '; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS space, spaces",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='  a  b  '; IFS=' '; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split set: IFS space, space colon mix",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=' : a : b : '; IFS=' '; set -- $v; p \"$@\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS space, newlines",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=$'a\\nb c\\n'; IFS=' '; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS space, letters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='xaybz'; IFS=' '; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read array: IFS space, star",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a*b'; IFS=' '; read -ra arr <<< \"$v\"; p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS space, empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=''; IFS=' '; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split set: IFS space, multibyte",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='aébéc'; IFS=' '; set -- $v; p \"$@\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS space, multibyte",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='aébéc'; IFS=' '; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS space, multibyte",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='aébéc'; IFS=' '; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS space, only delimiters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':::'; IFS=' '; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS multibyte, colon list",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a:b:c'; IFS=é; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read array: IFS multibyte, colon edges",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':a::b:'; IFS=é; read -ra arr <<< \"$v\"; p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split set: IFS multibyte, spaces",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='  a  b  '; IFS=é; set -- $v; p \"$@\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split set: IFS multibyte, space colon mix",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=' : a : b : '; IFS=é; set -- $v; p \"$@\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split set: IFS multibyte, newlines",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=$'a\\nb c\\n'; IFS=é; set -- $v; p \"$@\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split for: IFS multibyte, newlines",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=$'a\\nb c\\n'; IFS=é; for w in $v; do printf '<%s>' \"$w\"; done; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read three: IFS multibyte, newlines",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=$'a\\nb c\\n'; IFS=é; read -r x y z <<< \"$v\"; p \"$x\" \"$y\" \"$z\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS multibyte, letters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='xaybz'; IFS=é; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS multibyte, star",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a*b'; IFS=é; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS multibyte, empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=''; IFS=é; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split read array: IFS multibyte, empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=''; IFS=é; read -ra arr <<< \"$v\"; p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split star join: IFS multibyte, multibyte",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='aébéc'; IFS=é; set -- $v; p \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split array: IFS multibyte, only delimiters",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':::'; IFS=é; arr=($v); p \"${arr[@]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split table: IFS unset, colon edges",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':a::b:'; unset IFS; p $v",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split table: IFS unset, newlines",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=$'a\\nb c\\n'; unset IFS; p $v",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split table: IFS unset, empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=''; unset IFS; p $v",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split table: IFS colon, colon edges",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':a::b:'; IFS=:; p $v",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split table: IFS colon, newlines",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=$'a\\nb c\\n'; IFS=:; p $v",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split table: IFS colon, empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=''; IFS=:; p $v",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split table: IFS newline, colon edges",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':a::b:'; IFS=$'\\n'; p $v",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split table: IFS newline, newlines",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=$'a\\nb c\\n'; IFS=$'\\n'; p $v",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split table: IFS newline, empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=''; IFS=$'\\n'; p $v",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split table: IFS space, colon edges",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=':a::b:'; IFS=' '; p $v",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split table: IFS space, newlines",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=$'a\\nb c\\n'; IFS=' '; p $v",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words split table: IFS space, empty",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=''; IFS=' '; p $v",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs temporary IFS on read",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a:b'; IFS=: read -r x y <<< \"$v\"; echo \"$x|$y\"; set -- $v; echo $#",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs temporary IFS on a function",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; f() { set -- $1; echo $#; }; IFS=: f 'a:b:c'; f 'a:b:c'",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs local IFS",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; f() { local IFS=,; set -- $1; echo $#; }; f 'a,b'; v='a,b'; set -- $v; echo $#",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs IFS in a subshell",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; ( IFS=:; v='a:b'; set -- $v; echo $# ); v='a:b'; set -- $v; echo $#",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs unset IFS inside a function",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; f() { unset IFS; v='a b'; set -- $v; echo $#; }; IFS=:; f; v='a b'; set -- $v; echo $#",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs IFS applies to dollar star",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- a b c; IFS=; echo \"$*\"; IFS=-+; echo \"$*\"; unset IFS; echo \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs IFS applies to array star",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(a b c); IFS=/; echo \"${a[*]}\" \"${a[*]:1}\" \"${!a[*]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs IFS and dollar at unquoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- 'a b' c; IFS=:; p() { echo $#; }; p $@; p $*; p \"$@\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs IFS whitespace collapse",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=$'a \\t\\n b'; set -- $v; echo $#",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs IFS non-whitespace keeps empties",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; IFS=,; v='a,,b,'; set -- $v; echo $#; printf '<%s>' \"$@\"; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs IFS trailing whitespace and delimiter",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; IFS=' ,'; v='a , b , '; set -- $v; echo $#; printf '<%s>' \"$@\"; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs IFS leading delimiter",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; IFS=,; v=',a'; set -- $v; echo $#; printf '<%s>' \"$@\"; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs splitting of arithmetic result",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; IFS=1; set -- $((121)); echo $#; printf '<%s>' \"$@\"; echo",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs splitting of tilde result",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; IFS=/; HOME=/a/b; set -- ~; echo $#",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs no splitting in assignments",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a b'; w=$v; echo \"$w\"; declare x=$v; echo \"$x\"; local_like=$(echo 'c  d'); echo \"$local_like\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs no splitting in [[",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a  b'; [[ $v == 'a  b' ]] && echo kept",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs no splitting in case word",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a  b'; case $v in 'a  b') echo kept;; esac",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs splitting in declare arguments",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='x=1 y=2'; declare $v; echo \"$x $y\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs splitting in export arguments",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='p=1 q'; export $v; echo \"${p-} ${q-unset}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs splitting in local arguments",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; f() { v='m=1 n=2'; local $v; echo \"$m $n\"; }; f",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs here-string does not split",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='a  b'; cat <<< $v",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs redirect word does not split",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; cd /tmp; v='f  g'; echo x > \"$v\"; cat 'f  g'",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs IFS read with backslash",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; IFS=: read x y <<< 'a\\:b:c'; echo \"$x|$y\"; IFS=: read -r x y <<< 'a\\:b:c'; echo \"$x|$y\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs IFS with glob characters",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; cd /tmp; touch ab; IFS='*'; v='a*b'; set -- $v; echo $# \"$1\" \"$2\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs splitting result is globbed",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; cd /tmp; touch s1 s2; v='s* x'; set -- $v; echo $#",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs noglob stops globbing after splitting",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; cd /tmp; touch s1 s2; set -f; v='s* x'; set -- $v; echo $# \"$1\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs empty IFS keeps dollar at separate",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- 'a b' c; IFS=; for w in $@; do echo \"[$w]\"; done",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs empty IFS joins dollar star",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- 'a b' c; IFS=; for w in $*; do echo \"[$w]\"; done",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs empty IFS joins quoted dollar star",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- 'a b' c; IFS=; for w in \"$*\"; do echo \"[$w]\"; done",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs unset IFS joins with space",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- a b; unset IFS; echo \"$*\"; a=(x y); echo \"${a[*]}\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs IFS first character joins",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- a b; IFS=' :'; echo \"$*\"; IFS=': '; echo \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words ifs IFS multibyte first character joins",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -- a b; IFS=é; echo \"$*\"",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read two vars: plain",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read x y; p \"$x\" \"$y\"; echo \"status=$?\"; } <<< 'a b c'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read raw two vars: plain",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r x y; p \"$x\" \"$y\"; echo \"status=$?\"; } <<< 'a b c'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read reply: plain",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read; p \"$REPLY\"; echo \"status=$?\"; } <<< 'a b c'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read raw reply: plain",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r; p \"$REPLY\"; echo \"status=$?\"; } <<< 'a b c'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read array: plain",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -a arr; p \"${arr[@]}\"; echo \"status=$?\"; } <<< 'a b c'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read raw reply: extra fields",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r; p \"$REPLY\"; echo \"status=$?\"; } <<< 'a b c d e'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read array: extra fields",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -a arr; p \"${arr[@]}\"; echo \"status=$?\"; } <<< 'a b c d e'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read colon IFS: extra fields",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { IFS=: read -r x y; p \"$x\" \"$y\"; echo \"status=$?\"; } <<< 'a b c d e'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read empty IFS: extra fields",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { IFS= read -r x; p \"$x\"; echo \"status=$?\"; } <<< 'a b c d e'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read delimiter space: extra fields",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r -d ' ' x; p \"$x\"; echo \"status=$?\"; } <<< 'a b c d e'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read empty IFS: fewer fields",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { IFS= read -r x; p \"$x\"; echo \"status=$?\"; } <<< 'a'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read delimiter space: fewer fields",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r -d ' ' x; p \"$x\"; echo \"status=$?\"; } <<< 'a'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read count two: fewer fields",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r -n 2 x; p \"$x\"; echo \"status=$?\"; } <<< 'a'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read exact count: fewer fields",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r -N 3 x; p \"$x\"; echo \"status=$?\"; } <<< 'a'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read count with vars: fewer fields",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r -n 4 x y; p \"$x\" \"$y\"; echo \"status=$?\"; } <<< 'a'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read exact count: leading spaces",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r -N 3 x; p \"$x\"; echo \"status=$?\"; } <<< '   a b'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read count with vars: leading spaces",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r -n 4 x y; p \"$x\" \"$y\"; echo \"status=$?\"; } <<< '   a b'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read two vars: leading spaces",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read x y; p \"$x\" \"$y\"; echo \"status=$?\"; } <<< '   a b'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read raw two vars: leading spaces",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r x y; p \"$x\" \"$y\"; echo \"status=$?\"; } <<< '   a b'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read reply: leading spaces",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read; p \"$REPLY\"; echo \"status=$?\"; } <<< '   a b'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read raw two vars: trailing spaces",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r x y; p \"$x\" \"$y\"; echo \"status=$?\"; } <<< 'a b   '",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read reply: trailing spaces",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read; p \"$REPLY\"; echo \"status=$?\"; } <<< 'a b   '",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read raw reply: trailing spaces",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r; p \"$REPLY\"; echo \"status=$?\"; } <<< 'a b   '",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read array: trailing spaces",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -a arr; p \"${arr[@]}\"; echo \"status=$?\"; } <<< 'a b   '",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read colon IFS: trailing spaces",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { IFS=: read -r x y; p \"$x\" \"$y\"; echo \"status=$?\"; } <<< 'a b   '",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read array: backslash",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -a arr; p \"${arr[@]}\"; echo \"status=$?\"; } <<< 'a\\\\ b c'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read colon IFS: backslash",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { IFS=: read -r x y; p \"$x\" \"$y\"; echo \"status=$?\"; } <<< 'a\\\\ b c'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read empty IFS: backslash",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { IFS= read -r x; p \"$x\"; echo \"status=$?\"; } <<< 'a\\\\ b c'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read delimiter space: backslash",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r -d ' ' x; p \"$x\"; echo \"status=$?\"; } <<< 'a\\\\ b c'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read count two: backslash",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r -n 2 x; p \"$x\"; echo \"status=$?\"; } <<< 'a\\\\ b c'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read delimiter space: line continuation",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r -d ' ' x; p \"$x\"; echo \"status=$?\"; } <<< $'a \\\\\\nb c'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read count two: line continuation",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r -n 2 x; p \"$x\"; echo \"status=$?\"; } <<< $'a \\\\\\nb c'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read exact count: line continuation",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r -N 3 x; p \"$x\"; echo \"status=$?\"; } <<< $'a \\\\\\nb c'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read count with vars: line continuation",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r -n 4 x y; p \"$x\" \"$y\"; echo \"status=$?\"; } <<< $'a \\\\\\nb c'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read two vars: line continuation",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read x y; p \"$x\" \"$y\"; echo \"status=$?\"; } <<< $'a \\\\\\nb c'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read count with vars: tabs",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r -n 4 x y; p \"$x\" \"$y\"; echo \"status=$?\"; } <<< $'a\\tb\\tc'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read two vars: tabs",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read x y; p \"$x\" \"$y\"; echo \"status=$?\"; } <<< $'a\\tb\\tc'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read raw two vars: tabs",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r x y; p \"$x\" \"$y\"; echo \"status=$?\"; } <<< $'a\\tb\\tc'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read reply: tabs",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read; p \"$REPLY\"; echo \"status=$?\"; } <<< $'a\\tb\\tc'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read raw reply: tabs",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r; p \"$REPLY\"; echo \"status=$?\"; } <<< $'a\\tb\\tc'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read reply: empty",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read; p \"$REPLY\"; echo \"status=$?\"; } <<< ''",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read raw reply: empty",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r; p \"$REPLY\"; echo \"status=$?\"; } <<< ''",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read array: empty",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -a arr; p \"${arr[@]}\"; echo \"status=$?\"; } <<< ''",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read colon IFS: empty",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { IFS=: read -r x y; p \"$x\" \"$y\"; echo \"status=$?\"; } <<< ''",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read empty IFS: empty",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { IFS= read -r x; p \"$x\"; echo \"status=$?\"; } <<< ''",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read colon IFS: colons",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { IFS=: read -r x y; p \"$x\" \"$y\"; echo \"status=$?\"; } <<< 'a:b:c'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read empty IFS: colons",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { IFS= read -r x; p \"$x\"; echo \"status=$?\"; } <<< 'a:b:c'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read delimiter space: colons",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r -d ' ' x; p \"$x\"; echo \"status=$?\"; } <<< 'a:b:c'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read count two: colons",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r -n 2 x; p \"$x\"; echo \"status=$?\"; } <<< 'a:b:c'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read exact count: colons",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read -r -N 3 x; p \"$x\"; echo \"status=$?\"; } <<< 'a:b:c'",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read count two: no newline",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; printf 'a b' | { read -r -n 2 x; p \"$x\"; echo \"status=$?\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read exact count: no newline",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; printf 'a b' | { read -r -N 3 x; p \"$x\"; echo \"status=$?\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read count with vars: no newline",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; printf 'a b' | { read -r -n 4 x y; p \"$x\" \"$y\"; echo \"status=$?\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read two vars: no newline",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; printf 'a b' | { read x y; p \"$x\" \"$y\"; echo \"status=$?\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read raw two vars: no newline",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; printf 'a b' | { read -r x y; p \"$x\" \"$y\"; echo \"status=$?\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read returns false at end of input",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; read x < /dev/null; echo \"status=$? [$x]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read partial last line",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; printf 'a\\nb' | { while read -r l; do echo \"[$l]\"; done; echo \"last=[$l]\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read partial last line idiom",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; printf 'a\\nb' | while read -r l || [[ -n $l ]]; do echo \"[$l]\"; done",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read from a file descriptor",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; exec 3<<< 'fd line'; read -r -u 3 x; echo \"$x\"; exec 3<&-",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read delimiter empty reads to nul",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; printf 'a\\0b\\0' | { read -r -d '' x; read -r -d '' y; echo \"$x|$y\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read invalid variable name",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; read 1x <<< 'a'; echo status=$?",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read invalid option",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; read -Z x <<< 'a'; echo status=$?",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read missing option argument",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; read -d; echo status=$?",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read into array element",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; read 'a[2]' <<< 'elem'; echo \"${a[2]}\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read into readonly variable",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; readonly r=1; read r <<< 'x'; echo status=$? r=$r",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read prompt without a terminal",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; read -p 'prompt> ' x <<< 'in'; echo \"[$x]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read silent flag without a terminal",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; read -s x <<< 'secret'; echo \"[$x]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read n zero",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; read -n 0 x <<< 'abc'; echo \"status=$? [$x]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read n with backslash",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; read -n 3 x <<< 'a\\bc'; echo \"[$x]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read N ignores delimiter",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; read -N 4 -d b x <<< 'abcdef'; echo \"[$x]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read multiple lines one read",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; { read a; read b; } <<< $'1\\n2\\n3'; echo \"$a $b\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read read in a pipeline does not persist",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; echo piped | read x; echo \"[${x-unset}]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read read with lastpipe persists",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s lastpipe; echo piped | read x; echo \"[${x-unset}]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read unicode count",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; read -n 2 x <<< 'éèa'; echo \"[$x]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read read -a with IFS comma",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; IFS=, read -ra arr <<< 'a,,b,'; echo ${#arr[@]}; printf '<%s>' \"${arr[@]}\"; echo",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words read assoc target refused",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; declare -A m; read -a m <<< 'a b'; echo status=$?",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile plain: lines",
+      "script": "arr=(keep0 keep1); printf '%s' $'a\\nb\\nc\\n' | { mapfile  arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile plain: commas",
+      "script": "arr=(keep0 keep1); printf '%s' 'a,b,,c' | { mapfile  arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile plain: no trailing newline",
+      "script": "arr=(keep0 keep1); printf '%s' $'a\\nb' | { mapfile  arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words readarray plain: no trailing newline",
+      "script": "arr=(keep0 keep1); printf '%s' $'a\\nb' | { readarray  arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile trim: commas",
+      "script": "arr=(keep0 keep1); printf '%s' 'a,b,,c' | { mapfile -t arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile trim: no trailing newline",
+      "script": "arr=(keep0 keep1); printf '%s' $'a\\nb' | { mapfile -t arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile trim: empty",
+      "script": "arr=(keep0 keep1); printf '%s' '' | { mapfile -t arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile count: no trailing newline",
+      "script": "arr=(keep0 keep1); printf '%s' $'a\\nb' | { mapfile -n 2 arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words readarray count: no trailing newline",
+      "script": "arr=(keep0 keep1); printf '%s' $'a\\nb' | { readarray -n 2 arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile count: empty",
+      "script": "arr=(keep0 keep1); printf '%s' '' | { mapfile -n 2 arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile count: blank lines",
+      "script": "arr=(keep0 keep1); printf '%s' $'\\n\\nx\\n' | { mapfile -n 2 arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words readarray count: blank lines",
+      "script": "arr=(keep0 keep1); printf '%s' $'\\n\\nx\\n' | { readarray -n 2 arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile skip: empty",
+      "script": "arr=(keep0 keep1); printf '%s' '' | { mapfile -s 1 arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile skip: blank lines",
+      "script": "arr=(keep0 keep1); printf '%s' $'\\n\\nx\\n' | { mapfile -s 1 arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile skip: lines",
+      "script": "arr=(keep0 keep1); printf '%s' $'a\\nb\\nc\\n' | { mapfile -s 1 arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile origin: blank lines",
+      "script": "arr=(keep0 keep1); printf '%s' $'\\n\\nx\\n' | { mapfile -O 5 arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile origin: lines",
+      "script": "arr=(keep0 keep1); printf '%s' $'a\\nb\\nc\\n' | { mapfile -O 5 arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile origin: commas",
+      "script": "arr=(keep0 keep1); printf '%s' 'a,b,,c' | { mapfile -O 5 arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words readarray origin: commas",
+      "script": "arr=(keep0 keep1); printf '%s' 'a,b,,c' | { readarray -O 5 arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile delimiter: lines",
+      "script": "arr=(keep0 keep1); printf '%s' $'a\\nb\\nc\\n' | { mapfile -d , arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile delimiter: commas",
+      "script": "arr=(keep0 keep1); printf '%s' 'a,b,,c' | { mapfile -d , arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile delimiter: no trailing newline",
+      "script": "arr=(keep0 keep1); printf '%s' $'a\\nb' | { mapfile -d , arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words readarray delimiter: no trailing newline",
+      "script": "arr=(keep0 keep1); printf '%s' $'a\\nb' | { readarray -d , arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile trim delimiter: commas",
+      "script": "arr=(keep0 keep1); printf '%s' 'a,b,,c' | { mapfile -t -d , arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words readarray trim delimiter: commas",
+      "script": "arr=(keep0 keep1); printf '%s' 'a,b,,c' | { readarray -t -d , arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile trim delimiter: no trailing newline",
+      "script": "arr=(keep0 keep1); printf '%s' $'a\\nb' | { mapfile -t -d , arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile trim delimiter: empty",
+      "script": "arr=(keep0 keep1); printf '%s' '' | { mapfile -t -d , arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile skip and count: no trailing newline",
+      "script": "arr=(keep0 keep1); printf '%s' $'a\\nb' | { mapfile -s 1 -n 1 -t arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile skip and count: empty",
+      "script": "arr=(keep0 keep1); printf '%s' '' | { mapfile -s 1 -n 1 -t arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile skip and count: blank lines",
+      "script": "arr=(keep0 keep1); printf '%s' $'\\n\\nx\\n' | { mapfile -s 1 -n 1 -t arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile nul delimiter: empty",
+      "script": "arr=(keep0 keep1); printf '%s' '' | { mapfile -d '' arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile nul delimiter: blank lines",
+      "script": "arr=(keep0 keep1); printf '%s' $'\\n\\nx\\n' | { mapfile -d '' arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words readarray nul delimiter: blank lines",
+      "script": "arr=(keep0 keep1); printf '%s' $'\\n\\nx\\n' | { readarray -d '' arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile nul delimiter: lines",
+      "script": "arr=(keep0 keep1); printf '%s' $'a\\nb\\nc\\n' | { mapfile -d '' arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile count zero: blank lines",
+      "script": "arr=(keep0 keep1); printf '%s' $'\\n\\nx\\n' | { mapfile -n 0 -t arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile count zero: lines",
+      "script": "arr=(keep0 keep1); printf '%s' $'a\\nb\\nc\\n' | { mapfile -n 0 -t arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile count zero: commas",
+      "script": "arr=(keep0 keep1); printf '%s' 'a,b,,c' | { mapfile -n 0 -t arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words readarray count zero: commas",
+      "script": "arr=(keep0 keep1); printf '%s' 'a,b,,c' | { readarray -n 0 -t arr; echo \"status=$? n=${#arr[@]}\"; declare -p arr; }",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile callback",
+      "script": "mapfile -t -C 'echo cb' -c 2 arr <<< $'a\\nb\\nc\\nd'; echo ${#arr[@]}",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile callback quantum one",
+      "script": "f() { echo \"at $1: $2\"; }; mapfile -t -C f -c 1 arr <<< $'x\\ny'",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile default MAPFILE",
+      "script": "mapfile <<< $'p\\nq'; echo ${#MAPFILE[@]} \"${MAPFILE[1]}\"",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile from a file descriptor",
+      "script": "exec 4<<< $'u\\nv'; mapfile -t -u 4 arr; echo \"${arr[*]}\"",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile invalid array name",
+      "script": "mapfile 1bad <<< x; echo status=$?",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile negative count",
+      "script": "mapfile -n -1 arr <<< x; echo status=$?",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile into an associative array",
+      "script": "declare -A m; mapfile m <<< x; echo status=$?",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile process substitution",
+      "script": "mapfile -t arr < <(printf '%s\\n' one two); echo \"${arr[1]}\"",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile keeps existing elements beyond",
+      "script": "arr=(a b c d); mapfile -t -O 1 arr <<< 'X'; declare -p arr",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words mapfile delimiter longer than one character",
+      "script": "mapfile -t -d ab arr <<< 'xaybzac'; declare -p arr",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {a,b}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {a,b}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {a,,b}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {a,,b}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {,a}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {,a}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {a,}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {a,}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {a}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {a}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace x{a,b}y",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p x{a,b}y",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {a,b}{c,d}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {a,b}{c,d}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {a,{b,c}}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {a,{b,c}}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {{a,b},c}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {{a,b},c}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {1..5}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {1..5}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {5..1}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {5..1}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {1..10..3}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {1..10..3}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {10..1..3}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {10..1..3}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {10..1..-3}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {10..1..-3}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {1..10..-3}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {1..10..-3}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {01..10}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {01..10}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {1..010}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {1..010}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {-3..3}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {-3..3}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {-03..3}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {-03..3}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {3..-3..2}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {3..-3..2}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {a..e}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {a..e}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {e..a}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {e..a}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {a..z..5}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {a..z..5}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {A..c}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {A..c}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {Z..a}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {Z..a}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {1..a}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {1..a}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {1..}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {1..}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {..1}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {..1}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {1..3..0}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {1..3..0}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {a..e..-2}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {a..e..-2}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace \"{a,b}\"",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p \"{a,b}\"",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace \\{a,b}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p \\{a,b}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {a\\,b,c}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {a\\,b,c}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {a,b}.{1..2}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {a,b}.{1..2}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace a{b..d}e",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p a{b..d}e",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {1..3}{a..b}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {1..3}{a..b}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {0..2}{0..1}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {0..2}{0..1}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {a,b}{}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {a,b}{}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {$v,x}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {$v,x}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace $v{a,b}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p $v{a,b}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace ${v}{a,b}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p ${v}{a,b}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {a,b}$v",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {a,b}$v",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {'a,b',c}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {'a,b',c}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {\"x y\",z}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {\"x y\",z}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {a..c}{1,2}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {a..c}{1,2}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {9..11}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {9..11}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {-1..-5..2}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {-1..-5..2}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {x..x}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {x..x}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {1..1}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {1..1}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {aa..cc}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {aa..cc}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {a..b..c}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {a..b..c}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {1.5..3}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {1.5..3}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {a,b}}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {a,b}}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {{a,b}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {{a,b}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace a{,}b",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p a{,}b",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {,}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {,}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace { a,b }",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p { a,b }",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {a, b}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {a, b}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {~,x}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {~,x}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {1..3}\\ x",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {1..3}\\ x",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {@,#}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {@,#}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {a..e..0}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {a..e..0}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {0x1..0x3}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {0x1..0x3}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {+1..3}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {+1..3}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {1..+3}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {1..+3}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {00..3}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {00..3}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {-00..2}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {-00..2}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {9223372036854775806..9223372036854775807}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {9223372036854775806..9223372036854775807}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {a,b}[0-9]",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {a,b}[0-9]",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace {*,?}",
+      "script": "cd /tmp; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v=V; p {*,?}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace in an array assignment",
+      "script": "a=({a,b}{1,2}); echo ${#a[@]} ${a[3]}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace not in a scalar assignment",
+      "script": "x={a,b}; echo \"$x\"",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace in a for loop",
+      "script": "for i in {1..3}{x,y}; do printf '%s ' $i; done; echo",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace not in [[",
+      "script": "[[ a == {a,b} ]] && echo yes || echo no",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace in case words",
+      "script": "case {a,b} in '{a,b}') echo literal;; *) echo other;; esac",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace in a redirect target is ambiguous",
+      "script": "cd /tmp; echo x > {a,b}.txt; echo status=$?; echo *",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace braceexpand off",
+      "script": "set +B; echo {a,b} {1..2}; set -B; echo {a,b}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace with command substitution",
+      "script": "echo {$(echo a),b}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace sequence from variables is literal",
+      "script": "n=3; echo {1..$n}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace eval makes it work",
+      "script": "n=3; eval echo {1..$n}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace generated words then globbing",
+      "script": "cd /tmp; touch b1 b2; echo {b,c}*",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace with tilde",
+      "script": "HOME=/h; echo {~,~/x}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace large sequence count",
+      "script": "set -- {1..1000}; echo $# ${1000}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace nested sequence",
+      "script": "echo {a,{1..3},b}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace with quoted comma",
+      "script": "echo {a',b',c}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace in function arguments",
+      "script": "f() { echo $#; }; f {x,y,z}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace in a here-document is literal",
+      "script": "cat <<EOF\n{a,b}\nEOF",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace in double quotes in a word",
+      "script": "echo x\"{a,b}\"y {a,b}\"q\"",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace with parameter expansion inside",
+      "script": "v=1; echo {${v},2}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words brace after a dollar",
+      "script": "echo ${a,b} 2>/dev/null; echo \\${a,b}; echo \\$\\{a,b\\}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~: HOME unset",
+      "script": "cd /tmp; OLDPWD=/old; unset HOME; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~/x: HOME unset",
+      "script": "cd /tmp; OLDPWD=/old; unset HOME; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~/x",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~+: HOME unset",
+      "script": "cd /tmp; OLDPWD=/old; unset HOME; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~+",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~+/x: HOME unset",
+      "script": "cd /tmp; OLDPWD=/old; unset HOME; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~+/x",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~-: HOME unset",
+      "script": "cd /tmp; OLDPWD=/old; unset HOME; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~-",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~-/x: HOME unset",
+      "script": "cd /tmp; OLDPWD=/old; unset HOME; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~-/x",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde x~: HOME unset",
+      "script": "cd /tmp; OLDPWD=/old; unset HOME; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p x~",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~nonexistentuser: HOME unset",
+      "script": "cd /tmp; OLDPWD=/old; unset HOME; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~nonexistentuser",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde \"~\": HOME unset",
+      "script": "cd /tmp; OLDPWD=/old; unset HOME; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p \"~\"",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde '~': HOME unset",
+      "script": "cd /tmp; OLDPWD=/old; unset HOME; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p '~'",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde \\~: HOME unset",
+      "script": "cd /tmp; OLDPWD=/old; unset HOME; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p \\~",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde a:~/b: HOME unset",
+      "script": "cd /tmp; OLDPWD=/old; unset HOME; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p a:~/b",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~:~: HOME unset",
+      "script": "cd /tmp; OLDPWD=/old; unset HOME; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~:~",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde --opt=~: HOME unset",
+      "script": "cd /tmp; OLDPWD=/old; unset HOME; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p --opt=~",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~/: HOME unset",
+      "script": "cd /tmp; OLDPWD=/old; unset HOME; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~/",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~//x: HOME unset",
+      "script": "cd /tmp; OLDPWD=/old; unset HOME; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~//x",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~+0: HOME unset",
+      "script": "cd /tmp; OLDPWD=/old; unset HOME; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~+0",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~1: HOME unset",
+      "script": "cd /tmp; OLDPWD=/old; unset HOME; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~1",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~: HOME set",
+      "script": "cd /tmp; OLDPWD=/old; HOME=/h/me; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~/x: HOME set",
+      "script": "cd /tmp; OLDPWD=/old; HOME=/h/me; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~/x",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde a:~/b: HOME set",
+      "script": "cd /tmp; OLDPWD=/old; HOME=/h/me; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p a:~/b",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~:~: HOME set",
+      "script": "cd /tmp; OLDPWD=/old; HOME=/h/me; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~:~",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde --opt=~: HOME set",
+      "script": "cd /tmp; OLDPWD=/old; HOME=/h/me; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p --opt=~",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~/: HOME set",
+      "script": "cd /tmp; OLDPWD=/old; HOME=/h/me; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~/",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~//x: HOME set",
+      "script": "cd /tmp; OLDPWD=/old; HOME=/h/me; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~//x",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~: HOME empty",
+      "script": "cd /tmp; OLDPWD=/old; HOME=; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~/x: HOME empty",
+      "script": "cd /tmp; OLDPWD=/old; HOME=; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~/x",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde a:~/b: HOME empty",
+      "script": "cd /tmp; OLDPWD=/old; HOME=; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p a:~/b",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~:~: HOME empty",
+      "script": "cd /tmp; OLDPWD=/old; HOME=; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~:~",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde --opt=~: HOME empty",
+      "script": "cd /tmp; OLDPWD=/old; HOME=; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p --opt=~",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~/: HOME empty",
+      "script": "cd /tmp; OLDPWD=/old; HOME=; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~/",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~//x: HOME empty",
+      "script": "cd /tmp; OLDPWD=/old; HOME=; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~//x",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~: HOME slash",
+      "script": "cd /tmp; OLDPWD=/old; HOME=/; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~/x: HOME slash",
+      "script": "cd /tmp; OLDPWD=/old; HOME=/; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~/x",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde a:~/b: HOME slash",
+      "script": "cd /tmp; OLDPWD=/old; HOME=/; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p a:~/b",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~:~: HOME slash",
+      "script": "cd /tmp; OLDPWD=/old; HOME=/; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~:~",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde --opt=~: HOME slash",
+      "script": "cd /tmp; OLDPWD=/old; HOME=/; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p --opt=~",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~/: HOME slash",
+      "script": "cd /tmp; OLDPWD=/old; HOME=/; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~/",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde ~//x: HOME slash",
+      "script": "cd /tmp; OLDPWD=/old; HOME=/; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ~//x",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde in an assignment after a colon",
+      "script": "HOME=/h; x=a:~/b:~; echo \"$x\"",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde in an assignment argument",
+      "script": "HOME=/h; declare x=~/y; echo \"$x\"; export z=a:~; echo \"$z\"",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde in a default word",
+      "script": "HOME=/h; unset u; echo ${u:-~} \"${u:-~}\"",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde in an array element",
+      "script": "HOME=/h; a=(~ x~ ~/z); echo \"${a[@]}\"",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde in a case pattern",
+      "script": "HOME=/h; case /h in ~) echo matched;; *) echo no;; esac",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde in [[",
+      "script": "HOME=/h; [[ ~ == /h ]] && echo equal",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde in a redirect target",
+      "script": "HOME=/tmp; echo t > ~/tf; cat /tmp/tf",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde after cd",
+      "script": "cd /tmp; cd /; echo ~- ~+",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde directory stack",
+      "script": "cd /tmp; pushd / >/dev/null; echo ~1 ~+1 ~-1 ~0; popd >/dev/null",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde in a here-string",
+      "script": "HOME=/h; cat <<< ~",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde in a here-document is literal",
+      "script": "HOME=/h; cat <<EOF\n~\nEOF",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde in a for list",
+      "script": "HOME=/h; for d in ~ ~/a; do echo $d; done",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde HOME with trailing slash",
+      "script": "HOME=/h/; echo ~/x ~",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde tilde in a function argument",
+      "script": "HOME=/h; f() { echo \"$1\"; }; f ~/p",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words tilde HOME changes mid script",
+      "script": "HOME=/one; a=~; HOME=/two; echo $a ~",
+      "tags": [
+        "expansion.tilde"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution trailing newlines removed",
+      "script": "x=$(printf 'a\\n\\n'); echo \"[$x]\"",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution inner newlines kept",
+      "script": "x=$(printf 'a\\n\\nb'); echo \"[$x]\"",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution only newlines",
+      "script": "x=$(printf '\\n\\n'); echo \"[$x]\" ${#x}",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution carriage return kept",
+      "script": "x=$(printf 'a\\r\\n'); echo ${#x}",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution nul byte dropped with a warning",
+      "script": "x=$(printf 'a\\0b'); echo \"[$x]\" ${#x}",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution nested three deep",
+      "script": "echo $(echo $(echo $(echo deep)))",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution nested quotes",
+      "script": "echo \"$(echo \"$(echo 'a  b')\")\"",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution backquotes nested",
+      "script": "echo `echo \\`echo in\\``",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution backquote backslash dollar",
+      "script": "v=V; echo `echo \\$v` `echo $v`",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution backquote double backslash",
+      "script": "echo `echo a\\\\\\\\b`",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution backquote in double quotes",
+      "script": "echo \"`echo 'x  y'`\"",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution case inside substitution",
+      "script": "echo $(case a in a) echo matched;; esac)",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution case with paren inside substitution",
+      "script": "echo $(case a in (a) echo p;; esac)",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution comment inside substitution",
+      "script": "echo $(echo a # comment )\n)",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution here-document inside substitution",
+      "script": "x=$(cat <<EOF\nhd $((1+1))\nEOF\n); echo \"$x\"",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution subshell inside substitution",
+      "script": "echo $( (echo sub) )",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution arithmetic lookalike",
+      "script": "echo $( (echo a); echo b )",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution status of assignment",
+      "script": "x=$(exit 3); echo $?",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution status of assignment with two substitutions",
+      "script": "x=$(exit 3)$(exit 4); echo $?",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution status of local assignment",
+      "script": "f() { local x=$(exit 3); echo $?; }; f",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution status of export assignment",
+      "script": "export x=$(exit 3); echo $?",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution status of declare assignment",
+      "script": "declare x=$(exit 3); echo $?",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution status of readonly assignment",
+      "script": "readonly x=$(exit 3); echo $?",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution status of a command with substitution",
+      "script": "echo $(exit 3); echo $?",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution status of empty command",
+      "script": "$(exit 5); echo $?",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution substitution runs in a subshell",
+      "script": "x=1; : $(x=2); echo $x; $(cd /tmp); pwd",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution exit inside substitution",
+      "script": "x=$(echo a; exit 2; echo b); echo \"$x $?\"",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution substitution output as command",
+      "script": "$(echo echo) hello",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution file read shorthand",
+      "script": "cd /tmp; printf 'one\\ntwo\\n' > f; echo \"$(< f)\"",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution file read shorthand with spaces",
+      "script": "cd /tmp; printf 'z' > f; echo \"$( < f )\"",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution file read shorthand missing",
+      "script": "echo \"$(< /tmp/missing)\"; echo status=$?",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution stderr is not captured",
+      "script": "x=$(echo out; echo err >&2); echo \"[$x]\"",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution stderr captured with redirect",
+      "script": "x=$(echo err >&2 2>&1); echo \"[$x]\"; y=$( { echo e >&2; } 2>&1 ); echo \"[$y]\"",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution in a here-document",
+      "script": "cat <<EOF\n$(echo sub) \\$(echo no)\nEOF",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution in arithmetic",
+      "script": "echo $(( $(echo 3) * 2 ))",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution unbalanced parenthesis in quotes",
+      "script": "echo $(echo ')')",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution unbalanced parenthesis escaped",
+      "script": "echo $(echo \\))",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution empty substitution",
+      "script": "echo \"[$()]\" [$( )]",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution substitution with only a comment",
+      "script": "echo \"[$(# nothing\n)]\"",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution pipeline inside",
+      "script": "echo $(echo a b | while read x y; do echo $y$x; done)",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution function defined inside does not escape",
+      "script": "x=$(f() { echo in; }; f); echo $x; type f >/dev/null 2>&1 || echo no-f",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution large output",
+      "script": "x=$(for i in {1..2000}; do echo line$i; done); echo ${#x}",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution BASH_SUBSHELL",
+      "script": "echo $BASH_SUBSHELL $(echo $BASH_SUBSHELL $(echo $BASH_SUBSHELL))",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution trap reset inside",
+      "script": "trap 'echo trapped' EXIT; x=$(trap -p EXIT); echo \"[$x]\"; trap - EXIT",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution set -e inherited only with inherit_errexit",
+      "script": "set -e; x=$(false; echo after); echo \"[$x]\"; shopt -s inherit_errexit; y=$(false; echo after2); echo \"[$y]\"",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution substitution in a case pattern",
+      "script": "case ab in $(echo a)*) echo pat;; esac",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution substitution as a for list",
+      "script": "for w in $(echo 'x y'); do echo \"<$w>\"; done",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution quoted substitution as a for list",
+      "script": "for w in \"$(echo 'x y')\"; do echo \"<$w>\"; done",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution backquote with dollar parenthesis",
+      "script": "echo `echo $(echo mix)`",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution dollar parenthesis with backquote",
+      "script": "echo $(echo `echo mix2`)",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution funsub",
+      "script": "x=${ echo in-current; }; echo \"[$x]\"",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution funsub shares variables",
+      "script": "y=1; x=${ y=2; echo z; }; echo \"$x $y\"",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram words command substitution valsub",
+      "script": "x=${| REPLY=val; }; echo \"[$x]\"",
+      "tags": [
+        "expansion.command"
+      ],
+      "options": {}
+    }
+  ]
+}

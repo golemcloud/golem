@@ -4,17 +4,20 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at http://license.golem.cloud/LICENSE
 
+use super::{assert_invocation_receipt, assert_no_invocation_receipt};
 use crate::custom_api::http_test_context::{HttpTestContext, make_test_context};
 use base64::Engine;
+use golem_common::agent_key;
 use golem_common::base_model::agent::AgentTypeName;
-use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
+use golem_common::model::agent::OwnedAgentId;
 use golem_common::model::durable_stream::StreamTerminalRecord;
 use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::model::{AgentId, OplogIndex};
 use golem_common::schema::FromSchema;
 use golem_test_framework::config::EnvBasedTestDependencies;
 use golem_test_framework::dsl::TestDsl;
+use integration_tests::agents::derive_keyed_agent_id;
 use pretty_assertions::assert_eq;
 use reqwest::header::{ALLOW, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
 use reqwest::{Method, StatusCode};
@@ -1055,10 +1058,12 @@ async fn post_input_accepts_json_batches_and_is_idempotently_closed(
 
     let batch = append_json(agent, &input, serde_json::json!(["a", "b"]), false).await?;
     assert_eq!(batch.status(), StatusCode::NO_CONTENT);
+    assert_invocation_receipt(agent, &batch).await?;
     assert!(!batch.headers().contains_key("stream-closed"));
     let first_offset = header(&batch, "stream-next-offset");
     let single = append_json(agent, &input, serde_json::json!("c"), false).await?;
     assert_eq!(single.status(), StatusCode::NO_CONTENT);
+    assert_no_invocation_receipt(&single);
     assert!(header(&single, "stream-next-offset") > first_offset);
 
     for value in ["true", "TRUE"] {
@@ -1371,8 +1376,15 @@ async fn post_input_enforces_external_producer_sequence_and_epoch(
         StatusCode::BAD_REQUEST
     );
 
+    let initial_gap = post("7", "1", "gap").send().await?;
+    assert_eq!(initial_gap.status(), StatusCode::CONFLICT);
+    assert_eq!(header(&initial_gap, "producer-expected-seq"), "0");
+    assert_eq!(header(&initial_gap, "producer-received-seq"), "1");
+    assert_invocation_receipt(agent, &initial_gap).await?;
+
     let first = post("7", "0", "zero").send().await?;
     assert_eq!(first.status(), StatusCode::OK);
+    assert_no_invocation_receipt(&first);
     let first_offset = header(&first, "stream-next-offset");
     let second = post("7", "1", "one").send().await?;
     assert_eq!(second.status(), StatusCode::OK);
@@ -1435,21 +1447,27 @@ async fn post_input_offsets_and_retry_survive_reconstruction(
 ) -> anyhow::Result<()> {
     let session = Uuid::new_v4().to_string();
     let id = format!("ds3-{session}");
-    let component_id = agent
+    let agent_id = agent
         .client
         .put(
             agent
                 .base_url
-                .join(&format!("/durable-stream-agents/{id}/component-id"))?,
+                .join(&format!("/durable-stream-agents/{id}/agent-id"))?,
         )
         .send()
         .await?
         .json::<String>()
         .await?;
-    let worker = AgentId {
-        component_id: ComponentId(Uuid::parse_str(&component_id)?),
-        agent_id: format!("DurableStreamAgent(\"{id}\")"),
-    };
+    let worker = OwnedAgentId::new(agent.env_id, &AgentId(Uuid::parse_str(&agent_id)?));
+    assert_eq!(
+        worker,
+        derive_keyed_agent_id(
+            &agent.user,
+            &agent.component_id,
+            &agent_key!("DurableStreamAgent", id.clone()),
+        )
+        .await?
+    );
     let input = echo_stream_path(&session, "input");
     let output = echo_stream_path(&session, "output");
     let mut offsets = Vec::new();
@@ -1535,6 +1553,7 @@ async fn lifecycle_json_binary_head_and_methods(
         .send()
         .await?;
     assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+    assert_no_invocation_receipt(&rejected);
     let mismatch = agent
         .client
         .put(agent.base_url.join(&json)?)
@@ -1554,10 +1573,17 @@ async fn lifecycle_json_binary_head_and_methods(
 
     let first = create(agent, &json).await?;
     assert_eq!(first.status(), StatusCode::CREATED);
+    let receipt = assert_invocation_receipt(agent, &first).await?;
     assert_eq!(header(&first, CONTENT_TYPE.as_str()), "application/json");
     assert!(first.headers().contains_key("stream-next-offset"));
-    let repeated = create(agent, &json).await?;
+    let repeated = agent
+        .client
+        .put(agent.base_url.join(&json)?)
+        .header("Idempotency-Key", "unrelated-external-key")
+        .send()
+        .await?;
     assert_eq!(repeated.status(), StatusCode::OK);
+    assert_eq!(assert_invocation_receipt(agent, &repeated).await?, receipt);
     assert_eq!(
         agent
             .client
@@ -1577,6 +1603,7 @@ async fn lifecycle_json_binary_head_and_methods(
     assert_eq!(head.status(), StatusCode::OK);
     assert_eq!(header(&head, CONTENT_TYPE.as_str()), "application/json");
     assert_eq!(header(&head, CACHE_CONTROL.as_str()), "no-store");
+    assert_no_invocation_receipt(&head);
     assert!(head.bytes().await?.is_empty());
 
     wait_for_closed(agent, &json).await?;
@@ -1720,6 +1747,7 @@ async fn generated_session_location_and_manifest(
     let base = format!("/durable-stream-agents/generated-{}/json/2", Uuid::new_v4());
     let created = create(agent, &format!("{base}?delay_ms=0")).await?;
     assert_eq!(created.status(), StatusCode::CREATED);
+    let receipt = assert_invocation_receipt(agent, &created).await?;
     let location = header(&created, "location");
     let session = location
         .strip_prefix(&format!("{base}/invocations/"))
@@ -1736,6 +1764,7 @@ async fn generated_session_location_and_manifest(
         .await?;
     assert_eq!(metadata.status(), StatusCode::OK);
     assert_eq!(header(&metadata, "cache-control"), "no-store");
+    assert_no_invocation_receipt(&metadata);
     let metadata = metadata.json::<Value>().await?;
     assert_eq!(metadata["session"], session);
     assert_eq!(metadata["closed"], true);
@@ -1755,18 +1784,17 @@ async fn generated_session_location_and_manifest(
     assert_eq!(header(&head, "content-type"), "application/json");
     assert_eq!(header(&head, "stream-closed"), "true");
     assert!(head.bytes().await?.is_empty());
-    assert_eq!(
-        create(agent, &format!("{location}?delay_ms=0"))
-            .await?
-            .status(),
-        StatusCode::OK
-    );
-    assert_eq!(
-        create(agent, &format!("{location}?delay_ms=1"))
-            .await?
-            .status(),
-        StatusCode::UNPROCESSABLE_ENTITY
-    );
+    let replay = agent
+        .client
+        .put(agent.base_url.join(&format!("{location}?delay_ms=0"))?)
+        .header("Idempotency-Key", "different-from-session-identity")
+        .send()
+        .await?;
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(assert_invocation_receipt(agent, &replay).await?, receipt);
+    let conflict = create(agent, &format!("{location}?delay_ms=1")).await?;
+    assert_eq!(conflict.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_no_invocation_receipt(&conflict);
     let data = agent
         .client
         .get(agent.base_url.join(&stream)?)
@@ -2013,6 +2041,7 @@ async fn session_put_binds_body_query_header_and_path(
         );
     }
 
+    let mut receipt = None;
     for expected in [StatusCode::CREATED, StatusCode::OK] {
         let response = agent
             .client
@@ -2022,6 +2051,11 @@ async fn session_put_binds_body_query_header_and_path(
             .send()
             .await?;
         assert_eq!(response.status(), expected);
+        let current = assert_invocation_receipt(agent, &response).await?;
+        if let Some(previous) = &receipt {
+            assert_eq!(&current, previous);
+        }
+        receipt = Some(current);
     }
     for (label, message) in [
         ("different-header", "body-value"),
@@ -2035,6 +2069,7 @@ async fn session_put_binds_body_query_header_and_path(
             .send()
             .await?;
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_no_invocation_receipt(&response);
     }
 
     for (method, path) in [
@@ -2060,7 +2095,17 @@ async fn session_put_binds_body_query_header_and_path(
         assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
     }
 
-    assert_eq!(create(agent, &stream).await?.status(), StatusCode::OK);
+    let existing_slot = agent
+        .client
+        .put(agent.base_url.join(&stream)?)
+        .header("Idempotency-Key", "unrelated-slot-key")
+        .send()
+        .await?;
+    assert_eq!(existing_slot.status(), StatusCode::OK);
+    assert_eq!(
+        Some(assert_invocation_receipt(agent, &existing_slot).await?),
+        receipt
+    );
     wait_for_closed(agent, &stream).await?;
     let response = agent
         .client
@@ -2180,7 +2225,8 @@ async fn websocket_and_http_sessions_have_isolated_identities(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     use crate::api::streaming_rpc::{
-        connect_public_invocation_socket, receive_public_response, send_public_request,
+        connect_public_invocation_socket, receive_public_response, receive_public_stream_readiness,
+        send_public_request,
     };
     use golem_common::model::invocation_session_public::{
         DecimalU64, INVOCATION_SESSION_VERSION, InvocationSelector, PublicClientMessage,
@@ -2190,37 +2236,39 @@ async fn websocket_and_http_sessions_have_isolated_identities(
     let session = Uuid::new_v4().to_string();
     let input_reference = Uuid::new_v4();
     let mut socket =
-        connect_public_invocation_socket(&agent.user.deps, Some(&agent.user.token)).await?;
+        connect_public_invocation_socket(&agent.user.deps, agent.env_id, Some(&agent.user.token))
+            .await?;
     send_public_request(
         &mut socket,
         &PublicClientMessage::InvocationStart {
             attempt_id: Uuid::new_v4(),
             config: Vec::new(),
             idempotency_key: session.clone(),
-            method_parameters: native_input_stream(input_reference),
+            method_parameters: native_input_stream(input_reference).try_into()?,
             selector: Box::new(InvocationSelector {
                 agent_type: "DurableStreamAgent".into(),
                 application: agent.application_name.clone(),
-                constructor_parameters: native_constructor_id(format!("ds3-{session}")),
+                target: golem_common::model::invocation_session_public::PublicAgentTarget::Key {
+                    constructor_parameters: native_constructor_id(format!("ds3-{session}")),
+                },
                 environment: agent.environment_name.clone(),
                 method: "echo".into(),
-                phantom_id: None,
             }),
             version: INVOCATION_SESSION_VERSION,
         },
     )
     .await?;
-    let accepted = receive_public_response(&mut socket).await?;
-    let input_channel = match accepted {
-        PublicServerMessage::InvocationAccepted { mappings, .. } => {
-            mappings
-                .iter()
-                .find(|mapping| mapping.provisional_ref == Some(input_reference))
-                .ok_or_else(|| anyhow::anyhow!("missing input mapping"))?
-                .channel
-        }
+    let accepted = receive_public_stream_readiness(&mut socket).await?;
+    let mappings = match accepted {
+        PublicServerMessage::InvocationAccepted { mappings, .. }
+        | PublicServerMessage::InvocationReady { mappings, .. } => mappings,
         other => anyhow::bail!("invocation was not accepted: {other:?}"),
     };
+    let input_channel = mappings
+        .iter()
+        .find(|mapping| mapping.provisional_ref == Some(input_reference))
+        .ok_or_else(|| anyhow::anyhow!("missing input mapping"))?
+        .channel;
     send_public_request(
         &mut socket,
         &PublicClientMessage::InputStreamItem {
@@ -2373,21 +2421,27 @@ async fn session_delete_is_cooperative_and_survives_reconstruction(
     assert_eq!(marked.json::<Value>().await?, serde_json::json!("37"));
     assert_eq!(observations(agent, &id).await?, vec![0, 0, 1, 1, 1, 37, 0]);
 
-    let component_id = agent
+    let agent_id = agent
         .client
         .put(
             agent
                 .base_url
-                .join(&format!("/durable-stream-agents/{id}/component-id"))?,
+                .join(&format!("/durable-stream-agents/{id}/agent-id"))?,
         )
         .send()
         .await?
         .json::<String>()
         .await?;
-    let worker = AgentId {
-        component_id: ComponentId(Uuid::parse_str(&component_id)?),
-        agent_id: format!("DurableStreamAgent(\"{id}\")"),
-    };
+    let worker = OwnedAgentId::new(agent.env_id, &AgentId(Uuid::parse_str(&agent_id)?));
+    assert_eq!(
+        worker,
+        derive_keyed_agent_id(
+            &agent.user,
+            &agent.component_id,
+            &agent_key!("DurableStreamAgent", id.clone()),
+        )
+        .await?
+    );
     let before = stream_terminals(agent.user.get_oplog(&worker, OplogIndex::INITIAL).await?)?;
     assert_eq!(before.len(), 1);
     assert_eq!(before[0].1.authored_by, StreamTerminalAuthor::Host);
@@ -2480,10 +2534,12 @@ async fn input_slot_delete_is_guest_observable_and_tombstoned(
     }
     use golem_common::model::durable_stream::{StreamError, StreamSessionRecord, StreamTerminal};
 
-    let worker = AgentId {
-        component_id: agent.component_id,
-        agent_id: format!("DurableStreamAgent(\"{id}\")"),
-    };
+    let worker = derive_keyed_agent_id(
+        &agent.user,
+        &agent.component_id,
+        &agent_key!("DurableStreamAgent", id.clone()),
+    )
+    .await?;
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             let history = agent.user.get_oplog(&worker, OplogIndex::INITIAL).await?;
@@ -2570,21 +2626,27 @@ async fn output_slot_delete_is_guest_observable_and_tombstoned(
     }
     wait_for_observations(agent, &id, &[0, 0, 1, 1, 1, 0, 0]).await?;
 
-    let component_id = agent
+    let agent_id = agent
         .client
         .put(
             agent
                 .base_url
-                .join(&format!("/durable-stream-agents/{id}/component-id"))?,
+                .join(&format!("/durable-stream-agents/{id}/agent-id"))?,
         )
         .send()
         .await?
         .json::<String>()
         .await?;
-    let worker = AgentId {
-        component_id: ComponentId(Uuid::parse_str(&component_id)?),
-        agent_id: format!("DurableStreamAgent(\"{id}\")"),
-    };
+    let worker = OwnedAgentId::new(agent.env_id, &AgentId(Uuid::parse_str(&agent_id)?));
+    assert_eq!(
+        worker,
+        derive_keyed_agent_id(
+            &agent.user,
+            &agent.component_id,
+            &agent_key!("DurableStreamAgent", id.clone()),
+        )
+        .await?
+    );
     agent.user.simulated_crash(&worker).await?;
     agent.user.resume(&worker, false).await?;
     for method in [Method::GET, Method::HEAD, Method::POST, Method::DELETE] {
@@ -2807,10 +2869,12 @@ async fn trapped_output_closes_without_the_cancelled_header(
         StatusCode::NO_CONTENT
     );
     wait_for_closed(agent, &path).await?;
-    let worker = AgentId {
-        component_id: agent.component_id,
-        agent_id: format!("DurableStreamAgent(\"ds3-{session}\")"),
-    };
+    let worker = derive_keyed_agent_id(
+        &agent.user,
+        &agent.component_id,
+        &agent_key!("DurableStreamAgent", format!("ds3-{session}")),
+    )
+    .await?;
     let history = agent.user.get_oplog(&worker, OplogIndex::INITIAL).await?;
     let output = history
         .iter()

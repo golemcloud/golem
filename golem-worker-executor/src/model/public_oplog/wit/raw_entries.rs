@@ -23,6 +23,7 @@ before (value) {}
         timestamp: timestamp_from_datetime(params.timestamp),
         parameters: Box::new(golem_common::model::oplog::CreateProjectionParameters {
             agent_id: golem_common::model::AgentId::from(params.agent_id),
+            agent_type_name: params.agent_type_name.map(golem_common::model::agent::AgentTypeName),
             owner_kind: match params.owner_kind {
                 oplog::OwnerKind::ComponentAgent => {
                     golem_common::model::agent::OwnerKind::ComponentAgent
@@ -70,9 +71,6 @@ before (value) {}
                     value: decode_untyped_schema_value(entry.value)?,
                 })
             }).collect::<Result<_, String>>()?,
-            original_phantom_id: params
-                .original_phantom_id
-                .map(|uuid| uuid::Uuid::from_u64_pair(uuid.high_bits, uuid.low_bits)),
             instance_id: uuid::Uuid::from_u64_pair(
                 params.instance_id.high_bits,
                 params.instance_id.low_bits,
@@ -92,6 +90,7 @@ before (value) {}
         observational_owner: params
         .observational_owner
         .map(golem_common::base_model::OplogIndex::from_u64),
+        driver: params.driver.map(golem_common::base_model::OplogIndex::from_u64),
         request: params.request.map(oplog_payload_from_wit),
         durable_function_type: params.durable_function_type.into(),
         span_started: params.span_started.map(|span| raw_span_started_from_wit(span).map(Box::new)).transpose()?,
@@ -123,6 +122,7 @@ before (value) {}
                     Ok(M::AgentInvocationStarted {
                         timestamp: timestamp_from_datetime(params.timestamp),
                         invocation_id: uuid::Uuid::from(params.invocation_id).into(),
+                        operation: Box::new(params.operation.try_into()?),
                         payload: oplog_payload_from_wit(params.payload),
                         trace_id,
                         trace_states: params.trace_states,
@@ -140,6 +140,7 @@ before (value) {}
         .component_revision
         .try_into()
         .map_err(|e: String| e)?,
+        awaits_settlement: false,
     } }
     AgentInvocationFailed { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
@@ -147,6 +148,12 @@ before (value) {}
         invocation_id: uuid::Uuid::from(params.invocation_id).into(),
         error: params.error.into(),
         start_index: golem_common::model::OplogIndex::from_u64(params.start_index),
+        awaits_settlement: false,
+    } }
+    AgentInvocationSettled { record (params) {
+        timestamp: timestamp_from_datetime(params.timestamp),
+        invocation_id: uuid::Uuid::from(params.invocation_id).into(),
+        consumed_fuel: params.consumed_fuel,
     } }
     Suspend { record (ts) {
         timestamp: timestamp_from_datetime(ts.timestamp),
@@ -197,6 +204,7 @@ before (value) {}
                         timestamp: timestamp_from_datetime(params.timestamp),
                         not_before: params.not_before.map(timestamp_from_datetime),
                         invocation_id: uuid::Uuid::from(params.invocation_id).into(),
+                        operation: Box::new(params.operation.try_into()?),
                         payload: oplog_payload_from_wit(params.payload),
                         trace_id,
                         trace_states: params.trace_states,
@@ -209,6 +217,7 @@ before (value) {}
         update_attempt_index: params
         .update_attempt_index
         .map(golem_common::model::oplog::OplogIndex::from_u64),
+        requester: Box::new(requester_from_wit(&params.requester)?),
     } }
     SuccessfulUpdate { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
@@ -539,8 +548,9 @@ before (value) {}
                 }) => {
                     let golem_common::model::oplog::CreateParameters {
                         component_id: _,
-                        agent_type_name: _,
+                        agent_type_name,
                         canonical_key: _,
+                        constructor_parameters: _,
                         agent_id,
                         owner_kind,
                         agent_mode,
@@ -553,7 +563,6 @@ before (value) {}
                         initial_total_linear_memory_size,
                         initial_active_plugins,
                         local_agent_config,
-                        original_phantom_id,
                         instance_id,
                         create_request: _,
                         never_live,
@@ -561,6 +570,7 @@ before (value) {}
                     Ok(Self::Create(oplog::RawCreateParameters {
                         timestamp: timestamp.into(),
                         agent_id: agent_id.into(),
+                        agent_type_name: agent_type_name.map(|name| name.0),
                         owner_kind: match owner_kind {
                             golem_common::model::agent::OwnerKind::ComponentAgent => {
                                 oplog::OwnerKind::ComponentAgent
@@ -600,7 +610,6 @@ before (value) {}
                                 })
                             })
                             .collect::<Result<_, String>>()?,
-                        original_phantom_id: original_phantom_id.map(|id| id.into()),
                         instance_id: instance_id.into(),
                         never_live,
                     }))
@@ -611,6 +620,7 @@ before (value) {}
         function_name: function_name.to_string(),
         invocation_id: invocation_id.map(durable_invocation_id_to_wit),
         observational_owner: observational_owner.map(|i| i.into()),
+        driver: driver.map(|i| i.into()),
         request: request.map(oplog_payload_to_wit).transpose()?,
         durable_function_type: durable_function_type.into(),
         span_started: span_started.map(|span| raw_span_started_to_wit(*span)),
@@ -633,13 +643,14 @@ before (value) {}
     AgentInvocationStarted { record () => RawAgentInvocationStartedParameters {
         timestamp: timestamp.into(),
         invocation_id: invocation_id.0.into(),
+        operation: (*operation).into(),
         payload: oplog_payload_to_wit(payload)?,
         trace_id: trace_id.to_string(),
         trace_states: trace_states,
         invocation_context: invocation_context.into_iter().map(|s| s.into()).collect(),
         wallet_pin: invocation_wallet_pin_to_wit(*wallet_pin),
     } }
-    AgentInvocationFinished { record () => RawAgentInvocationFinishedParameters {
+    AgentInvocationFinished { record (awaits_settlement) => RawAgentInvocationFinishedParameters {
         timestamp: timestamp.into(),
         invocation_id: invocation_id.0.into(),
         result: oplog_payload_to_wit(result)?,
@@ -647,11 +658,16 @@ before (value) {}
         consumed_fuel: consumed_fuel,
         component_revision: component_revision.get(),
     } }
-    AgentInvocationFailed { record (entity_parent_start_index) => RawAgentInvocationFailedParameters {
+    AgentInvocationFailed { record (entity_parent_start_index, awaits_settlement) => RawAgentInvocationFailedParameters {
         timestamp: timestamp.into(),
         invocation_id: invocation_id.0.into(),
         error: error.into(),
         start_index: start_index.into(),
+    } }
+    AgentInvocationSettled { record () => RawAgentInvocationSettledParameters {
+        timestamp: timestamp.into(),
+        invocation_id: invocation_id.0.into(),
+        consumed_fuel: consumed_fuel,
     } }
     Suspend { override (M::Suspend { timestamp }) => Ok(Self::Suspend(timestamp.into())) }
     Error { record (entity_parent_start_index) => RawErrorParameters {
@@ -678,6 +694,7 @@ before (value) {}
         timestamp: timestamp.into(),
         not_before: not_before.map(Into::into),
         invocation_id: invocation_id.0.into(),
+        operation: (*operation).into(),
         payload: oplog_payload_to_wit(payload)?,
         trace_id: trace_id.to_string(),
         trace_states: trace_states,
@@ -687,6 +704,7 @@ before (value) {}
         timestamp: timestamp.into(),
         description: description.try_into()?,
         update_attempt_index: update_attempt_index.map(Into::into),
+        requester: requester_to_wit(&requester)?,
     } }
     SuccessfulUpdate { record (new_total_linear_memory_size) => RawSuccessfulUpdateParameters {
         timestamp: timestamp.into(),

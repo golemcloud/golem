@@ -252,7 +252,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.http_connection_pool(),
             self.websocket_connection_pool(),
             None,
-            worker_metadata.original_phantom_id,
             runtime,
             Some(execution_mode),
             self.owner_execution(),
@@ -462,10 +461,12 @@ impl RunningWorker {
             admission_index,
         } = decision
         {
+            let requester = parent.requester_of_admission(admission_index).await?;
             parent
                 .add_and_commit_oplog(OplogEntry::pending_update(
                     description,
                     Some(admission_index),
+                    Box::new(requester),
                 ))
                 .await
                 .map_err(WorkerExecutorError::from)?;
@@ -477,10 +478,12 @@ impl RunningWorker {
                 description,
                 admission_index,
             } => {
+                let requester = parent.requester_of_admission(admission_index).await?;
                 parent
                     .add_and_commit_oplog(OplogEntry::pending_update(
                         description,
                         Some(admission_index),
+                        Box::new(requester),
                     ))
                     .await
                     .map_err(WorkerExecutorError::from)?;
@@ -1022,7 +1025,6 @@ impl RunningWorker {
             parent.http_connection_pool(),
             parent.websocket_connection_pool(),
             pending_update,
-            worker_metadata.original_phantom_id,
             OwnerRuntime::Agent,
             None,
             parent.owner_execution(),

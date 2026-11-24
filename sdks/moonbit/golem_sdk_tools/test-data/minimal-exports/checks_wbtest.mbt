@@ -1,4 +1,7 @@
 ///|
+extern "wasm" fn push_host_buffer(ptr : Int, size : Int) = "golem:test" "push-permission-host-buffer"
+
+///|
 fn run_fixture_async(body : async () -> Unit) -> Unit raise {
   let mut callback = @asyncCore.with_waitableset(() => {
     body()
@@ -62,8 +65,9 @@ test "generated tool invocation and snapshot hooks" {
           Bytes::from_array([ for byte in snapshot.payload => byte ]),
           b"{\"version\":2,\"state\":{\"value\":18}}",
         )
+        push_host_buffer(@gen.mbt_ffi_cabi_realloc(0, 0, 1, 1), 1)
         assert_true(
-          @loadSnapshot.load(snapshot, group)
+          @loadSnapshot.load(snapshot, empty, group)
           is Err("Agent instance is already initialized"),
         )
       } else {
@@ -82,7 +86,7 @@ test "generated tool invocation and snapshot hooks" {
         let snapshot = @saveSnapshot.save(group)
         assert_eq(snapshot.payload.length(), 0)
         assert_true(
-          @loadSnapshot.load(snapshot, group)
+          @loadSnapshot.load(snapshot, empty, group)
           is Err("Component defines no agents"),
         )
       }

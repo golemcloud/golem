@@ -77,16 +77,54 @@ pub(super) async fn published_interrupt_receipt<
     }
 }
 
-pub(super) fn ephemeral_owner_key(
+/// The ID of the agent that the test DSL's invocation of `method` on `name` under `key` reaches:
+/// the keyed agent of `name` when `durable`, otherwise the instance of that ephemeral invocation.
+pub(super) fn invocation_agent_id(
     executor: &TestWorkerExecutor,
+    environment_id: golem_common::model::environment::EnvironmentId,
+    name: &golem_common::model::agent::ParsedAgentKey,
+    durable: bool,
     key: &IdempotencyKey,
     method: &str,
-) -> IdempotencyKey {
-    golem_common::model::InvocationRequestKey::external(
-        executor.auth_ctx().idempotency_scope(),
-        Some(key),
-    )
-    .owner_key(method)
+) -> AgentId {
+    if durable {
+        crate::agent::keyed_agent_id(environment_id, name).agent_id
+    } else {
+        crate::agent::ephemeral_agent_id(executor, environment_id, name, key, method).agent_id
+    }
+}
+
+/// Explicitly prepares the agent targeted by the test DSL's invocation of `method` under `key`:
+/// the keyed agent of `name` when durable, otherwise the instance without a key whose ID derives
+/// from the invocation's owner key. This setup does not submit method arguments.
+pub(super) fn invocation_create_intent(
+    executor: &TestWorkerExecutor,
+    component_id: golem_common::model::component::ComponentId,
+    name: &golem_common::model::agent::ParsedAgentKey,
+    durable: bool,
+    key: &IdempotencyKey,
+    method: &str,
+) -> golem_worker_executor::worker::CreateIntent {
+    use golem_worker_executor::worker::{CreateIntent, NewOwner};
+    if durable {
+        CreateIntent::Create {
+            owner: NewOwner::keyed(component_id, name.clone()),
+            idempotency_key: None,
+            exclusive: false,
+        }
+    } else {
+        CreateIntent::Create {
+            owner: NewOwner::unkeyed(component_id, name.clone()),
+            exclusive: false,
+            idempotency_key: Some(
+                golem_common::model::InvocationRequestKey::external(
+                    executor.auth_ctx().idempotency_scope(),
+                    Some(key),
+                )
+                .owner_key(method),
+            ),
+        }
+    }
 }
 
 pub(super) const FUEL_BUDGET: u64 = 1_000_000_000;
@@ -97,7 +135,13 @@ pub(super) fn managed_filesystem_config(
     if !metering.filesystem {
         return Ok(None);
     }
-    #[cfg(target_os = "linux")]
+    platform::managed_filesystem_config()
+}
+
+#[cfg(target_os = "linux")]
+mod platform {
+    pub(super) fn managed_filesystem_config()
+    -> anyhow::Result<Option<golem_worker_executor::services::golem_config::FilesystemStorageMode>>
     {
         use golem_worker_executor::services::golem_config::FilesystemStorageMode;
         let root = std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
@@ -111,8 +155,15 @@ pub(super) fn managed_filesystem_config(
             xfs_quotad_socket: socket.into_boxed_path(),
         }))
     }
-    #[cfg(not(target_os = "linux"))]
-    anyhow::bail!("ManagedXfs storage metering requires Linux")
+}
+
+#[cfg(not(target_os = "linux"))]
+mod platform {
+    pub(super) fn managed_filesystem_config()
+    -> anyhow::Result<Option<golem_worker_executor::services::golem_config::FilesystemStorageMode>>
+    {
+        anyhow::bail!("ManagedXfs storage metering requires Linux")
+    }
 }
 
 fn managed_runtime_path(owned: &OwnedAgentId) -> anyhow::Result<std::path::PathBuf> {
@@ -121,7 +172,7 @@ fn managed_runtime_path(owned: &OwnedAgentId) -> anyhow::Result<std::path::PathB
         .ok_or_else(|| anyhow::anyhow!("GOLEM_MANAGED_XFS_TEST_ROOT is not set"))?;
     Ok(root
         .join(owned.environment_id.to_string())
-        .join(owned.agent_id.component_id.to_string())
+        .join(format!("{:08x}", owned.agent_id.type_tag()))
         .join(golem_service_base::storage::blob::agent_path_segment(
             &owned.agent_id,
         )))

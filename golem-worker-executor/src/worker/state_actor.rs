@@ -72,7 +72,9 @@ use futures::future::{BoxFuture, Shared};
 use golem_common::model::InvocationId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::oplog::{FilesystemSnapshotName, OplogEntry, OplogIndex};
+use golem_common::model::oplog::{
+    DurableStreamEventSummary, FilesystemSnapshotName, OplogEntry, OplogIndex,
+};
 use golem_common::model::{
     AgentFingerprint, AgentStatus, AgentStatusRecord, OwnedAgentId, ScheduledAction, Timestamp,
 };
@@ -230,6 +232,7 @@ enum StatusJob {
     },
     AppendInvocationIfVersion {
         entry: Box<OplogEntry>,
+        attachment: Option<golem_common::model::durable_stream::StreamSessionAttachedRecord>,
         idempotency_key: InvocationId,
         expected_result_generation: u64,
         expected_revert_generation: u64,
@@ -519,6 +522,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     }
                     StatusJob::AppendInvocationIfVersion {
                         entry,
+                        attachment,
                         idempotency_key,
                         expected_result_generation,
                         expected_revert_generation,
@@ -556,7 +560,17 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                 drop(status);
                                 // Returned rather than reported as a moved version: the caller
                                 // retries on `false`, and a fenced oplog refuses every retry.
-                                if let Err(error) = state.oplog.add(*entry).await {
+                                let appended = if let Some(mut attachment) = attachment {
+                                    state.oplog.add_pair(*entry, Box::new(move |index| {
+                                        attachment.pending_invocation_oplog_index = index;
+                                        let record = golem_common::model::durable_stream::StreamSessionRecord::Attached(attachment);
+                                        let summary = DurableStreamEventSummary::session(&record);
+                                        OplogEntry::stream_session(None, golem_common::model::oplog::OplogPayload::Inline(Box::new(record)), summary)
+                                    })).await.map(|_| ())
+                                } else {
+                                    state.oplog.add(*entry).await.map(|_| ())
+                                };
+                                if let Err(error) = appended {
                                     if let OplogError::Fenced(fence) = &error {
                                         state.retire_fenced_agent(fence.clone());
                                     }
@@ -904,6 +918,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     pub async fn append_invocation_if_version(
         &self,
         entry: OplogEntry,
+        attachment: Option<golem_common::model::durable_stream::StreamSessionAttachedRecord>,
         idempotency_key: InvocationId,
         expected_result_generation: u64,
         expected_revert_generation: u64,
@@ -912,6 +927,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         self.commit
             .run_status_job(|done| StatusJob::AppendInvocationIfVersion {
                 entry: Box::new(entry),
+                attachment,
                 idempotency_key,
                 expected_result_generation,
                 expected_revert_generation,
@@ -1645,7 +1661,7 @@ fn can_append_invocation(
     status.invocation_results.change_generation() == expected_result_generation
         && status.invocation_results.revert_generation() == expected_revert_generation
         && !status.invocation_results.contains_key(idempotency_key)
-        && status.current_idempotency_key.as_ref() != Some(idempotency_key)
+        && status.current_idempotency_key() != Some(idempotency_key)
         && !status
             .pending_invocations
             .iter()
@@ -1660,7 +1676,6 @@ mod tests {
     };
     use crate::services::oplog::{CommitLevel, Oplog, OplogRefusal, gated_ephemeral_fixture};
     use crate::workerctx::default::Context;
-    use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::OplogEntry;
     use golem_common::model::oplog::OplogIndex;
@@ -1755,13 +1770,8 @@ mod tests {
                     },
                 );
                 let weak_stop = Arc::downgrade(&stop);
-                let owned_agent_id = OwnedAgentId::new(
-                    EnvironmentId::new(),
-                    &AgentId {
-                        component_id: ComponentId::new(),
-                        agent_id: "actor-stop".into(),
-                    },
-                );
+                let owned_agent_id =
+                    OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 1));
                 let actor = Arc::new(WorkerStateActor::<Context> {
                     commit: Arc::new(OwnerCommitController {
                         status_jobs,
@@ -1866,6 +1876,7 @@ mod tests {
             oplog_index: OplogIndex::INITIAL,
             idempotency_key: Some(key),
             manual_update_target_revision: None,
+            operation: None,
         }
     }
 
@@ -2043,13 +2054,7 @@ mod tests {
     async fn a_confirmation_to_a_stopped_status_task_is_deferred_and_does_not_panic() {
         use super::{ConfirmOutcome, WorkerLifecycle};
         use golem_common::model::oplog::FilesystemSnapshotName;
-        let owned_agent_id = OwnedAgentId::new(
-            EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "stopped-status".into(),
-            },
-        );
+        let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 2));
         let (status_jobs, status_rx) = mpsc::unbounded_channel();
         let (lifecycle_jobs, _lifecycle_rx) = mpsc::unbounded_channel();
         let stop = WorkerStateActorStop::new(
@@ -2085,13 +2090,7 @@ mod tests {
     async fn a_confirmation_gives_the_reply_of_the_status_task() {
         use super::{ConfirmOutcome, WorkerLifecycle};
         use golem_common::model::oplog::FilesystemSnapshotName;
-        let owned_agent_id = OwnedAgentId::new(
-            EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "replying-status".into(),
-            },
-        );
+        let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 3));
         let (status_jobs, mut status_rx) = mpsc::unbounded_channel();
         let (lifecycle_jobs, _lifecycle_rx) = mpsc::unbounded_channel();
         let stop = WorkerStateActorStop::new(
@@ -2162,6 +2161,10 @@ mod tests {
         golem_common::model::InvocationResultPosition {
             terminal,
             request: None,
+            end: golem_common::model::InvocationEnd::Completed,
+            operation: None,
+            accepted_at: None,
+            changed_at: golem_common::model::Timestamp::from(0),
         }
     }
 
@@ -2181,7 +2184,16 @@ mod tests {
         ));
 
         status.pending_invocations.clear();
-        status.current_idempotency_key = Some(key);
+        status.running = Some(golem_common::model::RunningInvocation {
+            key,
+            request: golem_common::model::InvocationRequestRef {
+                index: OplogIndex::INITIAL,
+                accepted_at: golem_common::model::Timestamp::from(0),
+                operation: None,
+            },
+            last_change: OplogIndex::INITIAL,
+            last_change_at: golem_common::model::Timestamp::from(0),
+        });
         assert!(!can_append_invocation(
             &status,
             &key,
@@ -2189,7 +2201,7 @@ mod tests {
             revert_generation
         ));
 
-        status.current_idempotency_key = None;
+        status.running = None;
         status
             .invocation_results
             .insert(InvocationId(Uuid::new_v4()), result_at(OplogIndex::INITIAL));

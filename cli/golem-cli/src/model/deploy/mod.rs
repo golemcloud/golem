@@ -16,7 +16,7 @@ use crate::agent_id_display::{SourceLanguage, render_type_for_language};
 use crate::command::shared_args::{ForceBuildArg, PostDeployArgs};
 use crate::error::service::ServiceError;
 use crate::log::{LogColorize, logln};
-use crate::model::agent::{AgentActionError, RawAgentId};
+use crate::model::agent::AgentActionError;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::component::{
     render_agent_constructor, render_input_schema, render_output_schema,
@@ -33,6 +33,7 @@ use crate::model::text_format::{
 use colored::Colorize;
 use golem_client::model::{AgentSecretDto, Deployment, RetryPolicyDto};
 use golem_common::base_model::json::NormalizedJsonValue;
+use golem_common::model::AgentId;
 use golem_common::model::agent::{
     AgentConfigSource, HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment,
 };
@@ -636,7 +637,9 @@ pub struct DeploymentDisplayHttpMount {
     pub webhook: Option<String>,
     pub phantom_agent: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub phantom_id_binding: Option<golem_common::model::agent::PhantomIdBinding>,
+    pub agent_id_binding: Option<golem_common::model::agent::AgentIdBinding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub create_route: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_required: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -736,7 +739,7 @@ pub struct DeploymentDisplayRemoteTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata_digest: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub provision: Option<golem_common::model::tool::ToolProvisionConfig>,
+    pub provision: Option<diff::ToolProvision>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub bindings: BTreeMap<String, diff::EffectiveToolBinding>,
 }
@@ -1172,7 +1175,8 @@ fn display_http_mount(http_mount: &HttpMountDetails) -> DeploymentDisplayHttpMou
         webhook: (!http_mount.webhook_suffix.is_empty())
             .then(|| render_path(&http_mount.webhook_suffix)),
         phantom_agent: http_mount.phantom_agent,
-        phantom_id_binding: http_mount.phantom_id_binding.clone(),
+        agent_id_binding: http_mount.agent_id_binding.clone(),
+        create_route: http_mount.create_route.as_deref().map(render_path),
         auth_required: http_mount.auth_details.as_ref().map(|auth| auth.required),
         cors: http_mount.cors_options.allowed_patterns.clone(),
     }
@@ -1426,7 +1430,7 @@ impl TextOutput for TryUpdateAllWorkersView {
 #[serde(rename_all = "camelCase")]
 pub struct AgentUpdateMeta {
     pub component_name: ComponentName,
-    pub agent_id: RawAgentId,
+    pub agent_id: AgentId,
     pub from_revision: ComponentRevision,
     pub revision: ComponentRevision,
 }
@@ -1641,6 +1645,9 @@ impl TextOutput for DeploymentDiff {
                             ));
                             if diff.wasm_changed {
                                 logln("    - binary");
+                            }
+                            if diff.package_metadata_changed {
+                                logln("    - package metadata");
                             }
                             if !diff.agent_type_changes.is_empty() {
                                 logln("    - agent type declarations");

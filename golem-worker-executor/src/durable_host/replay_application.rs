@@ -23,6 +23,7 @@ use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
 use golem_common::model::Timestamp;
 use golem_common::model::card::{CardId, ScopeCard, StoredCard};
+use golem_common::model::entity::OwnerRuntime;
 use golem_common::model::oplog::UpdateDescription;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::collections::BTreeMap;
@@ -112,7 +113,7 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
         let worker = ctx.public_state.worker();
         let baseline_role = ctx.state.baseline_role.clone();
         let linear_memory = ctx.linear_memory_tracker();
-        let scope = ctx.current_invocation_scope_card();
+        let scope = installed_invocation_scope_card(ctx);
         let interest = ctx.state.card_interest_index.clone();
         let cards = ctx.state.card_service.clone();
         // Registration captures the exact generation before this work becomes independently
@@ -385,6 +386,23 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
     Ok(())
 }
 
+/// The scope card installed for the Store's current invocation: the primary Store's admitted
+/// scope, also while the export's return hides it from the calls made after it, or the scope an
+/// entity Store inherited. A replay application maintains the roots of the installed card for
+/// every call, so it must not depend on which call applies it.
+fn installed_invocation_scope_card<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+) -> Option<ScopeCard> {
+    match &ctx.runtime {
+        OwnerRuntime::Agent => ctx.state.authority().admitted_scope_card().cloned(),
+        OwnerRuntime::Entity(_) => ctx
+            .state
+            .inherited_invocation_scope
+            .as_ref()
+            .map(|scope| scope.card.clone()),
+    }
+}
+
 pub(super) fn apply<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     application: &Arc<ReplayApplication>,
@@ -415,13 +433,10 @@ pub(super) fn apply<Ctx: WorkerCtx>(
         _ => &[],
     };
     ctx.clear_invocation_scope_if_roots_include(revoked);
-    if let ReplayEvent::ForkReplayed { new_phantom_id } = &prepared.event {
-        ctx.state.current_phantom_id = Some(*new_phantom_id);
-    }
     if prepared.finalized_update {
         ctx.state.automatic_update_unsettled = false;
     }
-    if ctx.current_invocation_scope_card() == prepared.scope
+    if installed_invocation_scope_card(ctx) == prepared.scope
         && let Some(roots) = &prepared.live_scope_roots
     {
         let authority = ctx.state.authority_mut();

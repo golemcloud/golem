@@ -15,13 +15,13 @@ Obtain a typed client for the same durable identity, then yield the remote metho
 `.schedule(scheduledAt, input)` Effect:
 
 ```typescript
-const self = yield * PollerDefinition.client.get({ name });
+const self = yield * PollerDefinition.client.upsert({ name });
 const scheduled = yield * self.poll.schedule(scheduledAt, {});
 ```
 
 Use these client conventions:
 
-- `client.get(...)` takes the complete named constructor-parameter record.
+- `client.upsert(...)` takes the complete named constructor-parameter record.
 - A method with `input: {}` still receives `{}` in remote calls.
 - `.schedule(at, input)` accepts `Datetime.Input`: a WIT wall-clock value with
   `{ seconds: bigint, nanoseconds: number }`, a JavaScript `Date`, an Effect `DateTime`, or
@@ -30,7 +30,7 @@ Use these client conventions:
 - Cancel with `yield* scheduled.cancel()`. There is no `.scheduleCancelable()` method.
 - The handle belongs to the allocating Scope. Closing that Scope drops the host cancellation
   resource, but does not cancel the invocation. A `Ref` does not extend that lifetime.
-- Both `client.get(...)` and `.schedule(...)` are lazy Effects and must be yielded.
+- Both `client.upsert(...)` and `.schedule(...)` are lazy Effects and must be yielded.
 
 The client normalizes supported inputs. To construct a WIT datetime explicitly from an Effect
 `DateTime.Utc`, convert it with `DateTime.toEpochMillis(...)`:
@@ -89,7 +89,7 @@ export const Ticker = TickerDefinition.implement({
           nanoseconds: Math.floor(atMillis % 1_000) * 1_000_000,
         };
 
-        const self = yield* TickerDefinition.client.get({ name });
+        const self = yield* TickerDefinition.client.upsert({ name });
         yield* self.tick.schedule(scheduledAt, { generation });
       }).pipe(Effect.scoped);
 
@@ -136,7 +136,7 @@ Register the implementation from the component entry point:
 import "./ticker.js";
 ```
 
-`client.get(...)` and `.schedule(...)` can fail with SDK infrastructure errors. The example uses
+`client.upsert(...)` and `.schedule(...)` can fail with SDK infrastructure errors. The example uses
 `Effect.orDie` around the recurring tick because its public method declares no typed error. If
 callers should handle scheduling failures, map them to a domain error declared in the method's
 `error` schema instead.
@@ -199,5 +199,5 @@ idempotency key can identify a CLI-scheduled invocation for later cancellation:
 golem agent invoke --trigger --schedule-at 2026-03-15T10:30:00Z -i 'poll-next' \
   'PollerAgent("my-poller")' poll
 
-golem agent cancel-invocation 'PollerAgent("my-poller")' 'poll-next'
+golem invocation cancel --agent 'PollerAgent("my-poller")' --idempotency-key 'poll-next'
 ```

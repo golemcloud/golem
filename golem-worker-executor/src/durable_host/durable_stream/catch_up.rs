@@ -194,6 +194,7 @@ impl DurableStreamStore {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl StreamSegmentSource for DurableStreamStore {
     #[tracing::instrument(name = "durable_stream.read_segment", level = "debug", skip_all)]
     async fn read_segment(
@@ -407,6 +408,7 @@ impl StreamSegmentSource for DurableStreamStore {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl AttachedStreamSegmentSource for DurableStreamStore {
     async fn journal_lag_events(
         &self,
@@ -432,7 +434,7 @@ impl AttachedStreamSegmentSource for DurableStreamStore {
                 attachment.attachment_id,
                 attachment.stream_id,
                 attachment.consumer_environment_id,
-                attachment.consumer.clone(),
+                attachment.consumer,
             )])
             .await?;
         index.validate_attachment_key(

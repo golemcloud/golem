@@ -1,0 +1,596 @@
+{
+  "tier": "pr",
+  "description": "jq conformance: jq 1.8.2 in the oracle is the reference for status, stdout and stderr.",
+  "cases": [
+    {
+      "name": "jq: pretty print",
+      "script": "echo '{\"name\":\"ada\",\"age\":36,\"tags\":[\"x\",\"y\"],\"nested\":{\"k\":[1,2,{\"z\":null}]}}' | jq .",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: default filter",
+      "script": "echo '{\"name\":\"ada\",\"age\":36,\"tags\":[\"x\",\"y\"],\"nested\":{\"k\":[1,2,{\"z\":null}]}}' | jq",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: raw field",
+      "script": "echo '{\"name\":\"ada\",\"age\":36,\"tags\":[\"x\",\"y\"],\"nested\":{\"k\":[1,2,{\"z\":null}]}}' | jq -r .name",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: nested path",
+      "script": "echo '{\"name\":\"ada\",\"age\":36,\"tags\":[\"x\",\"y\"],\"nested\":{\"k\":[1,2,{\"z\":null}]}}' | jq -c '.nested.k[2]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: array iteration",
+      "script": "echo '[{\"name\":\"ada\",\"age\":36,\"team\":\"a\"},{\"name\":\"bob\",\"age\":25,\"team\":\"b\"},{\"name\":\"cy\",\"age\":41,\"team\":\"a\"}]' | jq -r '.[].name'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: select map",
+      "script": "echo '[{\"name\":\"ada\",\"age\":36,\"team\":\"a\"},{\"name\":\"bob\",\"age\":25,\"team\":\"b\"},{\"name\":\"cy\",\"age\":41,\"team\":\"a\"}]' | jq -c '[.[] | select(.age > 30) | .name]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: object construction",
+      "script": "echo '[{\"name\":\"ada\",\"age\":36,\"team\":\"a\"},{\"name\":\"bob\",\"age\":25,\"team\":\"b\"},{\"name\":\"cy\",\"age\":41,\"team\":\"a\"}]' | jq -c '.[] | {who: .name, old: (.age > 30)}'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: keys length type",
+      "script": "echo '{\"name\":\"ada\",\"age\":36,\"tags\":[\"x\",\"y\"],\"nested\":{\"k\":[1,2,{\"z\":null}]}}' | jq -c '[keys, length, (.tags|length), (.age|type), (.nested|type)]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: entries",
+      "script": "echo '{\"name\":\"ada\",\"age\":36,\"tags\":[\"x\",\"y\"],\"nested\":{\"k\":[1,2,{\"z\":null}]}}' | jq -c 'del(.nested) | to_entries | map(.key)'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: with entries",
+      "script": "echo '{\"a\":1,\"b\":2}' | jq -c 'with_entries(.value |= tostring)'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: group sort unique",
+      "script": "echo '[{\"name\":\"ada\",\"age\":36,\"team\":\"a\"},{\"name\":\"bob\",\"age\":25,\"team\":\"b\"},{\"name\":\"cy\",\"age\":41,\"team\":\"a\"}]' | jq -c '(group_by(.team) | map(length)), (sort_by(.age) | map(.name)), (map(.team) | unique), (max_by(.age).name)'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: update operators",
+      "script": "echo '{\"name\":\"ada\",\"age\":36,\"tags\":[\"x\",\"y\"],\"nested\":{\"k\":[1,2,{\"z\":null}]}}' | jq -c '.age += 1 | .tags |= map(ascii_upcase) | del(.nested) | .new.deep = true'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: alternative and optional",
+      "script": "echo '{\"a\":null}' | jq -c '[.a // \"d\", .b // 1, (.c?.d?), (try error(\"x\") catch .)]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: conditionals",
+      "script": "echo '[1,5,10]' | jq -c 'map(if . < 3 then \"s\" elif . < 8 then \"m\" else \"l\" end)'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: reduce foreach",
+      "script": "echo '[1,2,3,4]' | jq -c 'reduce .[] as $x (0; . + $x), [foreach .[] as $x (0; . + $x)]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: limit first last range",
+      "script": "jq -nc '[limit(3; range(10))], first(range(5;9)), [range(0;10;4)], ([1,2,3]|last)'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: recurse paths",
+      "script": "echo '{\"a\":{\"b\":[1,{\"c\":2}]}}' | jq -c '[paths], [.. | numbers], [leaf_paths], getpath([\"a\",\"b\",1,\"c\"])'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: strings",
+      "script": "jq -nc '\"Hello, World\" | [ascii_downcase, (split(\", \")), (ltrimstr(\"Hello\")), (startswith(\"He\")), (test(\"world\"; \"i\")), (sub(\"o\"; \"0\")), (gsub(\"o\"; \"0\")), (explode|implode), (length)]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: regex capture",
+      "script": "jq -nc '\"id=42 name=ada\" | capture(\"id=(?<id>[0-9]+) name=(?<name>[a-z]+)\"), [scan(\"[0-9]+\")], (match(\"n.me\").offset)'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: conversions",
+      "script": "jq -nc '[\"1\", 2, \"x\"] | [(.[0]|tonumber), (.[1]|tostring), tojson, (\"[1,2]\"|fromjson), (10/4|tostring), (6/3|tojson)]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: formats",
+      "script": "jq -nr '[\"a,b\", 1, \"x y\"] | @csv, @tsv, @sh, @json, @text, (.[2]|@uri), (.[2]|@base64), (.[2]|@base64|@base64d), (\"<&>\"|@html)'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: string interpolation",
+      "script": "echo '{\"n\":\"ada\",\"a\":36}' | jq -r '\"\\(.n) is \\(.a)\"'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: aggregate",
+      "script": "jq -nc '[3,1,2] | [add, min, max, (add/length), any(. > 2), all(. > 0), (map(.*2)), sort, reverse, (index(1)), (indices(2)), flatten]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: contains inside has",
+      "script": "jq -nc '{\"a\":[1,2],\"b\":\"xyz\"} | [has(\"a\"), (.a|contains([1])), (\"x\"|inside(\"xyz\")), ([.b]|inside([\"xyz\",\"q\"])), (keys_unsorted)]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: type selectors",
+      "script": "jq -nc '[1,\"a\",null,true,[1],{\"a\":1}] | [(.[]|numbers), (.[]|strings), (.[]|nulls), (.[]|booleans), (.[]|arrays), (.[]|objects), (.[]|scalars)]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: arg and argjson",
+      "script": "echo '[{\"name\":\"ada\",\"age\":36,\"team\":\"a\"},{\"name\":\"bob\",\"age\":25,\"team\":\"b\"},{\"name\":\"cy\",\"age\":41,\"team\":\"a\"}]' | jq -c --arg n bob --argjson min 30 '[.[] | select(.name == $n or .age > $min) | .name]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: named args object",
+      "script": "jq -nc --arg a 1 --argjson b '{\"c\":[2]}' '$ARGS'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: positional args",
+      "script": "jq -nc '$ARGS.positional' --args a 'b c'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: json positional args",
+      "script": "jq -nc '$ARGS.positional' --jsonargs 1 '{\"a\":2}' null",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: slurp",
+      "script": "printf '1 2\\n3\\n' | jq -c -s 'add, length'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: raw input lines",
+      "script": "printf 'a\\nb c\\n\\nlast' | jq -R .",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: raw input slurp",
+      "script": "printf 'a\\nb\\n' | jq -Rs 'split(\"\\n\")'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: raw input to json",
+      "script": "printf '{\"a\":1}\\n' | jq -R 'fromjson | .a'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: null input inputs",
+      "script": "printf '1 2 3' | jq -nc '[inputs]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: null input reduce inputs",
+      "script": "printf '1 2 3' | jq -n 'reduce inputs as $x (0; . + $x)'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: input pairs",
+      "script": "printf '1 2 3 4' | jq -c '[., input]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: exit status null",
+      "script": "jq -ne null; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: exit status false then true",
+      "script": "jq -ne 'false, 1'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: exit status no output",
+      "script": "jq -ne empty; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: exit status truthy",
+      "script": "echo '{\"ok\":true}' | jq -e .ok >/dev/null && echo yes",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: compact tab indent",
+      "script": "echo '{\"a\":[1,{\"b\":2}]}' | jq --tab . && echo '{\"a\":[1]}' | jq --indent 1 . && echo '{\"a\":[1]}' | jq --indent 0 .",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: sort keys",
+      "script": "echo '{\"b\":1,\"a\":{\"d\":1,\"c\":2}}' | jq -S -c .",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: join output",
+      "script": "jq -nj '\"a\", 1, \"b\"'; echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: raw output0",
+      "script": "jq -n --raw-output0 '\"a\",\"b\"' | cat -v; echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: ascii output",
+      "script": "jq -nac '\"é😀\", {\"ü\":1}'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: seq",
+      "script": "jq -nc --seq '1, [2]' | cat -v",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: combined short flags",
+      "script": "echo '[\"a\",\"b\"]' | jq -rc '.[]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: file operands",
+      "script": "printf '{\"x\":1}' > /tmp/a.json; printf '{\"x\":2}' > /tmp/b.json; jq .x /tmp/a.json /tmp/b.json",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: input filename",
+      "script": "echo 1 > /tmp/a.json; echo 2 > /tmp/b.json; jq -c '[., input_filename]' /tmp/a.json /tmp/b.json; echo 3 | jq -c '[., input_filename]'; jq -nc input_filename",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: slurp files",
+      "script": "printf '[1]' > /tmp/a.json; printf '[2]' > /tmp/b.json; jq -c -s . /tmp/a.json /tmp/b.json",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: stdin operand",
+      "script": "echo '{\"a\":1}' | jq .a -",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: filter from file",
+      "script": "echo '.a | . * 2' > /tmp/p.jq; echo '{\"a\":21}' | jq -f /tmp/p.jq",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: slurpfile rawfile",
+      "script": "printf '1 2' > /tmp/v.json; printf 'text\\n' > /tmp/t.txt; jq -nc --slurpfile s /tmp/v.json --rawfile r /tmp/t.txt '[$s, $r]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: env",
+      "script": "export JQ_T=val; jq -nr 'env.JQ_T, $ENV.JQ_T'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: unexported var is not env",
+      "script": "JQ_U=hidden; jq -nc 'env.JQ_U'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: debug",
+      "script": "jq -nc '1 | debug | . + 1'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: debug message",
+      "script": "jq -nc '1 | debug(\"msg\", .) | . + 1'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: stderr",
+      "script": "jq -n '\"s\" | stderr | empty'; jq -n '{a:1} | stderr | empty'; echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: halt",
+      "script": "jq -n 'halt'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: halt error string",
+      "script": "jq -n '\"bye\\n\" | halt_error'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: halt error object",
+      "script": "jq -n '{a:1} | halt_error(3)'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: error continues",
+      "script": "printf '1 {\"a\":2}' | jq .a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: error message",
+      "script": "jq -n 'error(\"boom\")'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: error object",
+      "script": "jq -n 'error({a:1})'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: an uncaught error ends that input's outputs",
+      "script": "jq -n '1, error(\"x\"), 2'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: array index too large",
+      "script": "for i in 536870912 2147483648 4294967295; do jq -nc \"[] | .[$i] = 1 | length\"; echo status=$?; done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: invalid input",
+      "script": "printf '1 abc 2' | jq .; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: undefined function",
+      "script": "jq -n '1 | foo'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: undefined variable",
+      "script": "jq -n '$x'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: syntax error",
+      "script": "jq -n '.['; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: unknown option",
+      "script": "jq --bogus .; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: missing file",
+      "script": "echo 1 > /tmp/a.json; jq . /tmp/a.json /tmp/nope.json; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: bad argjson",
+      "script": "jq -n --argjson x '{bad' '$x'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: indent limit",
+      "script": "jq --indent 9 -n 1; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: stream refused",
+      "script": "echo 1 | jq --stream .; echo status=$?",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=2\n"
+        },
+        "stderr": {
+          "text": "jq: --stream is unsupported in bash-tool\n"
+        },
+        "reason": "bash-tool refuses --stream rather than emulating jq's streaming parser"
+      }
+    },
+    {
+      "name": "jq: loc",
+      "script": "jq -nc '$__loc__'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: numbers",
+      "script": "jq -nc '[1.0, 1.5, 100000000000000000000, 3.0e2, -0, 0.1 + 0.2, 1e1000, infinite, nan]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: number literals pass through",
+      "script": "echo '[1.0, 1.50, 3e2, 100000000000000000001]' | jq -c .",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: unicode",
+      "script": "echo '{\"k\":\"ø \\u00e9 \\ud83d\\ude00\"}' | jq -c . && jq -nr '\"tab\\there\"'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: dates",
+      "script": "jq -nc '\"2015-03-05T23:51:47Z\" | [fromdate, (fromdate | todate), (fromdate | strftime(\"%Y-%m-%d %H:%M\"))], (now | type)'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: paths and delete",
+      "script": "echo '{\"a\":1,\"b\":null,\"c\":{\"d\":null,\"e\":2}}' | jq -c 'del(.. | nulls), [paths(type == \"number\")]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: endless producer",
+      "script": "while :; do echo '{\"a\":1}'; done | jq -c .a | head -n 2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: endless raw producer",
+      "script": "while :; do echo line; done | jq -R . | head -n 1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: early null input ignores stdin",
+      "script": "while :; do echo 1; done | jq -n '\"ready\"' | head -n 1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: help",
+      "script": "jq --help | head -n 1",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "Usage:\tjq [OPTIONS] FILTER [FILES...]\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "our help text is jaq's, not jq's"
+      }
+    },
+    {
+      "name": "jq: nested assignment",
+      "script": "echo '{}' | jq -c '.config.retries = 3 | .list[2] = \"x\" | .n.m |= 5'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: array extension",
+      "script": "jq -nc '[1] | .[3] = 4'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: null slice",
+      "script": "jq -nc 'null | .[1:]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: number output",
+      "script": "jq -nc '[10/2, 1/3, 100/3, 0.00001*1, 1e17*1, 2e21*1, 1000000000000000.5, 1.5*2, (7|./2)]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: number literals",
+      "script": "echo '[1e-5, 1E5, 0.00, 1.500e3, -0.0, 12e-9, 5e-7, 0.050]' | jq -c .",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: join",
+      "script": "jq -nr '[1,null,\"a\",true,1.5] | join(\"-\")' && jq -nc '[] | join(\",\")'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: join rejects arrays",
+      "script": "jq -nr '[[1]] | join(\"-\")'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: csv tsv",
+      "script": "jq -nr '[1.5, 2, \"a\\\"b\", null, true, (10/2)] | @csv, @tsv' && jq -nr '[\"a\\tb\\\\c\\nd\"] | @tsv'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: csv of objects",
+      "script": "jq -nr '[{}] | @csv'; echo status=$?; jq -nr '\"x\" | @csv'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jq: format interpolation",
+      "script": "jq -nr '@csv \"row: \\([1,\"a\"])\"' && jq -nr '@base64 \"x=\\(\"hi\")\"'",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}

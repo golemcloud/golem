@@ -15,7 +15,7 @@
 use crate::Tracing;
 use anyhow::anyhow;
 use golem_common::schema::SchemaValue;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::metrics::storage::{
     STORAGE_BYTES_WRITTEN_TOTAL, STORAGE_OBJECTS_DELETED_TOTAL, STORAGE_OBJECTS_WRITTEN_TOTAL,
@@ -50,7 +50,7 @@ async fn readwrite_get_returns_the_value_that_was_set(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("KeyValue", "key-value-service-1");
+    let agent_id = agent_key!("KeyValue", "key-value-service-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -111,7 +111,7 @@ async fn readwrite_get_returns_the_value_that_was_set_using_async_body(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("KeyValue", "key-value-service-async-body-1");
+    let agent_id = agent_key!("KeyValue", "key-value-service-async-body-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -181,7 +181,7 @@ async fn readwrite_get_fails_if_the_value_was_not_set(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("KeyValue", "key-value-service-2");
+    let agent_id = agent_key!("KeyValue", "key-value-service-2");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -222,7 +222,7 @@ async fn readwrite_set_replaces_the_value_if_it_was_already_set(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("KeyValue", "key-value-service-3");
+    let agent_id = agent_key!("KeyValue", "key-value-service-3");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -296,7 +296,7 @@ async fn readwrite_delete_removes_the_value_if_it_was_already_set(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("KeyValue", "key-value-service-4");
+    let agent_id = agent_key!("KeyValue", "key-value-service-4");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -362,7 +362,7 @@ async fn readwrite_exists_returns_true_if_the_value_was_set(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("KeyValue", "key-value-service-5");
+    let agent_id = agent_key!("KeyValue", "key-value-service-5");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -414,7 +414,7 @@ async fn readwrite_exists_returns_false_if_the_value_was_not_set(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("KeyValue", "key-value-service-6");
+    let agent_id = agent_key!("KeyValue", "key-value-service-6");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -454,11 +454,11 @@ async fn readwrite_buckets_can_be_shared_between_workers(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id_1 = agent_id!("KeyValue", "key-value-service-7");
+    let agent_id_1 = agent_key!("KeyValue", "key-value-service-7");
     let worker_id_1 = executor
         .start_agent(&component.id, agent_id_1.clone())
         .await?;
-    let agent_id_2 = agent_id!("KeyValue", "key-value-service-8");
+    let agent_id_2 = agent_key!("KeyValue", "key-value-service-8");
     let worker_id_2 = executor
         .start_agent(&component.id, agent_id_2.clone())
         .await?;
@@ -517,7 +517,7 @@ async fn batch_get_many_gets_multiple_values(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("KeyValue", "key-value-service-9");
+    let agent_id = agent_key!("KeyValue", "key-value-service-9");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -604,7 +604,7 @@ async fn batch_get_many_fails_if_any_value_was_not_set(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("KeyValue", "key-value-service-10");
+    let agent_id = agent_key!("KeyValue", "key-value-service-10");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -663,7 +663,7 @@ async fn batch_set_many_sets_multiple_values(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("KeyValue", "key-value-service-11");
+    let agent_id = agent_key!("KeyValue", "key-value-service-11");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -759,7 +759,7 @@ async fn batch_delete_many_deletes_multiple_values(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("KeyValue", "key-value-service-12");
+    let agent_id = agent_key!("KeyValue", "key-value-service-12");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -857,7 +857,7 @@ async fn batch_get_keys_returns_multiple_keys(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("KeyValue", "key-value-service-13");
+    let agent_id = agent_key!("KeyValue", "key-value-service-13");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -928,7 +928,7 @@ async fn kv_set_increments_storage_bytes_and_objects_written_metrics(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("KeyValue", "kv-metrics-set-1");
+    let agent_id = agent_key!("KeyValue", "kv-metrics-set-1");
     let bucket = format!("{}-kv-metrics-set-bucket", component.id);
     let account_id = context.account_id.to_string();
     let environment_id = context.default_environment_id.to_string();
@@ -1003,7 +1003,7 @@ async fn kv_delete_increments_storage_objects_deleted_metric(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("KeyValue", "kv-metrics-delete-1");
+    let agent_id = agent_key!("KeyValue", "kv-metrics-delete-1");
     let bucket = format!("{}-kv-metrics-delete-bucket", component.id);
     let account_id = context.account_id.to_string();
     let environment_id = context.default_environment_id.to_string();

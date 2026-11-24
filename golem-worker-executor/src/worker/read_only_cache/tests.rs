@@ -27,11 +27,10 @@ async fn pending_admission_preserves_queued_signal() {
 
 use super::*;
 use golem_common::base_model::component_metadata::KnownExports;
-use golem_common::model::AgentId;
 use golem_common::model::agent::{
     AgentMode, AgentTypeName, CachePolicy, ReadOnlyConfig, Snapshotting,
 };
-use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::RawSnapshotData;
 use golem_common::schema::UnionValuePayload;
@@ -46,6 +45,42 @@ use uuid::Uuid;
 
 fn rev(n: u64) -> ComponentRevision {
     ComponentRevision::new(n).unwrap()
+}
+
+#[test]
+fn cache_observations_expire_when_execution_selects_another_revision() {
+    let context = ReadOnlyContext {
+        method_name: "get".to_string(),
+        input: SchemaValue::Record { fields: Vec::new() },
+        caller: Caller::anonymous(),
+        cfg: ReadOnlyConfig {
+            cache_policy: CachePolicy::UntilWrite(Empty {}),
+        },
+        component_revision: rev(1),
+        cacheable: true,
+    };
+    for selected_revision in [Some(rev(1)), Some(rev(2)), None] {
+        let entry = build_read_only_cache_entry(
+            &context,
+            AgentInvocationOutput {
+                result: golem_common::model::AgentInvocationResult::AgentMethod {
+                    output: SchemaValue::U32(37),
+                },
+                consumed_fuel: None,
+                invocation_status: None,
+                component_revision: selected_revision,
+                agent_id: None,
+                idempotency_key: None,
+                oplog_index: None,
+                agent_fingerprint: None,
+                background_failure: None,
+            },
+        );
+        assert_eq!(
+            entry.is_expired(Instant::now()),
+            selected_revision != Some(rev(1))
+        );
+    }
 }
 
 fn read_only_method(name: &str, ro: Option<ReadOnlyConfig>) -> AgentMethodSchema {
@@ -87,10 +122,7 @@ fn metadata_with_one_agent_type(
 }
 
 fn caller(seed: u128) -> Caller {
-    let agent_id = AgentId {
-        component_id: ComponentId(Uuid::from_u128(seed)),
-        agent_id: format!("agent-{seed}"),
-    };
+    let agent_id = crate::test_agent_id(&format!("agent-{seed}"));
     crate::test_callers::agent_caller(agent_id)
 }
 
@@ -390,6 +422,7 @@ fn method_name_changes_the_key() {
 fn classify_non_method_variants_are_mutating() {
     let m = AgentInvocation::ManualUpdate {
         target_revision: ComponentRevision::new(2).unwrap(),
+        requester: golem_common::model::caller::Caller::anonymous(),
     };
     assert_eq!(
         classify_invocation(None, None, &m),
@@ -477,7 +510,8 @@ fn classify_unknown_metadata_is_unknown_assume_mutating() {
     let m = AgentInvocation::AgentMethod {
         idempotency_key: InvocationId(Uuid::from_u128(2)),
         method_name: "m".into(),
-        input: tuple(vec![]),
+        allow_streams: false,
+        input: tuple(vec![]).try_into().unwrap(),
         invocation_context: InvocationContextStack::fresh(),
         caller: Caller::anonymous(),
         scope_card: None,

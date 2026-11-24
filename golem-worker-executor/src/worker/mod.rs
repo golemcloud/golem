@@ -23,6 +23,7 @@ mod runtime;
 mod startup;
 mod streaming;
 
+use acquisition::ConstructionError;
 #[cfg(test)]
 use acquisition::snapshot_policy_of_mode;
 #[cfg(test)]
@@ -71,6 +72,7 @@ pub mod instance;
 mod interrupt;
 pub mod invocation;
 mod invocation_loop;
+pub mod invocations;
 mod lifecycle;
 #[cfg(test)]
 mod lifecycle_tests;
@@ -86,10 +88,12 @@ pub mod status;
 pub mod status_checkpointer;
 pub mod status_flusher;
 pub(crate) mod suspension;
+pub mod target;
 pub(crate) mod tasks;
 
 #[cfg(test)]
 pub(crate) use invocation_loop::{MonthlyResourceAdmission, monthly_resource_admission};
+pub use lifecycle::CancelInvocationOutcome;
 pub use lifecycle::UpdateMode as WorkerUpdateMode;
 
 use self::agent_config::{
@@ -164,8 +168,8 @@ use crate::worker::lifecycle::state::{
 use crate::worker::snapshot_selection::{SnapshotExclusions, StartDecision, StartSelection};
 use crate::worker::status::update_queue::is_unselected_automatic;
 use crate::worker::status::{
-    InvocationRequests, calculate_last_known_status_with_checkpoint,
-    fold_invocation_result_entries, revert_validation_regions, update_status_with_new_entries,
+    calculate_last_known_status_with_checkpoint, revert_validation_regions,
+    update_status_with_new_entries,
 };
 use crate::workerctx::{WorkerCtx, WorkerCtxExecutable, WorkerFilesystemContext};
 use futures::{
@@ -188,11 +192,12 @@ use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId
 use golem_common::base_model::oplog::QueuedCardEvent;
 use golem_common::cache::PendingOrFinal;
 use golem_common::model::AgentStatus;
+use golem_common::model::InvocationEnd;
 use golem_common::model::RetryConfig;
 use golem_common::model::agent::{AgentConfigEntryDto, TypedAgentConfigEntry};
 use golem_common::model::agent::{
     AgentMode, InvocationFreshnessDisposition, OwnerKind, ParsedAgentKey, ResolvedOwnerContext,
-    Snapshotting, SnapshottingConfig, ephemeral_invocation_phantom_id,
+    Snapshotting, SnapshottingConfig,
 };
 use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient};
 use golem_common::model::component::CanonicalFilePath;
@@ -213,9 +218,10 @@ use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
-    AgentInvocationResult, AgentMetadata, AgentStatusRecord, InvocationResultPosition,
-    OwnedAgentId, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RetryPolicyState,
-    ShardAssignment, ShardEpoch, ShardId, Timestamp,
+    AgentInvocationResult, AgentMetadata, AgentStatusRecord, InvocationRequestOperation,
+    InvocationResultPosition, OwnedAgentId, PendingInvocationRef, PendingUpdateKind,
+    PendingUpdateRef, RetryPolicyState, ShardAssignment, ShardEpoch, ShardId,
+    StoredAgentInvocationPayload, Timestamp,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -254,51 +260,129 @@ pub(crate) enum WorkerCreationMode {
     OplogProcessor,
 }
 
+/// The owner that a request creates when the owner it names does not exist yet.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NewOwner {
+    /// The component that implements the agent type, or that a fresh external-tool owner or
+    /// oplog processor runs.
+    pub component_id: ComponentId,
+    /// The type and constructor parameters of a component agent. Other owners have none.
+    pub constructor: Option<ParsedAgentKey>,
+    /// Whether the agent owns the key of `constructor`. Its ID then derives from the key.
+    pub keyed: bool,
+}
+
+impl NewOwner {
+    pub fn keyed(component_id: ComponentId, key: ParsedAgentKey) -> Self {
+        Self {
+            component_id,
+            constructor: Some(key),
+            keyed: true,
+        }
+    }
+
+    pub fn unkeyed(component_id: ComponentId, constructor: ParsedAgentKey) -> Self {
+        Self {
+            component_id,
+            constructor: Some(constructor),
+            keyed: false,
+        }
+    }
+
+    /// An owner without an agent type: an external-tool owner or an oplog processor.
+    pub fn untyped(component_id: ComponentId) -> Self {
+        Self {
+            component_id,
+            constructor: None,
+            keyed: false,
+        }
+    }
+
+    /// The key that the owner owns. Only a keyed durable agent owns its key.
+    pub(crate) fn canonical_key(&self, agent_mode: AgentMode) -> Option<String> {
+        self.constructor
+            .as_ref()
+            .filter(|_| self.keyed && agent_mode == AgentMode::Durable)
+            .map(ToString::to_string)
+    }
+
+    pub(crate) fn ensure_owns_key(
+        &self,
+        agent_id: AgentId,
+        agent_mode: AgentMode,
+        stored_key: Option<&str>,
+    ) -> Result<(), WorkerExecutorError> {
+        if !self.keyed {
+            return Ok(());
+        }
+        let requested_key = self.canonical_key(agent_mode);
+        if stored_key == requested_key.as_deref() {
+            Ok(())
+        } else {
+            Err(WorkerExecutorError::AgentKeyCollision {
+                agent_id,
+                requested_key: requested_key.unwrap_or_default(),
+            })
+        }
+    }
+}
+
 /// What a caller asks for when it may create an owner. Only the request that actually writes the
 /// Create entry is recorded; a caller that finds the owner existing records nothing.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum CreateIntent {
+    /// Reaches only an owner that exists. A missing owner is not found.
+    Existing,
     /// The owner is created as a side effect of an invocation. The invocation's idempotency key
-    /// identifies the create only for an owner whose phantom ID is derived from that key.
+    /// is recorded only for an owner without a key, whose ID the caller may derive from it.
     Invocation {
+        owner: NewOwner,
         idempotency_key: Option<IdempotencyKey>,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
     },
     /// An explicit create request.
     Create {
+        owner: NewOwner,
         exclusive: bool,
         idempotency_key: Option<IdempotencyKey>,
     },
 }
 
 impl CreateIntent {
-    pub const UNKEYED_INVOCATION: Self = Self::Invocation {
-        idempotency_key: None,
-    };
+    pub fn owner(&self) -> Option<&NewOwner> {
+        match self {
+            Self::Existing => None,
+            Self::Invocation { owner, .. } | Self::Create { owner, .. } => Some(owner),
+        }
+    }
 
     fn request(
         &self,
-        phantom_id: Option<Uuid>,
         caller: Caller,
         invocation_context: &InvocationContextStack,
     ) -> CreateRequest {
         let (kind, idempotency_key) = match self {
-            Self::Invocation { idempotency_key } if phantom_id.is_some() => (
-                CreateRequestKind::Phantom,
-                idempotency_key
-                    .clone()
-                    .filter(|key| phantom_id == Some(ephemeral_invocation_phantom_id(key))),
-            ),
+            Self::Existing => (CreateRequestKind::GetOrCreate, None),
+            Self::Invocation {
+                owner,
+                idempotency_key,
+                ..
+            } if !owner.keyed => (CreateRequestKind::Unkeyed, idempotency_key.clone()),
             Self::Invocation { .. } => (CreateRequestKind::GetOrCreate, None),
             Self::Create {
-                idempotency_key, ..
-            } if phantom_id.is_some() => (CreateRequestKind::Phantom, idempotency_key.clone()),
+                owner,
+                idempotency_key,
+                ..
+            } if !owner.keyed => (CreateRequestKind::Unkeyed, idempotency_key.clone()),
             Self::Create {
                 exclusive: true,
                 idempotency_key,
+                ..
             } => (CreateRequestKind::Exclusive, idempotency_key.clone()),
             Self::Create {
                 exclusive: false,
                 idempotency_key,
+                ..
             } => (CreateRequestKind::GetOrCreate, idempotency_key.clone()),
         };
         CreateRequest::new(kind, idempotency_key, caller, invocation_context)
@@ -571,6 +655,9 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     #[allow(dead_code)]
     metrics_status: Arc<WorkerStatusMetric>,
     last_known_status_detached: Arc<AtomicBool>,
+    /// Set while an `AgentInvocationSettled` that the invocation loop appended waits for the
+    /// commit of the next `AgentInvocationStarted` (see [`Worker::defer_settlement_commit`]).
+    settlement_commit_deferred: AtomicBool,
     status_flusher: Arc<status_flusher::AgentStatusFlusher>,
     status_checkpointer: status_checkpointer::StatusCheckpointer,
     // Note: std lock for wasmtime reasons
@@ -748,7 +835,8 @@ impl<Ctx: WorkerCtx> UsesAllDeps for Worker<Ctx> {
 /// unchanged for Started; lowering may transform only a separate invocation clone.
 pub struct HydratedInvocation {
     pub(crate) invocation: AgentInvocation,
-    pub(crate) payload: OplogPayload<AgentInvocationPayload>,
+    pub(crate) operation: InvocationRequestOperation,
+    pub(crate) payload: OplogPayload<StoredAgentInvocationPayload>,
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
@@ -847,33 +935,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.initial_worker_metadata.clone()
     }
 
-    /// This agent as a principal, under the Golem issuer. An owner that has no agent type gets
-    /// the fixed type name of its owner kind.
+    /// This agent as a principal, under the Golem issuer.
     pub(crate) fn self_principal(
         &self,
         issuer: &golem_common::model::golem_issuer::GolemIssuer,
     ) -> golem_common::model::caller::Principal {
-        use golem_common::model::agent::{AgentTypeName, OwnerKind};
-        use golem_common::model::caller::{AgentPrincipal, Principal};
-
-        let metadata = &self.initial_worker_metadata;
-        let agent_type = match (&metadata.agent_type_name, metadata.owner_kind) {
-            (Some(agent_type), _) => agent_type.clone(),
-            (None, OwnerKind::EphemeralExternalTool) => {
-                AgentTypeName("~golem-external-tool-owner".to_string())
-            }
-            (None, OwnerKind::OplogProcessor) => {
-                AgentTypeName("~golem-oplog-processor".to_string())
-            }
-            (None, OwnerKind::ComponentAgent) => AgentTypeName(String::new()),
-        };
-        Principal::Agent(AgentPrincipal::of_agent(
-            issuer.to_string(),
-            self.owned_agent_id.agent_id.clone(),
-            metadata.fingerprint,
-            agent_type,
-            self.owned_agent_id.environment_id,
-        ))
+        crate::golem_started::agent_principal(
+            issuer,
+            &self.owned_agent_id,
+            &self.initial_worker_metadata,
+        )
     }
 
     pub(crate) fn owned_agent_id(&self) -> &OwnedAgentId {
@@ -932,7 +1003,7 @@ impl Drop for WorkerStatusMetric {
 #[derive(Debug)]
 enum WorkerInstance {
     Unresolved,
-    Initializing(Shared<BoxFuture<'static, Result<bool, WorkerExecutorError>>>),
+    Initializing(Shared<BoxFuture<'static, Result<bool, ConstructionError>>>),
     /// No invocation loop runs. `startup_failure` is the failed last start of a durable agent:
     /// admission returns it until the next start, which runs the agent again.
     Unloaded {
@@ -1213,6 +1284,8 @@ enum InvocationResult {
     Cancelled,
     Lazy {
         oplog_idx: OplogIndex,
+        /// The give-up entry of a background failure after the result at `oplog_idx`.
+        background_failure: Option<OplogIndex>,
     },
 }
 
@@ -1255,6 +1328,8 @@ pub(crate) enum MethodFailureSettlementError {
 pub enum InvocationFailureDecision {
     /// Retry the invocation, or stop, as the retry decision says.
     Retry(RetryDecision),
+    /// The cancellation and typed rejection were committed. The rejected key must not run again.
+    Rejected,
     /// The oplog refused the record of the failure. A `RecoveryRequired` error, a storage that did
     /// not answer, sends the agent to infrastructure recovery, and the invocation stays pending, so
     /// it continues when the storage answers again. An `OplogFailed` error stops the agent, and the
@@ -1406,14 +1481,15 @@ enum StopResult {
 mod resource_release_tests;
 
 pub use acquisition::merge_agent_env_with_default_env;
-pub(crate) use ingress::{await_scalar_invocation, require_expected_tool_deployment_revision};
-use ingress::{
-    inactive_ephemeral_agent_error, replace_invocation_input, validate_resolved_invocation_identity,
+pub(crate) use ingress::{
+    await_scalar_invocation, require_canonical_command_path,
+    require_expected_tool_deployment_revision,
 };
+use ingress::{inactive_ephemeral_agent_error, validate_resolved_invocation_identity};
 use interrupt::register_interrupt_request;
 use lifecycle::retirement::owned_shard_epoch;
 pub(crate) use lifecycle::retirement::retired_by_assignment;
-use lifecycle::stop::invocation_keys_to_fail;
+use lifecycle::stop::{invocation_keys_failed_on_giving_up, invocation_keys_to_fail};
 use read_only_cache::{build_read_only_cache_entry, is_no_cache, populate_read_only_cache};
 use runtime::shared_linear_memory_error;
 use streaming::sessions::{
@@ -1422,6 +1498,6 @@ use streaming::sessions::{
     validate_stream_session_record,
 };
 pub(crate) use streaming::sessions::{
-    same_origin_stream_invocation, stream_session_record_key, stream_session_record_keys,
-    stream_session_record_reference,
+    same_origin_queued_request, same_origin_stream_invocation, stream_session_record_key,
+    stream_session_record_keys, stream_session_record_reference,
 };

@@ -23,7 +23,7 @@ use crate::Tracing;
 use async_trait::async_trait;
 use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::account::AccountEmail;
-use golem_common::model::agent::{AgentTypeName, ParsedAgentKey};
+use golem_common::model::agent::{AgentTypeName, ParsedAgentKey, ResolvedOwnerContext};
 use golem_common::model::agent_config::CanonicalAgentConfigPath;
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
@@ -62,7 +62,7 @@ use golem_common::model::{AgentInvocation, AgentInvocationResult, InvocationId, 
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::{SchemaGraph, SecretValuePayload};
-use golem_common::{agent_id, data_value, widen_infallible};
+use golem_common::{agent_key, data_value, widen_infallible};
 use golem_schema::schema::wit::{SecretResolver, decode_value, decode_value_with, encode_graph};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::AgentDeploymentDetails;
@@ -249,12 +249,12 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
         })
         .store()
         .await?;
-    let agent = agent_id!("RpcCounter", "derivation-namespace");
+    let agent = agent_key!("RpcCounter", "derivation-namespace");
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
     executor
         .invoke_and_await_agent(&component, &agent, "get_value", data_value!())
         .await?;
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active = executor.active_agent(&owner_id).await.unwrap();
     let canonical = owner_component_metadata(&active, component.id, component.revision).await?;
     let mut pinned = (*canonical).clone();
@@ -290,7 +290,7 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
     let mut live_initializer_calls = Vec::new();
     let mut live_decisions = Vec::new();
     for historical in [false, true] {
-        let parent_start = active.execution().oplog().current_oplog_index().await;
+        let parent_start = stage_invocation_started(&active).await?;
         let parent_id = OwnerInvocationId::Agent(parent_start);
         let parent = active
             .execution()
@@ -298,7 +298,7 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
             .enter_primary(parent_start)?
             .acquire()
             .await?;
-        let caller = callers::agent(worker_id.clone());
+        let caller = callers::agent(worker_id.agent_id, agent.agent_type.clone());
         let scope = if historical {
             replay_invocation_scope(
                 &owner_id,
@@ -355,10 +355,14 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
                 .execution()
                 .install_replay_generation(
                     DeletedRegions::from_regions([OplogRegion::from_index_range(
-                        OplogIndex::INITIAL.next()..=parent_start,
+                        OplogIndex::INITIAL.next()..=parent_start.previous(),
                     )]),
                     None,
                 )
+                .await?;
+            active
+                .execution()
+                .test_replay_invocation_started(parent_start)
                 .await?;
             let claim = active
                 .execution()
@@ -481,6 +485,7 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
                 .collect();
         }
         drop(parent);
+        settle_staged_invocation(&active, parent_start).await?;
     }
     Ok(())
 }
@@ -558,6 +563,7 @@ async fn record_entity_call(
             function_name,
             invocation_id: Some(DurableInvocationId::new(entity_start, ordinal)),
             observational_owner: None,
+            driver: None,
             request,
             durable_function_type,
             span_started: None,
@@ -658,12 +664,23 @@ async fn cross_store_wallet_change(
         })
         .store()
         .await?;
-    let agent = agent_id!("RpcCounter", format!("cross-store-{change:?}"));
+    let agent = agent_key!("RpcCounter", format!("cross-store-{change:?}"));
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
     executor
         .invoke_and_await_agent(&component, &agent, "get_value", data_value!())
         .await?;
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    // A card transfer installs the card on an agent that exists.
+    let transfer_target = if matches!(change, WalletChange::Transfer) {
+        Some(
+            executor
+                .start_agent(&component.id, agent_key!("RpcCounter", "card-recipient"))
+                .await?
+                .agent_id,
+        )
+    } else {
+        None
+    };
+    let owner_id = worker_id.clone();
     let active = executor.active_agent(&owner_id).await.unwrap();
     let metadata = owner_component_metadata(&active, component.id, component.revision).await?;
     let grant = parse_permission_fields("config", "*/*/*/*/*", "*", "read", "target").unwrap();
@@ -692,7 +709,7 @@ async fn cross_store_wallet_change(
             card.clone(),
             CardManagedByRuntimeDerived {
                 environment_id: context.default_environment_id,
-                agent_id: worker_id.clone(),
+                agent_id: worker_id.agent_id,
                 invocation_key: InvocationId(uuid::Uuid::new_v4()),
                 oplog_index: OplogIndex::INITIAL,
             },
@@ -700,7 +717,7 @@ async fn cross_store_wallet_change(
         .await?;
     if matches!(change, WalletChange::Transfer) {
         executor
-            .queue_card_install(&worker_id, card.clone())
+            .queue_card_install(&worker_id.agent_id, card.clone())
             .await?;
     }
     // Read the wallet before either entity starts. Never ask the primary to serve a wallet
@@ -729,7 +746,7 @@ async fn cross_store_wallet_change(
         .enter_primary(parent_start)?
         .acquire()
         .await?;
-    let caller = callers::agent(worker_id.clone());
+    let caller = callers::agent(worker_id.agent_id, agent.agent_type.clone());
     let entity =
         AgentEntity::ToolMiddleware(ToolMiddlewareName::try_from("wallet-observer").unwrap());
     let activation = Arc::new(middleware_activation(
@@ -802,7 +819,7 @@ async fn cross_store_wallet_change(
         WalletChange::Restriction | WalletChange::Grant | WalletChange::SiblingScope
     ) {
         executor
-            .queue_card_install(&worker_id, card.clone())
+            .queue_card_install(&worker_id.agent_id, card.clone())
             .await?;
     }
     let consumer_scope = invocation_scope(
@@ -814,9 +831,9 @@ async fn cross_store_wallet_change(
         caller,
     )
     .with_authority_wallet(wallet);
-    let transfer_target = agent_id!("RpcCounter", "card-recipient").to_string();
     let card_id = card.card_id();
-    let commit_gate = cancel_consumer.then(|| executor.gate_next_wallet_install_commit(&worker_id));
+    let commit_gate =
+        cancel_consumer.then(|| executor.gate_next_wallet_install_commit(&worker_id.agent_id));
     let consumer = active.start_entity_invocation(
         parent_id.clone(),
         consumer_scope,
@@ -842,10 +859,9 @@ async fn cross_store_wallet_change(
                         ctx,
                         source.expect("source is in the wallet"),
                         types::Holder::Agent(
-                            golem_worker_executor::preview2::golem::agent::common::AgentId {
-                                component_id: component.id.into(),
-                                agent_id: transfer_target,
-                            },
+                            transfer_target
+                                .expect("a transfer has a started target")
+                                .into(),
                         ),
                     )
                     .await?;
@@ -1049,15 +1065,12 @@ async fn gol838_retained_replay_preparation_is_helped_or_fails_closed(
             .component_dep(&context.default_environment_id, fixture)
             .store()
             .await?;
-        let agent = agent_id!("RpcCounter", "replay-preparation-help");
-        let worker_id = golem_common::model::AgentId {
-            component_id: component.id,
-            agent_id: agent.to_string(),
-        };
+        let agent = agent_key!("RpcCounter", "replay-preparation-help");
+        let worker_id = executor.keyed_agent_id(context.default_environment_id, &agent)?;
         let (entered, entered_rx) = tokio::sync::oneshot::channel();
         let (updated, updated_rx) = tokio::sync::oneshot::channel();
         let checked = executor.probe_next_primary_context(
-            &worker_id,
+            &worker_id.agent_id,
             move |ctx| Box::pin(async move {
                 ctx.process_pending_replay_events().await?;
                 let _ = entered.send(());
@@ -1143,10 +1156,10 @@ async fn gol838_retained_replay_preparation_is_helped_or_fails_closed(
             tokio::spawn(async move { startup_executor.start_agent(&component.id, agent).await });
         tokio::time::timeout(Duration::from_secs(10), entered_rx).await??;
         let first_target = executor
-            .update_component(&worker_id.component_id, &fixture.wasm_name)
+            .update_component(&component.id, &fixture.wasm_name)
             .await?;
         let target = executor
-            .update_component(&worker_id.component_id, &fixture.wasm_name)
+            .update_component(&component.id, &fixture.wasm_name)
             .await?;
         updated
             .send((first_target, target))
@@ -1187,8 +1200,13 @@ async fn initialize_entity(
         invocation_context: InvocationContextStack::fresh(),
         caller,
     };
-    let lowered = lower_invocation(init.clone(), &metadata, Some(parsed_agent_id))?;
-    let result = invoke_observed_and_traced(lowered, store, instance, None).await?;
+    let lowered = lower_invocation(
+        init.clone(),
+        &metadata,
+        &ResolvedOwnerContext::Agent(Box::new(parsed_agent_id.clone())),
+        None,
+    )?;
+    let result = invoke_observed_and_traced(lowered, store, instance, None, None).await?;
     match result {
         InvokeResult::Succeeded { result, .. }
             if matches!(*result, AgentInvocationResult::AgentInitialization) =>
@@ -1219,13 +1237,19 @@ async fn invoke_sleep_p3(
     let method = AgentInvocation::AgentMethod {
         idempotency_key: method_key,
         method_name: "sleep_p3".to_string(),
-        input: data_value!(seconds).value().clone(),
+        allow_streams: false,
+        input: data_value!(seconds).value().clone().try_into().unwrap(),
         invocation_context: InvocationContextStack::fresh(),
         caller,
         scope_card: None,
     };
-    let lowered = lower_invocation(method.clone(), &metadata, Some(parsed_agent_id))?;
-    let result = invoke_observed_and_traced(lowered, store, instance, None).await?;
+    let lowered = lower_invocation(
+        method.clone(),
+        &metadata,
+        &ResolvedOwnerContext::Agent(Box::new(parsed_agent_id.clone())),
+        None,
+    )?;
+    let result = invoke_observed_and_traced(lowered, store, instance, None, None).await?;
     assert!(matches!(
         result,
         InvokeResult::Succeeded { result, .. }
@@ -1252,13 +1276,19 @@ async fn invoke_entity_method(
     let method = AgentInvocation::AgentMethod {
         idempotency_key: method_key,
         method_name: method_name.to_string(),
-        input,
+        allow_streams: false,
+        input: input.try_into().unwrap(),
         invocation_context: InvocationContextStack::fresh(),
         caller,
         scope_card: None,
     };
-    let lowered = lower_invocation(method.clone(), &metadata, Some(parsed_agent_id))?;
-    match invoke_observed_and_traced(lowered, store, instance, None).await? {
+    let lowered = lower_invocation(
+        method.clone(),
+        &metadata,
+        &ResolvedOwnerContext::Agent(Box::new(parsed_agent_id.clone())),
+        None,
+    )?;
+    match invoke_observed_and_traced(lowered, store, instance, None, None).await? {
         InvokeResult::Succeeded { result, .. } => Ok(*result),
         result => Err(
             golem_service_base::error::worker_executor::WorkerExecutorError::runtime(format!(
@@ -1397,6 +1427,7 @@ fn activation_with_policy(
             }
         },
         source,
+        shell: false,
     };
 
     EntityActivation::new(
@@ -1437,7 +1468,7 @@ where
         -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>>,
 {
     let lane = active_agent.execution().lane();
-    let parent_start = active_agent.execution().oplog().current_oplog_index().await;
+    let parent_start = stage_invocation_started(active_agent).await?;
     let parent_id = OwnerInvocationId::Agent(parent_start);
     let parent = lane
         .enter_primary(parent_start)
@@ -1445,7 +1476,14 @@ where
         .acquire()
         .await
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-    let caller = callers::agent(owner_id.agent_id.clone());
+    let caller = callers::agent(
+        owner_id.agent_id,
+        active_agent
+            .primary()
+            .get_initial_worker_metadata()
+            .agent_type_name
+            .unwrap(),
+    );
     let scope = invocation_scope(
         owner_id,
         entity,
@@ -1466,14 +1504,116 @@ where
     )?;
 
     let result = body.await_result(&parent_id).await;
+    drop(parent);
     if result.is_ok() {
         finish_entity_boundary(active_agent, parent_start.next()).await?;
+        settle_staged_invocation(active_agent, parent_start).await?;
     }
-    drop(parent);
     result
 }
 
-/// Records a boundary for a staged body, not an executor recovery or tool dispatch.
+/// The last entry of the owner's oplog that `matches`.
+async fn last_recorded(
+    active: &ActiveAgent<TestWorkerCtx>,
+    matches: impl Fn(&OplogEntry) -> bool,
+) -> Option<OplogEntry> {
+    let oplog = active.execution().oplog();
+    let tip = oplog.current_oplog_index().await;
+    oplog
+        .read_exact(OplogIndex::INITIAL, u64::from(tip))
+        .await
+        .unwrap()
+        .into_values()
+        .rev()
+        .find(|entry| matches(entry))
+}
+
+/// Appends the `AgentInvocationStarted` of a new invocation that repeats the payload of the last
+/// recorded invocation, pinned to the current wallet as an admitted invocation is, and returns
+/// its index. Tests stage an entity boundary under it as the entity call of that invocation, and
+/// end it with [`settle_staged_invocation`].
+async fn stage_invocation_started(
+    active: &ActiveAgent<TestWorkerCtx>,
+) -> Result<OplogIndex, WorkerExecutorError> {
+    let Some(OplogEntry::AgentInvocationStarted {
+        operation,
+        payload,
+        trace_id,
+        trace_states,
+        invocation_context,
+        ..
+    }) = last_recorded(active, |entry| {
+        matches!(entry, OplogEntry::AgentInvocationStarted { .. })
+    })
+    .await
+    else {
+        panic!("staging an invocation needs a recorded invocation to repeat");
+    };
+    let wallet_pin = active.execution().test_current_wallet_pin().await?;
+    Ok(active
+        .execution()
+        .oplog()
+        .add(OplogEntry::AgentInvocationStarted {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            invocation_id: InvocationId(uuid::Uuid::new_v4()),
+            operation,
+            payload,
+            trace_id,
+            trace_states,
+            invocation_context,
+            wallet_pin: Box::new(wallet_pin),
+        })
+        .await?)
+}
+
+/// Records the result and the settlement of the invocation that [`stage_invocation_started`]
+/// staged at `anchor`, repeating the result of the last recorded invocation.
+async fn settle_staged_invocation(
+    active: &ActiveAgent<TestWorkerCtx>,
+    anchor: OplogIndex,
+) -> Result<(), WorkerExecutorError> {
+    let oplog = active.execution().oplog();
+    let OplogEntry::AgentInvocationStarted { invocation_id, .. } =
+        oplog.read(anchor).await.unwrap()
+    else {
+        panic!("expected a staged AgentInvocationStarted at {anchor}");
+    };
+    let Some(OplogEntry::AgentInvocationFinished {
+        result,
+        method_name,
+        component_revision,
+        ..
+    }) = last_recorded(active, |entry| {
+        matches!(entry, OplogEntry::AgentInvocationFinished { .. })
+    })
+    .await
+    else {
+        panic!("settling a staged invocation needs a recorded result to repeat");
+    };
+    oplog
+        .add(OplogEntry::AgentInvocationFinished {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            invocation_id,
+            result,
+            method_name,
+            consumed_fuel: 0,
+            component_revision,
+            awaits_settlement: true,
+        })
+        .await?;
+    oplog
+        .add(OplogEntry::AgentInvocationSettled {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            invocation_id,
+            consumed_fuel: 0,
+        })
+        .await?;
+    Ok(())
+}
+
+/// Records a boundary for a staged body, not an executor recovery or tool dispatch. The scope's
+/// parent is the `AgentInvocationStarted` that [`stage_invocation_started`] staged, or the
+/// `Start` of an enclosing entity body, as a production entity call records it.
 async fn stage_entity_boundary(
     active: &ActiveAgent<TestWorkerCtx>,
     scope: &EntityInvocationScope,
@@ -1553,6 +1693,7 @@ async fn stage_entity_boundary(
             function_name: HostFunctionName::GolemEntityInvoke,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(
                 HostRequest::EntityInvocation(HostRequestEntityInvocation {
                     metadata: desert_rust::serialize_to_byte_vec(&metadata).unwrap(),
@@ -1583,6 +1724,7 @@ async fn record_entity_self_wallet(
             function_name: HostFunctionName::GolemPermissionsSelfWallet,
             invocation_id: Some(DurableInvocationId::new(entity_start_index, ordinal)),
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 HostRequestNoInput {},
             )))),
@@ -1627,6 +1769,7 @@ async fn record_live_card_liveness(
             function_name: HostFunctionName::GolemPermissionsCardLiveness,
             invocation_id: Some(DurableInvocationId::new(entity_start, ordinal)),
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(
                 HostRequest::PermissionCardLiveness(HostRequestPermissionCardLiveness {
                     card_id: card.card_id().0,
@@ -1772,7 +1915,7 @@ async fn completed_entity_replay_rejects_positional_calls(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let agent_id = agent_id!("RpcCounter", "completed-positional-tail");
+    let agent_id = agent_key!("RpcCounter", "completed-positional-tail");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1780,18 +1923,18 @@ async fn completed_entity_replay_rejects_positional_calls(
         .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
         .await?;
 
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active = executor.active_agent(&owner_id).await.unwrap();
     let metadata = owner_component_metadata(&active, component.id, component.revision).await?;
     let entity = AgentEntity::ToolMiddleware(
         ToolMiddlewareName::try_from("completed-positional-tail").unwrap(),
     );
-    let caller = callers::agent(owner_id.agent_id.clone());
+    let caller = callers::agent(owner_id.agent_id, agent_id.agent_type.clone());
     let activation = Arc::new(middleware_activation(
         ExecutableTarget::new(component.id, component.revision),
         ToolMiddlewareName::try_from("completed-positional-tail").unwrap(),
     ));
-    let parent_start = active.execution().oplog().current_oplog_index().await;
+    let parent_start = stage_invocation_started(&active).await?;
     let entity_start = parent_start.next();
     let parent_id = OwnerInvocationId::Agent(parent_start);
     let lane = active.execution().lane();
@@ -1839,12 +1982,16 @@ async fn completed_entity_replay_rejects_positional_calls(
         .execution()
         .install_replay_generation(
             DeletedRegions::from_regions([OplogRegion::from_index_range(
-                OplogIndex::INITIAL.next()..=parent_start,
+                OplogIndex::INITIAL.next()..=parent_start.previous(),
             )]),
             None,
         )
         .await?;
     let replay_primary = lane.enter_primary(parent_start)?.acquire().await?;
+    active
+        .execution()
+        .test_replay_invocation_started(parent_start)
+        .await?;
     let claim = active
         .execution()
         .test_claim_entity_boundary(parent_start)
@@ -1916,6 +2063,7 @@ async fn completed_entity_replay_rejects_positional_calls(
         .test_settle_entity_boundary(claim)
         .await?;
     drop(replay_primary);
+    settle_staged_invocation(&active, parent_start).await?;
     Ok(())
 }
 
@@ -1937,24 +2085,24 @@ async fn retry_decisions_replay_jitter_and_typed_errors(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let agent_id = agent_id!("RpcCounter", "retry-decisions");
+    let agent_id = agent_key!("RpcCounter", "retry-decisions");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
     executor
         .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
         .await?;
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active = executor.active_agent(&owner_id).await.unwrap();
     let metadata = owner_component_metadata(&active, component.id, component.revision).await?;
     let name = ToolMiddlewareName::try_from("retry-decisions").unwrap();
     let entity = AgentEntity::ToolMiddleware(name.clone());
-    let caller = callers::agent(owner_id.agent_id.clone());
+    let caller = callers::agent(owner_id.agent_id, agent_id.agent_type.clone());
     let activation = Arc::new(middleware_activation(
         ExecutableTarget::new(component.id, component.revision),
         name,
     ));
-    let parent_start = active.execution().oplog().current_oplog_index().await;
+    let parent_start = stage_invocation_started(&active).await?;
     let entity_start = parent_start.next();
     let parent_id = OwnerInvocationId::Agent(parent_start);
     let lane = active.execution().lane();
@@ -1974,6 +2122,10 @@ async fn retry_decisions_replay_jitter_and_typed_errors(
     for replay in [false, true] {
         let primary = lane.enter_primary(parent_start)?.acquire().await?;
         let claim = if replay {
+            active
+                .execution()
+                .test_replay_invocation_started(parent_start)
+                .await?;
             Some(
                 active
                     .execution()
@@ -2124,13 +2276,14 @@ async fn retry_decisions_replay_jitter_and_typed_errors(
                 .execution()
                 .install_replay_generation(
                     DeletedRegions::from_regions([OplogRegion::from_index_range(
-                        OplogIndex::INITIAL.next()..=parent_start,
+                        OplogIndex::INITIAL.next()..=parent_start.previous(),
                     )]),
                     None,
                 )
                 .await?;
         }
     }
+    settle_staged_invocation(&active, parent_start).await?;
     Ok(())
 }
 
@@ -2203,7 +2356,7 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         })
         .store()
         .await?;
-    let agent_id = agent_id!("RpcCounter", "config-tail-authorization");
+    let agent_id = agent_key!("RpcCounter", "config-tail-authorization");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2211,13 +2364,13 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
         .await?;
 
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active_agent = executor.active_agent(&owner_id).await.unwrap();
     let owner_metadata =
         owner_component_metadata(&active_agent, component.id, component.revision).await?;
     let middleware_name = ToolMiddlewareName::try_from("config-tail-authorization").unwrap();
     let entity = AgentEntity::ToolMiddleware(middleware_name.clone());
-    let caller = callers::agent(owner_id.agent_id.clone());
+    let caller = callers::agent(owner_id.agent_id, agent_id.agent_type.clone());
     let activation = Arc::new(middleware_activation(
         ExecutableTarget::new(component.id, component.revision),
         middleware_name,
@@ -2234,7 +2387,7 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         category: None,
     };
     let lane = active_agent.execution().lane();
-    let parent_start = active_agent.execution().oplog().current_oplog_index().await;
+    let parent_start = stage_invocation_started(&active_agent).await?;
     let entity_start = parent_start.next();
     let parent_id = OwnerInvocationId::Agent(parent_start);
 
@@ -2339,7 +2492,7 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         .execution()
         .install_replay_generation(
             DeletedRegions::from_regions([
-                OplogRegion::from_index_range(OplogIndex::INITIAL.next()..=parent_start),
+                OplogRegion::from_index_range(OplogIndex::INITIAL.next()..=parent_start.previous()),
                 OplogRegion::from_index_range(config_end..=live_tip),
             ]),
             None,
@@ -2347,6 +2500,10 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         .await?;
 
     let replay_primary = lane.enter_primary(parent_start)?.acquire().await?;
+    active_agent
+        .execution()
+        .test_replay_invocation_started(parent_start)
+        .await?;
     let claim = active_agent
         .execution()
         .test_claim_entity_boundary(parent_start)
@@ -2401,6 +2558,7 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         .test_settle_entity_boundary(claim)
         .await?;
     drop(replay_primary);
+    settle_staged_invocation(&active_agent, parent_start).await?;
     assert!(
         matches!(
             recorded,
@@ -2485,7 +2643,7 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
         })
         .store()
         .await?;
-    let agent_id = agent_id!("RpcCounter", "reveal-tail-authorization");
+    let agent_id = agent_key!("RpcCounter", "reveal-tail-authorization");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2493,13 +2651,13 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
         .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
         .await?;
 
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active_agent = executor.active_agent(&owner_id).await.unwrap();
     let owner_metadata =
         owner_component_metadata(&active_agent, component.id, component.revision).await?;
     let middleware_name = ToolMiddlewareName::try_from("reveal-tail-authorization").unwrap();
     let entity = AgentEntity::ToolMiddleware(middleware_name.clone());
-    let caller = callers::agent(owner_id.agent_id.clone());
+    let caller = callers::agent(owner_id.agent_id, agent_id.agent_type.clone());
     let activation = Arc::new(middleware_activation(
         ExecutableTarget::new(component.id, component.revision),
         middleware_name,
@@ -2513,7 +2671,7 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
         category: None,
     };
     let lane = active_agent.execution().lane();
-    let parent_start = active_agent.execution().oplog().current_oplog_index().await;
+    let parent_start = stage_invocation_started(&active_agent).await?;
     let entity_start = parent_start.next();
     let parent_id = OwnerInvocationId::Agent(parent_start);
 
@@ -2599,7 +2757,7 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
         .execution()
         .install_replay_generation(
             DeletedRegions::from_regions([
-                OplogRegion::from_index_range(OplogIndex::INITIAL.next()..=parent_start),
+                OplogRegion::from_index_range(OplogIndex::INITIAL.next()..=parent_start.previous()),
                 OplogRegion::from_index_range(reveal_end..=live_tip),
             ]),
             None,
@@ -2607,10 +2765,14 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
         .await?;
     if fail_authority_check {
         executor
-            .queue_card_install(&worker_id, registry_test_card())
+            .queue_card_install(&worker_id.agent_id, registry_test_card())
             .await?;
     }
     let replay_primary = lane.enter_primary(parent_start)?.acquire().await?;
+    active_agent
+        .execution()
+        .test_replay_invocation_started(parent_start)
+        .await?;
     let claim = active_agent
         .execution()
         .test_claim_entity_boundary(parent_start)
@@ -2664,6 +2826,7 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
         .test_settle_entity_boundary(claim)
         .await?;
     drop(replay_primary);
+    settle_staged_invocation(&active_agent, parent_start).await?;
     if fail_authority_check {
         let error = replay_result.expect_err("authority synchronization failure must escape");
         let error = format!("{error:?}");
@@ -2702,12 +2865,12 @@ async fn gol838_retained_entity_roots_survive_body_cleanup_and_detached_settleme
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent = agent_id!("Clock", "retained-scope-interest");
+    let agent = agent_key!("Clock", "retained-scope-interest");
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
     executor
         .invoke_and_await_agent(&component, &agent, "healthcheck", data_value!())
         .await?;
-    let owner = OwnedAgentId::new(context.default_environment_id, &worker);
+    let owner = worker.clone();
     let active = executor.active_agent(&owner).await.unwrap();
     let metadata = owner_component_metadata(&active, component.id, component.revision).await?;
     let tool = ToolName::try_from("retained-interest").unwrap();
@@ -2744,7 +2907,7 @@ async fn gol838_retained_entity_roots_survive_body_cleanup_and_detached_settleme
             OplogIndex::from_u64(u64::from(start) + offset as u64 + 1),
             start,
             activation.clone(),
-            callers::agent(worker.clone()),
+            callers::agent(worker.agent_id, agent.agent_type.clone()),
         )
         .with_invocation_scope_card(Some(ScopeCard {
             scope_card_id: CardId::new(),
@@ -2840,7 +3003,7 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "entity-owner");
+    let agent_id = agent_key!("Clock", "entity-owner");
     let worker_id = executor
         .start_agent(&owner_component.id, agent_id.clone())
         .await?;
@@ -2848,7 +3011,7 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         .invoke_and_await_agent(&owner_component, &agent_id, "healthcheck", data_value!())
         .await?;
 
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active_agent = executor
         .active_agent(&owner_id)
         .await
@@ -2906,7 +3069,7 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         outer_start,
     )
     .unwrap();
-    let caller = callers::agent(owner_id.agent_id.clone());
+    let caller = callers::agent(owner_id.agent_id, agent_id.agent_type.clone());
     let scope = EntityInvocationScope::new(
         invocation_id,
         before,
@@ -3171,7 +3334,7 @@ async fn entity_slots_lane_and_all_live_call_modes(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "phase-three-owner");
+    let agent_id = agent_key!("Clock", "phase-three-owner");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3179,7 +3342,7 @@ async fn entity_slots_lane_and_all_live_call_modes(
         .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
         .await?;
 
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active_agent = executor
         .active_agent(&owner_id)
         .await
@@ -3187,7 +3350,7 @@ async fn entity_slots_lane_and_all_live_call_modes(
     let owner_metadata =
         owner_component_metadata(&active_agent, component.id, component.revision).await?;
     let entity = AgentEntity::Tool(ToolName::try_from("phase-three-tool").unwrap());
-    let caller = callers::agent(owner_id.agent_id.clone());
+    let caller = callers::agent(owner_id.agent_id, agent_id.agent_type.clone());
     let incapable_activation = Arc::new(activation(
         ExecutableTarget::new(component.id, component.revision),
         "test:phase-three-incapable",
@@ -3604,7 +3767,7 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "middleware-owner");
+    let agent_id = agent_key!("Clock", "middleware-owner");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3612,7 +3775,7 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
         .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
         .await?;
 
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active_agent = executor
         .active_agent(&owner_id)
         .await
@@ -3638,12 +3801,12 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
         context.account_id,
         FilesystemCapability::Incapable,
     ));
-    let caller = callers::agent(owner_id.agent_id.clone());
+    let caller = callers::agent(owner_id.agent_id, agent_id.agent_type.clone());
     // No guest call makes these staged scopes, so the owner cannot reconstruct them. Owner
     // restart and interrupt of nested entity bodies are covered with real guest tool calls by
     // `owner_restart_and_interrupt_retire_nested_tool_stores_and_reopen_entity_admission`.
     let lane = active_agent.execution().lane();
-    let root_start = active_agent.execution().oplog().current_oplog_index().await;
+    let root_start = stage_invocation_started(&active_agent).await?;
     let root_id = OwnerInvocationId::Agent(root_start);
     let root = lane.enter_primary(root_start)?.acquire().await?;
     let middleware_start = root_start.next();
@@ -3756,6 +3919,7 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
         .expect("nested tool must wait for its release");
     middleware.await_result(&root_id).await?;
     drop(root);
+    settle_staged_invocation(&active_agent, root_start).await?;
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         while active_agent
             .entity_metadata()
@@ -3769,7 +3933,7 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
     .await
     .expect("completed Stores leave only vacant in-memory slots, never durable child status");
 
-    let delete_parent_start = active_agent.execution().oplog().current_oplog_index().await;
+    let delete_parent_start = stage_invocation_started(&active_agent).await?;
     let delete_parent = OwnerInvocationId::Agent(delete_parent_start);
     let delete_parent_permit = lane.enter_primary(delete_parent_start)?.acquire().await?;
     let delete_start = delete_parent_start.next();
@@ -3779,7 +3943,7 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
         delete_start,
         delete_parent_start,
         tool_activation.clone(),
-        callers::agent(owner_id.agent_id.clone()),
+        callers::agent(owner_id.agent_id, agent_id.agent_type.clone()),
     );
     stage_entity_boundary(&active_agent, &delete_scope).await?;
     let (delete_body_started, delete_body_started_rx) = tokio::sync::oneshot::channel();
@@ -3825,7 +3989,7 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
         delete_start.next(),
         delete_start,
         tool_activation,
-        callers::agent(owner_id.agent_id.clone()),
+        callers::agent(owner_id.agent_id, agent_id.agent_type.clone()),
     );
     let rejected = active_agent.start_entity_invocation(
         OwnerInvocationId::Entity(
@@ -3867,7 +4031,7 @@ async fn entity_filesystem_streams_share_root_and_block_executor_inspection(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "entity-filesystem-owner");
+    let agent_id = agent_key!("FileSystem", "entity-filesystem-owner");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3875,7 +4039,7 @@ async fn entity_filesystem_streams_share_root_and_block_executor_inspection(
         .invoke_and_await_agent(&component, &agent_id, "run_directories", data_value!())
         .await?;
 
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active_agent = executor
         .active_agent(&owner_id)
         .await
@@ -3884,7 +4048,7 @@ async fn entity_filesystem_streams_share_root_and_block_executor_inspection(
         owner_component_metadata(&active_agent, component.id, component.revision).await?;
     let tool_name = ToolName::try_from("filesystem-stream-tool").unwrap();
     let entity = AgentEntity::Tool(tool_name.clone());
-    let caller = callers::agent(owner_id.agent_id.clone());
+    let caller = callers::agent(owner_id.agent_id, agent_id.agent_type.clone());
     let activation = Arc::new(activation(
         ExecutableTarget::new(component.id, component.revision),
         "test:filesystem-stream-tool",
@@ -3988,14 +4152,14 @@ async fn filesystem_capable_entity_stream_replays_on_owner_filesystem(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "entity-filesystem-replay-owner");
+    let agent_id = agent_key!("FileSystem", "entity-filesystem-replay-owner");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
     executor
         .invoke_and_await_agent(&component, &agent_id, "run_directories", data_value!())
         .await?;
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active_agent = executor
         .active_agent(&owner_id)
         .await
@@ -4004,7 +4168,7 @@ async fn filesystem_capable_entity_stream_replays_on_owner_filesystem(
         owner_component_metadata(&active_agent, component.id, component.revision).await?;
     let tool_name = ToolName::try_from("filesystem-replay-tool").unwrap();
     let entity = AgentEntity::Tool(tool_name.clone());
-    let caller = callers::agent(owner_id.agent_id.clone());
+    let caller = callers::agent(owner_id.agent_id, agent_id.agent_type.clone());
     let activation = Arc::new(activation(
         ExecutableTarget::new(component.id, component.revision),
         "test:filesystem-replay-tool",
@@ -4014,7 +4178,7 @@ async fn filesystem_capable_entity_stream_replays_on_owner_filesystem(
         FilesystemCapability::Capable,
     ));
     let lane = active_agent.execution().lane();
-    let parent_start = active_agent.execution().oplog().current_oplog_index().await;
+    let parent_start = stage_invocation_started(&active_agent).await?;
     let entity_start = parent_start.next();
     let parent_id = OwnerInvocationId::Agent(parent_start);
 
@@ -4080,13 +4244,17 @@ async fn filesystem_capable_entity_stream_replays_on_owner_filesystem(
         .execution()
         .install_replay_generation(
             DeletedRegions::from_regions([OplogRegion::from_index_range(
-                OplogIndex::INITIAL.next()..=parent_start,
+                OplogIndex::INITIAL.next()..=parent_start.previous(),
             )]),
             None,
         )
         .await?;
 
     let replay_primary = lane.enter_primary(parent_start)?.acquire().await?;
+    active_agent
+        .execution()
+        .test_replay_invocation_started(parent_start)
+        .await?;
     let claim = active_agent
         .execution()
         .test_claim_entity_boundary(parent_start)
@@ -4143,6 +4311,7 @@ async fn filesystem_capable_entity_stream_replays_on_owner_filesystem(
         .test_settle_entity_boundary(claim)
         .await?;
     drop(replay_primary);
+    settle_staged_invocation(&active_agent, parent_start).await?;
 
     assert!(live_result.replay_equivalent(&replay_result));
     let replayed_contents = executor
@@ -4171,7 +4340,7 @@ async fn entity_provisioning_is_lane_scoped_idempotent_and_conflict_checked(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "entity-provision-owner");
+    let agent_id = agent_key!("FileSystem", "entity-provision-owner");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -4216,7 +4385,7 @@ async fn entity_provisioning_is_lane_scoped_idempotent_and_conflict_checked(
         size: conflicting_contents.len() as u64,
     };
 
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active_agent = executor
         .active_agent(&owner_id)
         .await
@@ -4225,7 +4394,7 @@ async fn entity_provisioning_is_lane_scoped_idempotent_and_conflict_checked(
         owner_component_metadata(&active_agent, component.id, component.revision).await?;
     let tool_name = ToolName::try_from("provisioning-tool").unwrap();
     let entity = AgentEntity::Tool(tool_name.clone());
-    let caller = callers::agent(owner_id.agent_id.clone());
+    let caller = callers::agent(owner_id.agent_id, agent_id.agent_type.clone());
     let activation = Arc::new(activation_with_provision(
         ExecutableTarget::new(component.id, component.revision),
         "test:provisioning-tool",
@@ -4307,7 +4476,7 @@ async fn entity_provisioning_is_lane_scoped_idempotent_and_conflict_checked(
         root_start.next().next(),
         root_start,
         activation,
-        callers::agent(owner_id.agent_id.clone()),
+        callers::agent(owner_id.agent_id, agent_id.agent_type.clone()),
     )
     .with_authority_wallet(authority_wallet.clone());
     let second = active_agent.start_entity_invocation(
@@ -4326,7 +4495,7 @@ async fn entity_provisioning_is_lane_scoped_idempotent_and_conflict_checked(
         root_start.next().next().next(),
         root_start,
         conflicting_activation,
-        callers::agent(owner_id.agent_id.clone()),
+        callers::agent(owner_id.agent_id, agent_id.agent_type.clone()),
     )
     .with_authority_wallet(authority_wallet);
     let conflicting = active_agent.start_entity_invocation(
@@ -4436,7 +4605,7 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
         )
         .store()
         .await?;
-    let agent_id = agent_id!("ConfigAgent", "entity-secret-owner");
+    let agent_id = agent_key!("ConfigAgent", "entity-secret-owner");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -4444,7 +4613,7 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
         .invoke_and_await_agent(&component, &agent_id, "echo_local_config", data_value!())
         .await?;
 
-    let owner_id = OwnedAgentId::new(environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active_agent = executor
         .active_agent(&owner_id)
         .await
@@ -4556,12 +4725,17 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
             None,
         )
         .await?;
-    let config_parent_id = OwnerInvocationId::Agent(before_denial);
+    let denial_invocation = before_denial.next();
+    let config_parent_id = OwnerInvocationId::Agent(denial_invocation);
     let lane = active_agent.execution().lane();
-    let replay_primary = lane.enter_primary(before_denial)?.acquire().await?;
+    let replay_primary = lane.enter_primary(denial_invocation)?.acquire().await?;
+    active_agent
+        .execution()
+        .test_replay_invocation_started(denial_invocation)
+        .await?;
     let claim = active_agent
         .execution()
-        .test_claim_entity_boundary(before_denial)
+        .test_claim_entity_boundary(denial_invocation)
         .await?;
     assert_eq!(claim.start_idx(), config_entity_start);
     let replay = active_agent.start_entity_invocation(
@@ -4570,9 +4744,9 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
             &owner_id,
             &entity,
             config_entity_start,
-            before_denial,
+            denial_invocation,
             permissive_activation,
-            callers::agent(owner_id.agent_id.clone()),
+            callers::agent(owner_id.agent_id, agent_id.agent_type.clone()),
         ),
         owner_metadata.clone(),
         EntityCallMode::Synchronous,
@@ -4607,14 +4781,14 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
 
     // A replay generation retires the primary Store's live wallet. Record the reveal cases on
     // a fresh owner instead of asking that stale primary Store to admit another live body.
-    let agent_id = agent_id!("ConfigAgent", "entity-secret-reveal-owner");
+    let agent_id = agent_key!("ConfigAgent", "entity-secret-reveal-owner");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
     executor
         .invoke_and_await_agent(&component, &agent_id, "echo_local_config", data_value!())
         .await?;
-    let owner_id = OwnedAgentId::new(environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active_agent = executor
         .active_agent(&owner_id)
         .await
@@ -4745,12 +4919,17 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
             None,
         )
         .await?;
-    let parent_id = OwnerInvocationId::Agent(before_reveal_denial);
+    let reveal_invocation = before_reveal_denial.next();
+    let parent_id = OwnerInvocationId::Agent(reveal_invocation);
     let lane = active_agent.execution().lane();
-    let replay_primary = lane.enter_primary(before_reveal_denial)?.acquire().await?;
+    let replay_primary = lane.enter_primary(reveal_invocation)?.acquire().await?;
+    active_agent
+        .execution()
+        .test_replay_invocation_started(reveal_invocation)
+        .await?;
     let claim = active_agent
         .execution()
-        .test_claim_entity_boundary(before_reveal_denial)
+        .test_claim_entity_boundary(reveal_invocation)
         .await?;
     assert_eq!(claim.start_idx(), entity_start);
     let replay = active_agent.start_entity_invocation(
@@ -4759,9 +4938,9 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
             &owner_id,
             &entity,
             entity_start,
-            before_reveal_denial,
+            reveal_invocation,
             permissive_activation.clone(),
-            callers::agent(owner_id.agent_id.clone()),
+            callers::agent(owner_id.agent_id, agent_id.agent_type.clone()),
         ),
         owner_metadata.clone(),
         EntityCallMode::Synchronous,
@@ -4812,10 +4991,14 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
             None,
         )
         .await?;
-    let replay_primary = lane.enter_primary(before_reveal_denial)?.acquire().await?;
+    let replay_primary = lane.enter_primary(reveal_invocation)?.acquire().await?;
+    active_agent
+        .execution()
+        .test_replay_invocation_started(reveal_invocation)
+        .await?;
     let claim = active_agent
         .execution()
-        .test_claim_entity_boundary(before_reveal_denial)
+        .test_claim_entity_boundary(reveal_invocation)
         .await?;
     assert_eq!(claim.start_idx(), entity_start);
     let replay_scope = EntityInvocationScope::new(
@@ -4827,9 +5010,9 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
             entity_start,
         )
         .unwrap(),
-        before_reveal_denial,
+        reveal_invocation,
         reveal_activation,
-        callers::agent_principal(owner_id.agent_id.clone()),
+        callers::agent_principal(owner_id.agent_id, agent_id.agent_type.clone()),
         InvocationExecutionMode::ReplayingIncomplete,
         InvocationId(uuid::Uuid::from_u128(17)),
         false,
@@ -4951,7 +5134,7 @@ async fn entity_agent_config_uses_owner_component_declarations(
         .await?;
     assert_ne!(owner_component.id, entity_component.id);
     assert_ne!(owner_component.revision, entity_component.revision);
-    let agent_id = agent_id!("LocalConfigAgent", "entity-owner-config");
+    let agent_id = agent_key!("LocalConfigAgent", "entity-owner-config");
     let worker_id = executor
         .start_agent(&owner_component.id, agent_id.clone())
         .await?;
@@ -4966,7 +5149,7 @@ async fn entity_agent_config_uses_owner_component_declarations(
         )
         .await?;
 
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner_id = worker_id.clone();
     let active_agent = executor
         .active_agent(&owner_id)
         .await

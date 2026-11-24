@@ -24,6 +24,8 @@ tags:
 - name: EnvironmentToolGrants
 - name: EnvironmentToolMiddlewareGrants
 - name: HealthCheck
+- name: Invocation
+  description: API working on the invocations of agents
 - name: Login
   description: The login endpoints are implementing an OAuth2 flow.
 - name: McpDeployment
@@ -12622,17 +12624,19 @@ components:
             - Any
           value:
             $ref: '#/components/schemas/Empty'
-    AgentId:
+    AgentIdBinding:
       type: object
-      title: AgentId
+      title: AgentIdBinding
       required:
-      - componentId
-      - agentId
+      - type
+      - name
       properties:
-        componentId:
+        type:
           type: string
-          format: uuid
-        agentId:
+          enum:
+          - Path
+          - Query
+        name:
           type: string
     AgentMethodSchema:
       type: object
@@ -13857,7 +13861,8 @@ components:
           type: string
           format: uuid
         agentId:
-          $ref: '#/components/schemas/AgentId'
+          type: string
+          format: uuid
         invocationKey:
           type: string
           format: uuid
@@ -14162,6 +14167,8 @@ components:
       properties:
         componentName:
           type: string
+        packageMetadata:
+          $ref: '#/components/schemas/ComponentPackageMetadata'
         configSchema:
           default:
             schema:
@@ -14281,6 +14288,8 @@ components:
         wasmHash:
           type: string
           format: hash
+        packageMetadata:
+          $ref: '#/components/schemas/ComponentPackageMetadata'
     ComponentMetadataDto:
       type: object
       title: ComponentMetadataDto
@@ -14345,6 +14354,21 @@ components:
           default: {}
           additionalProperties:
             $ref: '#/components/schemas/ToolMiddlewareDeploymentMetadata'
+    ComponentPackageMetadata:
+      type: object
+      title: ComponentPackageMetadata
+      description: Package origin supplied by the client. Only the Wasm layer digest is verified by Golem.
+      required:
+      - source
+      - packageDigest
+      - layerDigest
+      properties:
+        source:
+          type: string
+        packageDigest:
+          type: string
+        layerDigest:
+          type: string
     ComponentProvisionConfig:
       type: object
       title: ComponentProvisionConfig
@@ -14425,6 +14449,11 @@ components:
         currentRevision:
           type: integer
           format: uint64
+        packageMetadata:
+          description: Only valid with a Wasm upload. A new Wasm upload without this field clears the origin.
+          allOf:
+          - $ref: '#/components/schemas/ComponentPackageMetadata'
+          - description: Only valid with a Wasm upload. A new Wasm upload without this field clears the origin.
         configSchema:
           $ref: '#/components/schemas/ComponentConfigSchema'
         componentProvisionConfig:
@@ -16276,7 +16305,9 @@ components:
             enum:
             - char
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
       - type: object
         required:
         - kind
@@ -17128,8 +17159,12 @@ components:
           $ref: '#/components/schemas/AgentHttpAuthDetails'
         phantomAgent:
           type: boolean
-        phantomIdBinding:
-          $ref: '#/components/schemas/PhantomIdBinding'
+        agentIdBinding:
+          $ref: '#/components/schemas/AgentIdBinding'
+        createRoute:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentPathSegment'
         corsOptions:
           $ref: '#/components/schemas/CorsOptions'
         webhookSuffix:
@@ -17251,6 +17286,7 @@ components:
       - pluginRegistrationId
       - pluginName
       - pluginVersion
+      - installedBy
       properties:
         environmentPluginGrantId:
           type: string
@@ -17278,6 +17314,12 @@ components:
         oplogProcessorComponentRevision:
           type: integer
           format: uint64
+        installedBy:
+          type: string
+          format: uuid
+          description: |-
+            The account that installed the plugin. An oplog processor processes each batch with
+            this account as its original caller.
     KnownExports:
       type: object
       title: KnownExports
@@ -18682,23 +18724,6 @@ components:
           type: string
         data:
           $ref: '#/components/schemas/PermissionShareData'
-    PhantomIdBinding:
-      type: object
-      title: PhantomIdBinding
-      required:
-      - type
-      - name
-      - optional
-      properties:
-        type:
-          type: string
-          enum:
-          - Path
-          - Query
-        name:
-          type: string
-        optional:
-          type: boolean
     Plan:
       type: object
       title: Plan
@@ -19433,7 +19458,9 @@ components:
             enum:
             - delimited
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
       - type: object
         required:
         - kind
@@ -19444,7 +19471,9 @@ components:
             enum:
             - either
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
     ResourceCapacityLimit:
       type: object
       title: ResourceCapacityLimit
@@ -20652,7 +20681,9 @@ components:
             enum:
             - char
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
       - type: object
         required:
         - kind

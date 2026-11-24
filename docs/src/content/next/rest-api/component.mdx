@@ -156,7 +156,8 @@ Path|Method|Protected
               "pluginName": "string",
               "pluginVersion": "string",
               "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
-              "oplogProcessorComponentRevision": 0
+              "oplogProcessorComponentRevision": 0,
+              "installedBy": "e6707e42-ac61-4f2a-9dde-594242608890"
             }
           ],
           "files": [
@@ -196,7 +197,12 @@ Path|Method|Protected
         "toolMiddlewares": {}
       },
       "createdAt": "2019-08-24T14:15:22Z",
-      "wasmHash": "string"
+      "wasmHash": "string",
+      "packageMetadata": {
+        "source": "string",
+        "packageDigest": "string",
+        "layerDigest": "string"
+      }
     }
   ]
 }
@@ -218,6 +224,11 @@ The request body is encoded as multipart/form-data containing metadata and the W
 ```json copy
 {
   "componentName": "string",
+  "packageMetadata": {
+    "source": "string",
+    "packageDigest": "string",
+    "layerDigest": "string"
+  },
   "configSchema": {
     "schema": {
       "root": {
@@ -407,7 +418,8 @@ The request body is encoded as multipart/form-data containing metadata and the W
           "pluginName": "string",
           "pluginVersion": "string",
           "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
-          "oplogProcessorComponentRevision": 0
+          "oplogProcessorComponentRevision": 0,
+          "installedBy": "e6707e42-ac61-4f2a-9dde-594242608890"
         }
       ],
       "files": [
@@ -447,7 +459,12 @@ The request body is encoded as multipart/form-data containing metadata and the W
     "toolMiddlewares": {}
   },
   "createdAt": "2019-08-24T14:15:22Z",
-  "wasmHash": "string"
+  "wasmHash": "string",
+  "packageMetadata": {
+    "source": "string",
+    "packageDigest": "string",
+    "layerDigest": "string"
+  }
 }
 ```
 
@@ -607,7 +624,8 @@ Path|Method|Protected
           "pluginName": "string",
           "pluginVersion": "string",
           "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
-          "oplogProcessorComponentRevision": 0
+          "oplogProcessorComponentRevision": 0,
+          "installedBy": "e6707e42-ac61-4f2a-9dde-594242608890"
         }
       ],
       "files": [
@@ -647,7 +665,12 @@ Path|Method|Protected
     "toolMiddlewares": {}
   },
   "createdAt": "2019-08-24T14:15:22Z",
-  "wasmHash": "string"
+  "wasmHash": "string",
+  "packageMetadata": {
+    "source": "string",
+    "packageDigest": "string",
+    "layerDigest": "string"
+  }
 }
 ```
 
@@ -807,7 +830,8 @@ Path|Method|Protected
               "pluginName": "string",
               "pluginVersion": "string",
               "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
-              "oplogProcessorComponentRevision": 0
+              "oplogProcessorComponentRevision": 0,
+              "installedBy": "e6707e42-ac61-4f2a-9dde-594242608890"
             }
           ],
           "files": [
@@ -847,7 +871,12 @@ Path|Method|Protected
         "toolMiddlewares": {}
       },
       "createdAt": "2019-08-24T14:15:22Z",
-      "wasmHash": "string"
+      "wasmHash": "string",
+      "packageMetadata": {
+        "source": "string",
+        "packageDigest": "string",
+        "layerDigest": "string"
+      }
     }
   ]
 }
@@ -1009,7 +1038,8 @@ Path|Method|Protected
           "pluginName": "string",
           "pluginVersion": "string",
           "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
-          "oplogProcessorComponentRevision": 0
+          "oplogProcessorComponentRevision": 0,
+          "installedBy": "e6707e42-ac61-4f2a-9dde-594242608890"
         }
       ],
       "files": [
@@ -1049,7 +1079,12 @@ Path|Method|Protected
     "toolMiddlewares": {}
   },
   "createdAt": "2019-08-24T14:15:22Z",
-  "wasmHash": "string"
+  "wasmHash": "string",
+  "packageMetadata": {
+    "source": "string",
+    "packageDigest": "string",
+    "layerDigest": "string"
+  }
 }
 ```
 
@@ -1209,7 +1244,8 @@ Path|Method|Protected
           "pluginName": "string",
           "pluginVersion": "string",
           "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
-          "oplogProcessorComponentRevision": 0
+          "oplogProcessorComponentRevision": 0,
+          "installedBy": "e6707e42-ac61-4f2a-9dde-594242608890"
         }
       ],
       "files": [
@@ -1249,7 +1285,12 @@ Path|Method|Protected
     "toolMiddlewares": {}
   },
   "createdAt": "2019-08-24T14:15:22Z",
-  "wasmHash": "string"
+  "wasmHash": "string",
+  "packageMetadata": {
+    "source": "string",
+    "packageDigest": "string",
+    "layerDigest": "string"
+  }
 }
 ```
 
@@ -1281,6 +1322,11 @@ The request body is encoded as multipart/form-data containing metadata and the W
 ```json copy
 {
   "currentRevision": 0,
+  "packageMetadata": {
+    "source": "string",
+    "packageDigest": "string",
+    "layerDigest": "string"
+  },
   "configSchema": {
     "schema": {
       "defs": [
@@ -1815,11 +1861,19 @@ The request body is encoded as multipart/form-data containing metadata and the W
           "required": true
         },
         "phantomAgent": true,
-        "phantomIdBinding": {
+        "agentIdBinding": {
           "type": "Path",
-          "name": "string",
-          "optional": true
+          "name": "string"
         },
+        "createRoute": [
+          {
+            "type": "Segment",
+            "value": {
+              "type": "Literal",
+              "value": "string"
+            }
+          }
+        ],
         "corsOptions": {
           "allowedPatterns": [
             "string"
@@ -3914,7 +3968,8 @@ The request body is encoded as multipart/form-data containing metadata and the W
           "pluginName": "string",
           "pluginVersion": "string",
           "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
-          "oplogProcessorComponentRevision": 0
+          "oplogProcessorComponentRevision": 0,
+          "installedBy": "e6707e42-ac61-4f2a-9dde-594242608890"
         }
       ],
       "files": [
@@ -3954,7 +4009,12 @@ The request body is encoded as multipart/form-data containing metadata and the W
     "toolMiddlewares": {}
   },
   "createdAt": "2019-08-24T14:15:22Z",
-  "wasmHash": "string"
+  "wasmHash": "string",
+  "packageMetadata": {
+    "source": "string",
+    "packageDigest": "string",
+    "layerDigest": "string"
+  }
 }
 ```
 
@@ -4114,7 +4174,8 @@ Path|Method|Protected
           "pluginName": "string",
           "pluginVersion": "string",
           "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
-          "oplogProcessorComponentRevision": 0
+          "oplogProcessorComponentRevision": 0,
+          "installedBy": "e6707e42-ac61-4f2a-9dde-594242608890"
         }
       ],
       "files": [
@@ -4154,7 +4215,12 @@ Path|Method|Protected
     "toolMiddlewares": {}
   },
   "createdAt": "2019-08-24T14:15:22Z",
-  "wasmHash": "string"
+  "wasmHash": "string",
+  "packageMetadata": {
+    "source": "string",
+    "packageDigest": "string",
+    "layerDigest": "string"
+  }
 }
 ```
 

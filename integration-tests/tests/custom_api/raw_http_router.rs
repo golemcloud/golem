@@ -1,9 +1,12 @@
+use super::{assert_invocation_receipt, assert_no_invocation_receipt};
 use crate::custom_api::http_test_context::{HttpTestContext, make_test_context};
 use golem_common::base_model::agent::{AgentMode, AgentTypeName};
 use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
+use golem_common::model::agent::OwnedAgentId;
 use golem_common::model::{AgentFilter, FilterComparator};
 use golem_test_framework::config::EnvBasedTestDependencies;
 use reqwest::{Body, Method, StatusCode};
+use std::error::Error as _;
 use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep, timeout};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -111,6 +114,11 @@ async fn mounted_files_and_raw_responses_apply_cache_privacy(
                 .send()
                 .await?;
             assert_eq!(response.status(), StatusCode::OK, "{path}");
+            if path == "/raw/static/asset.txt" {
+                assert_no_invocation_receipt(&response);
+            } else {
+                assert_invocation_receipt(&context, &response).await?;
+            }
             let expected = if authenticated {
                 Some(if anonymous_policy == Some("no-store") {
                     "private, no-store"
@@ -156,6 +164,51 @@ async fn mounted_files_and_raw_responses_apply_cache_privacy(
             assert_eq!(denied.headers()["cache-control"], "no-cache");
         }
     }
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+async fn raw_invocation_receipts_preserve_keys_without_deduplication(
+    #[dimension(db)] raw_router_context: &HttpTestContext,
+) -> anyhow::Result<()> {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    let count = Arc::new(AtomicUsize::new(0));
+    let observed = count.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let counter_url = format!("http://{}/", listener.local_addr()?);
+    let app = axum::Router::new().route(
+        "/",
+        axum::routing::post(move || {
+            let observed = observed.clone();
+            async move { (observed.fetch_add(1, Ordering::SeqCst) + 1).to_string() }
+        }),
+    );
+    let mut servers = tokio::task::JoinSet::new();
+    servers.spawn(async move { axum::serve(listener, app).await });
+    let mut ids = Vec::new();
+    for expected in ["1", "2"] {
+        let response = raw_router_context
+            .client
+            .post(raw_router_context.base_url.join("/raw/count-effect")?)
+            .header("Idempotency-Key", "Same/Case-Sensitive:Key")
+            .header("x-counter-url", &counter_url)
+            .send()
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()["x-echo-idempotency-key"],
+            "Same/Case-Sensitive:Key"
+        );
+        ids.push(assert_invocation_receipt(raw_router_context, &response).await?);
+        assert_eq!(response.text().await?, expected);
+    }
+    assert_ne!(ids[0].id(), ids[1].id());
+    assert_eq!(count.load(Ordering::SeqCst), 2);
     Ok(())
 }
 
@@ -271,6 +324,13 @@ async fn raw_router_http_body_rules(
         (Method::GET, "/raw/empty", 200, b"".as_slice(), None),
         (
             Method::GET,
+            "/raw/400",
+            400,
+            b"guest-error".as_slice(),
+            None,
+        ),
+        (
+            Method::GET,
             "/raw/known-one",
             200,
             b"K".as_slice(),
@@ -288,6 +348,7 @@ async fn raw_router_http_body_rules(
             .send()
             .await?;
         assert_eq!(response.status().as_u16(), status, "{path}");
+        assert_invocation_receipt(raw_router_context, &response).await?;
         assert_eq!(
             response
                 .headers()
@@ -313,6 +374,7 @@ async fn raw_router_rejects_invalid_response_head(
             .send()
             .await?;
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY, "{path}");
+        assert_invocation_receipt(raw_router_context, &response).await?;
     }
     Ok(())
 }
@@ -327,12 +389,34 @@ async fn raw_router_reports_response_body_failures(
             .client
             .get(raw_router_context.base_url.join(path)?)
             .send()
-            .await?;
-        assert_eq!(response.status(), StatusCode::OK, "{path}");
-        assert!(
-            response.bytes().await.is_err(),
-            "{path} body unexpectedly succeeded"
-        );
+            .await;
+        match response {
+            Ok(response) => {
+                assert_eq!(response.status(), StatusCode::OK, "{path}");
+                assert!(
+                    response.bytes().await.is_err(),
+                    "{path} body unexpectedly succeeded"
+                );
+            }
+            Err(error) => {
+                // An immediate body error can abort before Hyper flushes the head.
+                let mut source = error.source();
+                let mut incomplete_message = false;
+                while let Some(cause) = source {
+                    if let Some(cause) = cause.downcast_ref::<hyper::Error>() {
+                        incomplete_message |= cause.is_incomplete_message();
+                    }
+                    source = cause.source();
+                }
+                assert!(
+                    error.is_request()
+                        && !error.is_connect()
+                        && !error.is_timeout()
+                        && incomplete_message,
+                    "{path}: unexpected send failure: {error:?}"
+                );
+            }
+        }
     }
 
     let (release_failure, wait_for_response) = tokio::sync::oneshot::channel::<()>();
@@ -547,7 +631,8 @@ async fn raw_router_disconnect_stops_private_execution(
         let (_, before) = raw_router_context
             .user
             .get_workers_metadata(
-                &raw_router_context.component_id,
+                &raw_router_context.env_id,
+                &AgentTypeName("RawHttpRouter".to_string()),
                 Some(AgentFilter::new_mode(
                     FilterComparator::Equal,
                     AgentMode::Ephemeral,
@@ -568,7 +653,8 @@ async fn raw_router_disconnect_stops_private_execution(
                 let (_, agents) = raw_router_context
                     .user
                     .get_workers_metadata(
-                        &raw_router_context.component_id,
+                        &raw_router_context.env_id,
+                        &AgentTypeName("RawHttpRouter".to_string()),
                         Some(AgentFilter::new_mode(
                             FilterComparator::Equal,
                             AgentMode::Ephemeral,
@@ -580,17 +666,22 @@ async fn raw_router_disconnect_stops_private_execution(
                     .await?;
                 for agent_id in agents
                     .into_iter()
-                    .map(|agent| agent.agent_id)
-                    .filter(|agent_id| !before.iter().any(|old| old.agent_id == *agent_id))
+                    .map(|agent| OwnedAgentId::new(raw_router_context.env_id, &agent.agent_id))
+                    .filter(|agent_id| !before.iter().any(|old| old.agent_id == agent_id.agent_id))
                 {
                     // The invocation starts in the initial page. Reading the entire history
                     // can chase the unbounded output producer without ever reaching its tail.
                     let oplog = worker_client
                         .get_oplog(
-                            &agent_id.component_id.0,
-                            &agent_id.agent_id,
+                            &agent_id.environment_id.0,
+                            &agent_id.agent_id.0,
                             Some(OplogIndex::INITIAL.as_u64()),
                             100,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
                             None,
                             None,
                         )
@@ -654,7 +745,8 @@ async fn raw_router_h2_reset_stops_private_execution(
     let (_, before) = raw_router_context
         .user
         .get_workers_metadata(
-            &raw_router_context.component_id,
+            &raw_router_context.env_id,
+            &AgentTypeName("RawHttpRouter".to_string()),
             Some(AgentFilter::new_mode(
                 FilterComparator::Equal,
                 AgentMode::Ephemeral,
@@ -683,7 +775,8 @@ async fn raw_router_h2_reset_stops_private_execution(
             let (_, agents) = raw_router_context
                 .user
                 .get_workers_metadata(
-                    &raw_router_context.component_id,
+                    &raw_router_context.env_id,
+                    &AgentTypeName("RawHttpRouter".to_string()),
                     Some(AgentFilter::new_mode(
                         FilterComparator::Equal,
                         AgentMode::Ephemeral,
@@ -697,6 +790,7 @@ async fn raw_router_h2_reset_stops_private_execution(
                 .into_iter()
                 .map(|agent| agent.agent_id)
                 .find(|agent_id| !before.iter().any(|old| old.agent_id == *agent_id))
+                .map(|agent_id| OwnedAgentId::new(raw_router_context.env_id, &agent_id))
             {
                 // The response head proves this isolated request's method has started.
                 // Do not chase a growing output oplog before sending the reset.
@@ -719,10 +813,7 @@ async fn raw_router_h2_reset_stops_private_execution(
     Ok(())
 }
 
-async fn wait_for_stopped(
-    context: &HttpTestContext,
-    agent: &golem_common::model::AgentId,
-) -> anyhow::Result<()> {
+async fn wait_for_stopped(context: &HttpTestContext, agent: &OwnedAgentId) -> anyhow::Result<()> {
     use golem_client::api::WorkerClient;
     use golem_common::model::AgentStatus;
     use golem_common::model::oplog::{
@@ -743,10 +834,15 @@ async fn wait_for_stopped(
         // Fetching all output can chase the producer or spend the deadline on stream payloads.
         let page = client
             .get_oplog(
-                &agent.component_id.0,
-                &agent.agent_id,
+                &agent.environment_id.0,
+                &agent.agent_id.0,
                 Some(OplogIndex::INITIAL.as_u64()),
                 100,
+                None,
+                None,
+                None,
+                None,
+                None,
                 None,
                 None,
             )
@@ -800,7 +896,8 @@ async fn raw_router_cors_preflight_does_not_invoke(
         raw_router_context
             .user
             .get_workers_metadata(
-                &raw_router_context.component_id,
+                &raw_router_context.env_id,
+                &AgentTypeName("RawHttpRouter".to_string()),
                 Some(AgentFilter::new_mode(
                     FilterComparator::Equal,
                     AgentMode::Ephemeral,
@@ -824,6 +921,7 @@ async fn raw_router_cors_preflight_does_not_invoke(
         .send()
         .await?;
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_no_invocation_receipt(&response);
     assert_eq!(
         response.headers()["access-control-allow-origin"],
         "https://allowed.test"
@@ -971,6 +1069,7 @@ async fn immutable_router_files_from_registry_blob_storage(
             "https://allowed.test"
         );
         assert!(!response.headers().contains_key("x-echo-path"));
+        assert_no_invocation_receipt(&response);
         if status != 403 {
             assert_eq!(response.headers()["etag"], etag);
             assert_eq!(response.headers()["cache-control"], "no-cache");
@@ -984,7 +1083,8 @@ async fn immutable_router_files_from_registry_blob_storage(
     let (_, agents) = context
         .user
         .get_workers_metadata(
-            &context.component_id,
+            &context.env_id,
+            &AgentTypeName("StaticHttpRouter".to_string()),
             None,
             ScanCursor::default(),
             100,
@@ -998,6 +1098,8 @@ async fn immutable_router_files_from_registry_blob_storage(
     for (method, path) in [
         (Method::GET, "/raw/static/private.txt"),
         (Method::GET, "/raw/static/missing.txt"),
+        (Method::HEAD, "/raw/static/private.txt"),
+        (Method::HEAD, "/raw/static/missing.txt"),
         (Method::POST, "/raw/static/asset.txt"),
     ] {
         let response = context
@@ -1008,6 +1110,7 @@ async fn immutable_router_files_from_registry_blob_storage(
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()["x-echo-path"], path);
         assert!(!response.headers().contains_key("etag"));
+        assert_invocation_receipt(&context, &response).await?;
         assert!(response.bytes().await?.is_empty());
     }
     Ok(())

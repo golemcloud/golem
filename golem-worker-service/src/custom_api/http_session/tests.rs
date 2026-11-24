@@ -2,7 +2,6 @@ use super::*;
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use golem_api_grpc::proto::golem::common::EnvironmentId;
-use golem_api_grpc::proto::golem::component::ComponentId;
 use golem_api_grpc::proto::golem::worker::{
     AgentId as ProtoAgentId, DurableStreamHandle, DurableStreamMapping, IdempotencyKey,
     InputStreamAck, InputStreamHighWater, InvocationAccepted, InvocationFailure,
@@ -15,7 +14,7 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_session_completion, invocation_session_result,
 };
 use golem_common::model::durable_stream::{StreamError, StreamTerminal};
-use golem_common::model::{AgentId, InvocationId};
+use golem_common::model::{AgentId, InvocationId, OwnedAgentId};
 use golem_schema::proto::golem::common::{Empty, Uuid};
 use golem_schema::proto::golem::schema::{
     ListValue, SchemaValue, SchemaValueStreamReference, schema_value,
@@ -44,11 +43,12 @@ enum Call {
 struct ScriptTransport {
     calls: mpsc::UnboundedSender<Call>,
     responses: Mutex<VecDeque<Result<InvocationResponseStream, WorkerServiceError>>>,
-    cleanups: mpsc::UnboundedSender<(AgentId, InvocationId)>,
+    cleanups: mpsc::UnboundedSender<(OwnedAgentId, InvocationId)>,
     cleanup_gate: Arc<Semaphore>,
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SessionTransport for ScriptTransport {
     async fn start(
         &self,
@@ -78,7 +78,7 @@ impl SessionTransport for ScriptTransport {
             .unwrap_or_else(|| Err(WorkerServiceError::Internal("missing resume script".into())))
     }
 
-    async fn cleanup(&self, agent: AgentId, key: InvocationId) -> CleanupOutcome {
+    async fn cleanup(&self, agent: OwnedAgentId, key: InvocationId) -> CleanupOutcome {
         let _ = self.cleanups.send((agent, key));
         let _ = self.cleanup_gate.acquire().await;
         CleanupOutcome::FinishedUnconfirmed
@@ -88,7 +88,7 @@ impl SessionTransport for ScriptTransport {
 pub(in crate::custom_api) struct Harness {
     transport: Arc<ScriptTransport>,
     calls: mpsc::UnboundedReceiver<Call>,
-    cleanups: mpsc::UnboundedReceiver<(AgentId, InvocationId)>,
+    cleanups: mpsc::UnboundedReceiver<(OwnedAgentId, InvocationId)>,
     pub(in crate::custom_api) response_txs: Vec<ResponseSender>,
 }
 
@@ -182,12 +182,18 @@ fn uuid(n: u64) -> Uuid {
 }
 
 fn proto_agent() -> ProtoAgentId {
-    ProtoAgentId {
-        component_id: Some(ComponentId {
-            value: Some(uuid(20)),
-        }),
-        name: "actor".into(),
-    }
+    AgentId::from_parts(7, 20).into()
+}
+
+/// The agent of the session in its environment, which the accepted response names.
+fn owned_agent() -> OwnedAgentId {
+    OwnedAgentId::new(
+        golem_common::model::environment::EnvironmentId::try_from(EnvironmentId {
+            value: Some(uuid(3)),
+        })
+        .unwrap(),
+        &AgentId::try_from(proto_agent()).unwrap(),
+    )
 }
 
 fn key() -> Uuid {
@@ -204,7 +210,14 @@ fn stream_value(id: u64) -> SchemaValue {
 
 fn start() -> InvocationStart {
     InvocationStart {
-        agent_id: Some(proto_agent()),
+        target: Some(golem_api_grpc::proto::golem::worker::AgentTarget {
+            target: Some(
+                golem_api_grpc::proto::golem::worker::agent_target::Target::Id(proto_agent()),
+            ),
+        }),
+        environment_id: Some(EnvironmentId {
+            value: Some(uuid(3)),
+        }),
         method_name: Some("run".into()),
         input: Some(stream_value(INPUT_STREAM_ID)),
         idempotency_key: Some(IdempotencyKey {
@@ -340,6 +353,7 @@ pub(in crate::custom_api) fn accepted(epoch: u64, high_water: Option<u64>) -> In
             command_path: vec![],
             joined_origin_observer: false,
             terminal_cursor_stream_ids: vec![],
+            captured_method_input: None,
         },
     ))
 }
@@ -509,6 +523,67 @@ fn event_bytes(event: HttpSessionEvent) -> Option<Vec<u8>> {
             })
             .collect(),
     )
+}
+
+#[test]
+#[test_timeout("10s")]
+async fn closed_request_channel_preserves_pending_response_completion() {
+    let mut h = harness(1);
+    let mut session = h.start_session();
+    let Call::Start(_, tail) = call(&mut h.calls).await else {
+        panic!()
+    };
+    send(&h.response_txs[0], accepted(1, None)).await;
+    assert!(matches!(
+        event(&mut session).await,
+        HttpSessionEvent::Accepted(_)
+    ));
+    drop(tail);
+    session
+        .input
+        .send_chunk(b"late input".to_vec())
+        .await
+        .unwrap();
+    // The executor can stop consuming input before its response is delivered.
+    assert!(
+        timeout(Duration::from_millis(30), h.calls.recv())
+            .await
+            .is_err()
+    );
+    send(
+        &h.response_txs[0],
+        response(invocation_response::Response::StreamEnd(StreamEnd {
+            transport_stream_id: INPUT_STREAM_ID,
+            producer_sequence: 0,
+            direction: StreamDirection::Input as i32,
+            authored_by: StreamTerminalAuthor::Guest as i32,
+            outcome: Some(
+                StreamTerminal::ConsumerCancelled { details: None }
+                    .try_into()
+                    .unwrap(),
+            ),
+            durable_stream_id: Some(uuid(101)),
+            durable_offset: offset(0),
+            epoch: 1,
+        })),
+    )
+    .await;
+    send(&h.response_txs[0], scalar_result()).await;
+    send(&h.response_txs[0], finished()).await;
+    assert!(matches!(
+        event(&mut session).await,
+        HttpSessionEvent::StreamEnd(_)
+    ));
+    assert!(matches!(
+        event(&mut session).await,
+        HttpSessionEvent::Result(_)
+    ));
+    let completion = event(&mut session).await;
+    assert!(
+        matches!(completion, HttpSessionEvent::Finished(_)),
+        "{completion:?}"
+    );
+    assert!(h.calls.try_recv().is_err());
 }
 
 #[test]
@@ -861,7 +936,7 @@ async fn cancellation_while_awaiting_acceptance_cleans_prepared_identity() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(agent, AgentId::try_from(proto_agent()).unwrap());
+    assert_eq!(agent, owned_agent());
     assert_eq!(key, InvocationId::from(self::key()));
 }
 
@@ -1026,7 +1101,7 @@ async fn rejected_start_cleans_up_its_prepared_unkeyed_identity_exactly_once() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(agent, AgentId::try_from(proto_agent()).unwrap());
+    assert_eq!(agent, owned_agent());
     assert_eq!(key, InvocationId(uuid));
     assert!(
         timeout(Duration::from_millis(50), h.cleanups.recv())
@@ -2272,6 +2347,7 @@ fn unread_request_body_bounds_only_the_wait_for_acceptance() {
                     IDLE,
                     has_request_body,
                     crate::custom_api::http_envelope::HttpVersion::Http1,
+                    &mut None,
                 )
                 .await
                 .map(|_| ())
@@ -2404,6 +2480,7 @@ fn guest_input_disposal_stops_the_upload_without_a_late_idle_failure() {
                     Duration::from_secs(1),
                     true,
                     version,
+                    &mut None,
                 )
                 .await
                 .unwrap();
@@ -2499,6 +2576,7 @@ async fn disconnect_cancels_the_session_after_the_upload_stops() {
                         idle,
                         true,
                         version,
+                        &mut None,
                     )
                     .await;
                     let _ = head_tx.send(head.map(|_| ()));

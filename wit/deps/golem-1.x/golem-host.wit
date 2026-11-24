@@ -63,8 +63,9 @@ interface host {
         sandboxed,
     }
 
-    /// Describes a filter condition on agent IDs when enumerating agents
-    record agent-name-filter {
+    /// Describes a filter condition on the canonical key of keyed agents when enumerating
+    /// agents. An agent without a key never matches it.
+    record agent-key-filter {
         comparator: string-filter-comparator,
         value: string
     }
@@ -103,7 +104,7 @@ interface host {
 
     /// Describes one filter condition for enumerating agents
     variant agent-property-filter {
-        name(agent-name-filter),
+        key(agent-key-filter),
         status(agent-status-filter),
         version(agent-version-filter),
         created-at(agent-created-at-filter),
@@ -123,8 +124,13 @@ interface host {
 
     /// Metadata about an agent
     record agent-metadata {
-        /// The agent ID, consists of the component ID, agent type and agent parameters
+        /// The agent ID
         agent-id: agent-id,
+        /// The name of the agent's type. Owners without an agent type have none.
+        agent-type-name: option<string>,
+        /// The incarnation of the agent: a deleted and re-created agent keeps its ID but
+        /// gets a new fingerprint
+        fingerprint: uuid,
         /// Command line arguments seen by the agent
         args: list<string>,
         /// Environment variables seen by the agent
@@ -143,11 +149,11 @@ interface host {
 
     /// Creates an agent enumeration
     resource get-agents {
-        /// Creates an agent enumeration request. It is going to enumerate all agents of all the agent types
-        /// defined in `component-id`, filtered by the conditions given by `filter`. If `precise` is true,
+        /// Creates an agent enumeration request. It is going to enumerate the agents of `agent-type-name`
+        /// in the current environment, filtered by the conditions given by `filter`. If `precise` is true,
         /// the server will calculate the most recent state of all the returned agents, otherwise the returned
         /// metadata will be not guaranteed to be up-to-date.
-        constructor(component-id: component-id, filter: option<agent-any-filter>, precise: bool);
+        constructor(agent-type-name: string, filter: option<agent-any-filter>, precise: bool);
 
         /// Retrieves the next batch of agent metadata.
         get-next: func() -> result<option<list<agent-metadata>>, agent-operation-error>;
@@ -169,11 +175,11 @@ interface host {
 
     /// Details about the fork result
     record fork-details {
-        forked-phantom-id: uuid,
+        forked-agent-id: agent-id,
     }
 
     /// Indicates which agent the code is running on after `fork`.
-    /// The parameter contains details about the fork result, such as the phantom-ID of the newly
+    /// The parameter contains details about the fork result, such as the ID of the newly
     /// created agent.
     variant fork-result {
         /// The original agent that called `fork`
@@ -222,8 +228,9 @@ interface host {
     /// Get agent metadata
     get-agent-metadata: func(agent-id: agent-id) -> option<agent-metadata>;
 
-    /// Fork an agent to another agent at a given oplog index
-    fork-agent: func(source-agent-id: agent-id, target-agent-id: agent-id, oplog-idx-cut-off: oplog-index) -> result<_, agent-operation-error>;
+    /// Forks an agent at a given oplog index into a new agent of the same type, and returns
+    /// the ID that Golem issued for the new agent. The new agent has no key.
+    fork-agent: func(source-agent-id: agent-id, oplog-idx-cut-off: oplog-index) -> result<agent-id, agent-operation-error>;
 
     /// Revert an agent to a previous state
     revert-agent: func(agent-id: agent-id, revert-target: revert-agent-target) -> result<_, agent-operation-error>;
@@ -239,16 +246,8 @@ interface host {
     ///     3: "{account_id}/{project_name}/{component_name}"
     resolve-component-id: func(component-reference: string) -> option<component-id>;
 
-    /// Get the agent-id for a given component and agent name.
-    /// Returns none when no component for the specified reference exists.
-    resolve-agent-id: func(component-reference: string, agent-name: string) -> option<agent-id>;
-
-    /// Get the agent-id for a given component and agent-name.
-    /// Returns none when no component for the specified component-reference or no agent with the specified agent-name exists.
-    resolve-agent-id-strict: func(component-reference: string, agent-name: string) -> option<agent-id>;
-
-    /// Forks the current agent at the current execution point. The new agent gets the same base agent ID but
-    /// with a new unique phantom ID. The phantom ID of the forked agent is returned in `fork-result` on
+    /// Forks the current agent at the current execution point. The new agent has the same type, a new
+    /// ID that Golem issues and no key. The ID of the forked agent is returned in `fork-result` on
     /// both sides. The newly created agent continues running from the same point, but the return value is
     /// going to be different in this agent and the forked agent.
     fork: func() -> result<fork-result, agent-operation-error>;
@@ -272,11 +271,15 @@ interface save-snapshot {
 /// Interface providing user-defined snapshotting capability. This can be used to perform manual update of agents
 /// when the new component incompatible with the old one.
 interface load-snapshot {
+    use golem:core/types@2.0.0.{schema-value-tree};
     use host.{snapshot};
 
     /// Tries to load a user-defined snapshot, setting up the agent's state based on it.
     /// The function can return with a failure to indicate that the update is not possible.
-    load: async func(snapshot: snapshot) -> result<_, string>;
+    ///
+    /// `constructor` is a value tree whose root encodes the agent's constructor parameter
+    /// list, in the same form `initialize` received it when the agent was created.
+    load: async func(snapshot: snapshot, %constructor: schema-value-tree) -> result<_, string>;
 }
 
 world golem-host {

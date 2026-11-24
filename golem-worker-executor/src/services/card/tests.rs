@@ -899,6 +899,7 @@ async fn scope_card_admission_negatively_caches_a_registry_missing_root() {
 struct FailingCardService;
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl CardService for FailingCardService {
     async fn record_revoked_cards(&self, _card_ids: &[CardId]) {}
 
@@ -925,6 +926,7 @@ async fn scope_card_admission_propagates_liveness_service_errors() {
 struct OmittingCardService;
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl CardService for OmittingCardService {
     async fn record_revoked_cards(&self, _card_ids: &[CardId]) {}
 
@@ -1026,10 +1028,7 @@ async fn created_runtime_card_is_immediately_cached_as_live() {
     )));
     let provenance = CardManagedByRuntimeDerived {
         environment_id: EnvironmentId::new(),
-        agent_id: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "deriving-agent".to_string(),
-        },
+        agent_id: AgentId::from_parts(7, 1),
         invocation_key: test_invocation_id("derive-test".to_string()),
         oplog_index: OplogIndex::from_u64(42),
     };
@@ -1070,10 +1069,7 @@ async fn stale_missing_lookup_cannot_revoke_concurrently_created_runtime_card() 
             card,
             CardManagedByRuntimeDerived {
                 environment_id: EnvironmentId::new(),
-                agent_id: AgentId {
-                    component_id: ComponentId::new(),
-                    agent_id: "deriving-agent".to_string(),
-                },
+                agent_id: AgentId::from_parts(7, 2),
                 invocation_key: test_invocation_id("concurrent-derive".to_string()),
                 oplog_index: OplogIndex::from_u64(42),
             },
@@ -1100,10 +1096,7 @@ async fn revocation_after_runtime_creation_commit_wins_over_delayed_response() {
     })));
     let provenance = CardManagedByRuntimeDerived {
         environment_id: EnvironmentId::new(),
-        agent_id: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "deriving-agent".to_string(),
-        },
+        agent_id: AgentId::from_parts(7, 3),
         invocation_key: test_invocation_id("delayed-create-response".to_string()),
         oplog_index: OplogIndex::from_u64(42),
     };
@@ -1138,10 +1131,7 @@ async fn successful_runtime_creation_supersedes_cached_missing_state() {
             card,
             CardManagedByRuntimeDerived {
                 environment_id: EnvironmentId::new(),
-                agent_id: AgentId {
-                    component_id: ComponentId::new(),
-                    agent_id: "deriving-agent".to_string(),
-                },
+                agent_id: AgentId::from_parts(7, 4),
                 invocation_key: test_invocation_id("post-lookup-derive".to_string()),
                 oplog_index: OplogIndex::from_u64(42),
             },

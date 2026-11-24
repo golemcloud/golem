@@ -31,20 +31,21 @@ use super::error::RequestHandlerError;
 use super::model::ResponseBody;
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ParsedRequestBody, RouteExecutionResult};
-use crate::service::worker::WorkerService;
+use crate::service::worker::{AcceptedInvocation, AgentBinding, WorkerService, WorkerServiceError};
 use anyhow::anyhow;
 use golem_common::model::OplogIndex;
 use golem_common::model::Timestamp;
-use golem_common::model::agent::{AgentMode, AgentTarget, ParsedAgentKey, ReadOnlyConfig};
-use golem_common::model::caller::{Caller, Claims, Pair, Principal, UserPrincipal};
-use golem_common::model::{AgentFingerprint, AgentId};
+use golem_common::model::agent::{InvocationFreshnessDisposition, ParsedAgentKey, ReadOnlyConfig};
+use golem_common::model::caller::{Caller, Principal, UserPrincipal};
+use golem_common::model::caller::{Claims, Pair};
+use golem_common::model::{AgentFingerprint, AgentId, InvocationRequestKey, OwnedAgentId};
 use golem_common::schema::unstructured::wrap_unstructured_inline_for_schema;
 use golem_common::schema::validation::validate_value;
 use golem_common::schema::{
     BinaryValuePayload, FieldSource, SchemaType, SchemaValue, TextValuePayload, TypedSchemaValue,
 };
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, ConstructorParameter, MethodParameter, PhantomSelection, RequestBodySchema,
+    AgentSelection, CallAgentBehaviour, ConstructorParameter, MethodParameter, RequestBodySchema,
 };
 use golem_service_base::model::auth::AuthCtx;
 use http::{Method, StatusCode};
@@ -68,21 +69,42 @@ impl CallAgentHandler {
         behaviour: &CallAgentBehaviour,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
         validate_query_parameters(request, behaviour, &[])?;
-        let phantom_id = resolve_phantom_id(
-            request,
-            resolved_route,
-            &behaviour.phantom_selection,
-            |phantom| (phantom && behaviour.agent_mode == AgentMode::Durable).then(Uuid::new_v4),
-        )?;
-
-        let agent_id = Self::build_agent_id(
-            resolved_route,
-            behaviour.component_id,
-            &behaviour.agent_type,
-            &behaviour.constructor_input,
-            &behaviour.constructor_parameters,
-            phantom_id,
-        )?;
+        let binding =
+            route_agent_binding(request, resolved_route, &behaviour.agent_selection, |_| {
+                AgentBinding::Fresh
+            })?;
+        let constructor = if matches!(binding, AgentBinding::Id(_)) {
+            None
+        } else {
+            Some(Self::route_constructor(
+                resolved_route,
+                &behaviour.agent_type,
+                &behaviour.constructor_input,
+                &behaviour.constructor_parameters,
+            )?)
+        };
+        let supplied_key = if behaviour.method_parameters.iter().any(|parameter| {
+            matches!(parameter, MethodParameter::Header { header_name, .. }
+                if header_name.eq_ignore_ascii_case("Idempotency-Key"))
+        }) {
+            None
+        } else {
+            request.idempotency_key()?
+        };
+        let request_key = InvocationRequestKey::external(None, supplied_key.as_ref());
+        let (target, component, freshness_disposition) = self
+            .worker_service
+            .bound_invocation_target(
+                behaviour.component_id,
+                &behaviour.agent_type,
+                constructor.as_ref(),
+                binding,
+                &request_key,
+                &behaviour.method_name,
+                &AuthCtx::System,
+            )
+            .await?;
+        let agent_id = OwnedAgentId::new(resolved_route.route.environment_id, &target.agent_id);
 
         let request_method = request.underlying.method().clone();
 
@@ -93,6 +115,7 @@ impl CallAgentHandler {
         // executor implementation reads cached metadata / persisted oplog
         // state and does **not** wake or load the worker.
         if let Some(read_only) = behaviour.read_only.as_ref()
+            && freshness_disposition == InvocationFreshnessDisposition::MayExist
             && is_cacheable_method(&request_method)
             && supports_http_revalidation(read_only)
             && let Some(not_modified) = self
@@ -113,7 +136,7 @@ impl CallAgentHandler {
             fields: method_params,
         };
 
-        let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
+        let method_input: golem_common::model::agent::AgentMethodInput =
             method_params_value.try_into().map_err(|error| {
                 anyhow!("method parameters cannot cross the worker boundary: {error}")
             })?;
@@ -130,24 +153,45 @@ impl CallAgentHandler {
 
         let agent_response = self
             .worker_service
-            .invoke_agent(
-                &AgentTarget::Current(agent_id.clone()),
+            .dispatch_agent_invocation(
+                &component,
+                &target,
                 Some(behaviour.method_name.clone()),
-                Some(proto_method_parameters),
+                Some(method_input),
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 None,
-                golem_common::model::InvocationRequestKey::external(None, None),
+                request_key,
+                supplied_key,
                 invocation_context,
-                false,
-                golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+                freshness_disposition,
                 Vec::new(),
+                resolved_route.route.environment_id,
+                component.account_id,
                 AuthCtx::System,
                 proto_caller,
-                Some(resolved_route.route.environment_id),
                 None,
                 None,
             )
-            .await?;
+            .await;
+        let agent_response = match agent_response {
+            Ok(output) => {
+                if let (Some(agent_id), Some(invocation_id)) =
+                    (output.agent_id, output.idempotency_key)
+                {
+                    request.accepted_invocation = Some(AcceptedInvocation {
+                        id: golem_common::model::OwnedInvocationId::new(agent_id, invocation_id),
+                        environment_id: resolved_route.route.environment_id,
+                    });
+                }
+                output
+            }
+            Err(error) => {
+                if let WorkerServiceError::AcceptedInvocation { accepted, .. } = &error {
+                    request.accepted_invocation = Some(accepted.clone());
+                }
+                return Err(error.into());
+            }
+        };
 
         debug!("Received agent response: {agent_response:?}");
 
@@ -207,7 +251,7 @@ impl CallAgentHandler {
         &self,
         request: &RichRequest,
         behaviour: &CallAgentBehaviour,
-        agent_id: &AgentId,
+        agent_id: &OwnedAgentId,
         read_only: &ReadOnlyConfig,
     ) -> Result<Option<RouteExecutionResult>, RequestHandlerError> {
         let Some(raw) = request
@@ -267,11 +311,11 @@ impl CallAgentHandler {
     /// the oplog index describe the same agent instance.
     async fn fetch_current_validator(
         &self,
-        agent_id: &AgentId,
+        agent_id: &OwnedAgentId,
     ) -> Result<Option<(AgentFingerprint, OplogIndex)>, RequestHandlerError> {
         match self
             .worker_service
-            .get_metadata(agent_id, AuthCtx::System)
+            .get_metadata(agent_id, None, AuthCtx::System)
             .await
         {
             Ok(metadata) => Ok(Some((metadata.fingerprint, metadata.last_oplog_index))),
@@ -287,14 +331,13 @@ impl CallAgentHandler {
         }
     }
 
-    pub(super) fn build_agent_id(
+    /// The constructor of the agent of a route, from the path segments it binds.
+    pub(super) fn route_constructor(
         resolved_route: &ResolvedRouteEntry,
-        component_id: golem_common::model::component::ComponentId,
         agent_type: &golem_common::model::agent::AgentTypeName,
         constructor_input: &golem_service_base::custom_api::CompiledInputSchema,
         constructor_parameters: &[ConstructorParameter],
-        phantom_id: Option<Uuid>,
-    ) -> Result<AgentId, RequestHandlerError> {
+    ) -> Result<ParsedAgentKey, RequestHandlerError> {
         let mut fields = Vec::with_capacity(constructor_parameters.len());
 
         for param in constructor_parameters {
@@ -312,21 +355,16 @@ impl CallAgentHandler {
             }
         }
 
-        // The agent-id parameters travel as a self-contained `TypedSchemaValue`:
-        // the constructor's compiled `SchemaGraph` paired with the positional
-        // record of the (user-supplied) constructor parameters.
+        // The constructor parameters travel as a self-contained `TypedSchemaValue`: the
+        // constructor's compiled `SchemaGraph` paired with the positional record of the
+        // (user-supplied) constructor parameters.
         let parameters = TypedSchemaValue::new(
             constructor_input.graph.clone(),
             SchemaValue::Record { fields },
         );
 
-        let agent_id = ParsedAgentKey::try_new(agent_type.clone(), parameters, phantom_id)
-            .map_err(|e| RequestHandlerError::AgentResponseTypeMismatch { error: e })?;
-
-        Ok(AgentId {
-            component_id,
-            agent_id: agent_id.to_string(),
-        })
+        ParsedAgentKey::try_new(agent_type.clone(), parameters)
+            .map_err(|e| RequestHandlerError::AgentResponseTypeMismatch { error: e })
     }
 
     pub(super) fn resolve_method_arguments(
@@ -546,7 +584,7 @@ fn is_cacheable_method(method: &Method) -> bool {
 /// applied at the response boundary.
 fn add_read_only_cache_headers(
     headers: &mut http::HeaderMap,
-    agent_id: &AgentId,
+    agent_id: &OwnedAgentId,
     oplog_index: Option<OplogIndex>,
     agent_fingerprint: Option<AgentFingerprint>,
     read_only: &ReadOnlyConfig,
@@ -587,40 +625,41 @@ fn add_read_only_cache_headers(
     }
 }
 
-pub(super) fn resolve_phantom_id(
+/// An ID selector names an existing agent without constructor parameters.
+/// `policy` supplies the binding for fresh selection, including stream sessions.
+pub(super) fn route_agent_binding(
     request: &RichRequest,
     resolved_route: &ResolvedRouteEntry,
-    selection: &PhantomSelection,
-    policy: impl FnOnce(bool) -> Option<Uuid>,
-) -> Result<Option<Uuid>, RequestHandlerError> {
+    selection: &AgentSelection,
+    policy: impl FnOnce(bool) -> AgentBinding,
+) -> Result<AgentBinding, RequestHandlerError> {
     let value = match selection {
-        PhantomSelection::Policy { phantom } => return Ok(policy(*phantom)),
-        PhantomSelection::Original => return Ok(None),
-        PhantomSelection::Path { index } => {
+        AgentSelection::Fresh => return Ok(policy(true)),
+        AgentSelection::Key => return Ok(AgentBinding::Constructor),
+        AgentSelection::Path { index } => {
             resolved_route.captured_path_parameters[usize::from(*index)].as_str()
         }
-        PhantomSelection::Query { name, optional } => {
+        AgentSelection::Query { name } => {
             match request.query_params().get(name).map(Vec::as_slice) {
                 Some([value]) => value.as_str(),
-                None if *optional => return Ok(None),
                 None | Some([]) => {
                     return Err(RequestHandlerError::MissingValue {
-                        expected: "phantom UUID query selector",
+                        expected: "agent ID query selector",
                     });
                 }
                 _ => {
                     return Err(RequestHandlerError::TooManyValues {
-                        expected: "phantom UUID query selector",
+                        expected: "agent ID query selector",
                     });
                 }
             }
         }
     };
     Uuid::parse_str(value)
-        .map(Some)
+        .map(|uuid| AgentBinding::Id(AgentId(uuid)))
         .map_err(|_| RequestHandlerError::ValueParsingFailed {
             value: value.into(),
-            expected: "UUID",
+            expected: "agent ID",
         })
 }
 
@@ -656,6 +695,7 @@ pub(super) fn caller_from_request(request: &RichRequest) -> Result<Caller, Reque
 mod tests {
     use super::*;
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+    use golem_common::model::agent::AgentMode;
     use golem_common::schema::{InputSchema, SchemaGraph, SchemaType};
     use golem_service_base::custom_api::{CompiledInputSchema, PathSegmentType};
     use test_r::test;
@@ -721,6 +761,84 @@ mod tests {
     }
 
     #[test]
+    async fn id_selection_skips_nonempty_constructor_and_dispatches_existing_only() {
+        use golem_common::schema::NamedField;
+        let harness = crate::mcp::InvocationHarness::with_run_method(AgentMode::Durable);
+        let handler = CallAgentHandler::new(harness.worker_service.clone());
+        let agent_id = AgentId::random(harness.type_id);
+        for path_selector in [false, true] {
+            let (pattern, uri, selection) = if path_selector {
+                (
+                    "/agents/{instance}",
+                    format!("/agents/{agent_id}"),
+                    AgentSelection::Path { index: 0.into() },
+                )
+            } else {
+                (
+                    "/agents",
+                    format!("/agents?instance={agent_id}"),
+                    AgentSelection::Query {
+                        name: "instance".into(),
+                    },
+                )
+            };
+            let resolver = test_resolver(vec![test_route(1, pattern, Some("POST"), "typed")]);
+            let request = poem::Request::builder()
+                .method(Method::POST)
+                .uri(uri.parse().unwrap())
+                .header("host", "example.com")
+                .finish();
+            let route = resolver.resolve_matching_route(&request).await.unwrap();
+            let super::super::RichRouteBehaviour::CallAgent(behaviour) = &route.route.behavior
+            else {
+                unreachable!()
+            };
+            let mut behaviour = behaviour.clone();
+            behaviour.component_id = harness.component_id;
+            behaviour.agent_type = harness.agent_type.type_name.clone();
+            behaviour.agent_selection = selection;
+            behaviour.method_parameters.clear();
+            behaviour.constructor_input = CompiledInputSchema {
+                graph: SchemaGraph::anonymous(SchemaType::record_from_fields([(
+                    "tenant",
+                    SchemaType::string(),
+                )])),
+                input_schema: InputSchema::parameters([NamedField::user_supplied(
+                    "tenant",
+                    SchemaType::string(),
+                )]),
+            };
+            assert!(
+                CallAgentHandler::route_constructor(
+                    &route,
+                    &behaviour.agent_type,
+                    &behaviour.constructor_input,
+                    &behaviour.constructor_parameters,
+                )
+                .is_err()
+            );
+            let response = handler
+                .handle_call_agent_behaviour(&mut RichRequest::new(request), &route, &behaviour)
+                .await
+                .unwrap();
+            assert_eq!(response.status, http::StatusCode::NO_CONTENT);
+        }
+        assert!(harness.metadata_reads.lock().unwrap().is_empty());
+        let targets = harness.targets.lock().unwrap();
+        assert_eq!(targets.len(), 2);
+        for target in targets.iter() {
+            assert_eq!(target.agent_id, agent_id);
+            let (target, constructor, _) = target.invoke_fields();
+            assert!(matches!(
+                target.target,
+                Some(golem_api_grpc::proto::golem::worker::agent_target::Target::Id(_))
+            ));
+            assert!(constructor.is_none());
+        }
+        assert!(harness.creates.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
     async fn query_ownership_rejects_unknown_and_malformed_names_without_requiring_arguments() {
         use golem_service_base::custom_api::QueryOrHeaderType;
         let resolver = test_resolver(vec![test_route(1, "/", Some("POST"), "typed")]);
@@ -747,9 +865,8 @@ mod tests {
                 },
             },
         ];
-        behaviour.phantom_selection = PhantomSelection::Query {
+        behaviour.agent_selection = AgentSelection::Query {
             name: "instance".into(),
-            optional: true,
         };
         for (query, valid) in [
             ("", true),
@@ -798,6 +915,231 @@ mod tests {
                     "{error:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    async fn typed_routes_forward_only_header_keys_without_changing_invocation_identity() {
+        use crate::mcp::InvocationHarness;
+        use golem_common::model::{
+            AgentInvocationOutput, AgentInvocationResult, InvocationId, OwnedInvocationId,
+        };
+        use golem_common::schema::{AgentConstructorSchema, AgentMethodSchema, OutputSchema};
+        use golem_service_base::custom_api::{CompiledSchema, RouteBehaviour};
+
+        let actual_agent = AgentId::from_parts(7, 19);
+        let actual_invocation = InvocationId(Uuid::from_u128(91));
+        let harness = InvocationHarness::new(
+            AgentInvocationOutput {
+                result: AgentInvocationResult::AgentInitialization,
+                consumed_fuel: None,
+                invocation_status: None,
+                component_revision: None,
+                agent_id: Some(actual_agent),
+                idempotency_key: Some(actual_invocation),
+                oplog_index: None,
+                agent_fingerprint: None,
+            },
+            AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![]),
+            },
+            vec![AgentMethodSchema {
+                name: "run".into(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![]),
+                output_schema: OutputSchema::Unit,
+                http_endpoint: vec![],
+                read_only: None,
+            }],
+        );
+        let handler = CallAgentHandler::new(harness.worker_service.clone());
+        let mut compiled = test_route(1, "/", Some("POST"), "typed");
+        let RouteBehaviour::CallAgent(behaviour) = &mut compiled.behavior else {
+            unreachable!()
+        };
+        behaviour.component_id = harness.component_id;
+        behaviour.agent_type = harness.agent_type.type_name.clone();
+        behaviour.body = RequestBodySchema::JsonBody {
+            expected: CompiledSchema {
+                graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+            },
+        };
+        let resolver = test_resolver(vec![compiled]);
+
+        for (header, body, accepted) in [
+            (None, "{}", true),
+            (Some(http::HeaderValue::from_static("k1")), "{}", true),
+            (Some(http::HeaderValue::from_static("k1")), "{}", true),
+            (Some(http::HeaderValue::from_static("")), "{}", false),
+            (
+                Some(http::HeaderValue::from_bytes(&[0xff]).unwrap()),
+                "{}",
+                false,
+            ),
+            (None, "{\"idempotencyKey\":\"body-key\"}", false),
+        ] {
+            let mut builder = poem::Request::builder()
+                .method(Method::POST)
+                .uri("/".parse().unwrap())
+                .header("host", "example.com")
+                .header("content-type", "application/json");
+            if let Some(header) = header.clone() {
+                builder = builder.header("Idempotency-Key", header);
+            }
+            let request = builder.body(body.to_string());
+            let route = resolver.resolve_matching_route(&request).await.unwrap();
+            let super::super::RichRouteBehaviour::CallAgent(behaviour) = &route.route.behavior
+            else {
+                unreachable!()
+            };
+            let mut request = RichRequest::new(request);
+            let before = harness.contexts.lock().unwrap().len();
+            let result = handler
+                .handle_call_agent_behaviour(&mut request, &route, behaviour)
+                .await;
+            if accepted {
+                result.unwrap();
+                let receipt = request.accepted_invocation.unwrap();
+                assert_eq!(
+                    receipt.id,
+                    OwnedInvocationId::new(actual_agent, actual_invocation)
+                );
+                let calls = harness.contexts.lock().unwrap();
+                let call = &calls[before];
+                assert_eq!(
+                    call.supplied_key.as_ref().map(|key| key.value.as_str()),
+                    header.as_ref().map(|value| value.to_str().unwrap())
+                );
+                assert!(matches!(call.request_key, InvocationRequestKey::Unkeyed(_)));
+            } else {
+                let error = result.unwrap_err();
+                assert!(request.accepted_invocation.is_none());
+                assert_eq!(harness.contexts.lock().unwrap().len(), before);
+                if header.as_ref().is_some_and(|value| value.is_empty()) {
+                    assert!(
+                        matches!(&error, RequestHandlerError::InvalidParameter { name, .. } if name == "Idempotency-Key")
+                    );
+                    use poem::IntoResponse;
+                    let response =
+                        crate::api::common::ApiEndpointError::from(error).into_response();
+                    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+                    let body: serde_json::Value = response.into_body().into_json().await.unwrap();
+                    assert!(body.to_string().contains("Idempotency-Key"));
+                } else if header.is_some() {
+                    assert!(
+                        matches!(error, RequestHandlerError::HeaderIsNotAscii { header_name } if header_name == "Idempotency-Key")
+                    );
+                } else {
+                    assert!(error.to_string().contains("idempotencyKey"), "{error}");
+                }
+            }
+        }
+        let calls = harness.contexts.lock().unwrap();
+        assert_ne!(calls[1].request_key, calls[2].request_key);
+    }
+
+    #[test]
+    async fn declared_idempotency_key_header_remains_a_business_argument() {
+        use crate::mcp::InvocationHarness;
+        use golem_common::model::{AgentInvocationOutput, AgentInvocationResult};
+        use golem_common::schema::{
+            AgentConstructorSchema, AgentMethodSchema, NamedField, OutputSchema,
+        };
+        use golem_service_base::custom_api::{QueryOrHeaderType, RouteBehaviour};
+
+        let input_schema =
+            InputSchema::parameters([NamedField::user_supplied("orderRef", SchemaType::string())]);
+        let harness = InvocationHarness::new(
+            AgentInvocationOutput {
+                result: AgentInvocationResult::AgentInitialization,
+                consumed_fuel: None,
+                invocation_status: None,
+                component_revision: None,
+                agent_id: None,
+                idempotency_key: None,
+                oplog_index: None,
+                agent_fingerprint: None,
+            },
+            AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![]),
+            },
+            vec![AgentMethodSchema {
+                name: "run".into(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: input_schema.clone(),
+                output_schema: OutputSchema::Unit,
+                http_endpoint: vec![],
+                read_only: None,
+            }],
+        );
+        let handler = CallAgentHandler::new(harness.worker_service.clone());
+        let mut compiled = test_route(1, "/", Some("POST"), "typed");
+        let RouteBehaviour::CallAgent(behaviour) = &mut compiled.behavior else {
+            unreachable!()
+        };
+        behaviour.component_id = harness.component_id;
+        behaviour.agent_type = harness.agent_type.type_name.clone();
+        behaviour.body = RequestBodySchema::Unused;
+        behaviour.method_input = CompiledInputSchema {
+            graph: SchemaGraph::anonymous(SchemaType::record(vec![
+                golem_common::schema::NamedFieldType {
+                    name: "orderRef".into(),
+                    body: SchemaType::string(),
+                    metadata: Default::default(),
+                },
+            ])),
+            input_schema,
+        };
+        behaviour.method_parameters = vec![MethodParameter::Header {
+            header_name: "iDeMpOtEnCy-KeY".into(),
+            parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::Str),
+        }];
+        let resolver = test_resolver(vec![compiled]);
+
+        for (index, value) in ["", "order-1"].into_iter().enumerate() {
+            let request = poem::Request::builder()
+                .method(Method::POST)
+                .uri("/".parse().unwrap())
+                .header("host", "example.com")
+                .header("Idempotency-Key", value)
+                .finish();
+            let route = resolver.resolve_matching_route(&request).await.unwrap();
+            let super::super::RichRouteBehaviour::CallAgent(behaviour) = &route.route.behavior
+            else {
+                unreachable!()
+            };
+            let response = handler
+                .handle_call_agent_behaviour(&mut RichRequest::new(request), &route, behaviour)
+                .await
+                .unwrap();
+            assert_eq!(response.status, StatusCode::NO_CONTENT);
+            let golem_common::model::agent::AgentMethodInput::Native(input) =
+                harness.recorded_method_inputs()[index].clone().unwrap()
+            else {
+                panic!("expected native method input")
+            };
+            assert_eq!(
+                input
+                    .decode(|_, _| Err("unexpected stream".into()))
+                    .unwrap(),
+                SchemaValue::Record {
+                    fields: vec![SchemaValue::String(value.into())],
+                }
+            );
+            let contexts = harness.contexts.lock().unwrap();
+            assert!(contexts[index].supplied_key.is_none());
+            assert!(matches!(
+                contexts[index].request_key,
+                InvocationRequestKey::Unkeyed(_)
+            ));
         }
     }
 
@@ -979,7 +1321,7 @@ mod tests {
     }
 
     #[test]
-    async fn explicit_phantom_selection_validates_decoded_queries_and_capture_ordinals() {
+    async fn explicit_agent_selection_validates_decoded_queries_and_capture_ordinals() {
         let p = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
         let q = "8badf00d-1234-4567-89ab-0123456789ab";
         let resolver = test_resolver(vec![test_route(
@@ -996,21 +1338,20 @@ mod tests {
             .resolve_matching_route(&route_request)
             .await
             .unwrap();
-        let path = PhantomSelection::Path { index: 1.into() };
+        let path = AgentSelection::Path { index: 1.into() };
         assert_eq!(
-            resolve_phantom_id(
+            route_agent_binding(
                 &RichRequest::new(route_request),
                 &resolved,
                 &path,
                 |_| panic!("explicit selection must not use policy")
             )
             .unwrap(),
-            Some(p)
+            AgentBinding::Id(AgentId(p))
         );
-        for optional in [false, true] {
-            let selection = PhantomSelection::Query {
+        {
+            let selection = AgentSelection::Query {
                 name: "instance".into(),
-                optional,
             };
             for query in [
                 format!("instance={p}"),
@@ -1024,11 +1365,11 @@ mod tests {
                         .finish(),
                 );
                 assert_eq!(
-                    resolve_phantom_id(&request, &resolved, &selection, |_| panic!(
+                    route_agent_binding(&request, &resolved, &selection, |_| panic!(
                         "explicit selection must not use policy"
                     ))
                     .unwrap(),
-                    Some(p)
+                    AgentBinding::Id(AgentId(p))
                 );
             }
             for query in [
@@ -1044,7 +1385,7 @@ mod tests {
                         .finish(),
                 );
                 assert!(
-                    resolve_phantom_id(&request, &resolved, &selection, |_| panic!(
+                    route_agent_binding(&request, &resolved, &selection, |_| panic!(
                         "invalid explicit selection must not use policy"
                     ))
                     .is_err()
@@ -1055,39 +1396,38 @@ mod tests {
                     .uri("/base".parse().unwrap())
                     .finish(),
             );
-            let result = resolve_phantom_id(&request, &resolved, &selection, |_| {
-                panic!("optional omission must not use policy")
+            let result = route_agent_binding(&request, &resolved, &selection, |_| {
+                panic!("missing ID must not use policy")
             });
-            if optional {
-                assert_eq!(result.unwrap(), None);
-            } else {
-                assert!(result.is_err());
-            }
+            assert!(matches!(
+                result,
+                Err(RequestHandlerError::MissingValue {
+                    expected: "agent ID query selector"
+                })
+            ));
         }
         let request = RichRequest::new(poem::Request::builder().finish());
         assert_eq!(
-            resolve_phantom_id(
-                &request,
-                &resolved,
-                &PhantomSelection::Original,
-                |_| panic!("original must not use policy")
-            )
+            route_agent_binding(&request, &resolved, &AgentSelection::Key, |_| panic!(
+                "key must not use policy"
+            ))
             .unwrap(),
-            None
+            AgentBinding::Constructor
         );
-        for phantom in [false, true] {
+        for binding in [
+            AgentBinding::Fresh,
+            AgentBinding::StreamSession {
+                route_scope: "route".into(),
+                session: "session".into(),
+            },
+        ] {
             assert_eq!(
-                resolve_phantom_id(
-                    &request,
-                    &resolved,
-                    &PhantomSelection::Policy { phantom },
-                    |flag| {
-                        assert_eq!(flag, phantom);
-                        Some(p)
-                    }
-                )
+                route_agent_binding(&request, &resolved, &AgentSelection::Fresh, |flag| {
+                    assert!(flag);
+                    binding.clone()
+                })
                 .unwrap(),
-                Some(p)
+                binding
             );
         }
         let constructor = CompiledInputSchema {
@@ -1115,41 +1455,16 @@ mod tests {
                 parameter_type: PathSegmentType::Str,
             },
         ];
-        let component_id = golem_common::model::component::ComponentId::new();
         let agent_type = golem_common::model::agent::AgentTypeName("selected".into());
-        let id = CallAgentHandler::build_agent_id(
-            &resolved,
-            component_id,
-            &agent_type,
-            &constructor,
-            &bindings,
-            Some(p),
-        )
-        .unwrap();
-        assert_eq!(id.agent_id, format!("selected(\"d7\",\"west\")[{p}]"));
+        let constructor_key =
+            CallAgentHandler::route_constructor(&resolved, &agent_type, &constructor, &bindings)
+                .unwrap();
+        assert_eq!(constructor_key.to_string(), "selected(\"d7\",\"west\")");
         resolved.captured_path_parameters[0] = "d9".into();
-        let other = CallAgentHandler::build_agent_id(
-            &resolved,
-            component_id,
-            &agent_type,
-            &constructor,
-            &bindings,
-            Some(p),
-        )
-        .unwrap();
-        assert_eq!(other.agent_id, format!("selected(\"d9\",\"west\")[{p}]"));
-        assert_ne!(id, other);
-        let other_component = CallAgentHandler::build_agent_id(
-            &resolved,
-            golem_common::model::component::ComponentId::new(),
-            &agent_type,
-            &constructor,
-            &bindings,
-            Some(p),
-        )
-        .unwrap();
-        assert_eq!(other.agent_id, other_component.agent_id);
-        assert_ne!(other, other_component);
+        let other =
+            CallAgentHandler::route_constructor(&resolved, &agent_type, &constructor, &bindings)
+                .unwrap();
+        assert_eq!(other.to_string(), "selected(\"d9\",\"west\")");
     }
 
     /// Ana signs in on a `SessionFromHeader` route and reads a read-only method; then Ben uses the
@@ -1180,10 +1495,7 @@ mod tests {
         else {
             panic!("expected an agent route");
         };
-        let agent_id = AgentId {
-            component_id: behaviour.component_id,
-            agent_id: "agent1()".to_string(),
-        };
+        let agent_id = OwnedAgentId::new(resolved.route.environment_id, &AgentId::from_parts(7, 1));
         let fingerprint = AgentFingerprint(Uuid::nil());
         let index = OplogIndex::from_u64(7);
         let user = |subject: &str| {
@@ -1313,7 +1625,7 @@ mod tests {
     /// tests below.
     async fn read_only_profile_route() -> (
         crate::custom_api::route_resolver::ResolvedRouteEntry,
-        AgentId,
+        OwnedAgentId,
         AgentFingerprint,
         OplogIndex,
         ReadOnlyConfig,
@@ -1331,15 +1643,11 @@ mod tests {
             .header("host", "example.com")
             .finish();
         let resolved = resolver.resolve_matching_route(&request).await.unwrap();
-        let crate::custom_api::model::RichRouteBehaviour::CallAgent(behaviour) =
-            &resolved.route.behavior
+        let crate::custom_api::model::RichRouteBehaviour::CallAgent(_) = &resolved.route.behavior
         else {
             panic!("expected an agent route");
         };
-        let agent_id = AgentId {
-            component_id: behaviour.component_id,
-            agent_id: "agent1()".to_string(),
-        };
+        let agent_id = OwnedAgentId::new(resolved.route.environment_id, &AgentId::from_parts(7, 1));
         let read_only = ReadOnlyConfig {
             cache_policy: CachePolicy::Ttl(CachePolicyTtl {
                 duration_nanos: 60_000_000_000,
@@ -1368,7 +1676,7 @@ mod tests {
     /// The ETag that a read-only response to `caller` carries.
     fn etag_for(
         resolved: &crate::custom_api::route_resolver::ResolvedRouteEntry,
-        agent_id: &AgentId,
+        agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
         index: OplogIndex,
         read_only: &ReadOnlyConfig,

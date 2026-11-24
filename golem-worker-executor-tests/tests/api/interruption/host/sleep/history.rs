@@ -337,12 +337,12 @@ mod tests {
             .component_dep(&context.default_environment_id, fixture)
             .store()
             .await?;
-        let name = agent_id!("Clock", "p3-clock-input-prefix");
+        let name = agent_key!("Clock", "p3-clock-input-prefix");
         let id = executor.start_agent(&component.id, name.clone()).await?;
-        wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
+        wait_for_invocation_pair(&executor, &id.agent_id, OplogIndex::INITIAL).await?;
         let key = IdempotencyKey::fresh();
         let stored_key = executor
-            .external_invocation_key(&id, &key, "sleep_p3")
+            .external_invocation_key(&id.agent_id, &key, "sleep_p3")
             .await?;
         let invocation = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
             let executor = executor.clone();
@@ -363,7 +363,7 @@ mod tests {
         }));
         let (record, entries) = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
-                executor.commit_oplog(&id).await?;
+                executor.commit_oplog(&id.agent_id).await?;
                 let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
                 let clock = entries.iter().find_map(|entry| match &entry.entry {
                     PublicOplogEntry::Start(start) if start.function_name == names(Abi::P3).0 => {

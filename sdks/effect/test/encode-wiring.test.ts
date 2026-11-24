@@ -3,18 +3,18 @@ import { vi } from "vitest"
 import { Effect, Fiber, Layer, Schema } from "effect"
 import type * as AgentHost from "golem:agent/host@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
-import * as AgentIdentity from "../src/AgentIdentity.js"
 import { defineAgent } from "../src/Agent.js"
 import * as Bridge from "../src/Bridge.js"
 import * as DynamicClient from "../src/DynamicClient.js"
 import { AgentHostClient } from "../src/host/AgentHostClient.js"
 import { PermissionsClient, type PermissionsClientShape } from "../src/host/PermissionsClient.js"
-import { RpcClient, type RpcConnection } from "../src/host/RpcClient.js"
+import type { RpcConnection } from "../src/host/RpcClient.js"
 import * as rpc from "../src/internal/rpc.js"
 import { method } from "../src/Method.js"
 import * as Permissions from "../src/Permissions.js"
 import * as WitTypes from "../src/WitTypes.js"
-import { hostInvocationMetadata } from "./invocation-metadata.js"
+import { agentIdFor, hostInvocationMetadata } from "./invocation-metadata.js"
+import { rpcLayer } from "./rpc-fake.js"
 
 // Runs right after an SDK wire encode has moved the capabilities and before its promise
 // resolves, which is where an interruption used to lose them.
@@ -76,18 +76,14 @@ const layers = (calls: Array<string>) => {
   } as unknown as RpcConnection
   return Layer.mergeAll(
     Layer.succeed(PermissionsClient, PermissionsClient.of(permissions as PermissionsClientShape)),
-    Layer.succeed(
-      RpcClient,
-      RpcClient.of({
-        bindSelf: () => Effect.die("unexpected self binding"),
-        connect: () => Effect.succeed(connection),
-      }),
-    ),
+    rpcLayer({
+      upsert: () => Effect.succeed(connection),
+      getById: () => Effect.succeed(connection),
+    }),
     Layer.succeed(
       AgentHostClient,
       AgentHostClient.of({
-        makeAgentId: () => "reader",
-        parseAgentId: () => ["WiringReader", { value: { root: 0, valueNodes: [] } }, undefined],
+        getAgentTypeByAgentId: () => ({ agentType: { typeName: "WiringReader", mode: "durable" } }),
       } as never),
     ),
   )
@@ -114,7 +110,7 @@ describe("wire encode wiring", () => {
     return Effect.gen(function* () {
       const card = yield* Permissions.deriveFromWallet({})
       if (!Schema.is(WitTypes.PermissionCard)(card)) throw new Error("expected concrete card")
-      const reader = yield* Reader.client.get({ name: "a" })
+      const reader = yield* Reader.client.upsert({ name: "a" })
       yield* interruptAfterEncode(reader.give({ card }))
       expect(calls).toEqual([])
       yield* Permissions.inspect(card)
@@ -126,13 +122,10 @@ describe("wire encode wiring", () => {
     return Effect.gen(function* () {
       const card = yield* Permissions.deriveFromWallet({})
       if (!Schema.is(WitTypes.PermissionCard)(card)) throw new Error("expected concrete card")
-      const handle = yield* Bridge.resolveRemoteAgent(
-        "WiringReader",
-        { tag: "record", fields: [] },
-        undefined,
-        [],
-        "durable",
-      )
+      const handle = yield* Bridge.upsertRemoteAgent("WiringReader", {
+        tag: "record",
+        fields: [],
+      })
       const input: Bridge.SchemaValue = {
         tag: "record",
         fields: [Bridge.permissionCardToSchemaValue(card)],
@@ -146,8 +139,7 @@ describe("wire encode wiring", () => {
   it.effect("dynamic calls never restore the caller's tree", () => {
     const calls: Array<string> = []
     return Effect.gen(function* () {
-      const identity = yield* AgentIdentity.parse('WiringReader("a")')
-      const dynamic = yield* DynamicClient.bind(identity)
+      const dynamic = yield* DynamicClient.bind(agentIdFor("reader"))
       vi.mocked(rpc.awaitInvocation).mockClear()
       yield* dynamic.method("give").invoke({ root: 0, valueNodes: [] })
       expect(vi.mocked(rpc.awaitInvocation).mock.calls.map((args) => args[4])).toEqual([false])

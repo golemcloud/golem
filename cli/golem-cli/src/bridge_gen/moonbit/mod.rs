@@ -109,22 +109,29 @@ const RESERVED_PARAM_NAMES: &[&str] = &[
     "result",
     "value",
     "v",
-    "phantom",
+    "keyed",
+    "env",
     "when",
 ];
 
+const CREATE_DOC: &str = "Creates an agent and returns after its initialization. With `keyed` it is the keyed agent of the constructor parameters, and an existing one raises a conflict; otherwise the new agent has no key and a new ID. `env` adds environment variables to the ones the manifest defines.";
+
+const GET_BY_ID_DOC: &str = "Connects to the existing agent with the ID. It never creates the agent: an unknown ID, or the ID of an agent of another type, raises not-found.";
+
+fn upsert_doc(mode: AgentMode) -> &'static str {
+    match mode {
+        AgentMode::Durable => {
+            "Connects to the keyed agent of the constructor parameters. The first call creates the agent when it is missing."
+        }
+        AgentMode::Ephemeral => {
+            "Addresses the agent type with the constructor parameters. Every call runs on a new one-shot instance."
+        }
+    }
+}
+
 /// Associated function names on the generated agent struct that a user method
 /// name must not collide with.
-const RESERVED_METHOD_NAMES: &[&str] = &[
-    "configure",
-    "agent_id",
-    "get",
-    "get_phantom",
-    "new_phantom",
-    "get_with_config",
-    "get_phantom_with_config",
-    "new_phantom_with_config",
-];
+const RESERVED_METHOD_NAMES: &[&str] = &["configure", "agent_id", "upsert", "create", "get_by_id"];
 
 /// A generated multimodal enum: its MoonBit type name, the variant cases (one
 /// per modality, in schema order — the index is the wire variant tag), and the
@@ -1184,7 +1191,11 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         let agent = self.agent_struct_name();
         let agent_type_name = moonbit_string_literal(self.agent_type.type_name.as_str());
 
-        writer.doc("A resolved agent. Construct one with `get` / `get_phantom` / `new_phantom`.");
+        writer.doc(if self.agent_type.mode == AgentMode::Durable {
+            "A resolved agent. Construct one with `upsert`, `create` or `get_by_id`."
+        } else {
+            "A resolved agent. Construct one with `upsert`."
+        });
         writer.line(format!("pub struct {agent} {{"));
         writer.indent();
         writer.line("resolved : @runtime.ResolvedAgent");
@@ -1206,11 +1217,14 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         writer.blank();
 
         if self.agent_type.mode == AgentMode::Durable {
+            writer.doc(
+                "The ID of the agent. On a client of `upsert` the first call creates a missing agent.",
+            );
             writer.line(format!(
-                "pub fn {agent}::agent_id(self : {agent}) -> @runtime.AgentId {{"
+                "pub async fn {agent}::agent_id(self : {agent}) -> @runtime.AgentId raise {{"
             ));
             writer.indent();
-            writer.line("self.resolved.agent_id.unwrap()");
+            writer.line("@runtime.agent_id(self.resolved)");
             writer.dedent();
             writer.line("}");
             writer.blank();
@@ -1242,20 +1256,14 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         self.write_guest_constructors(writer, &client, &agent_type_name)?;
 
         if self.agent_type.mode == AgentMode::Durable {
+            writer.doc(
+                "The ID of the agent. On a client of `upsert` the host creates a missing agent without invoking a method.",
+            );
             writer.line(format!(
-                "pub fn {client}::get_agent_id(self : {client}) -> String raise @common.AgentError {{"
+                "pub async fn {client}::agent_id(self : {client}) -> @schema.AgentId {{"
             ));
             writer.indent();
-            writer.line("self.client.get_agent_id()");
-            writer.dedent();
-            writer.line("}");
-            writer.blank();
-
-            writer.line(format!(
-                "pub fn {client}::phantom_id(self : {client}) -> @schema.Uuid? {{"
-            ));
-            writer.indent();
-            writer.line("self.client.phantom_id()");
+            writer.line("self.client.agent_id()");
             writer.dedent();
             writer.line("}");
             writer.blank();
@@ -1298,7 +1306,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             ));
             writer.indent();
             writer.line(format!(
-                "let client = {client}::get({})",
+                "let client = {client}::upsert({})",
                 param_names.join(", ")
             ));
             writer.line("defer client.drop()");
@@ -1341,145 +1349,85 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         let param_defs = self.input_param_defs(&input)?;
         let param_decls = render_param_decls(&param_defs);
 
-        if self.agent_type.mode == AgentMode::Durable {
-            self.write_guest_constructor(
-                writer,
-                client,
-                agent_type_name,
-                "get",
-                &param_decls,
-                &input,
-                None,
-                None,
-            )?;
-        }
-        self.write_guest_constructor(
-            writer,
-            client,
-            agent_type_name,
-            "new_phantom",
-            &param_decls,
-            &input,
-            None,
-            None,
-        )?;
-        if self.agent_type.mode == AgentMode::Durable {
-            self.write_guest_constructor(
-                writer,
-                client,
-                agent_type_name,
-                "get_phantom",
-                &append_param("phantom_id : @schema.Uuid", &param_decls),
-                &input,
-                Some("phantom_id"),
-                None,
-            )?;
-        }
+        writer.doc(upsert_doc(self.agent_type.mode));
+        writer.line("#warnings(\"-unused_try\")");
+        writer.line(format!(
+            "pub fn {client}::upsert({param_decls}) -> {client} raise {{"
+        ));
+        writer.indent();
+        self.write_guest_invocation_input(writer, &input, "constructor_input", "constructor")?;
+        writer.line(format!(
+            "let client = @rpc.AgentClient::upsert({agent_type_name}, constructor_input)"
+        ));
+        writer.line("{ client, }");
+        writer.dedent();
+        writer.line("}");
+        writer.blank();
 
-        let configs = self.local_configs();
-        if configs.is_empty() {
+        if self.agent_type.mode == AgentMode::Ephemeral {
             return Ok(());
         }
+
+        writer.doc(GET_BY_ID_DOC);
+        writer.line(format!(
+            "pub fn {client}::get_by_id(agent_id : @schema.AgentId) -> {client} raise {{"
+        ));
+        writer.indent();
+        writer.line(format!(
+            "let client = @rpc.AgentClient::get_by_id({agent_type_name}, agent_id)"
+        ));
+        writer.line("{ client, }");
+        writer.dedent();
+        writer.line("}");
+        writer.blank();
+
+        let configs = self.local_configs();
         let param_names = param_defs
             .iter()
             .map(|(name, _)| name.clone())
             .collect::<Vec<_>>();
         let config_names = self.config_param_idents(&param_names, &configs);
-        let config_decls = configs
-            .iter()
-            .zip(config_names.iter())
-            .map(|(config, name)| {
-                Ok(format!(
-                    "{name} : {}?",
-                    self.type_reference(&config.value_type)?
-                ))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?
-            .join(", ");
-        let with_config_decls = append_param(&config_decls, &param_decls);
-
-        if self.agent_type.mode == AgentMode::Durable {
-            self.write_guest_constructor(
-                writer,
-                client,
-                agent_type_name,
-                "get_with_config",
-                &with_config_decls,
-                &input,
-                None,
-                Some((&configs, &config_names)),
-            )?;
-        }
-        self.write_guest_constructor(
-            writer,
-            client,
-            agent_type_name,
-            "new_phantom_with_config",
-            &with_config_decls,
-            &input,
-            None,
-            Some((&configs, &config_names)),
-        )?;
-        if self.agent_type.mode == AgentMode::Durable {
-            self.write_guest_constructor(
-                writer,
-                client,
-                agent_type_name,
-                "get_phantom_with_config",
-                &append_param(
-                    &config_decls,
-                    &append_param("phantom_id : @schema.Uuid", &param_decls),
-                ),
-                &input,
-                Some("phantom_id"),
-                Some((&configs, &config_names)),
-            )?;
-        }
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn write_guest_constructor(
-        &self,
-        writer: &mut MoonBitWriter,
-        client: &str,
-        agent_type_name: &str,
-        name: &str,
-        param_decls: &str,
-        input: &InputSchema,
-        phantom_id: Option<&str>,
-        configs: Option<(&[AgentConfigDeclarationSchema], &[String])>,
-    ) -> anyhow::Result<()> {
+        writer.doc(CREATE_DOC);
         writer.line("#warnings(\"-unused_try\")");
         writer.line(format!(
-            "pub fn {client}::{name}({param_decls}) -> {client} raise @common.AgentError {{"
+            "pub async fn {client}::create({}) -> {client} {{",
+            self.create_decls(&param_decls, &configs, &config_names)?
         ));
         writer.indent();
-        self.write_guest_invocation_input(writer, input, "constructor_input", "constructor")?;
-        if let Some((configs, names)) = configs {
-            self.write_guest_config_array(writer, configs, names)?;
-        }
-        let mut args = vec![agent_type_name.to_string(), "constructor_input".to_string()];
-        if let Some(phantom_id) = phantom_id {
-            args.push(phantom_id.to_string());
-        }
-        if configs.is_some() {
-            args.push("agent_config".to_string());
-        }
-        let runtime_constructor = match (self.agent_type.mode, name) {
-            (AgentMode::Ephemeral, "new_phantom") => "ephemeral",
-            (AgentMode::Ephemeral, "new_phantom_with_config") => "ephemeral_with_config",
-            _ => name,
-        };
+        self.write_guest_invocation_input(writer, &input, "constructor_input", "constructor")?;
+        self.write_guest_config_array(writer, &configs, &config_names)?;
         writer.line(format!(
-            "let client = @rpc.AgentClient::{runtime_constructor}({})",
-            args.join(", ")
+            "let client = @rpc.AgentClient::create({agent_type_name}, constructor_input, keyed~, config=agent_config, env~)"
         ));
         writer.line("{ client, }");
         writer.dedent();
         writer.line("}");
         writer.blank();
         Ok(())
+    }
+
+    /// The parameter list of `create`: the constructor parameters, then the
+    /// optional `keyed`, one optional label per local config declaration, and
+    /// `env`.
+    fn create_decls(
+        &self,
+        param_decls: &str,
+        configs: &[AgentConfigDeclarationSchema],
+        config_names: &[String],
+    ) -> anyhow::Result<String> {
+        let mut decls = Vec::new();
+        if !param_decls.is_empty() {
+            decls.push(param_decls.to_string());
+        }
+        decls.push("keyed? : Bool = false".to_string());
+        for (config, name) in configs.iter().zip(config_names.iter()) {
+            decls.push(format!(
+                "{name}? : {}",
+                self.type_reference(&config.value_type)?
+            ));
+        }
+        decls.push("env? : Array[(String, String)] = []".to_string());
+        Ok(decls.join(", "))
     }
 
     fn write_guest_config_array(
@@ -1767,6 +1715,11 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         Ok(())
     }
 
+    /// Emits the constructors. Every agent gets `upsert`, which names the keyed
+    /// agent of the constructor parameters and contacts the server only on the
+    /// first invocation. Durable agents also get `create`, which creates an
+    /// agent with optional local config overrides and environment variables,
+    /// and `get_by_id`, which reaches an existing agent by its ID.
     fn write_constructors(
         &self,
         writer: &mut MoonBitWriter,
@@ -1781,200 +1734,57 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             .map(|(n, _)| n.clone())
             .collect::<Vec<_>>();
 
-        // get (durable only)
-        if self.agent_type.mode == AgentMode::Durable {
-            writer.doc("Gets (creating if necessary) the durable agent addressed by the given constructor parameters.");
-            writer.line(format!(
-                "pub async fn {agent}::get({param_decls}) -> {agent} raise {{"
-            ));
-            writer.indent();
-            self.write_create_agent_body(
-                writer,
-                agent,
-                agent_type_name,
-                &input,
-                "None",
-                "None",
-                "[]",
-            )?;
-            writer.dedent();
-            writer.line("}");
-            writer.blank();
-        }
-
-        // Explicit phantom identities are supported only by durable agents.
-        let phantom_decls = append_param("phantom : @runtime.Uuid", &param_decls);
-        if self.agent_type.mode == AgentMode::Durable {
-            writer
-                .doc("Gets (creating if necessary) the agent with the given explicit phantom id.");
-            writer.line(format!(
-                "pub async fn {agent}::get_phantom({phantom_decls}) -> {agent} raise {{"
-            ));
-            writer.indent();
-            self.write_create_agent_body(
-                writer,
-                agent,
-                agent_type_name,
-                &input,
-                "Some(phantom)",
-                "Some(phantom)",
-                "[]",
-            )?;
-            writer.dedent();
-            writer.line("}");
-            writer.blank();
-        }
-
-        writer.doc(if self.agent_type.mode == AgentMode::Durable {
-            "Creates a new agent instance with a fresh random phantom id."
-        } else {
-            "Creates a local logical proxy; each invocation receives a fresh final identity."
-        });
-        if self.agent_type.mode == AgentMode::Ephemeral {
-            writer.line("#warnings(\"-unused_async\")");
-        }
+        writer.doc(upsert_doc(self.agent_type.mode));
         writer.line(format!(
-            "pub async fn {agent}::new_phantom({param_decls}) -> {agent} raise {{"
+            "pub fn {agent}::upsert({param_decls}) -> {agent} raise {{"
         ));
         writer.indent();
-        if self.agent_type.mode == AgentMode::Durable {
-            let phantom_call_args = append_arg("@runtime.Uuid::random()", &param_names);
-            writer.line(format!("{agent}::get_phantom({phantom_call_args})"));
-        } else {
-            writer.line("let configuration = @runtime.get_configuration()");
-            self.write_param_record(writer, &input)?;
-            writer.line(format!("{agent}::{{"));
-            writer.indent();
-            writer.line("resolved: @runtime.ResolvedAgent::{");
-            writer.indent();
-            writer.line("configuration,");
-            writer.line(format!("agent_type_name: {agent_type_name},"));
-            writer.line("parameters,");
-            writer.line("phantom_id: None,");
-            writer.line("config: [],");
-            writer.line("agent_id: None,");
-            writer.dedent();
-            writer.line("},");
-            writer.dedent();
-            writer.line("}");
-        }
+        writer.line("let configuration = @runtime.get_configuration()");
+        self.write_param_record(writer, &input)?;
+        writer.line(format!(
+            "{{ resolved: @runtime.ResolvedAgent::new(configuration, {agent_type_name}, parameters=Some(parameters), target=None) }}"
+        ));
         writer.dedent();
         writer.line("}");
         writer.blank();
 
-        self.write_with_config_constructors(
-            writer,
-            agent,
-            agent_type_name,
-            &input,
-            &param_decls,
-            &param_names,
-        )?;
-        Ok(())
-    }
-
-    /// Emits the `*_with_config` constructor variants when the agent declares
-    /// locally overridable configuration. Each generated function takes the
-    /// constructor parameters plus one `Option[..]` parameter per local config
-    /// declaration; only the `Some` ones are sent as config overrides.
-    fn write_with_config_constructors(
-        &self,
-        writer: &mut MoonBitWriter,
-        agent: &str,
-        agent_type_name: &str,
-        input: &InputSchema,
-        param_decls: &str,
-        param_names: &[String],
-    ) -> anyhow::Result<()> {
-        let configs = self.local_configs();
-        if configs.is_empty() {
+        if self.agent_type.mode == AgentMode::Ephemeral {
             return Ok(());
         }
-        let config_names = self.config_param_idents(param_names, &configs);
-        let config_decls = configs
-            .iter()
-            .enumerate()
-            .map(|(idx, config)| {
-                let ty = self.type_reference(&config.value_type)?;
-                Ok(format!("{} : {ty}?", config_names[idx]))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?
-            .join(", ");
 
-        // get_with_config (durable only)
-        if self.agent_type.mode == AgentMode::Durable {
-            let decls = append_param(&config_decls, param_decls);
-            writer.doc("Gets (creating if necessary) the durable agent, overriding the given configuration values.");
-            writer.line(format!(
-                "pub async fn {agent}::get_with_config({decls}) -> {agent} raise {{"
-            ));
-            writer.indent();
-            self.write_config_array(writer, &configs, &config_names)?;
-            self.write_create_agent_body(
-                writer,
-                agent,
-                agent_type_name,
-                input,
-                "None",
-                "None",
-                "agent_config",
-            )?;
-            writer.dedent();
-            writer.line("}");
-            writer.blank();
-        }
-
-        // get_phantom_with_config (durable only)
-        let phantom_config_decls = append_param(
-            &config_decls,
-            &append_param("phantom : @runtime.Uuid", param_decls),
-        );
-        if self.agent_type.mode == AgentMode::Durable {
-            writer.doc("Gets (creating if necessary) the agent with an explicit phantom id, overriding the given configuration values.");
-            writer.line(format!(
-            "pub async fn {agent}::get_phantom_with_config({phantom_config_decls}) -> {agent} raise {{"
-            ));
-            writer.indent();
-            self.write_config_array(writer, &configs, &config_names)?;
-            self.write_create_agent_body(
-                writer,
-                agent,
-                agent_type_name,
-                input,
-                "Some(phantom)",
-                "Some(phantom)",
-                "agent_config",
-            )?;
-            writer.dedent();
-            writer.line("}");
-            writer.blank();
-        }
-
-        // new_phantom_with_config: a fresh random phantom id, delegating to
-        // get_phantom_with_config so config overrides are applied.
-        let decls = append_param(&config_decls, param_decls);
-        writer.doc("Creates a new agent instance with a fresh random phantom id, overriding the given configuration values.");
-        if self.agent_type.mode == AgentMode::Ephemeral {
-            writer.line("#warnings(\"-unused_async\")");
-        }
+        let configs = self.local_configs();
+        let config_names = self.config_param_idents(&param_names, &configs);
+        writer.doc(CREATE_DOC);
         writer.line(format!(
-            "pub async fn {agent}::new_phantom_with_config({decls}) -> {agent} raise {{"
+            "pub async fn {agent}::create({}) -> {agent} raise {{",
+            self.create_decls(&param_decls, &configs, &config_names)?
         ));
         writer.indent();
-        if self.agent_type.mode == AgentMode::Durable {
-            let call_args = append_arg_list(
-                param_names,
-                &std::iter::once("@runtime.Uuid::random()".to_string())
-                    .chain(config_names.iter().cloned())
-                    .collect::<Vec<_>>(),
-            );
-            writer.line(format!("{agent}::get_phantom_with_config({call_args})"));
-        } else {
-            writer.line("let configuration = @runtime.get_configuration()");
-            self.write_param_record(writer, input)?;
-            self.write_config_array(writer, &configs, &config_names)?;
-            writer.line(format!("{agent}::{{ resolved: @runtime.ResolvedAgent::{{ configuration, agent_type_name: {agent_type_name}, parameters, phantom_id: None, config: agent_config, agent_id: None }} }}"));
-        }
+        writer.line("let configuration = @runtime.get_configuration()");
+        self.write_param_record(writer, &input)?;
+        self.write_config_array(writer, &configs, &config_names)?;
+        writer.line(format!(
+            "let response = @runtime.create_agent(configuration, {agent_type_name}, parameters, keyed~, config=agent_config, env~)"
+        ));
+        writer.line(format!(
+            "{{ resolved: @runtime.ResolvedAgent::new(configuration, {agent_type_name}, parameters=None, target=Some(response)) }}"
+        ));
+        writer.dedent();
+        writer.line("}");
+        writer.blank();
+
+        writer.doc(GET_BY_ID_DOC);
+        writer.line(format!(
+            "pub async fn {agent}::get_by_id(agent_id : @runtime.AgentId) -> {agent} raise {{"
+        ));
+        writer.indent();
+        writer.line("let configuration = @runtime.get_configuration()");
+        writer.line(format!(
+            "let response = @runtime.get_agent(configuration, {agent_type_name}, agent_id)"
+        ));
+        writer.line(format!(
+            "{{ resolved: @runtime.ResolvedAgent::new(configuration, {agent_type_name}, parameters=None, target=Some(response)) }}"
+        ));
         writer.dedent();
         writer.line("}");
         writer.blank();
@@ -1995,7 +1805,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
 
     /// MoonBit parameter identifiers for the `config_<path>` config-override
     /// parameters, disambiguated away from the constructor parameters and from
-    /// the locals emitted by the `*_with_config` bodies.
+    /// the locals emitted by the `create` body.
     fn config_param_idents(
         &self,
         constructor_param_names: &[String],
@@ -2006,7 +1816,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         reserved.push("agent_config".to_string());
         if self.mode == MoonBitBridgeMode::GuestWasmRpc {
             reserved.extend(
-                ["client", "config_value", "error", "phantom_id", "wire"]
+                ["client", "config_value", "error", "wire"]
                     .into_iter()
                     .map(str::to_string),
             );
@@ -2082,42 +1892,6 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             writer.dedent();
             writer.line("}");
         }
-        Ok(())
-    }
-
-    /// Emits the shared body of a constructor: pack the parameters, call
-    /// `create_agent`, and build the agent handle. `config_expr` is the
-    /// expression passed as the create-agent config array (`"[]"` or
-    /// `"agent_config"`).
-    fn write_create_agent_body(
-        &self,
-        writer: &mut MoonBitWriter,
-        agent: &str,
-        agent_type_name: &str,
-        input: &InputSchema,
-        create_phantom_expr: &str,
-        resolved_phantom_expr: &str,
-        config_expr: &str,
-    ) -> anyhow::Result<()> {
-        writer.line("let configuration = @runtime.get_configuration()");
-        self.write_param_record(writer, input)?;
-        writer.line(format!(
-            "let response = @runtime.create_agent(configuration, {agent_type_name}, parameters, {create_phantom_expr}, {config_expr})"
-        ));
-        writer.line(format!("{agent}::{{"));
-        writer.indent();
-        writer.line("resolved: @runtime.ResolvedAgent::{");
-        writer.indent();
-        writer.line("configuration,");
-        writer.line(format!("agent_type_name: {agent_type_name},"));
-        writer.line("parameters,");
-        writer.line(format!("phantom_id: {resolved_phantom_expr},"));
-        writer.line("config: [],");
-        writer.line("agent_id: Some(response.agent_id),");
-        writer.dedent();
-        writer.line("},");
-        writer.dedent();
-        writer.line("}");
         Ok(())
     }
 
@@ -2468,7 +2242,6 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                     "error",
                     "f",
                     "input",
-                    "phantom_id",
                     "scheduled_at",
                     "scope_card",
                     "tree",
@@ -2519,26 +2292,14 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             .collect();
         if self.mode == MoonBitBridgeMode::GuestWasmRpc {
             used.remove("configure");
-            used.remove("agent_id");
             if self.agent_type.mode == AgentMode::Ephemeral {
-                used.remove("get");
-                used.remove("get_with_config");
-                used.remove("get_phantom");
-                used.remove("get_phantom_with_config");
-            }
-            if self.local_configs().is_empty() {
-                used.remove("get_with_config");
-                used.remove("get_phantom_with_config");
-                used.remove("new_phantom_with_config");
+                used.remove("agent_id");
+                used.remove("create");
+                used.remove("get_by_id");
             }
             used.insert("drop".to_string());
             used.insert("set_default_scope_card".to_string());
             if self.agent_type.mode == AgentMode::Durable {
-                used.extend(
-                    ["get_agent_id", "phantom_id"]
-                        .into_iter()
-                        .map(str::to_string),
-                );
                 used.insert("scoped".to_string());
             }
         }
@@ -3423,10 +3184,7 @@ fn prepend_self_decl(agent: &str, decls: &str) -> String {
     }
 }
 
-/// Appends an extra parameter declaration after a declaration list. The
-/// synthetic `phantom` parameter comes last, after the user's constructor
-/// parameters (matching the MoonBit SDK's RPC client, whose `get_phantom`
-/// takes `phantom_id` after the constructor arguments).
+/// Appends an extra parameter declaration after a declaration list.
 fn append_param(extra: &str, decls: &str) -> String {
     if decls.is_empty() {
         extra.to_string()
@@ -3445,25 +3203,6 @@ fn prepend_param(extra: &str, decls: &str) -> String {
     } else {
         format!("{extra}, {decls}")
     }
-}
-
-/// Appends an extra call argument after an argument-name list.
-fn append_arg(extra: &str, names: &[String]) -> String {
-    if names.is_empty() {
-        extra.to_string()
-    } else {
-        format!("{}, {extra}", names.join(", "))
-    }
-}
-
-/// Joins an argument-name list followed by extra call arguments, in order.
-fn append_arg_list(names: &[String], extras: &[String]) -> String {
-    names
-        .iter()
-        .chain(extras.iter())
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 /// Renders `value` as a double-quoted MoonBit string literal, escaping the

@@ -90,48 +90,51 @@ impl PostgresKeyValueStorage {
             // agent_id embedded so each agent's split status fields are an isolated key space
             // (per-agent `keys`/`del_many` select only that agent's rows).
             KeyValueStorageNamespace::AgentStatus {
-                agent_id,
+                owned_agent_id,
                 fingerprint,
             } => {
-                format!("agent-status:{}:{fingerprint}", agent_id.to_redis_key())
+                format!(
+                    "agent-status:{}:{fingerprint}",
+                    owned_agent_id.storage_key()
+                )
             }
             KeyValueStorageNamespace::AgentInvocationResultIndex {
-                agent_id,
+                owned_agent_id,
                 fingerprint,
             } => {
                 format!(
                     "agent-invocation-result-index:{}:{fingerprint}",
-                    agent_id.to_redis_key()
+                    owned_agent_id.storage_key()
                 )
             }
             KeyValueStorageNamespace::AgentStatusCheckpoint {
-                agent_id,
+                owned_agent_id,
                 fingerprint,
             } => {
                 format!(
                     "agent-status-checkpoint:{}:{fingerprint}",
-                    agent_id.to_redis_key()
+                    owned_agent_id.storage_key()
                 )
             }
             KeyValueStorageNamespace::AgentDurableStreamSessionIndex {
-                agent_id,
+                owned_agent_id,
                 fingerprint,
             } => {
                 format!(
                     "agent:durable_stream_session_index:{}:{fingerprint}",
-                    agent_id.to_redis_key()
+                    owned_agent_id.storage_key()
                 )
             }
-            KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots { agent_id } => {
+            KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots { owned_agent_id } => {
                 format!(
                     "agent:rejected_periodic_snapshots:{}",
-                    agent_id.to_redis_key()
+                    owned_agent_id.storage_key()
                 )
             }
             KeyValueStorageNamespace::Promise {
-                agent_id,
+                owned_agent_id,
                 fingerprint,
-            } => format!("promises:{}:{fingerprint}", agent_id.to_redis_key()),
+            } => format!("promises:{}:{fingerprint}", owned_agent_id.storage_key()),
             KeyValueStorageNamespace::Schedule => "schedule".to_string(),
             KeyValueStorageNamespace::UserDefined {
                 environment_id,
@@ -146,6 +149,7 @@ impl PostgresKeyValueStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl KeyValueStorage for PostgresKeyValueStorage {
     async fn set(
         &self,

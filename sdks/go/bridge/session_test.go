@@ -44,6 +44,16 @@ type fakeServer struct {
 	conns int
 	// refusals are the HTTP statuses the next upgrade requests get.
 	refusals []int
+	// lookup answers the requests of the environment lookup; nil refuses
+	// them like any other unexpected request.
+	lookup http.HandlerFunc
+}
+
+// answerLookups makes the server answer the environment lookup with h.
+func (f *fakeServer) answerLookups(h http.HandlerFunc) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lookup = h
 }
 
 func (f *fakeServer) connections() int {
@@ -55,7 +65,14 @@ func (f *fakeServer) connections() int {
 func newFakeServer(t *testing.T, scripts ...func(*fakeConn)) *fakeServer {
 	f := &fakeServer{t: t, scripts: scripts}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != sessionEndpoint || r.Header.Get("Authorization") != "Bearer token" {
+		f.mu.Lock()
+		lookup := f.lookup
+		f.mu.Unlock()
+		if lookup != nil && (r.URL.Path == tokenPath || r.URL.Path == visibleEnvPath) {
+			lookup(w, r)
+			return
+		}
+		if r.URL.Path != "/v1/runtime/envs/"+testEnvironmentID+sessionEndpoint || r.Header.Get("Authorization") != "Bearer token" {
 			http.Error(w, "unexpected request", http.StatusBadRequest)
 			return
 		}
@@ -99,23 +116,37 @@ func (f *fakeServer) agentWithin(t *testing.T, window time.Duration) *Agent {
 	return agentAt(t, f.srv.URL, window)
 }
 
-func agentAt(t *testing.T, url string, window time.Duration) *Agent {
-	a, err := NewAgent("Target", schema.RecordValue{Fields: []schema.SchemaValue{schema.StringValue{Value: "t1"}}},
-		WithConfiguration(Configuration{Server: Custom(url, "token"), AppName: "app", EnvName: "env", ReconnectWindow: window}))
+// sessionAgent is an upsert agent whose environment ID is already known, so a
+// session opens without a lookup.
+func sessionAgent(t *testing.T, c Configuration) *Agent {
+	a, err := Upsert("Target", schema.RecordValue{Fields: []schema.SchemaValue{schema.StringValue{Value: "t1"}}}, WithConfiguration(c))
 	if err != nil {
 		t.Fatal(err)
 	}
+	environmentIDs.Store(environmentKeyOf(c), testEnvironmentID)
 	return a
+}
+
+// unresolvedAgentAt is an upsert agent whose environment ID is not cached, so
+// its session looks the environment up first.
+func unresolvedAgentAt(t *testing.T, url string, window time.Duration) *Agent {
+	c := Configuration{Server: Custom(url, "token"), AppName: "app", EnvName: "env", ReconnectWindow: window}
+	a, err := Upsert("Target", schema.RecordValue{Fields: []schema.SchemaValue{schema.StringValue{Value: "t1"}}}, WithConfiguration(c))
+	if err != nil {
+		t.Fatal(err)
+	}
+	environmentIDs.Delete(environmentKeyOf(c))
+	t.Cleanup(func() { environmentIDs.Delete(environmentKeyOf(c)) })
+	return a
+}
+
+func agentAt(t *testing.T, url string, window time.Duration) *Agent {
+	return sessionAgent(t, Configuration{Server: Custom(url, "token"), AppName: "app", EnvName: "env", ReconnectWindow: window})
 }
 
 // agentWith is an agent of the server that sends its requests with client.
 func (f *fakeServer) agentWith(t *testing.T, client *http.Client) *Agent {
-	a, err := NewAgent("Target", schema.RecordValue{Fields: []schema.SchemaValue{schema.StringValue{Value: "t1"}}},
-		WithConfiguration(Configuration{Server: Custom(f.srv.URL, "token"), AppName: "app", EnvName: "env", HTTPClient: client}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return a
+	return sessionAgent(t, Configuration{Server: Custom(f.srv.URL, "token"), AppName: "app", EnvName: "env", HTTPClient: client})
 }
 
 type fakeConn struct {
@@ -227,7 +258,7 @@ func acceptAs(c *fakeConn, op received, key any, session string, mappings ...map
 	}
 	c.send("invocationAccepted", map[string]any{
 		"attemptId": op.m["attemptId"], "idempotencyKey": key,
-		"agentId":  map[string]any{"componentId": "00000000-0000-0000-0000-000000000004", "agentId": "counter()"},
+		"agentId":  testAgentID,
 		"mappings": mappings, "sessionToken": session,
 	})
 }
@@ -350,11 +381,22 @@ func TestStreamsFlowBothWays(t *testing.T) {
 	server := newFakeServer(t, func(c *fakeConn) {
 		start := c.expect("invocationStart")
 		selector := start.m["selector"].(map[string]any)
-		if selector["method"] != "transform" || selector["agentType"] != "Target" || selector["application"] != "app" {
+		if selector["method"] != "transform" || selector["agentType"] != "Target" || selector["application"] != "app" || selector["environment"] != "env" || len(selector) != 5 {
 			t.Errorf("selector %v", selector)
 		}
+		wantTarget := map[string]any{"kind": "key", "constructorParameters": map[string]any{
+			"kind": "record", "value": map[string]any{"fields": []any{map[string]any{"kind": "string", "value": "t1"}}},
+		}}
+		if !reflect.DeepEqual(selector["target"], wantTarget) {
+			t.Errorf("target = %#v, want %#v", selector["target"], wantTarget)
+		}
 		refs := provisionalRefs(t, start)
-		accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
+		accept(c, start, "queued")
+		c.send("invocationReady", map[string]any{
+			"attemptId": start.m["attemptId"], "idempotencyKey": start.m["idempotencyKey"],
+			"agentId": testAgentID, "sessionToken": "sess",
+			"mappings": []map[string]any{inputMapping(1, refs[0], "in", 0, false)},
+		})
 		got = consumeInput(c, 1)
 		streamResult(c, 2, "out", u32StreamGraph)
 		outputItem(c, 2, 0, "c0", 10)
@@ -2181,6 +2223,213 @@ func TestAStartAgainstAClosedPortIsUnreachable(t *testing.T) {
 	}
 	if elapsed < 300*time.Millisecond || elapsed > 3*time.Second {
 		t.Fatalf("gave up after %v", elapsed)
+	}
+}
+
+// Without a cached environment ID, a server that answers nothing makes the
+// environment lookup fail on every attempt, and the start fails once the
+// window passes, with the last lookup failure as the cause.
+func TestAStartWithAnUnresolvedEnvironmentAgainstAClosedPortIsUnreachable(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	url := "http://" + listener.Addr().String()
+	_ = listener.Close()
+	started := time.Now()
+	_, err = CallStreaming(ctxT(t), unresolvedAgentAt(t, url, 300*time.Millisecond), "numbers",
+		schema.RecordValue{}, DecodeStream(DecodeU32))
+	elapsed := time.Since(started)
+	var unreachable *UnreachableError
+	if !errors.As(err, &unreachable) {
+		t.Fatalf("got %v", err)
+	}
+	if unreachable.Window != 300*time.Millisecond || !strings.HasPrefix(unreachable.Endpoint, "ws://"+listener.Addr().String()) {
+		t.Fatalf("unreachable %+v", unreachable)
+	}
+	var cause *Error
+	if !errors.As(err, &cause) || cause.Status != 0 || cause.Endpoint != "token" {
+		t.Fatalf("cause %v", unreachable.Cause)
+	}
+	if elapsed < 300*time.Millisecond || elapsed > 3*time.Second {
+		t.Fatalf("gave up after %v", elapsed)
+	}
+}
+
+// lookupAnswers answers the environment lookup with tokenStatus for the token
+// request, and with the given environments for the visible ones. It counts
+// the token requests.
+func lookupAnswers(tokenStatus func() int, environments string, tokens *atomic.Int32) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer token" {
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == tokenPath {
+			tokens.Add(1)
+			if status := tokenStatus(); status != http.StatusOK {
+				http.Error(w, "refused", status)
+				return
+			}
+			_, _ = w.Write([]byte(tokenAnswer))
+			return
+		}
+		_, _ = w.Write([]byte(`{"values":[` + environments + `]}`))
+	}
+}
+
+// A lookup answered with HTTP 503 is retried like a failed connection, and
+// the call goes on once the lookup succeeds.
+func TestARetryableLookupStatusIsRetried(t *testing.T) {
+	server := newFakeServer(t, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		accept(c, start, "sess")
+		streamResult(c, 2, "out", u32StreamGraph)
+		outputEnd(c, 2, 0, "end", map[string]any{"kind": "finished"})
+		finished(c)
+		c.waitClose()
+	})
+	var tokens atomic.Int32
+	refused := []int{http.StatusServiceUnavailable, http.StatusServiceUnavailable}
+	server.answerLookups(lookupAnswers(func() int {
+		if n := int(tokens.Load()); n <= len(refused) {
+			return refused[n-1]
+		}
+		return http.StatusOK
+	}, ownEnvironment, &tokens))
+	ctx := ctxT(t)
+	out, err := CallStreaming(ctx, unresolvedAgentAt(t, server.srv.URL, 5*time.Second), "numbers",
+		schema.RecordValue{}, DecodeStream(DecodeU32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := out.Collect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := tokens.Load(); n != 3 {
+		t.Fatalf("looked up the token %d times", n)
+	}
+	if n := server.connections(); n != 1 {
+		t.Fatalf("connected %d times", n)
+	}
+}
+
+// A lookup answer cut off in its body never arrived, so it is retried like a
+// failed connection.
+func TestALookupAnswerCutOffIsRetried(t *testing.T) {
+	server := newFakeServer(t, func(c *fakeConn) {
+		start := c.expect("invocationStart")
+		accept(c, start, "sess")
+		streamResult(c, 2, "out", u32StreamGraph)
+		outputEnd(c, 2, 0, "end", map[string]any{"kind": "finished"})
+		finished(c)
+		c.waitClose()
+	})
+	var tokens atomic.Int32
+	answer := lookupAnswers(func() int { return http.StatusOK }, ownEnvironment, &tokens)
+	server.answerLookups(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == tokenPath && tokens.Load() == 0 {
+			tokens.Add(1)
+			conn, buffered, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			_, _ = buffered.WriteString("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"accountId\"")
+			_ = buffered.Flush()
+			_ = conn.Close()
+			return
+		}
+		answer(w, r)
+	})
+	ctx := ctxT(t)
+	out, err := CallStreaming(ctx, unresolvedAgentAt(t, server.srv.URL, 5*time.Second), "numbers",
+		schema.RecordValue{}, DecodeStream(DecodeU32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := out.Collect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := tokens.Load(); n != 2 {
+		t.Fatalf("looked up the token %d times", n)
+	}
+	if n := server.connections(); n != 1 {
+		t.Fatalf("connected %d times", n)
+	}
+}
+
+// A lookup the server answers with anything but HTTP 429 or 5xx fails the call
+// at once with that answer.
+func TestARefusedLookupFailsAtOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		tokenStatus  int
+		environments string
+		check        func(error) bool
+	}{
+		{"no environment", http.StatusOK, "", func(err error) bool { return errors.Is(err, ErrNotFound) }},
+		{"another account's environment", http.StatusOK, sharedEnvironment, func(err error) bool { return errors.Is(err, ErrNotFound) }},
+		{"forbidden", http.StatusForbidden, ownEnvironment, func(err error) bool {
+			var failure *Error
+			return errors.As(err, &failure) && failure.Status == http.StatusForbidden && failure.Endpoint == "token"
+		}},
+		{"unauthorized", http.StatusUnauthorized, ownEnvironment, func(err error) bool {
+			var failure *Error
+			return errors.As(err, &failure) && failure.Status == http.StatusUnauthorized
+		}},
+		{"undecodable", http.StatusOK, `{"not an environment"`, func(err error) bool {
+			var failure *Error
+			return errors.As(err, &failure) && failure.Status == http.StatusOK && failure.Endpoint == "visible-environments"
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newFakeServer(t)
+			var tokens atomic.Int32
+			server.answerLookups(lookupAnswers(func() int { return tc.tokenStatus }, tc.environments, &tokens))
+			started := time.Now()
+			_, err := CallStreaming(ctxT(t), unresolvedAgentAt(t, server.srv.URL, 5*time.Second), "numbers",
+				schema.RecordValue{}, DecodeStream(DecodeU32))
+			elapsed := time.Since(started)
+			var unreachable *UnreachableError
+			if !tc.check(err) || errors.As(err, &unreachable) {
+				t.Fatalf("got %v", err)
+			}
+			if n := tokens.Load(); n != 1 || elapsed > time.Second {
+				t.Fatalf("looked up the token %d times in %v", n, elapsed)
+			}
+			if n := server.connections(); n != 0 {
+				t.Fatalf("connected %d times", n)
+			}
+		})
+	}
+}
+
+// A lookup the server accepts but never answers is abandoned when the window
+// ends, and the call fails with an *UnreachableError.
+func TestALookupTheServerNeverAnswersIsUnreachable(t *testing.T) {
+	server := newFakeServer(t)
+	var tokens atomic.Int32
+	server.answerLookups(func(w http.ResponseWriter, r *http.Request) {
+		tokens.Add(1)
+		<-r.Context().Done()
+	})
+	started := time.Now()
+	_, err := CallStreaming(ctxT(t), unresolvedAgentAt(t, server.srv.URL, 300*time.Millisecond), "numbers",
+		schema.RecordValue{}, DecodeStream(DecodeU32))
+	elapsed := time.Since(started)
+	var unreachable *UnreachableError
+	var cause *Error
+	if !errors.As(err, &unreachable) || !errors.Is(err, context.DeadlineExceeded) ||
+		!errors.As(err, &cause) || cause.Endpoint != "token" {
+		t.Fatalf("got %v", err)
+	}
+	if elapsed < 300*time.Millisecond || elapsed > 3*time.Second {
+		t.Fatalf("gave up after %v", elapsed)
+	}
+	if n := tokens.Load(); n != 1 {
+		t.Fatalf("looked up the token %d times", n)
 	}
 }
 

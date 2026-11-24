@@ -25,25 +25,28 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_client::model::ComponentDto;
 use golem_common::base_model::durable_stream::AttachmentId;
-use golem_common::model::agent::{AgentMode, ParsedAgentKey};
+use golem_common::model::agent::{AgentMode, AgentTypeName, OwnedAgentId, ParsedAgentKey};
 use golem_common::model::auth::TokenSecret;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_session_public::{
     DecimalU64, INVOCATION_SESSION_SUBPROTOCOL, INVOCATION_SESSION_VERSION, InvocationSelector,
     PublicClientMessage, PublicErrorCode, PublicInvocationOutcome, PublicInvocationResult,
     PublicResumeOperation, PublicServerMessage, PublicStreamDirection, PublicStreamOutcome,
-    decode_server_text, encode_text,
+    decode_server_text, encode_client_text,
 };
 use golem_common::model::{AgentId, IdempotencyKey, InvocationRequestKey, RoutingTable};
 use golem_common::schema::{ResultValuePayload, SchemaValue, TypedSchemaValue};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_schema::proto::golem::schema::{
     RecordValue, SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, schema_value,
 };
 use golem_service_base::model::auth::AuthCtx;
+use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use integration_tests::agents::{
+    agent_type_id, id_target, key_target, keyed_agent_id, proto_agent_key,
+};
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -60,10 +63,12 @@ pub(crate) type PublicInvocationSocket = WebSocketStream<MaybeTlsStream<tokio::n
 
 pub(crate) async fn connect_public_invocation_socket(
     deps: &EnvBasedTestDependencies,
+    environment_id: EnvironmentId,
     token: Option<&TokenSecret>,
 ) -> Result<PublicInvocationSocket, WebSocketError> {
     connect_public_invocation_socket_with_subprotocol(
         deps,
+        environment_id,
         token,
         Some(INVOCATION_SESSION_SUBPROTOCOL),
     )
@@ -72,12 +77,13 @@ pub(crate) async fn connect_public_invocation_socket(
 
 async fn connect_public_invocation_socket_with_subprotocol(
     deps: &EnvBasedTestDependencies,
+    environment_id: EnvironmentId,
     token: Option<&TokenSecret>,
     subprotocol: Option<&str>,
 ) -> Result<PublicInvocationSocket, WebSocketError> {
     let worker_service = deps.worker_service();
     let url = format!(
-        "ws://{}:{}/v1/agents/invoke-agent-session",
+        "ws://{}:{}/v1/runtime/envs/{environment_id}/invoke-agent-session",
         worker_service.http_host(),
         worker_service.http_port()
     );
@@ -111,7 +117,7 @@ pub(crate) async fn send_public_request(
     request: &PublicClientMessage,
 ) -> anyhow::Result<()> {
     socket
-        .send(Message::Text(encode_text(request)?.into()))
+        .send(Message::Text(encode_client_text(request)?.into()))
         .await?;
     Ok(())
 }
@@ -138,6 +144,24 @@ pub(crate) async fn receive_public_response(
     }
 }
 
+pub(crate) async fn receive_public_stream_readiness(
+    socket: &mut PublicInvocationSocket,
+) -> anyhow::Result<PublicServerMessage> {
+    let response = receive_public_response(socket).await?;
+    match response {
+        PublicServerMessage::InvocationAccepted { ref mappings, .. } if mappings.is_empty() => {
+            let ready = receive_public_response(socket).await?;
+            anyhow::ensure!(
+                matches!(ready, PublicServerMessage::InvocationReady { .. }),
+                "expected stream readiness, got {ready:?}"
+            );
+            Ok(ready)
+        }
+        PublicServerMessage::InvocationAccepted { .. } => Ok(response),
+        other => anyhow::bail!("invocation was not accepted: {other:?}"),
+    }
+}
+
 fn public_start(
     application_name: &str,
     environment_name: &str,
@@ -149,17 +173,18 @@ fn public_start(
         attempt_id: uuid::Uuid::new_v4(),
         config: Vec::new(),
         idempotency_key: IdempotencyKey::fresh().value,
-        method_parameters,
+        method_parameters: method_parameters.try_into().unwrap(),
         selector: Box::new(InvocationSelector {
             agent_type: "StreamingRpcTarget".to_string(),
             application: application_name.to_string(),
-            constructor_parameters: native_record([serde_json::json!({
-                "kind": "string",
-                "value": agent_name
-            })]),
+            target: golem_common::model::invocation_session_public::PublicAgentTarget::Key {
+                constructor_parameters: native_record([serde_json::json!({
+                    "kind": "string",
+                    "value": agent_name
+                })]),
+            },
             environment: environment_name.to_string(),
             method: method_name.to_string(),
-            phantom_id: None,
         }),
         version: INVOCATION_SESSION_VERSION,
     }
@@ -179,10 +204,11 @@ fn native_stream(reference: serde_json::Value) -> serde_json::Value {
 
 async fn run_public_session(
     deps: &EnvBasedTestDependencies,
+    environment_id: EnvironmentId,
     token: &TokenSecret,
     start: PublicClientMessage,
 ) -> anyhow::Result<Vec<PublicServerMessage>> {
-    let mut socket = connect_public_invocation_socket(deps, Some(token)).await?;
+    let mut socket = connect_public_invocation_socket(deps, environment_id, Some(token)).await?;
     send_public_request(&mut socket, &start).await?;
 
     let mut responses = Vec::new();
@@ -207,6 +233,7 @@ async fn run_public_session(
 
 async fn resume_public_input_with_end(
     deps: &EnvBasedTestDependencies,
+    environment_id: EnvironmentId,
     token: &TokenSecret,
     session_token: String,
     input_channel: u32,
@@ -218,11 +245,12 @@ async fn resume_public_input_with_end(
         session_token,
         version: INVOCATION_SESSION_VERSION,
     };
-    let mut socket = connect_public_invocation_socket(deps, Some(token)).await?;
+    let mut socket = connect_public_invocation_socket(deps, environment_id, Some(token)).await?;
     send_public_request(&mut socket, &resume).await?;
-    let resumed = receive_public_response(&mut socket).await?;
+    let resumed = receive_public_stream_readiness(&mut socket).await?;
     let resumed_channel = match resumed {
-        PublicServerMessage::InvocationAccepted { mappings, .. } => mappings
+        PublicServerMessage::InvocationAccepted { mappings, .. }
+        | PublicServerMessage::InvocationReady { mappings, .. } => mappings
             .into_iter()
             .find(|mapping| {
                 mapping.direction == PublicStreamDirection::Input
@@ -252,29 +280,31 @@ async fn resume_public_input_with_end(
     Ok(())
 }
 
-fn cross_executor_caller(
-    component_id: ComponentId,
+/// A caller and target name whose keyed `caller_type` and `target_type` agents are owned by
+/// different executors.
+async fn cross_executor_caller(
+    user: &TestUserContext<EnvBasedTestDependencies>,
+    component: &ComponentDto,
     routing_table: &RoutingTable,
     caller_type: &str,
     target_type: &str,
     name_prefix: &str,
 ) -> anyhow::Result<(String, ParsedAgentKey)> {
+    let caller_type_id =
+        agent_type_id(user, component, &AgentTypeName(caller_type.to_string())).await?;
+    let target_type_id =
+        agent_type_id(user, component, &AgentTypeName(target_type.to_string())).await?;
     for index in 0..10_000 {
         let name = format!("{name_prefix}-{index}");
-        let mut caller_id = agent_id!(caller_type, name.clone());
-        // Equal type-prefix shard hashes stay equal under any shared name suffix.
-        // Vary the caller's identity independently of the ordinary target.
-        caller_id.phantom_id = Some(uuid::Uuid::from_u128(index + 1));
-        let target = agent_id!(target_type, name.clone());
-        let caller = AgentId::from_agent_id(component_id, &caller_id)
-            .map_err(|error| anyhow::anyhow!("invalid caller agent id: {error}"))?;
-        let target = AgentId::from_agent_id(component_id, &target)
-            .map_err(|error| anyhow::anyhow!("invalid target agent id: {error}"))?;
+        let caller_id = agent_key!(caller_type, name.clone());
+        let target = agent_key!(target_type, name.clone());
+        let caller = keyed_agent_id(component, caller_type_id, &caller_id)?;
+        let target = keyed_agent_id(component, target_type_id, &target)?;
         let caller_pod = routing_table
-            .lookup(&caller)
+            .lookup(&caller.agent_id)
             .ok_or_else(|| anyhow::anyhow!("caller agent has no executor assignment"))?;
         let target_pod = routing_table
-            .lookup(&target)
+            .lookup(&target.agent_id)
             .ok_or_else(|| anyhow::anyhow!("target agent has no executor assignment"))?;
         if caller_pod != target_pod {
             return Ok((name, caller_id));
@@ -286,54 +316,6 @@ fn cross_executor_caller(
     )
 }
 
-#[test]
-fn cross_executor_caller_separates_colliding_type_prefixes() {
-    use golem_api_grpc::proto::golem::shardmanager::{
-        RoutingTable as GrpcRoutingTable, RoutingTableEntry,
-    };
-    use golem_common::model::{Pod, ShardId};
-
-    let component_id: ComponentId = "00000000-0000-0000-0000-0000000000ac".parse().unwrap();
-    let routing_table = RoutingTable::try_from(GrpcRoutingTable {
-        number_of_shards: 1024,
-        shard_assignments: (0..1024)
-            .map(|value| RoutingTableEntry {
-                shard_id: Some(ShardId::new(value).into()),
-                pod: Some(
-                    Pod {
-                        ip: "127.0.0.1".parse().unwrap(),
-                        port: 9000 + (value / 342) as u16,
-                    }
-                    .into(),
-                ),
-            })
-            .collect(),
-    })
-    .unwrap();
-    let caller_type = "MoonbitStreamingRpcCaller";
-    let target_type = "MoonbitStreamingRpcCrossTarget";
-    let prefix = "generated-moonbit-streaming-rpc-cross";
-    for index in 0..10_000 {
-        let name = format!("{prefix}-{index}");
-        let caller =
-            AgentId::from_agent_id(component_id, &agent_id!(caller_type, name.clone())).unwrap();
-        let target = AgentId::from_agent_id(component_id, &agent_id!(target_type, name)).unwrap();
-        assert_eq!(routing_table.lookup(&caller), routing_table.lookup(&target));
-    }
-
-    let (name, caller_id) = cross_executor_caller(
-        component_id,
-        &routing_table,
-        caller_type,
-        target_type,
-        prefix,
-    )
-    .unwrap();
-    let caller = AgentId::from_agent_id(component_id, &caller_id).unwrap();
-    let target = AgentId::from_agent_id(component_id, &agent_id!(target_type, name)).unwrap();
-    assert_ne!(routing_table.lookup(&caller), routing_table.lookup(&target));
-}
-
 async fn invoke_agent_session(
     deps: &EnvBasedTestDependencies,
     component: &ComponentDto,
@@ -341,21 +323,22 @@ async fn invoke_agent_session(
     method_name: &str,
     params: TypedSchemaValue,
 ) -> anyhow::Result<Result<SchemaValue, InvocationFailure>> {
-    let agent_id = AgentId::from_agent_id(component.id, agent_id)
-        .map_err(|error| anyhow::anyhow!("invalid agent id: {error}"))?;
+    let target = key_target(agent_id)?;
     let (_, input) = params.into_parts();
     let input = input.try_into().map_err(anyhow::Error::msg)?;
     let (frames, receiver) = mpsc::channel(8);
     let request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
-            agent_id: Some(agent_id.into()),
+            target: Some(target),
             method_name: Some(method_name.to_string()),
             input: Some(input),
+            captured_method_input: None,
+            allow_streams: true,
             idempotency_key: Some(IdempotencyKey::fresh().into()),
             context: None,
             auth_ctx: Some(AuthCtx::System.into()),
             caller: Some(golem_common::model::caller::Caller::anonymous().into()),
-            environment_id: None,
+            environment_id: Some(component.environment_id.into()),
             config: Vec::new(),
             component_owner_account_id: None,
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
@@ -370,6 +353,8 @@ async fn invoke_agent_session(
             origin_invocation: None,
             external_tool: None,
             request_key: None,
+            constructor: None,
+            component_id: Some(component.id.into()),
         })),
     };
     let mut state = InvocationSessionState::default();
@@ -396,7 +381,10 @@ async fn invoke_agent_session(
             .validate_response(&response)
             .map_err(anyhow::Error::msg)?;
         match response.response {
-            Some(invocation_response::Response::Accepted(_)) => {}
+            Some(
+                invocation_response::Response::Accepted(_)
+                | invocation_response::Response::Ready(_),
+            ) => {}
             Some(invocation_response::Response::Rejected(rejected)) => {
                 anyhow::bail!("invocation session was rejected: {}", rejected.error);
             }
@@ -470,26 +458,33 @@ impl TrustedInvocationSession {
             AuthCtx::System.idempotency_scope(),
             Some(&idempotency_key),
         );
-        let agent_id = if ephemeral {
-            agent_id
-                .with_ephemeral_invocation_phantom(&request_key.owner_key(method_name))
-                .map_err(|error| anyhow::anyhow!("invalid ephemeral agent id: {error}"))?
+        // An ephemeral invocation runs on an instance of its own, whose ID derives from the
+        // invocation's owner key, and the executor creates it from the constructor.
+        let (target, constructor) = if ephemeral {
+            let type_id =
+                agent_type_id(&deps.admin().await, component, &agent_id.agent_type).await?;
+            let instance = AgentId::ephemeral_invocation(
+                component.environment_id,
+                type_id,
+                &request_key.owner_key(method_name),
+            );
+            (id_target(instance), Some(proto_agent_key(agent_id)?))
         } else {
-            agent_id.clone()
+            (key_target(agent_id)?, None)
         };
-        let agent_id = AgentId::from_agent_id(component.id, &agent_id)
-            .map_err(|error| anyhow::anyhow!("invalid agent id: {error}"))?;
         let (requests, receiver) = mpsc::channel(32);
         let request = InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
-                agent_id: Some(agent_id.into()),
+                target: Some(target),
                 method_name: Some(method_name.to_string()),
                 input: Some(input),
+                captured_method_input: None,
+                allow_streams: true,
                 idempotency_key: Some(idempotency_key.into()),
                 context: None,
                 auth_ctx: Some(AuthCtx::System.into()),
                 caller: Some(golem_common::model::caller::Caller::anonymous().into()),
-                environment_id: None,
+                environment_id: Some(component.environment_id.into()),
                 config: Vec::new(),
                 component_owner_account_id: None,
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
@@ -508,6 +503,8 @@ impl TrustedInvocationSession {
                 origin_invocation: None,
                 external_tool: None,
                 request_key: Some(request_key.into()),
+                constructor,
+                component_id: Some(component.id.into()),
             })),
         };
         let mut state = InvocationSessionState::default();
@@ -562,7 +559,14 @@ impl TrustedInvocationSession {
             }
             other => anyhow::bail!("trusted invocation was not accepted: {other:?}"),
         };
-        session.acceptance = accepted;
+        session.acceptance = if accepted.component_revision.is_some() {
+            accepted
+        } else {
+            match session.receive().await?.response {
+                Some(invocation_response::Response::Ready(ready)) => ready,
+                other => anyhow::bail!("trusted invocation was not ready: {other:?}"),
+            }
+        };
         Ok(session)
     }
 
@@ -589,7 +593,8 @@ impl TrustedInvocationSession {
 
     fn remember_mappings(&mut self, response: &InvocationResponse) {
         let mappings = match response.response.as_ref() {
-            Some(invocation_response::Response::Accepted(accepted)) => &accepted.stream_mappings,
+            Some(invocation_response::Response::Accepted(accepted))
+            | Some(invocation_response::Response::Ready(accepted)) => &accepted.stream_mappings,
             Some(invocation_response::Response::Result(result)) => &result.new_stream_mappings,
             Some(invocation_response::Response::OutputItem(item)) => &item.new_stream_mappings,
             Some(invocation_response::Response::InputAck(ack)) => &ack.new_stream_mappings,
@@ -861,6 +866,7 @@ impl TrustedInvocationReport {
             Some(invocation_response::Response::Accepted(_)) => {
                 anyhow::bail!("trusted invocation was accepted more than once")
             }
+            Some(invocation_response::Response::Ready(_)) => {}
             Some(invocation_response::Response::AttachmentRevoked(revoked)) => {
                 anyhow::bail!(
                     "trusted invocation attachment was revoked: {}",
@@ -1076,10 +1082,7 @@ async fn grpc_invocation_session_routes_resume_and_takeover(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     let environment_id = EnvironmentId(uuid::Uuid::new_v4());
-    let agent_id = AgentId {
-        component_id: ComponentId(uuid::Uuid::new_v4()),
-        agent_id: "missing-resume-target".to_string(),
-    };
+    let agent_id = AgentId::from_parts(1, uuid::Uuid::new_v4().as_u128() >> 38);
     let worker_service = deps.worker_service();
     let mut client = WorkerServiceClient::connect(format!(
         "http://{}:{}",
@@ -1097,7 +1100,7 @@ async fn grpc_invocation_session_routes_resume_and_takeover(
             request: Some(invocation_request::Request::ResumeAttach(
                 PrivateResumeAttach {
                     idempotency_key: Some(idempotency_key.into()),
-                    agent_id: Some(agent_id.clone().into()),
+                    agent_id: Some(agent_id.into()),
                     environment_id: Some(environment_id.into()),
                     attachment_id: Some(
                         AttachmentId::primary(environment_id, &agent_id, &idempotency_key)?
@@ -1138,10 +1141,10 @@ async fn grpc_invocation_session_routes_resume_and_takeover(
         };
         assert_eq!(
             rejected.reason,
-            InvocationRejectionReason::Internal as i32,
+            InvocationRejectionReason::NotFound as i32,
             "resume endpoint returned an unexpected rejection: {rejected:?}"
         );
-        assert_eq!(rejected.error, "Component not found");
+        assert_eq!(rejected.error, format!("Worker not found: {agent_id}"));
         assert!(responses.message().await?.is_none());
         assert!(state.is_complete());
     }
@@ -1167,7 +1170,7 @@ async fn dropped_durable_input_completes_while_producer_items_and_end_are_in_fli
         .unique()
         .store()
         .await?;
-    let target_agent_id = agent_id!(
+    let target_agent_id = agent_key!(
         "StreamingRpcTarget",
         format!("drop-input-{}", uuid::Uuid::new_v4())
     );
@@ -1220,7 +1223,7 @@ async fn dropped_durable_input_discards_items_and_end_after_consumer_cancellatio
         .unique()
         .store()
         .await?;
-    let target_agent_id = agent_id!(
+    let target_agent_id = agent_key!(
         "StreamingRpcTarget",
         format!("drop-input-late-end-{}", uuid::Uuid::new_v4())
     );
@@ -1304,16 +1307,25 @@ async fn streaming_rpc_failure_retains_callee_terminal_after_caller_crash(
     let routing = deps.shard_manager().get_routing_table().await?;
     for (crash, lose_source) in [(false, false), (true, false), (true, true)] {
         let (name, caller_id) = cross_executor_caller(
-            component.id,
+            &user,
+            &component,
             &routing,
             "StreamingRpcCaller",
             "StreamingRpcTarget",
             &format!("terminal-recovery-{crash}-{lose_source}"),
+        )
+        .await?;
+        let caller = keyed_agent_id(
+            &component,
+            agent_type_id(&user, &component, &caller_id.agent_type).await?,
+            &caller_id,
         )?;
-        let caller =
-            AgentId::from_agent_id(component.id, &caller_id).map_err(anyhow::Error::msg)?;
-        let target = AgentId::from_agent_id(component.id, &agent_id!("StreamingRpcTarget", name))
-            .map_err(anyhow::Error::msg)?;
+        let target_key = agent_key!("StreamingRpcTarget", name);
+        let target = keyed_agent_id(
+            &component,
+            agent_type_id(&user, &component, &target_key.agent_type).await?,
+            &target_key,
+        )?;
         let gate = user
             .invoke_and_await_agent(&component, &caller_id, "create_input_gate", data_value!())
             .await?
@@ -1430,7 +1442,8 @@ async fn streaming_rpc_failure_retains_callee_terminal_after_caller_crash(
                 data_value!(gate.clone()),
             ));
         }
-        user.complete_promise(&gate, vec![]).await?;
+        user.complete_promise(&component.environment_id, &gate, vec![])
+            .await?;
         let failure = tokio::time::timeout(Duration::from_secs(90), invocation)
             .await?
             .expect_err("failed producer reached the reader as EOF");
@@ -1516,12 +1529,14 @@ async fn generated_rust_client_streaming_rpc_cross_executor(
         .await?;
     let routing_table = deps.shard_manager().get_routing_table().await?;
     let (_, caller_agent_id) = cross_executor_caller(
-        component.id,
+        &user,
+        &component,
         &routing_table,
         "StreamingRpcCaller",
         "StreamingRpcTarget",
         "generated-rust-streaming-rpc-cross",
-    )?;
+    )
+    .await?;
 
     let result = invoke_agent_session(deps, &component, &caller_agent_id, "run", data_value!())
         .await?
@@ -1546,7 +1561,7 @@ async fn generated_rust_client_streaming_rpc_cross_executor(
         "unexpected producer error: {producer_error:?}"
     );
 
-    let stream_free_caller_id = agent_id!("StreamingRpcCaller", "stream-free-after-stream-error");
+    let stream_free_caller_id = agent_key!("StreamingRpcCaller", "stream-free-after-stream-error");
     let first = user
         .invoke_and_await_agent(
             &component,
@@ -1585,12 +1600,14 @@ async fn generated_moonbit_client_streaming_rpc_cross_executor(
         .await?;
     let routing_table = deps.shard_manager().get_routing_table().await?;
     let (target_name, caller_agent_id) = cross_executor_caller(
-        component.id,
+        &user,
+        &component,
         &routing_table,
         "MoonbitStreamingRpcCaller",
         "MoonbitStreamingRpcCrossTarget",
         "generated-moonbit-streaming-rpc-cross",
-    )?;
+    )
+    .await?;
 
     let report = invoke_agent_session(deps, &component, &caller_agent_id, "run", data_value!())
         .await?
@@ -1609,12 +1626,14 @@ async fn generated_moonbit_client_streaming_rpc_cross_executor(
     assert_eq!(after_reader_drop, SchemaValue::U64(2));
 
     let (_, failure_caller) = cross_executor_caller(
-        component.id,
+        &user,
+        &component,
         &routing_table,
         "MoonbitStreamingRpcCaller",
         "MoonbitStreamingRpcCrossTarget",
         "generated-moonbit-producer-failure-cross",
-    )?;
+    )
+    .await?;
     let failure = invoke_agent_session(
         deps,
         &component,
@@ -1631,12 +1650,14 @@ async fn generated_moonbit_client_streaming_rpc_cross_executor(
     );
 
     let (_, control_caller) = cross_executor_caller(
-        component.id,
+        &user,
+        &component,
         &routing_table,
         "MoonbitStreamingRpcCaller",
         "MoonbitStreamingRpcCrossTarget",
         "generated-moonbit-after-failure-cross",
-    )?;
+    )
+    .await?;
     for expected in [1, 2] {
         let value = invoke_agent_session(
             deps,
@@ -1651,14 +1672,16 @@ async fn generated_moonbit_client_streaming_rpc_cross_executor(
     }
 
     let (cancellation_name, cancellation_caller) = cross_executor_caller(
-        component.id,
+        &user,
+        &component,
         &routing_table,
         "MoonbitStreamingRpcCaller",
         "MoonbitStreamingRpcCrossTarget",
         "generated-moonbit-cancellation-cross",
-    )?;
+    )
+    .await?;
     let cancellation_target =
-        agent_id!("MoonbitStreamingRpcCrossTarget", cancellation_name.clone());
+        agent_key!("MoonbitStreamingRpcCrossTarget", cancellation_name.clone());
     let producer_cancellation = invoke_agent_session(
         deps,
         &component,
@@ -1684,12 +1707,14 @@ async fn generated_moonbit_client_streaming_rpc_cross_executor(
     assert_eq!(target_after_cancellation, 1);
 
     let (server_cancellation_name, server_cancellation_caller) = cross_executor_caller(
-        component.id,
+        &user,
+        &component,
         &routing_table,
         "MoonbitStreamingRpcCaller",
         "MoonbitStreamingRpcCrossTarget",
         "generated-moonbit-server-cancellation-cross",
-    )?;
+    )
+    .await?;
     let server_cancellation = invoke_agent_session(
         deps,
         &component,
@@ -1739,12 +1764,14 @@ async fn generated_go_client_streaming_rpc_cross_executor(
         .await?;
     let routing_table = deps.shard_manager().get_routing_table().await?;
     let (target_name, caller_agent_id) = cross_executor_caller(
-        component.id,
+        &user,
+        &component,
         &routing_table,
         "GoStreamingRpcCaller",
         "GoStreamingRpcCrossTarget",
         "generated-go-streaming-rpc-cross",
-    )?;
+    )
+    .await?;
 
     let report = invoke_agent_session(deps, &component, &caller_agent_id, "run", data_value!())
         .await?
@@ -1763,12 +1790,14 @@ async fn generated_go_client_streaming_rpc_cross_executor(
     assert_eq!(after_reader_drop, SchemaValue::U64(2));
 
     let (_, failure_caller) = cross_executor_caller(
-        component.id,
+        &user,
+        &component,
         &routing_table,
         "GoStreamingRpcCaller",
         "GoStreamingRpcCrossTarget",
         "generated-go-producer-failure-cross",
-    )?;
+    )
+    .await?;
     let failure = invoke_agent_session(
         deps,
         &component,
@@ -1785,12 +1814,14 @@ async fn generated_go_client_streaming_rpc_cross_executor(
     );
 
     let (_, control_caller) = cross_executor_caller(
-        component.id,
+        &user,
+        &component,
         &routing_table,
         "GoStreamingRpcCaller",
         "GoStreamingRpcCrossTarget",
         "generated-go-after-failure-cross",
-    )?;
+    )
+    .await?;
     for expected in [1, 2] {
         let value = invoke_agent_session(
             deps,
@@ -1805,13 +1836,15 @@ async fn generated_go_client_streaming_rpc_cross_executor(
     }
 
     let (cancellation_name, cancellation_caller) = cross_executor_caller(
-        component.id,
+        &user,
+        &component,
         &routing_table,
         "GoStreamingRpcCaller",
         "GoStreamingRpcCrossTarget",
         "generated-go-cancellation-cross",
-    )?;
-    let cancellation_target = agent_id!("GoStreamingRpcCrossTarget", cancellation_name.clone());
+    )
+    .await?;
+    let cancellation_target = agent_key!("GoStreamingRpcCrossTarget", cancellation_name.clone());
     let producer_cancellation = invoke_agent_session(
         deps,
         &component,
@@ -1837,12 +1870,14 @@ async fn generated_go_client_streaming_rpc_cross_executor(
     assert_eq!(target_after_cancellation, 1);
 
     let (server_cancellation_name, server_cancellation_caller) = cross_executor_caller(
-        component.id,
+        &user,
+        &component,
         &routing_table,
         "GoStreamingRpcCaller",
         "GoStreamingRpcCrossTarget",
         "generated-go-server-cancellation-cross",
-    )?;
+    )
+    .await?;
     let server_cancellation = invoke_agent_session(
         deps,
         &component,
@@ -1891,7 +1926,7 @@ async fn moonbit_direct_guest_abi_streaming_lifecycle(
         .store()
         .await?;
     let name = format!("moonbit-direct-streaming-{}", uuid::Uuid::new_v4());
-    let target_agent_id = agent_id!("MoonbitStreamingRpcTarget", name.clone());
+    let target_agent_id = agent_key!("MoonbitStreamingRpcTarget", name.clone());
     assert_eq!(
         component
             .metadata
@@ -2180,7 +2215,7 @@ async fn moonbit_direct_guest_abi_streaming_lifecycle(
     );
     assert!(recoverable.output_ends.contains(&recoverable_stream_id));
 
-    let failed_target = agent_id!("MoonbitStreamingRpcTarget", format!("{name}-failure"));
+    let failed_target = agent_key!("MoonbitStreamingRpcTarget", format!("{name}-failure"));
     let producer_failure = TrustedInvocationSession::start(
         deps,
         &component,
@@ -2303,7 +2338,6 @@ async fn moonbit_direct_guest_abi_streaming_lifecycle(
     let target: AgentId = cancelled_input
         .acceptance
         .agent_id
-        .clone()
         .expect("accepted cancellation target")
         .try_into()
         .map_err(anyhow::Error::msg)?;
@@ -2314,7 +2348,10 @@ async fn moonbit_direct_guest_abi_streaming_lifecycle(
         InvocationFailureKind::Execution
     );
     let history = user
-        .get_oplog(&target, golem_common::model::oplog::OplogIndex::INITIAL)
+        .get_oplog(
+            &OwnedAgentId::new(component.environment_id, &target),
+            golem_common::model::oplog::OplogIndex::INITIAL,
+        )
         .await?;
     assert!(history.iter().any(|entry| {
         use golem_common::model::durable_stream::{
@@ -2343,7 +2380,7 @@ async fn binary_transform_large_chunks(deps: &EnvBasedTestDependencies) -> anyho
         .unique()
         .store()
         .await?;
-    let agent = agent_id!("StreamingRpcTarget", uuid::Uuid::new_v4().to_string());
+    let agent = agent_key!("StreamingRpcTarget", uuid::Uuid::new_v4().to_string());
     let mut session = TrustedInvocationSession::start_with(
         deps,
         &component,
@@ -2413,8 +2450,12 @@ async fn streaming_rpc_disconnect_resume(deps: &EnvBasedTestDependencies) -> any
         .unique()
         .store()
         .await?;
-    let agent = agent_id!("StreamingRpcTarget", uuid::Uuid::new_v4().to_string());
-    let worker = AgentId::from_agent_id(component.id, &agent).map_err(anyhow::Error::msg)?;
+    let agent = agent_key!("StreamingRpcTarget", uuid::Uuid::new_v4().to_string());
+    let worker = keyed_agent_id(
+        &component,
+        agent_type_id(&user, &component, &agent.agent_type).await?,
+        &agent,
+    )?;
     let checkpoint = InvocationSession::start(
         deps,
         &component,
@@ -2526,6 +2567,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
 
     let scalar = run_public_session(
         deps,
+        environment.id,
         &user.token,
         public_start(
             application_name,
@@ -2536,14 +2578,18 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         ),
     )
     .await?;
-    assert_eq!(scalar.len(), 3);
+    assert_eq!(scalar.len(), 4);
     assert!(matches!(
         scalar[0],
         PublicServerMessage::InvocationAccepted { .. }
     ));
+    assert!(matches!(
+        scalar[1],
+        PublicServerMessage::InvocationReady { .. }
+    ));
     let PublicServerMessage::InvocationResult {
         mappings, result, ..
-    } = &scalar[1]
+    } = &scalar[2]
     else {
         anyhow::bail!("scalar public invocation did not return a result")
     };
@@ -2553,15 +2599,72 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
     assert!(mappings.is_empty());
     assert_eq!(value, &serde_json::json!({"kind": "u64", "value": "42"}));
     assert!(matches!(
-        scalar[2],
+        scalar[3],
         PublicServerMessage::InvocationFinished {
             outcome: PublicInvocationOutcome::Success,
             ..
         }
     ));
 
+    let PublicServerMessage::InvocationAccepted { agent_id, .. } = scalar[0] else {
+        unreachable!()
+    };
+    let mut by_id = public_start(
+        application_name,
+        environment_name,
+        &agent_name,
+        "ping",
+        native_record([]),
+    );
+    if let PublicClientMessage::InvocationStart { selector, .. } = &mut by_id {
+        selector.target = golem_common::model::invocation_session_public::PublicAgentTarget::Id {
+            agent_id,
+            expected_fingerprint: None,
+        };
+    }
+    let existing = run_public_session(deps, environment.id, &user.token, by_id.clone()).await?;
+    assert!(matches!(
+        existing[2],
+        PublicServerMessage::InvocationResult { .. }
+    ));
+    let missing_key = agent_key!("StreamingRpcTarget", format!("{agent_name}-missing"));
+    let missing_key =
+        golem_common::model::agent::AgentKey::new(missing_key.agent_type, missing_key.parameters)?;
+    let missing = AgentId::keyed(environment.id, agent_id.type_id().unwrap(), &missing_key);
+    if let PublicClientMessage::InvocationStart { selector, .. } = &mut by_id {
+        selector.target = golem_common::model::invocation_session_public::PublicAgentTarget::Id {
+            agent_id: missing,
+            expected_fingerprint: None,
+        };
+    }
+    let rejected = run_public_session(deps, environment.id, &user.token, by_id).await?;
+    assert!(matches!(
+        &rejected[..],
+        [PublicServerMessage::InvocationRejected {
+            code: PublicErrorCode::NotFound,
+            ..
+        }]
+    ));
+    let worker_service = deps.worker_service();
+    let metadata = reqwest::Client::new()
+        .get(format!(
+            "http://{}:{}/v1/runtime/envs/{}/agents/{missing}",
+            worker_service.http_host(),
+            worker_service.http_port(),
+            environment.id,
+        ))
+        .bearer_auth(user.token.secret())
+        .send()
+        .await?;
+    assert_eq!(
+        metadata.status(),
+        reqwest::StatusCode::NOT_FOUND,
+        "an ID session must not create an agent"
+    );
+
     let produced = run_public_session(
         deps,
+        environment.id,
         &user.token,
         public_start(
             application_name,
@@ -2575,10 +2678,14 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         ),
     )
     .await?;
-    assert_eq!(produced.len(), 7);
+    assert_eq!(produced.len(), 8);
+    assert!(matches!(
+        produced[1],
+        PublicServerMessage::InvocationReady { .. }
+    ));
     let PublicServerMessage::InvocationResult {
         mappings, result, ..
-    } = &produced[1]
+    } = &produced[2]
     else {
         anyhow::bail!("streaming public invocation did not return an initial result")
     };
@@ -2595,7 +2702,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
             "streamToken": output_mapping.stream_token.clone()
         }))
     );
-    let items = produced[2..5]
+    let items = produced[3..6]
         .iter()
         .enumerate()
         .map(|(expected_sequence, response)| match response {
@@ -2614,7 +2721,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         .collect::<Vec<_>>();
     assert_eq!(items, vec![native_u32(3), native_u32(5), native_u32(8)]);
     assert!(matches!(
-        produced[5],
+        produced[6],
         PublicServerMessage::StreamEnd {
             channel,
             direction: PublicStreamDirection::Output,
@@ -2624,7 +2731,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         } if channel == output_mapping.channel
     ));
     assert!(matches!(
-        produced[6],
+        produced[7],
         PublicServerMessage::InvocationFinished {
             outcome: PublicInvocationOutcome::Success,
             ..
@@ -2641,11 +2748,13 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
             "provisionalRef": input_reference
         }))]),
     );
-    let mut socket = connect_public_invocation_socket(deps, Some(&user.token)).await?;
+    let mut socket =
+        connect_public_invocation_socket(deps, environment.id, Some(&user.token)).await?;
     send_public_request(&mut socket, &start).await?;
-    let accepted = receive_public_response(&mut socket).await?;
+    let accepted = receive_public_stream_readiness(&mut socket).await?;
     let input_channel = match accepted {
-        PublicServerMessage::InvocationAccepted { mappings, .. } => mappings
+        PublicServerMessage::InvocationAccepted { mappings, .. }
+        | PublicServerMessage::InvocationReady { mappings, .. } => mappings
             .iter()
             .find(|mapping| mapping.provisional_ref == Some(input_reference))
             .map(|mapping| mapping.channel)
@@ -2724,11 +2833,17 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
             "provisionalRef": blocked_reference
         }))]),
     );
-    let mut blocked_socket = connect_public_invocation_socket(deps, Some(&user.token)).await?;
+    let mut blocked_socket =
+        connect_public_invocation_socket(deps, environment.id, Some(&user.token)).await?;
     send_public_request(&mut blocked_socket, &blocked).await?;
-    let accepted = receive_public_response(&mut blocked_socket).await?;
+    let accepted = receive_public_stream_readiness(&mut blocked_socket).await?;
     let (blocked_session_token, blocked_channel) = match accepted {
         PublicServerMessage::InvocationAccepted {
+            mappings,
+            session_token,
+            ..
+        }
+        | PublicServerMessage::InvocationReady {
             mappings,
             session_token,
             ..
@@ -2756,10 +2871,18 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
     .map_err(|_| anyhow::anyhow!("blocked invocation close handshake timed out"))??;
     drop(blocked_socket);
 
-    resume_public_input_with_end(deps, &user.token, blocked_session_token, blocked_channel).await?;
+    resume_public_input_with_end(
+        deps,
+        environment.id,
+        &user.token,
+        blocked_session_token,
+        blocked_channel,
+    )
+    .await?;
 
     let subsequent = run_public_session(
         deps,
+        environment.id,
         &user.token,
         public_start(
             application_name,
@@ -2779,7 +2902,8 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
     )));
 
     let capability_reference = uuid::Uuid::new_v4();
-    let mut capability_socket = connect_public_invocation_socket(deps, Some(&user.token)).await?;
+    let mut capability_socket =
+        connect_public_invocation_socket(deps, environment.id, Some(&user.token)).await?;
     send_public_request(
         &mut capability_socket,
         &public_start(
@@ -2793,9 +2917,14 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         ),
     )
     .await?;
-    let accepted = receive_public_response(&mut capability_socket).await?;
+    let accepted = receive_public_stream_readiness(&mut capability_socket).await?;
     let (capability_session_token, capability_channel) = match accepted {
         PublicServerMessage::InvocationAccepted {
+            mappings,
+            session_token,
+            ..
+        }
+        | PublicServerMessage::InvocationReady {
             mappings,
             session_token,
             ..
@@ -2839,6 +2968,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
 
     resume_public_input_with_end(
         deps,
+        environment.id,
         &user.token,
         capability_session_token,
         capability_channel,
@@ -2848,6 +2978,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         std::time::Duration::from_secs(30),
         run_public_session(
             deps,
+            environment.id,
             &user.token,
             public_start(
                 application_name,
@@ -2869,7 +3000,8 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
 async fn public_websocket_invocation_enforces_auth_frames_and_rejections(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
-    let missing_auth = connect_public_invocation_socket(deps, None)
+    let environment_id = EnvironmentId(uuid::Uuid::new_v4());
+    let missing_auth = connect_public_invocation_socket(deps, environment_id, None)
         .await
         .expect_err("missing authentication must reject the WebSocket upgrade");
     assert!(matches!(
@@ -2878,7 +3010,7 @@ async fn public_websocket_invocation_enforces_auth_frames_and_rejections(
     ));
 
     let invalid_token = TokenSecret::trusted("not-a-valid-token".to_string());
-    let invalid_auth = connect_public_invocation_socket(deps, Some(&invalid_token))
+    let invalid_auth = connect_public_invocation_socket(deps, environment_id, Some(&invalid_token))
         .await
         .expect_err("invalid authentication must reject the WebSocket upgrade");
     assert!(matches!(
@@ -2888,10 +3020,14 @@ async fn public_websocket_invocation_enforces_auth_frames_and_rejections(
 
     let user = deps.user().await?;
     for subprotocol in [None, Some("unsupported.invocation.v1")] {
-        let error =
-            connect_public_invocation_socket_with_subprotocol(deps, Some(&user.token), subprotocol)
-                .await
-                .expect_err("missing or unsupported subprotocol must reject the WebSocket upgrade");
+        let error = connect_public_invocation_socket_with_subprotocol(
+            deps,
+            environment_id,
+            Some(&user.token),
+            subprotocol,
+        )
+        .await
+        .expect_err("missing or unsupported subprotocol must reject the WebSocket upgrade");
         assert!(matches!(
             error,
             WebSocketError::Http(response) if response.status().as_u16() == 400
@@ -2902,7 +3038,8 @@ async fn public_websocket_invocation_enforces_auth_frames_and_rejections(
         Message::Text("not json".into()),
         Message::Binary(vec![0x0a, 0x00].into()),
     ] {
-        let mut socket = connect_public_invocation_socket(deps, Some(&user.token)).await?;
+        let mut socket =
+            connect_public_invocation_socket(deps, environment_id, Some(&user.token)).await?;
         socket.send(invalid_message).await?;
         let Some(Ok(Message::Close(Some(close)))) = socket.next().await else {
             anyhow::bail!("invalid public frame did not receive a close response")
@@ -2916,6 +3053,7 @@ async fn public_websocket_invocation_enforces_auth_frames_and_rejections(
 
     let rejected = run_public_session(
         deps,
+        environment_id,
         &user.token,
         public_start(
             "application-that-does-not-exist",

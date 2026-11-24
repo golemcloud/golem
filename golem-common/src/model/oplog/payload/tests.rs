@@ -827,7 +827,7 @@ use super::{
     HostRequestGolemRpcAsyncInvokeRejection, HostRequestGolemRpcInvoke, HostResponseGolemApiAgents,
 };
 use crate::model::agent::{
-    ResolvedRevert, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget,
+    AgentTypeName, ResolvedRevert, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget,
 };
 use crate::model::card::{CardId, ScopeCard};
 use crate::model::component::{ComponentId, ComponentRevision};
@@ -992,10 +992,7 @@ fn rpc_durable_request_captures_scope_card_and_logical_streaming_origin_determin
         expires_at: None,
     };
     let request = HostRequestGolemRpcInvoke {
-        remote_agent_id: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "target".to_string(),
-        },
+        remote_agent_id: AgentId::from_parts(7, 1),
         request_key: crate::model::InvocationRequestKey::Internal(IdempotencyKey::new(
             "scope-card-call".to_string(),
         )),
@@ -1005,10 +1002,7 @@ fn rpc_durable_request_captures_scope_card_and_logical_streaming_origin_determin
         },
         logical_streaming_origin: Some(StreamInvocationId {
             callee_environment_id: EnvironmentId::new(),
-            callee: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "original-caller".to_string(),
-            },
+            callee: AgentId::from_parts(7, 2),
             callee_fingerprint: AgentFingerprint(uuid::Uuid::from_u128(3)),
             idempotency_key: uuid::Uuid::from_u128(0x0123456789abcdef_fedcba9876543211).into(),
         }),
@@ -1028,10 +1022,7 @@ fn rpc_durable_request_captures_scope_card_and_logical_streaming_origin_determin
 #[test]
 fn async_rpc_rejection_request_roundtrips_stable_identity() {
     let request = HostRequestGolemRpcAsyncInvokeRejection {
-        remote_agent_id: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "counter-1".to_string(),
-        },
+        remote_agent_id: AgentId::from_parts(7, 3),
         idempotency_key: IdempotencyKey::new("rejected-at-42".to_string()),
         method_name: "increment".to_string(),
         error: SerializableRpcError::ProtocolError {
@@ -1050,10 +1041,7 @@ fn scheduled_invocation_typed_result_preserves_final_receipt() {
         id: uuid::Uuid::from_u128(0x123456789abcdef00123456789abcdef),
     };
     let invocation_id = crate::model::OwnedInvocationId::internal(
-        AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "target".to_string(),
-        },
+        AgentId::from_parts(7, 1),
         AgentFingerprint(uuid::Uuid::from_u128(42)),
         "run",
         &IdempotencyKey::from("child"),
@@ -1383,9 +1371,12 @@ fn entity_invocation_host_payload_pair_roundtrips() {
 fn agent_type_by_agent_id_host_payload_pair_roundtrips() {
     assert_host_payload_pair_roundtrip::<host_functions::GolemAgentGetAgentTypeByAgentId>(
         HostRequestGolemAgentGetAgentTypeByAgentId {
-            agent_id: "Counter(main)".to_string(),
+            agent_id: crate::model::AgentId::from_parts(7, 1),
         },
-        HostResponseGolemAgentAgentType { result: Ok(None) },
+        HostResponseGolemAgentAgentType {
+            result: Ok(None),
+            type_id: None,
+        },
     );
 }
 
@@ -1977,6 +1968,56 @@ fn p3_filesystem_host_payload_pairs_roundtrip() {
 }
 
 #[test]
+fn p2_tcp_socket_host_payload_pairs_roundtrip() {
+    use crate::model::oplog::types::SerializableSocketError;
+    use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode;
+    let local = SerializableP3IpSocketAddress {
+        address: SerializableIpAddress::IPv4 {
+            address: [127, 0, 0, 1],
+        },
+        port: 40123,
+        flow_info: None,
+        scope_id: None,
+    };
+    let remote = SerializableP3IpSocketAddress {
+        port: 5432,
+        ..local.clone()
+    };
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsTcpStartBind>(
+        super::HostRequestSocketsTcpBind {
+            local_address: local.clone(),
+        },
+        super::HostResponseSocketsTcpBind {
+            result: Ok(local.clone()),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsTcpStartConnect>(
+        super::HostRequestSocketsTcpConnect {
+            remote_address: remote.clone(),
+        },
+        super::HostResponseSocketsTcpStartConnect {
+            result: Err(SerializableSocketError::from_result(Ok(
+                ErrorCode::ConcurrencyConflict,
+            ))),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsTcpFinishConnect>(
+        HostRequestNoInput {},
+        super::HostResponseSocketsTcpFinishConnect {
+            result: Ok((local, remote)),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsTcpFinishConnect>(
+        HostRequestNoInput {},
+        super::HostResponseSocketsTcpFinishConnect {
+            result: Err(SerializableSocketError::from_result(Ok(
+                ErrorCode::WouldBlock,
+            ))),
+        },
+    );
+}
+
+#[test]
 fn p2_udp_socket_host_payload_pairs_roundtrip() {
     use crate::model::oplog::types::SerializableSocketError;
     use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode;
@@ -2071,7 +2112,7 @@ fn get_agents_page_preserves_opaque_cursor_in_durable_payload() {
     let cursor = ScanCursor::new("gsc1_recorded-token_雪".to_string());
     assert_host_payload_pair_roundtrip::<host_functions::GolemApiGetAgents>(
         HostRequestGolemApiGetAgents {
-            component_id: ComponentId::new(),
+            agent_type_name: AgentTypeName("Counter".to_string()),
         },
         HostResponseGolemApiAgents {
             result: Ok((Some(cursor), Vec::new())),
@@ -2106,12 +2147,9 @@ fn durable_rpc_create_outcomes_roundtrip() {
             details: "whole-agent invocation required".to_string(),
         }),
     ] {
-        assert_host_payload_pair_roundtrip::<host_functions::GolemRpcWasmRpcNew>(
+        assert_host_payload_pair_roundtrip::<host_functions::GolemRpcWasmRpcUpsert>(
             HostRequestGolemRpcCreate {
-                remote_agent_id: AgentId {
-                    component_id: ComponentId::new(),
-                    agent_id: "child-agent".to_string(),
-                },
+                remote_agent_id: AgentId::from_parts(7, 4),
             },
             HostResponseGolemRpcCreate {
                 result,
@@ -2126,10 +2164,7 @@ fn durable_rpc_preparation_payload_pair_roundtrips() {
     assert_host_payload_pair_roundtrip::<host_functions::GolemRpcWasmRpcPrepareInvocation>(
         super::HostRequestGolemRpcPrepareInvocation {
             invocation_start_index: crate::model::OplogIndex::from_u64(42),
-            remote_agent_id: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "target".to_string(),
-            },
+            remote_agent_id: AgentId::from_parts(7, 1),
             method_name: "run".to_string(),
             request_key: crate::model::InvocationRequestKey::Internal(IdempotencyKey::from(
                 "child",
@@ -2187,19 +2222,15 @@ fn tool_await_invoke_results_payload_pair_roundtrips() {
 
 #[test]
 fn prepared_revert_payload_pair_roundtrips() {
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "target-agent".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 5);
     assert_host_payload_pair_roundtrip::<host_functions::GolemApiRevertWorker>(
         HostRequestGolemApiRevertAgent {
-            agent_id: agent_id.clone(),
+            agent_id,
             target: RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
                 number_of_invocations: 2,
             }),
             resolved_revert: Some(ResolvedRevert {
                 last_oplog_index: OplogIndex::from_u64(42),
-                observed_oplog_index: OplogIndex::from_u64(100),
             }),
         },
         HostResponseGolemApiUnit { result: Ok(()) },
@@ -2899,14 +2930,11 @@ fn appended_tool_rpc_error_cases_preserve_legacy_discriminants() {
 
 #[test]
 fn durable_oplog_read_payload_pairs_roundtrip() {
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "Counter(main)".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 6);
     let revision = ComponentRevision::try_from(7_u64).unwrap();
     assert_host_payload_pair_roundtrip::<host_functions::GolemApiGetOplogNext>(
         HostRequestGolemApiOplogRead {
-            agent_id: agent_id.clone(),
+            agent_id,
             next_oplog_index: OplogIndex::from_u64(41),
             query: None,
             page_size: 100,
@@ -2921,7 +2949,7 @@ fn durable_oplog_read_payload_pairs_roundtrip() {
     );
     assert_host_payload_pair_roundtrip::<host_functions::GolemApiSearchOplogNext>(
         HostRequestGolemApiOplogRead {
-            agent_id: agent_id.clone(),
+            agent_id,
             next_oplog_index: OplogIndex::from_u64(42),
             query: Some("function = 'run'".to_string()),
             page_size: 100,
@@ -3176,4 +3204,82 @@ proptest! {
         assert_eq!(decoded, attributes);
     }
 
+}
+
+#[test]
+fn p2_tcp_stream_error_keeps_its_errno_and_kind_through_the_oplog() {
+    use crate::model::oplog::types::SerializableTcpStreamError;
+
+    fn replayed(error: StreamError) -> std::io::Error {
+        let recorded = SerializableTcpStreamError::from_stream_error(error).unwrap();
+        let bytes = desert_rust::serialize_to_byte_vec(&recorded).unwrap();
+        let decoded: SerializableTcpStreamError = desert_rust::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, recorded);
+        match StreamError::from(decoded) {
+            StreamError::LastOperationFailed(error) => error.downcast::<std::io::Error>().unwrap(),
+            other => panic!("expected last-operation-failed, got {other:?}"),
+        }
+    }
+
+    let os = replayed(StreamError::LastOperationFailed(wasmtime::Error::from(
+        std::io::Error::from_raw_os_error(32),
+    )));
+    assert_eq!(os.raw_os_error(), Some(32));
+    assert_eq!(os.kind(), std::io::ErrorKind::BrokenPipe);
+
+    let kind = replayed(StreamError::LastOperationFailed(wasmtime::Error::from(
+        std::io::Error::from(std::io::ErrorKind::ConnectionReset),
+    )));
+    assert_eq!(kind.raw_os_error(), None);
+    assert_eq!(kind.kind(), std::io::ErrorKind::ConnectionReset);
+
+    // The native P2 TCP streams fail with a socket error code, not with an I/O error.
+    let native = wasmtime_wasi::p2::bindings::sockets::network::ErrorCode::ConnectionAborted;
+    let code = replayed(StreamError::LastOperationFailed(wasmtime::Error::from(
+        native,
+    )));
+    assert_eq!(code.raw_os_error(), None);
+    assert_eq!(code.kind(), std::io::ErrorKind::ConnectionAborted);
+    assert_eq!(code.to_string(), native.to_string(), "the message is kept");
+
+    // The reader fails with the Wasmtime sockets error code instead of the P2 one.
+    let read = replayed(StreamError::LastOperationFailed(wasmtime::Error::from(
+        wasmtime_wasi::sockets::ErrorCode::ConnectionReset,
+    )));
+    assert_eq!(
+        wasmtime_wasi::p2::bindings::sockets::network::ErrorCode::from(&read),
+        wasmtime_wasi::p2::bindings::sockets::network::ErrorCode::ConnectionReset
+    );
+
+    // Every code that a native stream can fail with comes back as the guest's
+    // `network-error-code`, which Wasmtime derives from the I/O error.
+    {
+        use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode;
+        for code in [
+            ErrorCode::AccessDenied,
+            ErrorCode::NotSupported,
+            ErrorCode::InvalidArgument,
+            ErrorCode::OutOfMemory,
+            ErrorCode::Timeout,
+            ErrorCode::ConcurrencyConflict,
+            ErrorCode::InvalidState,
+            ErrorCode::NewSocketLimit,
+            ErrorCode::AddressNotBindable,
+            ErrorCode::AddressInUse,
+            ErrorCode::RemoteUnreachable,
+            ErrorCode::ConnectionRefused,
+            ErrorCode::ConnectionReset,
+            ErrorCode::ConnectionAborted,
+            ErrorCode::DatagramTooLarge,
+        ] {
+            let error = replayed(StreamError::LastOperationFailed(wasmtime::Error::from(
+                code,
+            )));
+            assert_eq!(ErrorCode::from(&error), code, "{code:?} through the oplog");
+        }
+    }
+
+    let closed = SerializableTcpStreamError::from_stream_error(StreamError::Closed).unwrap();
+    assert!(matches!(StreamError::from(closed), StreamError::Closed));
+    assert!(SerializableTcpStreamError::from_stream_error(StreamError::trap("trap")).is_err());
 }

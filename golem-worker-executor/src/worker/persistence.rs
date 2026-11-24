@@ -295,6 +295,54 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ),
         }
     }
+    /// Whether the next work of the invocation loop is a due pending invocation that starts with
+    /// a committed `AgentInvocationStarted`, as `SelectedWork::next` picks it from the published
+    /// status: a pending update goes first, then the first due pending invocation. Reads the
+    /// published status without waiting for folds in flight: a stale answer only commits a
+    /// settlement on its own, or defers one that the loop commits before other work.
+    pub(crate) fn next_work_is_a_due_invocation(&self) -> bool {
+        let status = self.last_known_status.load();
+        let now = Timestamp::now_utc();
+        status.pending_updates.is_empty()
+            && status
+                .pending_invocations
+                .iter()
+                .find(|pending| pending.is_due(now))
+                .is_some_and(starts_with_a_committed_start)
+    }
+    /// Leaves the `AgentInvocationSettled` the invocation loop just appended in the oplog buffer,
+    /// so the commit of the next `AgentInvocationStarted` stores both and one status fold covers
+    /// both. Until then the folded status still shows the invocation settling, as it does while a
+    /// settlement commit is in flight. So the invocation loop defers it only when a queued
+    /// invocation is due, and commits it on its own ([`Self::commit_deferred_settlement`]) before
+    /// other work, before it waits for a command or a permit, and when it exits. The start of the
+    /// next invocation (payload hydration, scope card, instance lock) runs with it buffered.
+    pub(crate) fn defer_settlement_commit(&self) {
+        self.settlement_commit_deferred
+            .store(true, Ordering::Release);
+    }
+    /// Whether an `AgentInvocationSettled` waits for the commit of the next
+    /// `AgentInvocationStarted`.
+    pub(crate) fn settlement_commit_deferred(&self) -> bool {
+        self.settlement_commit_deferred.load(Ordering::Acquire)
+    }
+    /// Records that a commit stored the deferred `AgentInvocationSettled` with the entries after
+    /// it.
+    pub(crate) fn settlement_committed(&self) {
+        self.settlement_commit_deferred
+            .store(false, Ordering::Release);
+    }
+    /// Commits a deferred `AgentInvocationSettled` and folds it into the published status, so a
+    /// status read after it sees the invocation settled. The flag stays set until the commit
+    /// succeeded, so a commit that a cancelled caller abandoned is repeated by the next one.
+    pub(crate) async fn commit_deferred_settlement(&self) -> Result<(), OplogError> {
+        if self.settlement_commit_deferred() {
+            self.commit_oplog_and_update_state(CommitLevel::Always)
+                .await?;
+            self.settlement_committed();
+        }
+        Ok(())
+    }
     /// Adds an entry and commits it, reporting a refusal of either as in
     /// [`Self::commit_oplog_and_update_state`].
     ///
@@ -547,4 +595,20 @@ pub(in crate::worker) fn scheduled_archive_is_current(
     scheduled: OplogIndex,
 ) -> bool {
     current >= scheduled
+}
+
+/// Whether `pending` is an agent invocation whose start commits its `AgentInvocationStarted`: a
+/// constructor, an agent method or a tool invocation. A manual update and the executor's own work
+/// start no such entry.
+pub(crate) fn starts_with_a_committed_start(
+    pending: &golem_common::model::PendingInvocationRef,
+) -> bool {
+    matches!(
+        pending.operation,
+        Some(
+            golem_common::model::InvocationOperation::Constructor
+                | golem_common::model::InvocationOperation::Method(_)
+                | golem_common::model::InvocationOperation::Tool(_)
+        )
+    )
 }

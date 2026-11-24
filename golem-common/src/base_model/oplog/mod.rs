@@ -18,7 +18,8 @@ mod oplog_macro;
 pub(crate) mod public_types;
 mod replay_divergence;
 
-use crate::base_model::agent::{AgentMode, OwnerKind};
+use crate::base_model::agent::{AgentMode, AgentTypeName, OwnerKind};
+use crate::base_model::caller::PublicCaller;
 use crate::base_model::component::ComponentRevision;
 #[cfg(feature = "full")]
 use crate::base_model::durable_stream::{
@@ -42,6 +43,7 @@ use uuid::Uuid;
 /// Imports only used by the raw oplog entries - not generated unless the 'full' feature is enabled.
 #[cfg(feature = "full")]
 mod raw_imports {
+    pub use crate::base_model::caller::Caller;
     pub use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
     pub use crate::base_model::invocation_context::TraceId;
 
@@ -49,7 +51,9 @@ mod raw_imports {
 
     pub use crate::model::oplog::raw_types::*;
     pub use crate::model::retry_policy::{NamedRetryPolicy, RetryPolicyState};
-    pub use crate::model::{AgentInvocationPayload, AgentInvocationResult};
+    pub use crate::model::{
+        AgentInvocationResult, InvocationRequestOperation, StoredAgentInvocationPayload,
+    };
     pub use crate::resource_runtime::ResourceTypeId;
 
     pub use std::collections::HashSet;
@@ -84,6 +88,7 @@ oplog_entry! {
         }
         public {
             agent_id: AgentId,
+            agent_type_name: Option<AgentTypeName>,
             owner_kind: OwnerKind,
             agent_mode: AgentMode,
             component_revision: ComponentRevision,
@@ -95,7 +100,6 @@ oplog_entry! {
             initial_total_linear_memory_size: u64,
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
             local_agent_config: Vec<PublicTypedAgentConfigEntry>,
-            original_phantom_id: Option<Uuid>,
             instance_id: Uuid,
             never_live: bool
         }
@@ -110,6 +114,11 @@ oplog_entry! {
     /// `observational_owner` is the `Start` index of a custom durable invocation whose physical
     /// call tree is recorded for observability but does not participate in replay. It is absent
     /// for ordinary replayable calls.
+    /// `driver` is the `AgentInvocationStarted` index of the invocation whose settlement waits for
+    /// this call. It is present in two cases: a store task that records after its spawning
+    /// invocation closed records the invocation that resumed it, and agent-level work recorded
+    /// while an invocation runs records that invocation, even when the call's invocation id is
+    /// anchored at the same invocation. It is absent otherwise.
     /// `request` is `Some(...)` for real host calls and `None` for scopes that have no
     /// host-level request payload (batched-write, future transaction scopes).
     /// `denial` is the reason the host denied the call before it ran. A denied call never runs
@@ -124,6 +133,7 @@ oplog_entry! {
             function_name: payload::host_functions::HostFunctionName,
             invocation_id: Option<DurableInvocationId>,
             observational_owner: Option<OplogIndex>,
+            driver: Option<OplogIndex>,
             request: Option<payload::OplogPayload<payload::HostRequest>>,
             durable_function_type: DurableFunctionType,
             span_started: Option<Box<SpanStarted>>,
@@ -134,6 +144,7 @@ oplog_entry! {
             function_name: String,
             invocation_id: Option<DurableInvocationId>,
             observational_owner: Option<OplogIndex>,
+            driver: Option<OplogIndex>,
             request: Option<TypedSchemaValue>,
             durable_function_type: PublicDurableFunctionType,
             span_started: Option<PublicSpanStarted>,
@@ -194,7 +205,8 @@ oplog_entry! {
         wit_public_type: "agent-invocation-started-parameters"
         raw {
             invocation_id: InvocationId,
-            payload: payload::OplogPayload<AgentInvocationPayload>,
+            operation: Box<InvocationRequestOperation>,
+            payload: payload::OplogPayload<StoredAgentInvocationPayload>,
             trace_id: TraceId,
             trace_states: Vec<String>,
             invocation_context: Vec<SpanData>,
@@ -206,6 +218,10 @@ oplog_entry! {
         }
     },
     /// The agent has completed an invocation
+    ///
+    /// `awaits_settlement` is set when the result was recorded at the export's return: the
+    /// invocation's background work drains after this entry, and `AgentInvocationSettled`
+    /// closes the invocation.
     AgentInvocationFinished {
         hint: false
         wit_raw_type: "raw-agent-invocation-finished-parameters"
@@ -216,6 +232,7 @@ oplog_entry! {
             method_name: Option<String>,
             consumed_fuel: i64,
             component_revision: ComponentRevision,
+            awaits_settlement: bool,
         }
         public {
             invocation_id: InvocationId,
@@ -226,6 +243,10 @@ oplog_entry! {
         }
     },
     /// A method returned an error, completing only this invocation.
+    ///
+    /// `awaits_settlement` is set when the error was recorded at the export's return: the
+    /// invocation's background work drains after this entry, and `AgentInvocationSettled`
+    /// closes the invocation.
     AgentInvocationFailed {
         hint: false
         wit_raw_type: "raw-agent-invocation-failed-parameters"
@@ -235,11 +256,26 @@ oplog_entry! {
             invocation_id: InvocationId,
             error: AgentError,
             start_index: OplogIndex,
+            awaits_settlement: bool,
         }
         public {
             invocation_id: InvocationId,
             error: String,
             start_index: OplogIndex,
+        }
+    },
+    /// The background work of an agent invocation ended after its result was recorded.
+    AgentInvocationSettled {
+        hint: true
+        wit_raw_type: "raw-agent-invocation-settled-parameters"
+        wit_public_type: "agent-invocation-settled-parameters"
+        raw {
+            invocation_id: InvocationId,
+            consumed_fuel: i64,
+        }
+        public {
+            invocation_id: InvocationId,
+            consumed_fuel: i64,
         }
     },
     /// Worker suspended
@@ -333,7 +369,8 @@ oplog_entry! {
         raw {
             not_before: Option<Timestamp>,
             invocation_id: InvocationId,
-            payload: payload::OplogPayload<AgentInvocationPayload>,
+            operation: Box<InvocationRequestOperation>,
+            payload: payload::OplogPayload<StoredAgentInvocationPayload>,
             trace_id: TraceId,
             trace_states: Vec<String>,
             invocation_context: Vec<SpanData>,
@@ -347,6 +384,10 @@ oplog_entry! {
     ///
     /// For automatic updates worker is expected to immediately get interrupted and restarted after inserting this entry.
     /// For manual updates, this entry is only inserted when the worker is idle, and it is also restarted.
+    ///
+    /// `requester` is who asked for the update: the caller of the update request. Every
+    /// `PendingUpdate` of one update attempt has the same requester. It is never the caller of the
+    /// update's snapshot save or load.
     PendingUpdate {
         hint: true
         wit_raw_type: "raw-pending-update-parameters"
@@ -354,11 +395,13 @@ oplog_entry! {
         raw {
             description: UpdateDescription,
             update_attempt_index: Option<OplogIndex>,
+            requester: Box<Caller>,
         }
         public {
             target_revision: ComponentRevision,
             description: PublicUpdateDescription,
             update_attempt_index: OplogIndex,
+            requester: PublicCaller,
         }
     },
     /// An update was successfully applied

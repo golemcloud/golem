@@ -20,10 +20,11 @@ use axum::extract::{Path, Request, State};
 use axum::response::Response;
 use axum::routing::{get, post};
 use futures::StreamExt;
-use golem_common::agent_id;
+use golem_common::agent_key;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::extraction::extract_component_metadata;
 use golem_common::model::agent::{AgentMode, AgentTypeName, OwnerKind};
+use golem_common::model::caller::Caller;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::durable_stream::{StreamError, StreamTerminal};
@@ -99,6 +100,7 @@ async fn start_with_agent_sockets(
 }
 
 mod attachment_cost_contract;
+mod caller_chains;
 mod chunk_f_policy_acceptance;
 mod chunk_m_stream_deltas;
 mod dropped_waits;
@@ -345,7 +347,7 @@ async fn run_single_store_http_probe(
         } else {
             format!("{agent_name}-recording-{attempt}")
         };
-        let agent = agent_id!("ToolStreamingCaller", agent_name);
+        let agent = agent_key!("ToolStreamingCaller", agent_name);
         let worker_id = executor
             .start_agent_with(&component.id, agent.clone(), env.clone(), Vec::new())
             .await?;
@@ -450,13 +452,15 @@ async fn run_single_store_http_probe(
         start_with_agent_sockets(deps, &context, TestExecutorOverrides::default()).await?;
     let mut admission_gate = match gate {
         SingleStoreProbeGate::None => None,
-        SingleStoreProbeGate::Admission(stage) => {
-            Some(executor.gate_next_replay_access_admission(&worker_id, "consume-body", stage))
-        }
+        SingleStoreProbeGate::Admission(stage) => Some(executor.gate_next_replay_access_admission(
+            &worker_id.agent_id,
+            "consume-body",
+            stage,
+        )),
     };
     // The direct idempotency-key call waits for replay progress while body admission is paused.
     let mut direct_wait =
-        executor.signal_next_direct_replay_wait(&worker_id, "generate_idempotency-key");
+        executor.signal_next_direct_replay_wait(&worker_id.agent_id, "generate_idempotency-key");
     let replay = async {
         let invoke = executor.invoke_and_await_agent(
             &component,
@@ -950,6 +954,9 @@ pub(crate) fn deployment_state(
                     secret_keys_revealable: SecretKeyScope::All,
                     filesystem_access,
                     source: tool.registration.source.clone(),
+                    // The registry marks the built-in `bash` release as the shell; the tests
+                    // deploy the built-in `bash` component in its place.
+                    shell: provider_component_name == "golem:bash" && name.as_str() == "bash",
                 },
             )
         })
@@ -1179,7 +1186,7 @@ async fn invoke_cli_tool_version(
     let evidence: CliToolEvidence = executor
         .invoke_and_await_agent(
             caller_component,
-            &agent_id!("ToolStreamingCaller", format!("{tool_name}-version")),
+            &agent_key!("ToolStreamingCaller", format!("{tool_name}-version")),
             "builtin_cli",
             data_value!(tool_name, "/workspace", vec!["--version"]),
         )
@@ -1208,7 +1215,7 @@ async fn invoke_cli_tool(
     executor
         .invoke_and_await_agent(
             caller_component,
-            &agent_id!("ToolStreamingCaller", agent_name),
+            &agent_key!("ToolStreamingCaller", agent_name),
             "builtin_cli",
             data_value!(tool_name, cwd, args),
         )
@@ -1960,6 +1967,7 @@ fn native_deployment_state(
         secret_keys_revealable: SecretKeyScope::All,
         filesystem_access: ToolFilesystemAccess::Unset,
         source,
+        shell: false,
     };
     let mut state = ToolDeploymentState {
         deployment_revision,
@@ -2011,6 +2019,7 @@ fn native_deployment_state(
             secret_keys_revealable: SecretKeyScope::All,
             filesystem_access: ToolFilesystemAccess::Unset,
             source: helper_source,
+            shell: false,
         },
     );
     state
@@ -2771,7 +2780,12 @@ async fn wait_for_promise_checkpoint_to_await(
         loop {
             // A resident owner can park with a buffered Start; oplog reads only see commits.
             executor.commit_oplog(worker_id).await?;
-            let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+            let oplog = executor
+                .get_oplog(
+                    &OwnedAgentId::new(executor.context.default_environment_id, worker_id),
+                    OplogIndex::INITIAL,
+                )
+                .await?;
             let checkpoint_parent = oplog.iter().find_map(|entry| {
                 (entry.oplog_index == checkpoint.oplog_idx).then(|| match &entry.entry {
                     PublicOplogEntry::Start(parameters)
@@ -2862,7 +2876,12 @@ async fn wait_for_completed_entity_terminal(
 ) -> anyhow::Result<OplogIndex> {
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
-            let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+            let oplog = executor
+                .get_oplog(
+                    &OwnedAgentId::new(executor.context.default_environment_id, worker_id),
+                    OplogIndex::INITIAL,
+                )
+                .await?;
             if let Some(start_index) = oplog.iter().find_map(|entry| match &entry.entry {
                 PublicOplogEntry::Start(params)
                     if params.function_name == "golem::entity::invoke"
@@ -2972,7 +2991,7 @@ async fn nested_guest_traps_isolate_children_and_settle_parent_descendants(
     );
     let (port, gate_port, server, _checkpoints) = start_crash_checkpoint_server().await;
     let (promise_port, promise_server, mut promises) = start_promise_checkpoint_server().await;
-    let agent_id = agent_id!("ToolStreamingCaller", "nested-trap-isolation");
+    let agent_id = agent_key!("ToolStreamingCaller", "nested-trap-isolation");
     let worker = executor
         .start_agent_with(
             &caller_component.id,
@@ -2991,7 +3010,7 @@ async fn nested_guest_traps_isolate_children_and_settle_parent_descendants(
             Vec::new(),
         )
         .await?;
-    let mut disposals = executor.probe_entity_store_disposal(&worker);
+    let mut disposals = executor.probe_entity_store_disposal(&worker.agent_id);
     for mode in ["child-trap", "parent-trap", "child-trap"] {
         let call = executor.invoke_and_await_agent(
             &caller_component,
@@ -3007,6 +3026,7 @@ async fn nested_guest_traps_isolate_children_and_settle_parent_descendants(
             };
             executor
                 .complete_promise(
+                    &executor.context.default_environment_id,
                     &executor.promise_id(&worker, admitted.oplog_idx).await?,
                     vec![],
                 )
@@ -3023,10 +3043,7 @@ async fn nested_guest_traps_isolate_children_and_settle_parent_descendants(
                 "handled[leaf(healthy-first)|leaf(healthy-second)]"
             }
         );
-        if let Some(active) = executor
-            .active_entity_metadata(&OwnedAgentId::new(context.default_environment_id, &worker))
-            .await
-        {
+        if let Some(active) = executor.active_entity_metadata(&worker.clone()).await {
             assert!(active.tool_operations.operations.is_empty());
             assert!(active.lane.holder.is_none());
             assert_eq!(active.lane.active_invocation_count, 0);
@@ -3172,7 +3189,7 @@ async fn middleware_chain_dispatches_universal_monomorphic_and_typed_parameters_
         caller_component.revision,
         Some(deployment),
     );
-    let agent_id = agent_id!("ToolStreamingCaller", "middleware-chain-dispatch");
+    let agent_id = agent_key!("ToolStreamingCaller", "middleware-chain-dispatch");
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
@@ -3341,13 +3358,7 @@ async fn middleware_chain_dispatches_universal_monomorphic_and_typed_parameters_
         9,
         "three provider calls through two middleware layers must each execute exactly once"
     );
-    if let Some(active) = executor
-        .active_entity_metadata(&OwnedAgentId::new(
-            context.default_environment_id,
-            &worker_id,
-        ))
-        .await
-    {
+    if let Some(active) = executor.active_entity_metadata(&worker_id.clone()).await {
         assert!(active.tool_operations.operations.is_empty());
     }
 
@@ -3609,7 +3620,7 @@ async fn dynamic_mcp_uses_effective_middleware_metadata_and_replays_pinned_host_
 
     let (checkpoint_port, checkpoint_server, mut checkpoints) =
         start_promise_checkpoint_server().await;
-    let agent_id = agent_id!("ToolStreamingCaller", "dynamic-mcp-middleware");
+    let agent_id = agent_key!("ToolStreamingCaller", "dynamic-mcp-middleware");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
@@ -3644,6 +3655,7 @@ async fn dynamic_mcp_uses_effective_middleware_metadata_and_replays_pinned_host_
     .expect("pending MCP request was observed");
     executor
         .complete_promise(
+            &executor.context.default_environment_id,
             &executor
                 .promise_id(&worker_id, checkpoint.oplog_idx)
                 .await?,
@@ -3708,6 +3720,884 @@ async fn dynamic_mcp_uses_effective_middleware_metadata_and_replays_pinned_host_
 
     checkpoint_server.abort();
 
+    Ok(())
+}
+
+/// A middleware starts an MCP tool invocation and cancels it while the upstream server holds its
+/// `tools/call`. The entity body records `Cancelled` after the body's records. Each of two
+/// executor restarts replays the cancelled body, which claims its records before the abort,
+/// without calling the server again, and a fresh invocation then runs live and settles.
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn cancelled_tool_body_with_in_flight_mcp_call_recovers_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use serde_json::{Value, json};
+    use std::sync::Mutex;
+
+    let requests = Arc::new(Mutex::new(Vec::<String>::new()));
+    let (pending_started, mut pending_started_rx) = tokio::sync::mpsc::unbounded_channel();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let handler = post({
+        let requests = requests.clone();
+        move |axum::Json(body): axum::Json<Value>| {
+            let requests = requests.clone();
+            let pending_started = pending_started.clone();
+            async move {
+                assert_eq!(body["method"], "tools/call");
+                let value = body["params"]["arguments"]["value"]
+                    .as_str()
+                    .expect("projected string argument")
+                    .to_string();
+                let first_pending = {
+                    let mut requests = requests.lock().unwrap();
+                    let first_pending = value.ends_with("-pending")
+                        && !requests.iter().any(|seen| seen.ends_with("-pending"));
+                    requests.push(value.clone());
+                    first_pending
+                };
+                // Only the first pending call is held, so a repeated call is counted instead
+                // of hanging the test.
+                if first_pending {
+                    pending_started.send(()).unwrap();
+                    std::future::pending::<()>().await;
+                }
+                axum::Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {
+                        "content": [{"type": "text", "text": format!("stdout:{value}")}],
+                        "structuredContent": {"evidence": format!("leaf({value})")}
+                    }
+                }))
+            }
+        }
+    });
+    let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/mcp", handler))
+            .await
+            .unwrap();
+    }));
+    let expected_requests = [
+        "middleware(cancelled)-first",
+        "middleware(cancelled)-second",
+        "middleware(cancelled)-pending",
+    ];
+
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let middleware_component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_tool_streaming_rust_middleware_release",
+        )
+        .name("golem-it:tool-streaming-rust-middleware-cancelled-mcp")
+        .store()
+        .await?;
+    let provider_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let middleware_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join("golem_it_tool_streaming_rust_middleware_release.wasm"),
+        false,
+        true,
+    )
+    .await?;
+    let transform = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "streaming-universal-transform-input")
+        .unwrap();
+    let fanout = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "streaming-universal-mcp-fanout")
+        .unwrap();
+    let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
+    let tool_name = ToolName::try_from("middleware-probe").unwrap();
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        agent_type.0.as_str(),
+        provider_metadata.tools.clone(),
+    );
+    install_middleware_chain(
+        &mut deployment,
+        &agent_type,
+        &tool_name,
+        middleware_component.id,
+        middleware_component.revision,
+        "golem-it:tool-streaming-rust-middleware",
+        &middleware_metadata.tool_middlewares,
+        vec![(
+            transform.name.as_str(),
+            empty_middleware_parameters(transform),
+        )],
+    );
+    deployment.registered_tools.clear();
+    deployment.tool_bindings.clear();
+    deployment.tool_middleware_chains.clear();
+    deployment.mcp_imports = vec![McpImport {
+        url: format!("http://127.0.0.1:{port}/mcp"),
+        auth: None,
+        security_scheme: None,
+        prefix: None,
+        include: None,
+        exclude: None,
+        version: None,
+    }];
+    deployment.tool_middleware_configuration.universal = [transform, fanout]
+        .into_iter()
+        .map(|definition| ToolMiddlewareInstallation {
+            name: ToolMiddlewareName::try_from(definition.name.as_str()).unwrap(),
+            version: Some(definition.version.clone()),
+            parameters: NormalizedJsonValue::new(json!({})),
+            account: None,
+            secret_keys_readable: None,
+            secret_keys_revealable: None,
+            filesystem_access: ToolFilesystemAccess::Unset,
+        })
+        .collect();
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let source = McpImportSource {
+        environment_id: context.default_environment_id,
+        deployment_revision: 1_u64.try_into().unwrap(),
+        import_index: 0,
+        upstream_tool_name: String::new(),
+    };
+    let projected = ProjectedTool::new(
+        &json!({
+            "name": "upstream-probe",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+                "required": ["value"],
+                "additionalProperties": false
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {"evidence": {"type": "string"}},
+                "required": ["evidence"],
+                "additionalProperties": false
+            }
+        }),
+        tool_name.as_str(),
+        Limits::default(),
+    )
+    .map_err(anyhow::Error::msg)?;
+    environment_state.set_mcp_observation(
+        source.clone(),
+        Ok(McpImportObservation {
+            source: source.clone(),
+            protocol_version: golem_mcp_import::transport::PROTOCOL_VERSION.to_string(),
+            tools: vec![projected],
+            diagnostics: Vec::new(),
+        }),
+    );
+    let mut credential_source = source;
+    credential_source.upstream_tool_name = "upstream-probe".to_string();
+    environment_state.set_mcp_credential(
+        credential_source,
+        golem_service_base::clients::registry::McpRuntimeCredential {
+            credential: None,
+            oauth_grant_generation: None,
+        },
+    );
+
+    let (checkpoint_port, checkpoint_server, mut checkpoints) =
+        start_promise_checkpoint_server().await;
+    let agent_id = agent_key!("ToolStreamingCaller", "cancelled-mcp-body");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([(
+                "MIDDLEWARE_PROMISE_CHECKPOINT_PORT".to_string(),
+                checkpoint_port.to_string(),
+            )]),
+            Vec::new(),
+        )
+        .await?;
+    let call_executor = executor.clone();
+    let call_component = caller_component.clone();
+    let call_agent = agent_id.clone();
+    let call = tokio::spawn(async move {
+        call_executor
+            .invoke_and_await_agent(
+                &call_component,
+                &call_agent,
+                "dynamic_mcp_chain_probe",
+                data_value!("cancelled"),
+            )
+            .await?
+            .into_typed::<Vec<String>>()
+    });
+    // The middleware cancels the pending tool invocation when this checkpoint's promise
+    // completes, and the server holds its `tools/call` until then.
+    let checkpoint = next_promise_checkpoint(&mut checkpoints, "mcp-pending-admitted").await?;
+    tokio::time::timeout(Duration::from_secs(30), pending_started_rx.recv())
+        .await?
+        .expect("the pending MCP request reached the server");
+    executor
+        .complete_promise(
+            &worker_id.environment_id,
+            &executor
+                .promise_id(&worker_id, checkpoint.oplog_idx)
+                .await?,
+            vec![],
+        )
+        .await?;
+    let result = call.await??;
+    assert_eq!(
+        result,
+        [
+            "leaf(middleware(cancelled)-second)",
+            "stdout:middleware(cancelled)-second"
+        ],
+        "the middleware returns the completed underlying call"
+    );
+
+    assert_eq!(*requests.lock().unwrap(), expected_requests);
+    let live = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_cancelled_mcp_body_history(&live);
+
+    let mut executor = executor;
+    let mut history = live;
+    for restart in 1..=2 {
+        drop(executor);
+        executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        let probe: String = executor
+            .invoke_and_await_agent(&caller_component, &agent_id, "replay_probe", data_value!())
+            .await?
+            .into_typed()?;
+        assert_eq!(probe, "replayed");
+        let fresh = history.len();
+        // The next invocation starts only after the fresh one settled, so once a second probe
+        // returns, the fresh invocation's `AgentInvocationSettled` is in the oplog.
+        let next: String = executor
+            .invoke_and_await_agent(&caller_component, &agent_id, "replay_probe", data_value!())
+            .await?
+            .into_typed()?;
+        assert_eq!(next, "replayed");
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        assert!(
+            fresh_invocation_settled(&oplog[fresh..]).is_some(),
+            "the fresh invocation settled before the next one started (restart {restart})"
+        );
+        assert_eq!(
+            *requests.lock().unwrap(),
+            expected_requests,
+            "replaying the cancelled body called the MCP server again (restart {restart})"
+        );
+        assert_eq!(
+            oplog[..fresh]
+                .iter()
+                .map(|entry| entry.oplog_index)
+                .collect::<Vec<_>>(),
+            history
+                .iter()
+                .map(|entry| entry.oplog_index)
+                .collect::<Vec<_>>(),
+            "the replay kept the recorded history (restart {restart})"
+        );
+        let settled = fresh_invocation_settled(&oplog[fresh..]).unwrap();
+        assert!(
+            !oplog.iter().any(|entry| entry.oplog_index > settled
+                && matches!(
+                    &entry.entry,
+                    PublicOplogEntry::Start(_)
+                        | PublicOplogEntry::End(_)
+                        | PublicOplogEntry::Cancelled(_)
+                )),
+            "no positional entry follows the fresh invocation's settlement at {settled} \
+             (restart {restart})"
+        );
+        assert_cancelled_mcp_body_history(&oplog);
+        history = oplog;
+    }
+
+    drop(executor);
+    drop(server);
+    checkpoint_server.abort();
+    Ok(())
+}
+
+/// The `AgentInvocationSettled` of the first invocation that starts in `entries`.
+fn fresh_invocation_settled(entries: &[PublicOplogEntryWithIndex]) -> Option<OplogIndex> {
+    let invocation_id = entries.iter().find_map(|entry| match &entry.entry {
+        PublicOplogEntry::AgentInvocationStarted(started) => match &started.invocation {
+            PublicAgentInvocation::AgentMethodInvocation(method) => Some(method.invocation_id),
+            _ => None,
+        },
+        _ => None,
+    })?;
+    entries.iter().find_map(|entry| match &entry.entry {
+        PublicOplogEntry::AgentInvocationSettled(settled)
+            if settled.invocation_id == invocation_id =>
+        {
+            Some(entry.oplog_index)
+        }
+        _ => None,
+    })
+}
+
+/// Checks the settled history of `cancelled_tool_body_with_in_flight_mcp_call_recovers_after_restart`:
+/// one entity body is cancelled, once; the MCP call that was in flight under it has one terminal,
+/// an `End`; every `Start` has a terminal; every invocation finishes once.
+fn assert_cancelled_mcp_body_history(oplog: &[PublicOplogEntryWithIndex]) {
+    let terminals = |start: OplogIndex| {
+        oplog
+            .iter()
+            .filter(|entry| match &entry.entry {
+                PublicOplogEntry::End(end) => end.start_index == start,
+                PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == start,
+                _ => false,
+            })
+            .map(|entry| entry.oplog_index)
+            .collect::<Vec<_>>()
+    };
+    let function_at = |index: OplogIndex| {
+        oplog.iter().find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start) if entry.oplog_index == index => {
+                Some(start.function_name.clone())
+            }
+            _ => None,
+        })
+    };
+    let cancelled = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Cancelled(cancelled) => Some(cancelled.start_index),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cancelled.len(),
+        1,
+        "one entity body is cancelled: {cancelled:?}"
+    );
+    let body = cancelled[0];
+    assert_eq!(
+        function_at(body).as_deref(),
+        Some("golem::entity::invoke"),
+        "the cancelled Start at {body} is an entity body"
+    );
+    assert_eq!(
+        terminals(body).len(),
+        1,
+        "the cancelled body has one terminal"
+    );
+
+    let mcp_calls = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start) if start.function_name == "golem::tool::mcp::call" => {
+                Some((entry.oplog_index, start.parent_start_index))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        mcp_calls.len(),
+        3,
+        "each MCP call starts once: {mcp_calls:?}"
+    );
+    let in_flight = mcp_calls
+        .iter()
+        .filter(|(_, parent)| *parent == Some(body))
+        .map(|(index, _)| *index)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        in_flight.len(),
+        1,
+        "one MCP call was in flight under the cancelled body: {mcp_calls:?}"
+    );
+    let in_flight_terminals = terminals(in_flight[0]);
+    assert!(
+        matches!(
+            in_flight_terminals.as_slice(),
+            [terminal] if oplog.iter().any(|entry| entry.oplog_index == *terminal
+                && matches!(entry.entry, PublicOplogEntry::End(_)))
+        ),
+        "the native MCP body closes its in-flight call with one End: {in_flight_terminals:?}"
+    );
+
+    for entry in oplog {
+        if let PublicOplogEntry::Start(start) = &entry.entry {
+            let index = entry.oplog_index;
+            assert!(
+                !terminals(index).is_empty(),
+                "the Start of {} at {index} has no terminal",
+                start.function_name
+            );
+        }
+    }
+
+    let mut finished = BTreeMap::new();
+    for entry in oplog {
+        if let PublicOplogEntry::AgentInvocationFinished(params) = &entry.entry {
+            *finished.entry(params.invocation_id).or_insert(0) += 1;
+        }
+    }
+    assert!(
+        finished.values().all(|count| *count == 1),
+        "every invocation finishes once: {finished:?}"
+    );
+}
+
+/// A WebSocket peer that counts the connections it accepts per request path, sends nothing, and
+/// holds every connection open until the peer stops.
+async fn start_held_websocket_peer() -> (
+    u16,
+    Arc<std::sync::Mutex<BTreeMap<String, usize>>>,
+    tokio_util::task::AbortOnDropHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind held WebSocket peer");
+    let port = listener
+        .local_addr()
+        .expect("held WebSocket address")
+        .port();
+    let connections = Arc::new(std::sync::Mutex::new(BTreeMap::<String, usize>::new()));
+    let accepted = connections.clone();
+    let peer = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        let mut held = tokio::task::JoinSet::new();
+        loop {
+            let (socket, _) = listener.accept().await.expect("accept a held WebSocket");
+            let accepted = accepted.clone();
+            held.spawn(async move {
+                let mut socket = tokio_tungstenite::accept_hdr_async(
+                    socket,
+                    |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                     response| {
+                        *accepted
+                            .lock()
+                            .unwrap()
+                            .entry(request.uri().path().to_string())
+                            .or_default() += 1;
+                        Ok(response)
+                    },
+                )
+                .await
+                .expect("accept the held WebSocket handshake");
+                while socket.next().await.is_some() {}
+            });
+        }
+    }));
+    (port, connections, peer)
+}
+
+/// The nearest entity body of the `Start` at `index`, through its `parent_start_index` and
+/// `observational_owner` chain.
+fn nearest_entity_body(
+    oplog: &[PublicOplogEntryWithIndex],
+    index: OplogIndex,
+) -> Option<OplogIndex> {
+    let start = |index: OplogIndex| {
+        oplog.iter().find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start) if entry.oplog_index == index => Some(start),
+            _ => None,
+        })
+    };
+    let mut current = start(index)?;
+    loop {
+        let parent = current.parent_start_index.or(current.observational_owner)?;
+        let parent_start = start(parent)?;
+        if parent_start.function_name == "golem::entity::invoke" {
+            return Some(parent);
+        }
+        current = parent_start;
+    }
+}
+
+/// Checks the history of a Wasm tool body that the caller cancelled while `open_call` was in
+/// flight under it: the body has one `Cancelled`, the in-flight call has no terminal and is the only
+/// `Start` without one, and every invocation finishes once.
+fn assert_cancelled_open_call_history(
+    oplog: &[PublicOplogEntryWithIndex],
+    body: OplogIndex,
+    open_call: OplogIndex,
+) {
+    let terminals = |start: OplogIndex| {
+        oplog
+            .iter()
+            .filter(|entry| match &entry.entry {
+                PublicOplogEntry::End(end) => end.start_index == start,
+                PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == start,
+                _ => false,
+            })
+            .collect::<Vec<_>>()
+    };
+    let body_terminals = terminals(body);
+    assert!(
+        matches!(
+            body_terminals.as_slice(),
+            [terminal] if matches!(terminal.entry, PublicOplogEntry::Cancelled(_))
+        ),
+        "the cancelled body at {body} has one terminal, a Cancelled: {body_terminals:?}"
+    );
+    assert!(
+        terminals(open_call).is_empty(),
+        "the call in flight at the cancellation keeps no terminal"
+    );
+    for entry in oplog {
+        if let PublicOplogEntry::Start(start) = &entry.entry {
+            assert!(
+                entry.oplog_index == open_call || !terminals(entry.oplog_index).is_empty(),
+                "the Start of {} at {} has no terminal",
+                start.function_name,
+                entry.oplog_index
+            );
+        }
+    }
+    let mut finished = BTreeMap::new();
+    for entry in oplog {
+        if let PublicOplogEntry::AgentInvocationFinished(params) = &entry.entry {
+            *finished.entry(params.invocation_id).or_insert(0) += 1;
+        }
+    }
+    assert!(
+        finished.values().all(|count| *count == 1),
+        "every invocation finishes once: {finished:?}"
+    );
+}
+
+/// A Wasm tool body connects a WebSocket, keeps a `receive` in flight, pauses at a promise
+/// checkpoint, and is cancelled by its caller while the receive is open, so the receive's
+/// `LeaveIncompleteOnDrop` `Start` stays without a terminal under the body's `Cancelled`. After the
+/// cancelled result, the caller makes a receive of its own on a second connection.
+///
+/// After a restart, the replayed body's receive is held before its claim. The body must not be
+/// aborted while that receive is unclaimed, so the caller, whose own receive follows the cancelled
+/// result, must not claim its receive while the body's receive is held. Nothing observable marks
+/// the moment replay commits the body's `Cancelled` while the body waits, so the test checks this
+/// absence over a bounded window; a body aborted at its `Cancelled` lets the caller claim its
+/// receive within it. The hold is what makes such an abort precede the receive's claim: a receive
+/// released at once usually claims its `Start` before replay commits the `Cancelled`. An abort that
+/// precedes the claim also fails the body-end check, which refuses a cancelled body that left a
+/// recorded call unclaimed. Once released, the body's receive is claimed and neither repairs nor
+/// connects again, and the caller continues. A second restart replays the settled history. A fresh
+/// invocation runs live and settles after each restart.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn cancelled_wasm_tool_body_with_an_open_websocket_receive_recovers_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let (peer_port, peer_connections, peer) = start_held_websocket_peer().await;
+    let expected_connections =
+        BTreeMap::from([("/hold".to_string(), 1), ("/marker".to_string(), 1)]);
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    let (checkpoint_port, checkpoint_server, mut checkpoints) =
+        start_promise_checkpoint_server().await;
+    let agent_id = agent_key!("ToolStreamingCaller", "cancelled-open-receive");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([
+                (
+                    "PROVIDER_PROMISE_CHECKPOINT_PORT".to_string(),
+                    checkpoint_port.to_string(),
+                ),
+                ("WEBSOCKET_HOLD_PORT".to_string(), peer_port.to_string()),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let call_executor = executor.clone();
+    let call_component = caller_component.clone();
+    let call_agent = agent_id.clone();
+    let call = tokio::spawn(async move {
+        call_executor
+            .invoke_and_await_agent(
+                &call_component,
+                &call_agent,
+                "cancel_run_then_receive",
+                data_value!(
+                    "open-receive-wait",
+                    format!("ws://127.0.0.1:{peer_port}/marker")
+                ),
+            )
+            .await?
+            .into_typed::<String>()
+    });
+
+    let checkpoint = next_promise_checkpoint(&mut checkpoints, "open-call-held").await?;
+    wait_for_promise_checkpoint_to_await(&executor, &worker_id.agent_id, &checkpoint).await?;
+    let at_checkpoint = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let open_calls = at_checkpoint
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name == "golem:websocket/client::receive"
+                    && !at_checkpoint.iter().any(|terminal| match &terminal.entry {
+                        PublicOplogEntry::End(end) => end.start_index == entry.oplog_index,
+                        PublicOplogEntry::Cancelled(cancelled) => {
+                            cancelled.start_index == entry.oplog_index
+                        }
+                        _ => false,
+                    }) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [open_call] = open_calls.as_slice() else {
+        anyhow::bail!("expected one WebSocket receive in flight: {open_calls:?}");
+    };
+    let open_call = *open_call;
+    let body = nearest_entity_body(&at_checkpoint, checkpoint.oplog_idx)
+        .expect("the checkpoint runs in the tool body");
+    assert_eq!(
+        nearest_entity_body(&at_checkpoint, open_call),
+        Some(body),
+        "the open receive at {open_call} runs under the tool body at {body}"
+    );
+    executor
+        .complete_promise(
+            &worker_id.environment_id,
+            &executor
+                .promise_id(&worker_id, checkpoint.oplog_idx)
+                .await?,
+            vec![],
+        )
+        .await?;
+    let result = tokio::time::timeout(Duration::from_secs(60), call).await???;
+    assert_eq!(result, "open-call-held:Err(ToolRpcError::Cancelled):None");
+
+    let live = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_cancelled_open_call_history(&live, body, open_call);
+    let body_cancelled = live
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Cancelled(cancelled) if cancelled.start_index == body => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .unwrap();
+    let caller_receive = live
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name == "golem:websocket/client::receive-with-timeout" =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("the caller's receive is recorded");
+    assert!(
+        open_call < body_cancelled && body_cancelled < caller_receive,
+        "the caller's receive at {caller_receive} follows the body's Cancelled at \
+         {body_cancelled}, which follows the body's open receive at {open_call}"
+    );
+    assert_eq!(*peer_connections.lock().unwrap(), expected_connections);
+
+    let mut executor = executor;
+    let mut history = live;
+    for restart in 1..=2 {
+        drop(executor);
+        executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        let mut gates = (restart == 1).then(|| {
+            (
+                executor.gate_next_replay_access_admission(
+                    &worker_id.agent_id,
+                    "client::receive",
+                    ReplayAdmissionStage::BeforeScope,
+                ),
+                executor.gate_next_replay_access_admission(
+                    &worker_id.agent_id,
+                    "client::receive-with-timeout",
+                    ReplayAdmissionStage::AfterStart,
+                ),
+            )
+        });
+        let mut probe = executor.invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "replay_probe",
+            data_value!(),
+        );
+        if let Some((body_receive, caller_receive)) = gates.as_mut() {
+            tokio::select! {
+                entered = tokio::time::timeout(Duration::from_secs(30), body_receive.entered()) => {
+                    entered.map_err(|_| {
+                        anyhow::anyhow!("the replayed body did not reach its receive")
+                    })?;
+                }
+                result = &mut probe => anyhow::bail!(
+                    "the fresh invocation ended before the replayed body reached its receive: \
+                     {result:?}"
+                ),
+            }
+            tokio::select! {
+                entered = tokio::time::timeout(Duration::from_secs(5), caller_receive.entered()) => {
+                    if entered.is_ok() {
+                        anyhow::bail!(
+                            "the replayed caller claimed its receive, which follows the body's \
+                             Cancelled, before the body claimed its in-flight receive"
+                        );
+                    }
+                }
+                result = &mut probe => anyhow::bail!(
+                    "the fresh invocation ended while the body's in-flight receive was held: \
+                     {result:?}"
+                ),
+            }
+            body_receive.release();
+            tokio::select! {
+                entered = tokio::time::timeout(Duration::from_secs(30), caller_receive.entered()) => {
+                    entered.map_err(|_| {
+                        anyhow::anyhow!(
+                            "the replayed caller did not claim its receive after the body's \
+                             receive was released"
+                        )
+                    })?;
+                }
+                result = &mut probe => anyhow::bail!(
+                    "the fresh invocation ended before the replayed caller claimed its receive: \
+                     {result:?}"
+                ),
+            }
+            caller_receive.release();
+        }
+        let probe: String = tokio::time::timeout(Duration::from_secs(60), probe)
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!("the fresh invocation did not complete (restart {restart})")
+            })??
+            .into_typed()?;
+        assert_eq!(probe, "replayed");
+        let fresh = history.len();
+        // The next invocation starts only after the fresh one settled, so once a second probe
+        // returns, the fresh invocation's `AgentInvocationSettled` is in the oplog.
+        let next: String = executor
+            .invoke_and_await_agent(&caller_component, &agent_id, "replay_probe", data_value!())
+            .await?
+            .into_typed()?;
+        assert_eq!(next, "replayed");
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        assert!(
+            fresh_invocation_settled(&oplog[fresh..]).is_some(),
+            "the fresh invocation settled before the next one started (restart {restart})"
+        );
+        assert_eq!(
+            *peer_connections.lock().unwrap(),
+            expected_connections,
+            "replaying the cancelled body connected again (restart {restart})"
+        );
+        assert_eq!(
+            oplog[..fresh]
+                .iter()
+                .map(|entry| entry.oplog_index)
+                .collect::<Vec<_>>(),
+            history
+                .iter()
+                .map(|entry| entry.oplog_index)
+                .collect::<Vec<_>>(),
+            "the replay kept the recorded history (restart {restart})"
+        );
+        assert!(
+            !oplog
+                .iter()
+                .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))),
+            "the replay recorded no error (restart {restart})"
+        );
+        let settled = fresh_invocation_settled(&oplog[fresh..]).unwrap();
+        assert!(
+            !oplog.iter().any(|entry| entry.oplog_index > settled
+                && matches!(
+                    &entry.entry,
+                    PublicOplogEntry::Start(_)
+                        | PublicOplogEntry::End(_)
+                        | PublicOplogEntry::Cancelled(_)
+                )),
+            "no positional entry follows the fresh invocation's settlement at {settled} \
+             (restart {restart})"
+        );
+        assert_cancelled_open_call_history(&oplog, body, open_call);
+        history = oplog;
+    }
+
+    drop(executor);
+    drop(peer);
+    checkpoint_server.abort();
     Ok(())
 }
 
@@ -3923,7 +4813,7 @@ async fn dynamic_mcp_executes_genuine_monomorphic_middleware_and_replays_offline
         },
     );
 
-    let agent_id = agent_id!("ToolStreamingCaller", "dynamic-mcp-monomorphic");
+    let agent_id = agent_key!("ToolStreamingCaller", "dynamic-mcp-monomorphic");
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
@@ -4054,7 +4944,7 @@ async fn overlapping_middleware_exposes_public_ancestry_across_replay(
         caller_component.revision,
         Some(deployment),
     );
-    let agent_id = agent_id!("ToolStreamingCaller", "middleware-overlap");
+    let agent_id = agent_key!("ToolStreamingCaller", "middleware-overlap");
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
@@ -4307,7 +5197,7 @@ async fn successful_middleware_parent_waits_for_admitted_dropped_child_observer(
         caller_component.revision,
         Some(deployment),
     );
-    let agent_id = agent_id!("ToolStreamingCaller", "middleware-early-return");
+    let agent_id = agent_key!("ToolStreamingCaller", "middleware-early-return");
     executor
         .start_agent_with(
             &caller_component.id,
@@ -4469,7 +5359,7 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
             caller_checkpoint_port.to_string(),
         ),
     ]);
-    let direct_id = agent_id!("ToolStreamingCaller", "typed-output-direct");
+    let direct_id = agent_key!("ToolStreamingCaller", "typed-output-direct");
     let direct_worker = executor
         .start_agent_with(
             &caller_component.id,
@@ -4525,6 +5415,7 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
     }
     executor
         .complete_promise(
+            &executor.context.default_environment_id,
             &executor
                 .promise_id(&direct_worker, provider_promise.oplog_idx)
                 .await?,
@@ -4542,6 +5433,7 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
     .await?;
     executor
         .complete_promise(
+            &executor.context.default_environment_id,
             &executor
                 .promise_id(&direct_worker, caller.oplog_idx)
                 .await?,
@@ -4602,7 +5494,7 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
         caller_component.revision,
         Some(decorated_deployment),
     );
-    let decorated_id = agent_id!("ToolStreamingCaller", "typed-output-decorated");
+    let decorated_id = agent_key!("ToolStreamingCaller", "typed-output-decorated");
     let decorated_worker = executor
         .start_agent_with(&caller_component.id, decorated_id.clone(), env, Vec::new())
         .await?;
@@ -4651,7 +5543,7 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
         })
         .collect::<Vec<_>>();
     assert_eq!(blocked_entity_starts.len(), 3);
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &decorated_worker);
+    let owned_agent_id = decorated_worker.clone();
     let active = executor
         .active_entity_metadata(&owned_agent_id)
         .await
@@ -4705,6 +5597,7 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
         next_promise_checkpoint(&mut provider_promises, "typed-output-after-first").await?;
     executor
         .complete_promise(
+            &executor.context.default_environment_id,
             &executor
                 .promise_id(&decorated_worker, replayed_provider_promise.oplog_idx)
                 .await?,
@@ -4722,6 +5615,7 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
     .await?;
     executor
         .complete_promise(
+            &executor.context.default_environment_id,
             &executor
                 .promise_id(&decorated_worker, caller_promise.oplog_idx)
                 .await?,
@@ -4874,7 +5768,7 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
         caller_component.revision,
         Some(deployment),
     );
-    let agent_id = agent_id!("ToolStreamingCaller", "typed-output-tcp-restart");
+    let agent_id = agent_key!("ToolStreamingCaller", "typed-output-tcp-restart");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
@@ -5141,7 +6035,7 @@ async fn typed_tool_input_stream_is_durable_through_universal_and_nonidentity_mi
             caller_component.revision,
             Some(deployment),
         );
-        let agent_id = agent_id!("ToolStreamingCaller", name);
+        let agent_id = agent_key!("ToolStreamingCaller", name);
         let worker_id = executor
             .start_agent_with(
                 &caller_component.id,
@@ -5169,13 +6063,15 @@ async fn typed_tool_input_stream_is_durable_through_universal_and_nonidentity_mi
         let caller_promise =
             next_promise_checkpoint(&mut caller_checkpoints, "typed-input-caller-produced-first")
                 .await?;
-        wait_for_promise_checkpoint_to_await(&executor, &worker_id, &caller_promise).await?;
+        wait_for_promise_checkpoint_to_await(&executor, &worker_id.agent_id, &caller_promise)
+            .await?;
         let provider_promise = next_promise_checkpoint(
             &mut provider_checkpoints,
             "typed-input-provider-consumed-first",
         )
         .await?;
-        wait_for_promise_checkpoint_to_await(&executor, &worker_id, &provider_promise).await?;
+        wait_for_promise_checkpoint_to_await(&executor, &worker_id.agent_id, &provider_promise)
+            .await?;
         assert!(
             !invocation.is_finished(),
             "input drain completed before the caller producer was released"
@@ -5194,6 +6090,7 @@ async fn typed_tool_input_stream_is_durable_through_universal_and_nonidentity_mi
     for (worker_id, caller_promise, provider_promise) in promises {
         executor
             .complete_promise(
+                &executor.context.default_environment_id,
                 &executor
                     .promise_id(&worker_id, caller_promise.oplog_idx)
                     .await?,
@@ -5202,6 +6099,7 @@ async fn typed_tool_input_stream_is_durable_through_universal_and_nonidentity_mi
             .await?;
         executor
             .complete_promise(
+                &executor.context.default_environment_id,
                 &executor
                     .promise_id(&worker_id, provider_promise.oplog_idx)
                     .await?,
@@ -5329,7 +6227,7 @@ async fn concurrent_tool_attempt_identity_survives_reordered_admission_and_repla
         )),
     );
 
-    let agent_id = agent_id!("ToolStreamingCaller", "attempt-identity-replay");
+    let agent_id = agent_key!("ToolStreamingCaller", "attempt-identity-replay");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
@@ -5355,7 +6253,7 @@ async fn concurrent_tool_attempt_identity_survives_reordered_admission_and_repla
             Vec::new(),
         )
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
 
     let call = executor.invoke_and_await_agent(
         &caller_component,
@@ -5521,7 +6419,7 @@ async fn native_entity_vetoes_owner_suspension_until_cancelled(
         caller_component.revision,
         Some(state),
     );
-    let agent = agent_id!("ToolStreamingCaller", "native-veto-long-clock");
+    let agent = agent_key!("ToolStreamingCaller", "native-veto-long-clock");
     let worker = executor
         .start_agent(&caller_component.id, agent.clone())
         .await?;
@@ -5531,9 +6429,9 @@ async fn native_entity_vetoes_owner_suspension_until_cancelled(
         .into_return_value()
         .expect("promise gate");
     let gate_promise_id = PromiseId::from_value(&gate).expect("promise gate id");
-    let loads = executor.instance_load_count(&worker);
+    let loads = executor.instance_load_count(&worker.agent_id);
     let effects = executor.native_test_effect_count();
-    let owned = OwnedAgentId::new(context.default_environment_id, &worker);
+    let owned = worker.clone();
     let invocation = executor.invoke_and_await_agent(
         &caller_component,
         &agent,
@@ -5556,7 +6454,7 @@ async fn native_entity_vetoes_owner_suspension_until_cancelled(
             while tokio::time::Instant::now() < until {
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 assert!(executor.worker_is_loaded(&owned).await, "executing native must veto unloading");
-                assert_eq!(executor.instance_load_count(&worker), loads);
+                assert_eq!(executor.instance_load_count(&worker.agent_id), loads);
                 assert!(!executor.get_oplog(&worker, OplogIndex::INITIAL).await.unwrap()
                     .iter().any(|entry| matches!(entry.entry, PublicOplogEntry::Suspend(_))),
                     "executing native must veto automatic suspension");
@@ -5564,7 +6462,13 @@ async fn native_entity_vetoes_owner_suspension_until_cancelled(
         } => {}
     }
     assert_eq!(executor.native_test_effect_count(), effects + 1);
-    executor.complete_promise(&gate_promise_id, vec![]).await?;
+    executor
+        .complete_promise(
+            &executor.context.default_environment_id,
+            &gate_promise_id,
+            vec![],
+        )
+        .await?;
     tokio::select! {
         result = &mut invocation => panic!("timer finished before unloading: {result:?}"),
         unloaded = tokio::time::timeout(Duration::from_secs(10), async {
@@ -5579,7 +6483,7 @@ async fn native_entity_vetoes_owner_suspension_until_cancelled(
         .await??
         .into_typed::<Vec<String>>()?;
     assert_eq!(result, ["cancelled", "20", "settled"]);
-    assert!(executor.instance_load_count(&worker) > loads);
+    assert!(executor.instance_load_count(&worker.agent_id) > loads);
     assert_eq!(
         executor.native_test_effect_count(),
         effects + 1,
@@ -5692,7 +6596,7 @@ async fn native_tool_config_uses_owner_binding_without_host_privilege(
         );
     }
 
-    let narrowed = agent_id!("ToolStreamingCaller", "native-config-narrowed");
+    let narrowed = agent_key!("ToolStreamingCaller", "native-config-narrowed");
     assert_eq!(
         executor
             .invoke_and_await_agent(
@@ -5717,7 +6621,7 @@ async fn native_tool_config_uses_owner_binding_without_host_privilege(
             .into_typed::<String>()?,
         "denied"
     );
-    let empty = agent_id!("ToolStreamingCaller", "native-config-empty");
+    let empty = agent_key!("ToolStreamingCaller", "native-config-empty");
     for key in ["allowed", "denied"] {
         assert_eq!(
             executor
@@ -5769,7 +6673,7 @@ async fn native_tool_runs_all_modes_streams_cancellation_overlap_and_replay(
         )),
     );
 
-    let agent_id = agent_id!("ToolStreamingCaller", "native-runtime");
+    let agent_id = agent_key!("ToolStreamingCaller", "native-runtime");
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
@@ -5829,7 +6733,7 @@ async fn native_tool_runs_all_modes_streams_cancellation_overlap_and_replay(
     isolated_executor
         .invoke_and_await_agent(
             &isolated_caller_component,
-            &agent_id!("ToolStreamingCaller", "isolated-native-runtime"),
+            &agent_key!("ToolStreamingCaller", "isolated-native-runtime"),
             "native_modes_stream_cancel_overlap",
             data_value!(),
         )
@@ -5914,9 +6818,9 @@ async fn native_incomplete_replay_rejects_attachment_upgrade_without_fencing(
             native_test_tool_metadata(),
         )),
     );
-    let agent = agent_id!("ToolStreamingCaller", "native-upgrade-rejection");
+    let agent = agent_key!("ToolStreamingCaller", "native-upgrade-rejection");
     let worker = executor.start_agent(&caller.id, agent.clone()).await?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &worker);
+    let owned = worker.clone();
     let invocation = executor.invoke_and_await_agent(
         &caller,
         &agent,
@@ -5941,7 +6845,7 @@ async fn native_incomplete_replay_rejects_attachment_upgrade_without_fencing(
             assert_eq!(output.capacity_bytes as u64, 2 * OUTPUT);
             assert!(!output.terminal_selected);
         }
-        executor.commit_oplog(&worker).await?;
+        executor.commit_oplog(&worker.agent_id).await?;
         let original = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
         let writes = original
             .iter()
@@ -5985,11 +6889,11 @@ async fn native_incomplete_replay_rejects_attachment_upgrade_without_fencing(
         )
         .await?;
         let owner_memory = executor.worker_memory_requirement(&owned).await?;
-        let pressure_agent = agent_id!("LargeDynamicMemoryAgent", "native-upgrade-pressure");
+        let pressure_agent = agent_key!("LargeDynamicMemoryAgent", "native-upgrade-pressure");
         let pressure_worker = executor
             .start_agent(&memory.id, pressure_agent.clone())
             .await?;
-        let pressure_owned = OwnedAgentId::new(context.default_environment_id, &pressure_worker);
+        let pressure_owned = pressure_worker.clone();
         let initial = executor.worker_memory_requirement(&pressure_owned).await?;
         let growth = POOL
             .checked_sub(owner_memory + initial + 12 * 1024 * 1024)
@@ -6080,7 +6984,7 @@ async fn native_incomplete_replay_rejects_attachment_upgrade_without_fencing(
             })
             .collect::<Vec<_>>()
     };
-    let original_controls = controls(&executor.stored_oplog(&worker).await);
+    let original_controls = controls(&executor.stored_oplog(&worker.agent_id).await);
     assert_eq!(original_controls.len(), 2);
     assert_ne!(original_controls[0].1, original_controls[1].1);
     assert!(
@@ -6104,7 +7008,7 @@ async fn native_incomplete_replay_rejects_attachment_upgrade_without_fencing(
     assert_eq!(replay_probe.into_typed::<String>()?, "replayed");
     assert_eq!(probe.reconstructed_prefixes.load(Ordering::SeqCst), 2);
     assert_eq!(
-        controls(&executor.stored_oplog(&worker).await),
+        controls(&executor.stored_oplog(&worker.agent_id).await),
         original_controls
     );
     let replayed = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
@@ -6181,7 +7085,7 @@ async fn rust_generated_client_streams_live_and_handles_edges(
         )),
     );
 
-    let agent_id = agent_id!("ToolStreamingCaller", "rust-live");
+    let agent_id = agent_key!("ToolStreamingCaller", "rust-live");
     let mut env = HashMap::new();
     env.insert("HTTP_GATE_PORT".to_string(), http_port.to_string());
     env.insert("TRAP_ONCE_PORT".to_string(), trap_once_port.to_string());
@@ -6189,18 +7093,42 @@ async fn rust_generated_client_streams_live_and_handles_edges(
         .start_agent_with(&caller_component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
+    let account = callers::account(AccountId::new());
     let principal_context: Vec<String> = executor
         .invoke_and_await_agent_as_caller(
             &caller_component,
             &agent_id,
-            callers::account(AccountId::new()),
+            account.clone(),
             "principal_context",
             data_value!(),
         )
         .await?
         .into_typed()?;
-    assert_eq!(principal_context, ["account", "account", "account"]);
+    // The agent sees the account in both roles. The tool that it calls keeps the account as the
+    // original caller and sees the agent, and the tool that this tool calls sees the tool.
+    let agent = callers::agent_in(
+        worker_id.agent_id,
+        agent_id.agent_type.clone(),
+        executor.get_worker_metadata(&worker_id).await?.fingerprint,
+        context.default_environment_id,
+    )
+    .immediate;
+    let tool = callers::tool_principal(context.default_environment_id, "streaming");
+    assert_eq!(
+        principal_context,
+        [
+            callers::caller_text(&account),
+            callers::caller_text(&Caller {
+                immediate: agent,
+                ..account.clone()
+            }),
+            callers::caller_text(&Caller {
+                immediate: tool,
+                ..account
+            }),
+        ]
+    );
 
     let marker_result = tokio::time::timeout(
         std::time::Duration::from_secs(30),
@@ -6421,7 +7349,7 @@ async fn rust_generated_client_streams_live_and_handles_edges(
         stdout_only_capable_input
     );
 
-    let raw_agent_id = agent_id!("ToolStreamingCaller", "rust-raw-modes");
+    let raw_agent_id = agent_key!("ToolStreamingCaller", "rust-raw-modes");
     let raw_worker_id = executor
         .start_agent(&caller_component.id, raw_agent_id.clone())
         .await?;
@@ -6528,10 +7456,7 @@ async fn rust_generated_client_streams_live_and_handles_edges(
         "replay after cancellation and observer/output detach repeated a tool effect"
     );
     if let Some(active) = executor
-        .active_entity_metadata(&OwnedAgentId::new(
-            context.default_environment_id,
-            &raw_worker_id,
-        ))
+        .active_entity_metadata(&raw_worker_id.clone())
         .await
     {
         assert!(active.tool_operations.operations.is_empty());
@@ -6873,12 +7798,11 @@ async fn rust_generated_client_interrupt_releases_held_tool_streams(
         ("interrupt-stdin", "hold_open_stdin", 3_u32),
         ("interrupt-stdout", "hold_unread_stdout", 1_u32),
     ] {
-        let held_agent_id = agent_id!("ToolStreamingCaller", name);
+        let held_agent_id = agent_key!("ToolStreamingCaller", name);
         let held_worker_id = executor
             .start_agent(&caller_component.id, held_agent_id.clone())
             .await?;
-        let held_owned_agent_id =
-            OwnedAgentId::new(context.default_environment_id, &held_worker_id);
+        let held_owned_agent_id = held_worker_id.clone();
         executor
             .invoke_agent(
                 &caller_component,
@@ -6989,7 +7913,7 @@ async fn rust_tool_trap_isolated_with_partial_effects_and_completed_replay(
 
         let (effect_port, mut effects, effect_server) =
             middleware_acceptance::start_probe_effect_server().await;
-        let agent_id = agent_id!("ToolStreamingCaller", "rust-trap");
+        let agent_id = agent_key!("ToolStreamingCaller", "rust-trap");
         let mut env = HashMap::from([(
             "MIDDLEWARE_PROBE_EFFECT_PORT".to_string(),
             effect_port.to_string(),
@@ -7000,13 +7924,13 @@ async fn rust_tool_trap_isolated_with_partial_effects_and_completed_replay(
         let worker_id = executor
             .start_agent_with(&caller_component.id, agent_id.clone(), env, Vec::new())
             .await?;
-        let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let owner = worker_id.clone();
         let victim = if pressure {
             let component = executor
                 .component_dep(&context.default_environment_id, large_dynamic_memory)
                 .store()
                 .await?;
-            let agent = agent_id!("LargeDynamicMemoryAgent", "tool-reacquire-victim");
+            let agent = agent_key!("LargeDynamicMemoryAgent", "tool-reacquire-victim");
             let worker = executor.start_agent(&component.id, agent.clone()).await?;
             let work = tokio::spawn({
                 let executor = executor.clone();
@@ -7021,7 +7945,7 @@ async fn rust_tool_trap_isolated_with_partial_effects_and_completed_replay(
                         .await
                 }
             });
-            let owned = OwnedAgentId::new(context.default_environment_id, &worker);
+            let owned = worker.clone();
             tokio::time::timeout(Duration::from_secs(10), async {
                 while executor
                     .worker_memory_requirement(&owned)
@@ -7189,7 +8113,7 @@ async fn rust_tool_trap_isolated_with_partial_effects_and_completed_replay(
                 .count(),
             recovery_errors
         );
-        let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let owner = worker_id.clone();
         if let Some(active) = executor.active_entity_metadata(&owner).await {
             assert!(active.tool_operations.operations.is_empty());
             assert!(active.lane.holder.is_none());
@@ -7258,11 +8182,11 @@ async fn guest_trap_preserves_a_blocked_same_tool_sibling_and_drains_cleanup(
     );
 
     // Observe Store context destruction without re-entering a poisoned guest event loop.
-    let healthy_agent = agent_id!("ToolStreamingCaller", "settlement-eof-control");
+    let healthy_agent = agent_key!("ToolStreamingCaller", "settlement-eof-control");
     let healthy_worker = executor
         .start_agent(&caller_component.id, healthy_agent.clone())
         .await?;
-    let mut healthy_probe = executor.probe_entity_store_disposal(&healthy_worker);
+    let mut healthy_probe = executor.probe_entity_store_disposal(&healthy_worker.agent_id);
     let healthy: StreamEvidence = executor
         .invoke_and_await_agent(
             &caller_component,
@@ -7291,12 +8215,12 @@ async fn guest_trap_preserves_a_blocked_same_tool_sibling_and_drains_cleanup(
     }));
     eprintln!("EOF control Start {healthy_start}: Store context destroyed");
 
-    let agent_id = agent_id!("ToolStreamingCaller", "trap-with-blocked-sibling");
+    let agent_id = agent_key!("ToolStreamingCaller", "trap-with-blocked-sibling");
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
-    let mut disposal_probe = executor.probe_entity_store_disposal(&worker_id);
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let mut disposal_probe = executor.probe_entity_store_disposal(&worker_id.agent_id);
+    let owned_agent_id = worker_id.clone();
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(30),
         executor.invoke_and_await_agent(
@@ -7471,12 +8395,12 @@ async fn run_isolated_trap_sibling_lifecycle_case(
         )),
     );
 
-    let agent_id = agent_id!("ToolStreamingCaller", format!("trap-{lifecycle}"));
+    let agent_id = agent_key!("ToolStreamingCaller", format!("trap-{lifecycle}"));
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
-    let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
-    let mut disposals = executor.probe_entity_store_disposal(&worker_id);
+    let owner = worker_id.clone();
+    let mut disposals = executor.probe_entity_store_disposal(&worker_id.agent_id);
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(30),
         executor.invoke_and_await_agent(
@@ -7674,7 +8598,7 @@ async fn detached_and_fire_and_forget_traps_settle_without_failing_the_owner(
         ("trap-after-result-drop", "drop_trapping_result"),
         ("trap-fire-and-forget", "fire_and_forget_trap"),
     ] {
-        let agent_id = agent_id!("ToolStreamingCaller", name);
+        let agent_id = agent_key!("ToolStreamingCaller", name);
         let worker_id = executor
             .start_agent(&caller_component.id, agent_id.clone())
             .await?;
@@ -7944,7 +8868,7 @@ async fn direct_stdin_reversed_replay_admission(
         .store()
         .await?;
     let (port, server, mut checkpoints) = start_promise_checkpoint_server().await;
-    let agent = agent_id!("ToolStreamingCaller", "stdin-wait-order");
+    let agent = agent_key!("ToolStreamingCaller", "stdin-wait-order");
     let worker = executor
         .start_agent_with(
             &caller_component.id,
@@ -7958,7 +8882,7 @@ async fn direct_stdin_reversed_replay_admission(
         .await?;
     let mut live_write = writes.then(|| {
         executor.gate_next_replay_access_admission(
-            &worker,
+            &worker.agent_id,
             "tool-stdin-writer::write",
             ReplayAdmissionStage::AfterToolOutputAccepted,
         )
@@ -7982,9 +8906,10 @@ async fn direct_stdin_reversed_replay_admission(
             tokio::time::timeout(Duration::from_secs(30), gate.entered()).await?;
             let first =
                 next_promise_checkpoint(&mut checkpoints, "first-stdin-write-accepted").await?;
-            wait_for_promise_checkpoint_to_await(&executor, &worker, &first).await?;
+            wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &first).await?;
             executor
                 .complete_promise(
+                    &executor.context.default_environment_id,
                     &executor.promise_id(&worker, first.oplog_idx).await?,
                     Vec::new(),
                 )
@@ -7992,9 +8917,10 @@ async fn direct_stdin_reversed_replay_admission(
             if !identical {
                 let second =
                     next_promise_checkpoint(&mut checkpoints, "second-stdin-write-done").await?;
-                wait_for_promise_checkpoint_to_await(&executor, &worker, &second).await?;
+                wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &second).await?;
                 executor
                     .complete_promise(
+                        &executor.context.default_environment_id,
                         &executor.promise_id(&worker, second.oplog_idx).await?,
                         Vec::new(),
                     )
@@ -8004,9 +8930,10 @@ async fn direct_stdin_reversed_replay_admission(
         }
         if same_watcher {
             let started = next_promise_checkpoint(&mut checkpoints, "same-watcher-started").await?;
-            wait_for_promise_checkpoint_to_await(&executor, &worker, &started).await?;
+            wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &started).await?;
             executor
                 .complete_promise(
+                    &executor.context.default_environment_id,
                     &executor.promise_id(&worker, started.oplog_idx).await?,
                     Vec::new(),
                 )
@@ -8014,7 +8941,7 @@ async fn direct_stdin_reversed_replay_admission(
         }
         let checkpoint =
             next_promise_checkpoint(&mut checkpoints, "direct-stdin-waits-done").await?;
-        wait_for_promise_checkpoint_to_await(&executor, &worker, &checkpoint).await?;
+        wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &checkpoint).await?;
         if identical {
             live_write
                 .take()
@@ -8069,9 +8996,9 @@ async fn direct_stdin_reversed_replay_admission(
                 golem_common::model::oplog::attachment::ByteStreamCloseCause::Finished
             );
         }
-        let loads = executor.instance_load_count(&worker);
+        let loads = executor.instance_load_count(&worker.agent_id);
         let mut first_wait = executor.gate_next_replay_access_admission(
-            &worker,
+            &worker.agent_id,
             if writes {
                 "tool-stdin-writer::write"
             } else {
@@ -8080,7 +9007,7 @@ async fn direct_stdin_reversed_replay_admission(
             ReplayAdmissionStage::BeforeScope,
         );
         let mut first_finish = executor.gate_next_replay_access_admission(
-            &worker,
+            &worker.agent_id,
             if identical || same_watcher {
                 "http::client::send"
             } else if writes {
@@ -8095,7 +9022,7 @@ async fn direct_stdin_reversed_replay_admission(
         tokio::time::timeout(Duration::from_secs(30), first_finish.entered()).await?;
         if same_watcher || identical {
             let mut completed = executor.gate_next_replay_access_admission(
-                &worker,
+                &worker.agent_id,
                 "http::client::send",
                 ReplayAdmissionStage::BeforeScope,
             );
@@ -8104,11 +9031,12 @@ async fn direct_stdin_reversed_replay_admission(
             first_finish = completed;
         }
         // The second operation must complete while the first cannot claim its Start.
-        assert!(executor.instance_load_count(&worker) > loads);
+        assert!(executor.instance_load_count(&worker.agent_id) > loads);
         first_finish.release();
         first_wait.release();
         executor
             .complete_promise(
+                &executor.context.default_environment_id,
                 &executor.promise_id(&worker, checkpoint.oplog_idx).await?,
                 Vec::new(),
             )
@@ -8223,7 +9151,7 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
         )),
     );
     let (port, server, mut checkpoints) = start_promise_checkpoint_server().await;
-    let agent = agent_id!("ToolStreamingCaller", "piped-unread");
+    let agent = agent_key!("ToolStreamingCaller", "piped-unread");
     let worker = executor
         .start_agent_with(
             &caller_component.id,
@@ -8248,14 +9176,14 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
     };
     let failure_gate = fail_receipt.then(|| {
         executor.gate_next_oplog_function_end(
-            &worker,
+            &worker.agent_id,
             golem_common::model::oplog::host_functions::HostFunctionName::GolemToolStdinWrite,
             true,
         )
     });
     let mut election_gate = no_tool.then(|| {
         executor.gate_next_replay_access_admission(
-            &worker,
+            &worker.agent_id,
             "tool-stdin-writer::write",
             ReplayAdmissionStage::BeforeToolAttachmentFailureElection,
         )
@@ -8293,7 +9221,8 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
                 let checkpoint = tokio::time::timeout(Duration::from_secs(30), checkpoints.recv())
                     .await?
                     .expect("promise checkpoint server stopped");
-                wait_for_promise_checkpoint_to_await(&executor, &worker, &checkpoint).await?;
+                wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &checkpoint)
+                    .await?;
                 if checkpoint.name == "direct-stdin-before-drop" {
                     before = Some(checkpoint);
                 } else {
@@ -8303,6 +9232,7 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
             tokio::time::timeout(Duration::from_secs(30), entered).await??;
             executor
                 .complete_promise(
+                    &executor.context.default_environment_id,
                     &executor
                         .promise_id(&worker, before.expect("caller checkpoint").oplog_idx)
                         .await?,
@@ -8311,7 +9241,7 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
                 .await?;
             tokio::time::timeout(Duration::from_secs(30), async {
                 loop {
-                    executor.commit_oplog(&worker).await?;
+                    executor.commit_oplog(&worker.agent_id).await?;
                     let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
                     if entries.iter().any(|entry| matches!(&entry.entry,
                         PublicOplogEntry::Log(log) if log.message.contains("direct-stdin-write-dropped")
@@ -8371,10 +9301,7 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
             }),
             "failed acceptance must not publish a terminal or acknowledgment"
         );
-        if let Some(active) = executor
-            .active_entity_metadata(&OwnedAgentId::new(context.default_environment_id, &worker))
-            .await
-        {
+        if let Some(active) = executor.active_entity_metadata(&worker.clone()).await {
             assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
         }
         server.abort();
@@ -8387,10 +9314,10 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
                 .await?
                 .expect("promise checkpoint server stopped");
             assert_eq!(checkpoint.name, "piped-before-cancel");
-            wait_for_promise_checkpoint_to_await(&executor, &worker, &checkpoint).await?;
+            wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &checkpoint).await?;
             tokio::time::timeout(Duration::from_secs(30), async {
                 loop {
-                    executor.commit_oplog(&worker).await?;
+                    executor.commit_oplog(&worker.agent_id).await?;
                     let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
                     let first_write = entries.iter().find(|entry| {
                         matches!(&entry.entry, PublicOplogEntry::Start(start)
@@ -8410,6 +9337,7 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
             .await??;
             executor
                 .complete_promise(
+                    &executor.context.default_environment_id,
                     &executor.promise_id(&worker, checkpoint.oplog_idx).await?,
                     Vec::new(),
                 )
@@ -8420,7 +9348,7 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
             let checkpoint = tokio::time::timeout(Duration::from_secs(30), checkpoints.recv())
                 .await?
                 .expect("promise checkpoint server stopped");
-            wait_for_promise_checkpoint_to_await(&executor, &worker, &checkpoint).await?;
+            wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &checkpoint).await?;
             held.push(checkpoint);
         }
         held.sort_by(|left, right| left.name.cmp(&right.name));
@@ -8454,9 +9382,9 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
                 PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == *start
             )));
         }
-        let loads = executor.instance_load_count(&worker);
+        let loads = executor.instance_load_count(&worker.agent_id);
         let mut regeneration = executor.gate_next_replay_access_admission(
-            &worker,
+            &worker.agent_id,
             if direct {
                 "tool-stdin-writer::write"
             } else {
@@ -8466,9 +9394,9 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
         );
         executor.simulated_crash(&worker).await?;
         tokio::time::timeout(Duration::from_secs(30), regeneration.entered()).await?;
-        assert!(executor.instance_load_count(&worker) > loads);
+        assert!(executor.instance_load_count(&worker.agent_id) > loads);
         regeneration.release();
-        let owner = OwnedAgentId::new(context.default_environment_id, &worker);
+        let owner = worker.clone();
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 if executor.owner_replay_is_live(&owner).await? {
@@ -8482,6 +9410,7 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
         for checkpoint in held {
             executor
                 .complete_promise(
+                    &executor.context.default_environment_id,
                     &executor.promise_id(&worker, checkpoint.oplog_idx).await?,
                     Vec::new(),
                 )
@@ -8577,12 +9506,12 @@ async fn unread_stdin_reconstructs_before_downstream_reads(
     }
     drop(executor);
     executor = start_with_overrides(deps, &context, overrides.clone()).await?;
-    assert_eq!(executor.instance_load_count(&worker), 0);
+    assert_eq!(executor.instance_load_count(&worker.agent_id), 0);
     let _: String = executor
         .invoke_and_await_agent(&caller_component, &agent, "replay_probe", data_value!())
         .await?
         .into_typed()?;
-    assert!(executor.instance_load_count(&worker) > 0);
+    assert!(executor.instance_load_count(&worker.agent_id) > 0);
     let replayed = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
     assert_eq!(
         replayed
@@ -8663,7 +9592,7 @@ async fn large_tool_output_reconstructs_with_one_chunk_capacity(
             metadata.tools,
         )),
     );
-    let agent = agent_id!("ToolStreamingCaller", "one-chunk-capacity");
+    let agent = agent_key!("ToolStreamingCaller", "one-chunk-capacity");
     let worker = executor
         .start_agent(&caller_component.id, agent.clone())
         .await?;
@@ -8684,12 +9613,12 @@ async fn large_tool_output_reconstructs_with_one_chunk_capacity(
     assert!(!result.output_closed);
     drop(executor);
     let executor = start_with_overrides(deps, &context, overrides).await?;
-    assert_eq!(executor.instance_load_count(&worker), 0);
+    assert_eq!(executor.instance_load_count(&worker.agent_id), 0);
     let _: String = executor
         .invoke_and_await_agent(&caller_component, &agent, "replay_probe", data_value!())
         .await?
         .into_typed()?;
-    assert!(executor.instance_load_count(&worker) > 0);
+    assert!(executor.instance_load_count(&worker.agent_id) > 0);
     let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
     assert_eq!(
         oplog
@@ -8771,7 +9700,7 @@ async fn large_tool_output_survives_crashes_while_it_is_consumed(
     );
     let (checkpoint_port, _checkpoint_server, mut checkpoints) =
         start_promise_checkpoint_server().await;
-    let agent = agent_id!("ToolStreamingCaller", "crash-while-consumed");
+    let agent = agent_key!("ToolStreamingCaller", "crash-while-consumed");
     let worker = executor
         .start_agent_with(
             &caller_component.id,
@@ -8797,11 +9726,11 @@ async fn large_tool_output_survives_crashes_while_it_is_consumed(
                 &format!("large-output-consumed-{chunks_before_crash}"),
             )
             .await?;
-            wait_for_promise_checkpoint_to_await(&executor, &worker, &checkpoint).await?;
+            wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &checkpoint).await?;
             // The paused consumer leaves the producer in a write without an End.
             tokio::time::timeout(Duration::from_secs(30), async {
                 loop {
-                    executor.commit_oplog(&worker).await?;
+                    executor.commit_oplog(&worker.agent_id).await?;
                     let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
                     let ended = entries
                         .iter()
@@ -8827,6 +9756,7 @@ async fn large_tool_output_survives_crashes_while_it_is_consumed(
             executor.simulated_crash(&worker).await?;
             executor
                 .complete_promise(
+                    &executor.context.default_environment_id,
                     &executor.promise_id(&worker, checkpoint.oplog_idx).await?,
                     Vec::new(),
                 )
@@ -8951,7 +9881,7 @@ async fn tool_stdin_closed_wait_survives_a_crash_while_stdin_is_open(
     );
     let (checkpoint_port, gate_port, _checkpoint_server, mut checkpoints) =
         start_crash_checkpoint_server().await;
-    let agent = agent_id!("ToolStreamingCaller", "crash-in-stdin-closed-wait");
+    let agent = agent_key!("ToolStreamingCaller", "crash-in-stdin-closed-wait");
     let worker = executor
         .start_agent_with(
             &caller_component.id,
@@ -8981,7 +9911,7 @@ async fn tool_stdin_closed_wait_survives_a_crash_while_stdin_is_open(
         // Crash only inside the window: the entity's wait has a committed Start and no End.
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
-                executor.commit_oplog(&worker).await?;
+                executor.commit_oplog(&worker.agent_id).await?;
                 let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
                 let ended = entries
                     .iter()
@@ -9111,7 +10041,6 @@ async fn retained_tool_output_fork(
     routes: (Option<bool>, Option<bool>),
 ) -> anyhow::Result<()> {
     use crate::fork::start_with_local_resume_and;
-    use golem_common::model::AgentId;
     use golem_common::model::agent::{RevertToOplogIndex, RevertWorkerTarget};
     use golem_common::model::durable_stream::StreamConsumerObservation;
     use golem_common::model::oplog::attachment::ToolAttachmentReadObservation;
@@ -9159,7 +10088,7 @@ async fn retained_tool_output_fork(
             metadata.tools,
         )),
     );
-    let parent_name = agent_id!("ToolStreamingCaller", "retained-output-fork-parent");
+    let parent_name = agent_key!("ToolStreamingCaller", "retained-output-fork-parent");
     let parent = executor
         .start_agent(&caller_component.id, parent_name.clone())
         .await?;
@@ -9235,7 +10164,7 @@ async fn retained_tool_output_fork(
             .expect("reverted history")
             .oplog_index;
     }
-    let stored = executor.stored_oplog(&parent).await;
+    let stored = executor.stored_oplog(&parent.agent_id).await;
     let original_payloads = stored
         .iter()
         .filter_map(|entry| match entry {
@@ -9254,44 +10183,41 @@ async fn retained_tool_output_fork(
             .all(|payload| matches!(payload, OplogPayload::External { .. })),
         "fork recovery must exercise external payload ownership"
     );
-    let child_name = agent_id!("ToolStreamingCaller", "retained-output-fork-child");
-    let child = AgentId {
-        component_id: caller_component.id,
-        agent_id: child_name.to_string(),
-    };
-    executor.fork_worker(&parent, &child.agent_id, cut).await?;
+    let child = executor.fork_worker(&parent, cut).await?;
     executor.delete_worker(&parent).await?;
     drop(executor);
 
     let executor = start_with_local_resume_and(deps, &context, overrides.clone()).await?;
-    assert_eq!(executor.instance_load_count(&child), 0);
+    assert_eq!(executor.instance_load_count(&child.agent_id), 0);
     let (consume_method, consume_params) = consumption(routes.1);
-    let bytes: Vec<u8> = executor
-        .invoke_and_await_agent(
-            &caller_component,
-            &child_name,
-            consume_method,
-            consume_params,
-        )
-        .await?
-        .into_typed()?;
+    let bytes: Vec<u8> = crate::agent::invoke_and_await_agent_by_id(
+        &executor,
+        &caller_component,
+        &child,
+        None,
+        consume_method,
+        consume_params,
+    )
+    .await?
+    .into_typed()?;
     assert_eq!(
         bytes,
         [vec![0, 255, 19], b"retained-tail".to_vec()].concat()
     );
-    assert!(executor.instance_load_count(&child) > 0);
+    assert!(executor.instance_load_count(&child.agent_id) > 0);
     drop(executor);
 
     let executor = start_with_local_resume_and(deps, &context, overrides).await?;
-    let _: String = executor
-        .invoke_and_await_agent(
-            &caller_component,
-            &child_name,
-            "replay_probe",
-            data_value!(),
-        )
-        .await?
-        .into_typed()?;
+    let _: String = crate::agent::invoke_and_await_agent_by_id(
+        &executor,
+        &caller_component,
+        &child,
+        None,
+        "replay_probe",
+        data_value!(),
+    )
+    .await?
+    .into_typed()?;
     let history = executor.get_oplog(&child, OplogIndex::INITIAL).await?;
     let reads = history
         .iter()
@@ -9460,7 +10386,7 @@ async fn retained_tool_output_reconstruction(
         (false, false, true),
     ] {
         for crash_before_read in [false, true] {
-            let agent = agent_id!(
+            let agent = agent_key!(
                 "ToolStreamingCaller",
                 format!(
                     "retained-output-{cancel_read}-{cancel_ready}-{cancel_positive}-{crash_before_read}"
@@ -9490,10 +10416,11 @@ async fn retained_tool_output_reconstruction(
                         "retained-output-before-positive-cancel",
                     )
                     .await?;
-                    wait_for_promise_checkpoint_to_await(&executor, &worker, &checkpoint).await?;
+                    wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &checkpoint)
+                        .await?;
                     tokio::time::timeout(Duration::from_secs(30), async {
                         loop {
-                            executor.commit_oplog(&worker).await?;
+                            executor.commit_oplog(&worker.agent_id).await?;
                             let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
                             let reads = primary_reads(&entries);
                             if reads.len() == 2 {
@@ -9504,19 +10431,20 @@ async fn retained_tool_output_reconstruction(
                         }
                     })
                     .await??;
-                    let loads = executor.instance_load_count(&worker);
+                    let loads = executor.instance_load_count(&worker.agent_id);
                     if crash_before_read {
                         executor.simulated_crash(&worker).await?;
                     }
                     executor
                         .complete_promise(
+                            &executor.context.default_environment_id,
                             &executor.promise_id(&worker, checkpoint.oplog_idx).await?,
                             Vec::new(),
                         )
                         .await?;
                     if crash_before_read {
                         tokio::time::timeout(Duration::from_secs(30), async {
-                            while executor.instance_load_count(&worker) == loads {
+                            while executor.instance_load_count(&worker.agent_id) == loads {
                                 tokio::time::sleep(Duration::from_millis(10)).await;
                             }
                         })
@@ -9564,7 +10492,7 @@ async fn retained_tool_output_reconstruction(
             if crash_before_read {
                 drop(executor);
                 executor = start_with_overrides(deps, &context, overrides.clone()).await?;
-                assert_eq!(executor.instance_load_count(&worker), 0);
+                assert_eq!(executor.instance_load_count(&worker.agent_id), 0);
             }
             let bytes: Vec<u8> = executor
                 .invoke_and_await_agent(
@@ -9584,7 +10512,7 @@ async fn retained_tool_output_reconstruction(
                 }
             );
             if crash_before_read {
-                assert!(executor.instance_load_count(&worker) > 0);
+                assert!(executor.instance_load_count(&worker.agent_id) > 0);
             }
             if snapshots {
                 tokio::time::timeout(Duration::from_secs(30), async {
@@ -9603,12 +10531,12 @@ async fn retained_tool_output_reconstruction(
             }
             drop(executor);
             executor = start_with_overrides(deps, &context, overrides.clone()).await?;
-            assert_eq!(executor.instance_load_count(&worker), 0);
+            assert_eq!(executor.instance_load_count(&worker.agent_id), 0);
             let _: String = executor
                 .invoke_and_await_agent(&caller_component, &agent, "replay_probe", data_value!())
                 .await?
                 .into_typed()?;
-            assert!(executor.instance_load_count(&worker) > 0);
+            assert!(executor.instance_load_count(&worker.agent_id) > 0);
             let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
             assert_eq!(oplog.iter().filter(|entry| matches!(
                 &entry.entry,
@@ -9635,7 +10563,7 @@ async fn retained_tool_output_reconstruction(
         }
     }
     for crash_before_eof in [false, true] {
-        let agent = agent_id!(
+        let agent = agent_key!(
             "ToolStreamingCaller",
             format!("retained-error-{crash_before_eof}")
         );
@@ -9653,7 +10581,7 @@ async fn retained_tool_output_reconstruction(
         if crash_before_eof {
             drop(executor);
             executor = start_with_overrides(deps, &context, overrides.clone()).await?;
-            assert_eq!(executor.instance_load_count(&worker), 0);
+            assert_eq!(executor.instance_load_count(&worker.agent_id), 0);
         }
         let bytes: Vec<u8> = executor
             .invoke_and_await_agent(
@@ -9685,7 +10613,7 @@ async fn retained_tool_output_reconstruction(
         executor.delete_worker(&worker).await?;
     }
     if snapshots {
-        let agent = agent_id!("ToolStreamingCaller", "retained-stdin-closed");
+        let agent = agent_key!("ToolStreamingCaller", "retained-stdin-closed");
         let worker = executor
             .start_agent(&caller_component.id, agent.clone())
             .await?;
@@ -9817,11 +10745,11 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
         )),
     );
 
-    let agent_id = agent_id!("ToolStreamingCaller", "capable-limits");
+    let agent_id = agent_key!("ToolStreamingCaller", "capable-limits");
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
 
     let exact_input = vec![b'i'; 64];
     let exact: StreamEvidence = executor
@@ -9896,7 +10824,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
     );
 
     let (port, server, mut checkpoints) = start_promise_checkpoint_server().await;
-    let cancelled_agent = agent_id!("ToolStreamingCaller", "capable-cancelled-overflow");
+    let cancelled_agent = agent_key!("ToolStreamingCaller", "capable-cancelled-overflow");
     let cancelled_worker = executor
         .start_agent_with(
             &caller_component.id,
@@ -9909,12 +10837,12 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
         )
         .await?;
     let (accepted, release) = executor.gate_next_oplog_function_end(
-        &cancelled_worker,
+        &cancelled_worker.agent_id,
         golem_common::model::oplog::host_functions::HostFunctionName::GolemToolOutputWrite,
         false,
     );
-    let mut completion =
-        executor.gate_next_live_entity_body_completion(&cancelled_worker, "capable-streaming");
+    let mut completion = executor
+        .gate_next_live_entity_body_completion(&cancelled_worker.agent_id, "capable-streaming");
     let mut output = executor.capture_output(&cancelled_worker).await?;
     let invoke = executor.invoke_and_await_agent(
         &caller_component,
@@ -9925,7 +10853,8 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
     let synchronize = async {
         let checkpoint =
             next_promise_checkpoint(&mut checkpoints, "exhaustion-before-write-drop").await?;
-        wait_for_promise_checkpoint_to_await(&executor, &cancelled_worker, &checkpoint).await?;
+        wait_for_promise_checkpoint_to_await(&executor, &cancelled_worker.agent_id, &checkpoint)
+            .await?;
         accepted.await?;
         let entries = executor
             .get_oplog(&cancelled_worker, OplogIndex::INITIAL)
@@ -9943,6 +10872,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
             .expect("capable tool entity Start");
         executor
             .complete_promise(
+                &executor.context.default_environment_id,
                 &executor
                     .promise_id(&cancelled_worker, checkpoint.oplog_idx)
                     .await?,
@@ -10072,7 +11002,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
 
     let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoint_arrivals) =
         start_crash_checkpoint_server().await;
-    let overflow_agent = agent_id!("ToolStreamingCaller", "capable-overflow-replay");
+    let overflow_agent = agent_key!("ToolStreamingCaller", "capable-overflow-replay");
     let overflow_worker = executor
         .start_agent_with(
             &caller_component.id,
@@ -10090,7 +11020,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
             Vec::new(),
         )
         .await?;
-    let overflow_owner = OwnedAgentId::new(context.default_environment_id, &overflow_worker);
+    let overflow_owner = overflow_worker.clone();
     executor
         .invoke_agent(
             &caller_component,
@@ -10226,7 +11156,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
             })
             .collect::<Vec<_>>()
     };
-    let stored = executor.stored_oplog(&overflow_worker).await;
+    let stored = executor.stored_oplog(&overflow_worker.agent_id).await;
     let original_controls = owner_controls(&stored);
     for attachment in &original_controls {
         assert_eq!(
@@ -10240,7 +11170,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
     }
     for (cut, retained_controls) in [(first_control, 1), (end, 0)] {
         use golem_common::model::agent::{RevertToOplogIndex, RevertWorkerTarget};
-        let before_repair = executor.stored_oplog(&overflow_worker).await.len();
+        let before_repair = executor.stored_oplog(&overflow_worker.agent_id).await.len();
         executor
             .revert(
                 &overflow_worker,
@@ -10259,7 +11189,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
         .expect("cut no-body terminal repair timed out")
         .expect("checkpoint server stopped");
         assert_eq!(replayed_gate.name, "capable-stdin-overflow-terminal");
-        let repaired = executor.stored_oplog(&overflow_worker).await;
+        let repaired = executor.stored_oplog(&overflow_worker.agent_id).await;
         assert_eq!(
             owner_controls(&repaired[before_repair..]).len(),
             original_controls.len() - retained_controls,
@@ -10279,10 +11209,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
     );
     checkpoint_server.abort();
 
-    for owner in [
-        owned_agent_id,
-        OwnedAgentId::new(context.default_environment_id, &cancelled_worker),
-    ] {
+    for owner in [owned_agent_id, cancelled_worker.clone()] {
         if let Some(active) = executor.active_entity_metadata(&owner).await {
             assert!(active.tool_operations.operations.is_empty());
             assert!(active.lane.holder.is_none());
@@ -10363,7 +11290,7 @@ async fn completed_tool_replay_bypasses_current_attachment_memory_pressure(
 
     let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoint_arrivals) =
         start_crash_checkpoint_server().await;
-    let agent_id = agent_id!("ToolStreamingCaller", "completed-replay-memory-pressure");
+    let agent_id = agent_key!("ToolStreamingCaller", "completed-replay-memory-pressure");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
@@ -10381,7 +11308,7 @@ async fn completed_tool_replay_bypasses_current_attachment_memory_pressure(
             Vec::new(),
         )
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
     let input = vec![b'i'; ATTACHMENT_BYTES];
     executor
         .invoke_agent(
@@ -10401,11 +11328,11 @@ async fn completed_tool_replay_bypasses_current_attachment_memory_pressure(
     assert_eq!(original_checkpoint.name, "completed-attachment-pressure");
     let target_memory = executor.worker_memory_requirement(&owned_agent_id).await?;
 
-    let pressure_agent = agent_id!("LargeDynamicMemoryAgent", "attachment-replay-pressure");
+    let pressure_agent = agent_key!("LargeDynamicMemoryAgent", "attachment-replay-pressure");
     let pressure_worker = executor
         .start_agent(&memory_component.id, pressure_agent.clone())
         .await?;
-    let pressure_owned = OwnedAgentId::new(context.default_environment_id, &pressure_worker);
+    let pressure_owned = pressure_worker.clone();
     let initial_pressure_memory = executor.worker_memory_requirement(&pressure_owned).await?;
     let growth_budget = SYSTEM_MEMORY_BYTES
         .checked_sub(target_memory + initial_pressure_memory + DESIRED_REPLAY_HEADROOM_BYTES)
@@ -10447,7 +11374,8 @@ async fn completed_tool_replay_bypasses_current_attachment_memory_pressure(
         "either output must fit independently so combined dual-output attachment admission is decisive"
     );
 
-    let mut reconstruction = executor.gate_next_completed_entity_reconstruction(&worker_id);
+    let mut reconstruction =
+        executor.gate_next_completed_entity_reconstruction(&worker_id.agent_id);
     executor.simulated_crash(&worker_id).await?;
     drop(original_checkpoint.release);
     tokio::time::timeout(std::time::Duration::from_secs(30), reconstruction.entered())
@@ -10559,7 +11487,7 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
 
     let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoint_arrivals) =
         start_crash_checkpoint_server().await;
-    let agent_id = agent_id!("ToolStreamingCaller", "incomplete-upgrade-rejection");
+    let agent_id = agent_key!("ToolStreamingCaller", "incomplete-upgrade-rejection");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
@@ -10577,7 +11505,7 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
             Vec::new(),
         )
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
 
     let invocation = executor.invoke_and_await_agent(
         &caller_component,
@@ -10623,7 +11551,7 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
             "incomplete tool entity has no reconstructed linear-memory charge"
         );
 
-        let mut reconstructed_body = executor.gate_next_entity_body_start(&worker_id);
+        let mut reconstructed_body = executor.gate_next_entity_body_start(&worker_id.agent_id);
         executor.simulated_crash(&worker_id).await?;
         drop(original_checkpoint.release);
         executor.resume(&worker_id, true).await?;
@@ -10638,11 +11566,12 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
         let restart_memory = target_memory
             .checked_add(reconstructed_entity_memory)
             .ok_or_else(|| anyhow::anyhow!("reconstructed memory requirement overflow"))?;
-        let pressure_agent = agent_id!("LargeDynamicMemoryAgent", "incomplete-attachment-pressure");
+        let pressure_agent =
+            agent_key!("LargeDynamicMemoryAgent", "incomplete-attachment-pressure");
         let pressure_worker = executor
             .start_agent(&memory_component.id, pressure_agent.clone())
             .await?;
-        let pressure_owned = OwnedAgentId::new(context.default_environment_id, &pressure_worker);
+        let pressure_owned = pressure_worker.clone();
         let initial_pressure_memory = executor.worker_memory_requirement(&pressure_owned).await?;
         let growth_budget = SYSTEM_MEMORY_BYTES
             .checked_sub(restart_memory + initial_pressure_memory + DESIRED_REPLAY_HEADROOM_BYTES)
@@ -10874,11 +11803,11 @@ async fn capable_stdout_poll_does_not_launch_before_result_await(
         )),
     );
 
-    let agent_id = agent_id!("ToolStreamingCaller", "capable-stdout-before-result");
+    let agent_id = agent_key!("ToolStreamingCaller", "capable-stdout-before-result");
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
     executor
         .invoke_agent(
             &caller_component,
@@ -10933,6 +11862,7 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
     };
     use golem_api_grpc::proto::golem::worker::{
         AgentInvocationMode, InvocationFreshnessDisposition, InvocationStart,
+        invocation_session_result,
     };
     use golem_common::model::card::{Card, CardId, ScopeCard, StoredCard};
     use golem_common::model::oplog::OplogEntry;
@@ -10993,7 +11923,7 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
             metadata.tools,
         )),
     );
-    let agent = agent_id!("ToolStreamingCaller", "scope-interest-before-store");
+    let agent = agent_key!("ToolStreamingCaller", "scope-interest-before-store");
     let worker = executor
         .start_agent_with(
             &caller_component.id,
@@ -11008,7 +11938,7 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
             Vec::new(),
         )
         .await?;
-    let owner = OwnedAgentId::new(context.default_environment_id, &worker);
+    let owner = worker.clone();
     let trigger = CardId::new();
     let marker = CardId::new();
     for id in [trigger, marker] {
@@ -11037,8 +11967,12 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
     let input = b"retained-before-store".to_vec();
     let (_, value) = data_value!(input.clone()).into_parts();
     let request = InvocationStart {
-        agent_id: Some(worker.clone().into()),
+        target: Some(crate::agent::id_target(&worker)),
+        constructor: None,
+        component_id: Some(caller_component.id.into()),
         method_name: Some("hold_fire_and_forget_capable_staging".to_string()),
+        allow_streams: false,
+        captured_method_input: None,
         input: Some(value.try_into().map_err(anyhow::Error::msg)?),
         mode: AgentInvocationMode::Await as i32,
         schedule_at: None,
@@ -11066,12 +12000,12 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
         let staging = tokio::time::timeout(Duration::from_secs(30), checkpoints.recv()).await?.unwrap();
         assert_eq!(staging.name, "fire-capable-staging");
         cards.revoke(trigger);
-        executor.queue_card_revocation(&worker, trigger).await?;
+        executor.queue_card_revocation(&worker.agent_id, trigger).await?;
         staging.release.send(()).unwrap();
         let parent_open = tokio::time::timeout(Duration::from_secs(30), checkpoints.recv()).await?.unwrap();
         assert_eq!(parent_open.name, "fire-capable-ready-parent-open");
-        executor.commit_oplog(&worker).await?;
-        assert!(executor.stored_oplog(&worker).await.iter().any(|entry| matches!(entry,
+        executor.commit_oplog(&worker.agent_id).await?;
+        assert!(executor.stored_oplog(&worker.agent_id).await.iter().any(|entry| matches!(entry,
             OplogEntry::CardRevokedCascade { revoked_card_ids, .. } if revoked_card_ids.contains(&trigger))));
         let operation = executor.active_entity_metadata(&owner).await.unwrap().tool_operations.operations.into_iter().next().unwrap();
         assert_eq!(operation.admission, ToolBodyAdmissionMetadata::Ready);
@@ -11082,8 +12016,17 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
         // Executable fetch precedes context/Store creation. The parent's next checkpoint
         // authorization invalidated its whole scope; only the accepted child retains marker.
         assert!(executor.active_agents().tracked_card_ids().await.contains(&marker));
+        // The parent records its result at its export's return and admits the staged
+        // fire-and-forget body only at the end of its drain, so the observer may already have
+        // its result here. Either way it detaches before the body's Store exists.
         observer.abort();
-        assert!(observer.await.unwrap_err().is_cancelled());
+        match observer.await {
+            Err(error) => assert!(error.is_cancelled()),
+            Ok(result) => assert!(matches!(
+                result?.result,
+                Some(invocation_session_result::Result::MethodResult(_))
+            )),
+        }
         assert!(executor.active_agents().tracked_card_ids().await.contains(&marker),
             "detaching the invocation observer must not drop accepted pre-Store interest");
         load.release();
@@ -11099,6 +12042,56 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
             }
         }).await?;
         assert_eq!(executor.get_file_contents(&worker, "/fire-capable-staging.bin").await?, input);
+
+        // The parent stages the call before its result; the staged body runs and the call ends
+        // after the result and before the parent's settlement.
+        let parent = executor.get_oplog(&worker, OplogIndex::INITIAL).await?.iter().find_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(started) => match &started.invocation {
+                PublicAgentInvocation::AgentMethodInvocation(method)
+                    if method.method_name.replace('-', "_") == "hold_fire_and_forget_capable_staging" => Some(method.invocation_id),
+                _ => None,
+            },
+            _ => None,
+        }).expect("the parent invocation started");
+        let settled_of = |oplog: &[PublicOplogEntryWithIndex]| oplog.iter().filter(|entry| matches!(&entry.entry,
+                PublicOplogEntry::AgentInvocationSettled(settled) if settled.invocation_id == parent))
+            .map(|entry| entry.oplog_index).collect::<Vec<_>>();
+        let oplog = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+                if !settled_of(&oplog).is_empty() {
+                    return Ok::<_, anyhow::Error>(oplog);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }).await??;
+        let finished = oplog.iter().filter(|entry| matches!(&entry.entry,
+                PublicOplogEntry::AgentInvocationFinished(finished) if finished.invocation_id == parent))
+            .map(|entry| entry.oplog_index).collect::<Vec<_>>();
+        let settled = settled_of(&oplog);
+        assert_eq!(finished.len(), 1, "the parent records one result");
+        assert_eq!(settled.len(), 1, "the parent settles once");
+        let (finished, settled) = (finished[0], settled[0]);
+        let calls = oplog.iter().filter(|entry| matches!(&entry.entry,
+                PublicOplogEntry::Start(parameters) if parameters.function_name == "golem::entity::invoke")
+                && matches!(&entry.attribution, PublicOplogEntryAttribution::Entity(entity)
+                    if entity.invocation.entity.kind == PublicAgentEntityKind::Tool))
+            .map(|entry| entry.oplog_index).collect::<Vec<_>>();
+        assert_eq!(calls.len(), 1, "the fire-and-forget tool call starts once");
+        let call = calls[0];
+        assert!(call < finished, "the parent stages the call at {call} before its result at {finished}");
+        let body = oplog.iter().filter(|entry| entry.oplog_index != call && matches!(&entry.attribution,
+                PublicOplogEntryAttribution::Entity(entity) if entity.invocation.start_index == call))
+            .map(|entry| entry.oplog_index).collect::<Vec<_>>();
+        assert!(oplog.iter().any(|entry| matches!(&entry.entry,
+                PublicOplogEntry::Start(parameters) if parameters.parent_start_index == Some(call))),
+            "the staged body records its own work");
+        assert!(body.iter().all(|index| finished < *index && *index < settled),
+            "the staged body runs between the result at {finished} and the settlement at {settled}: {body:?}");
+        let ends = oplog.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == call))
+            .map(|entry| entry.oplog_index).collect::<Vec<_>>();
+        assert!(ends.len() == 1 && finished < ends[0] && ends[0] < settled,
+            "the staged call ends once between the result at {finished} and the settlement at {settled}: {ends:?}");
         Ok::<_, anyhow::Error>(())
     }.await;
     load.release();
@@ -11117,24 +12110,20 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_agent_sockets(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            environment_state_service: Some(environment_state.clone()),
-            configure: Some(Arc::new(|config| {
-                config.retry = RetryConfig {
-                    max_attempts: 0,
-                    min_delay: std::time::Duration::from_millis(1),
-                    max_delay: std::time::Duration::from_millis(1),
-                    multiplier: 1.0,
-                    max_jitter_factor: None,
-                };
-            })),
-            ..Default::default()
-        },
-    )
-    .await?;
+    let overrides = || TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        configure: Some(Arc::new(|config| {
+            config.retry = RetryConfig {
+                max_attempts: 0,
+                min_delay: std::time::Duration::from_millis(1),
+                max_delay: std::time::Duration::from_millis(1),
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_agent_sockets(deps, &context, overrides()).await?;
     let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoint_arrivals) =
         start_crash_checkpoint_server().await;
 
@@ -11174,7 +12163,7 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
         ),
     ]);
 
-    let sync_agent = agent_id!("ToolStreamingCaller", "sync-capable-staging-boundary");
+    let sync_agent = agent_key!("ToolStreamingCaller", "sync-capable-staging-boundary");
     let sync_worker = executor
         .start_agent_with(
             &caller_component.id,
@@ -11183,7 +12172,7 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
             Vec::new(),
         )
         .await?;
-    let sync_owner = OwnedAgentId::new(context.default_environment_id, &sync_worker);
+    let sync_owner = sync_worker.clone();
     let sync_input = b"sync-staged".to_vec();
     let sync_call = executor.invoke_and_await_agent(
         &caller_component,
@@ -11249,7 +12238,7 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
         sync_input
     );
 
-    let fire_agent = agent_id!("ToolStreamingCaller", "fire-capable-staging-boundary");
+    let fire_agent = agent_key!("ToolStreamingCaller", "fire-capable-staging-boundary");
     let fire_worker = executor
         .start_agent_with(
             &caller_component.id,
@@ -11258,7 +12247,7 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
             Vec::new(),
         )
         .await?;
-    let fire_owner = OwnedAgentId::new(context.default_environment_id, &fire_worker);
+    let fire_owner = fire_worker.clone();
     let fire_input = b"fire-staged".to_vec();
     let fire_call = executor.invoke_and_await_agent(
         &caller_component,
@@ -11348,7 +12337,7 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
         fire_input
     );
 
-    let publication_agent = agent_id!("ToolStreamingCaller", "capable-publication-boundary");
+    let publication_agent = agent_key!("ToolStreamingCaller", "capable-publication-boundary");
     let publication_worker = executor
         .start_agent_with(
             &caller_component.id,
@@ -11357,7 +12346,7 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
             Vec::new(),
         )
         .await?;
-    let publication_owner = OwnedAgentId::new(context.default_environment_id, &publication_worker);
+    let publication_owner = publication_worker.clone();
     let publication_input = b"publication-staged".to_vec();
     let publication_call = executor.invoke_and_await_agent(
         &caller_component,
@@ -11464,7 +12453,7 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
             caller_checkpoint_gate_port.to_string(),
         ),
     ]);
-    let trap_agent = agent_id!("ToolStreamingCaller", "clean-stdout-before-trap");
+    let trap_agent = agent_key!("ToolStreamingCaller", "clean-stdout-before-trap");
     let trap_worker = executor
         .start_agent_with(
             &caller_component.id,
@@ -11473,7 +12462,7 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
             Vec::new(),
         )
         .await?;
-    let trap_owner = OwnedAgentId::new(context.default_environment_id, &trap_worker);
+    let trap_owner = trap_worker.clone();
     let trap_call = executor.invoke_and_await_agent(
         &caller_component,
         &trap_agent,
@@ -11538,9 +12527,230 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
         assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
     }
 
+    // The fire-and-forget body ran at its parent's end, after the parent's result and before
+    // its settlement. Replay reads that result first and admits the body at the parent's end
+    // too, after the drain.
+    drop(executor);
+    let executor = start_with_agent_sockets(deps, &context, overrides()).await?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        executor.invoke_and_await_agent(
+            &caller_component,
+            &fire_agent,
+            "principal_context",
+            data_value!(),
+        ),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("the fire-and-forget parent did not replay"))??;
+
     checkpoint_server.abort();
     provider_checkpoint_server.abort();
     caller_checkpoint_server.abort();
+    Ok(())
+}
+
+/// A stop accepted while the method's result is recorded at its export's return retires a
+/// capable tool child that the method staged until its end: the owner fence of the stop leaves
+/// the child's `Start` without a terminal, so the drain ends interrupted and the method does not
+/// settle. The recorded result stays.
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn a_stop_while_the_result_is_recorded_interrupts_a_drain_with_a_staged_capable_child(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_agent_sockets(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoint_arrivals) =
+        start_crash_checkpoint_server().await;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider_path = deps
+        .component_directory
+        .join(format!("{}.wasm", provider.wasm_name));
+    let metadata = extract_component_metadata(&provider_path, false, true).await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    let agent = agent_key!("ToolStreamingCaller", "stop-while-staged-child-result");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent.clone(),
+            HashMap::from([
+                (
+                    "CRASH_CHECKPOINT_PORT".to_string(),
+                    checkpoint_port.to_string(),
+                ),
+                (
+                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    checkpoint_gate_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let owner = worker_id.clone();
+    let call = tokio::spawn({
+        let executor = executor.clone();
+        let caller_component = caller_component.clone();
+        let agent = agent.clone();
+        async move {
+            executor
+                .invoke_and_await_agent(
+                    &caller_component,
+                    &agent,
+                    "hold_fire_and_forget_capable_staging",
+                    data_value!(b"stopped-staged".to_vec()),
+                )
+                .await
+        }
+    });
+    let mut next_checkpoint = async |name: &str| {
+        let arrival = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            checkpoint_arrivals.recv(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("checkpoint {name} timed out"))?
+        .ok_or_else(|| anyhow::anyhow!("checkpoint server stopped"))?;
+        assert_eq!(arrival.name, name);
+        Ok::<_, anyhow::Error>(arrival)
+    };
+    next_checkpoint("fire-capable-staging")
+        .await?
+        .release
+        .send(())
+        .expect("release the staging gate");
+    let parent_open = next_checkpoint("fire-capable-ready-parent-open").await?;
+    // The staged body is not held: whether the stop lets it start is not what this test checks.
+    let _release_later_checkpoints =
+        tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            while let Some(arrival) = checkpoint_arrivals.recv().await {
+                let _ = arrival.release.send(());
+            }
+        }));
+    let worker = executor
+        .active_agent(&owner)
+        .await
+        .expect("the caller is resident")
+        .primary();
+    let (at_result, release_result) = executor
+        .gate_next_invocation_outcome_append(&worker_id.agent_id)
+        .await;
+    parent_open
+        .release
+        .send(())
+        .expect("release the parent-open gate");
+    tokio::time::timeout(std::time::Duration::from_secs(30), at_result)
+        .await
+        .map_err(|_| anyhow::anyhow!("the method's result was not recorded"))??;
+
+    let accepted = worker.await_interrupt_for_test();
+    let stop = tokio::spawn({
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        async move { executor.interrupt(&worker_id).await }
+    });
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(30), accepted).await?,
+        golem_service_base::error::worker_executor::InterruptKind::Interrupt(_)
+    ));
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        worker.join_accepted_stops_for_test(),
+    )
+    .await??;
+    assert_eq!(
+        worker.selected_owner_failure_for_test().await,
+        Some(ToolOwnerFailureMetadata::Lifecycle)
+    );
+    release_result.send(false).unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(30), stop).await???;
+    tokio::time::timeout(std::time::Duration::from_secs(30), call).await???;
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while worker.is_loaded().await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let invocation = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(started) => match &started.invocation {
+                PublicAgentInvocation::AgentMethodInvocation(method)
+                    if method.method_name.replace('-', "_")
+                        == "hold_fire_and_forget_capable_staging" =>
+                {
+                    Some(method.invocation_id)
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("the method started");
+    let finished = after_return_finished(&oplog, &invocation)
+        .expect("the method's result is recorded at its export's return");
+    let child = *after_return_tool_starts(&oplog)
+        .first()
+        .expect("the method staged the capable tool call");
+    assert!(
+        !oplog.iter().any(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) => end.start_index == child,
+            PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == child,
+            _ => false,
+        }),
+        "the stop retires the staged call before it ends: {oplog:#?}"
+    );
+    assert!(
+        after_return_settled(&oplog, &invocation).is_empty(),
+        "the interrupted drain does not settle: {oplog:#?}"
+    );
+    assert!(
+        oplog.iter().any(|entry| entry.oplog_index > finished
+            && matches!(entry.entry, PublicOplogEntry::Interrupted(_))),
+        "the stop interrupts the drain after the result: {oplog:#?}"
+    );
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "the stop fails nothing: {oplog:#?}"
+    );
+    checkpoint_server.abort();
     Ok(())
 }
 
@@ -11588,11 +12798,11 @@ async fn active_stream_crash_replays_pinned_activation_with_fresh_attachments(
         )),
     );
 
-    let agent_id = agent_id!("ToolStreamingCaller", "active-stream-crash");
+    let agent_id = agent_key!("ToolStreamingCaller", "active-stream-crash");
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
     executor
         .invoke_agent(
             &caller_component,
@@ -11731,7 +12941,7 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
 
     let (promise_port, promise_server, mut promise_checkpoints) =
         start_promise_checkpoint_server().await;
-    let agent_id = agent_id!("ToolStreamingCaller", "suspended-restart-completed-tool");
+    let agent_id = agent_key!("ToolStreamingCaller", "suspended-restart-completed-tool");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
@@ -11743,7 +12953,7 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
             Vec::new(),
         )
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
     let key = IdempotencyKey::fresh();
     let expected = b"distinctive-suspended-restart".to_vec();
     let invocation = {
@@ -11785,6 +12995,7 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
     executor.simulated_crash(&worker_id).await?;
     executor
         .complete_promise(
+            &executor.context.default_environment_id,
             &executor
                 .promise_id(&worker_id, checkpoint.oplog_idx)
                 .await?,
@@ -11852,7 +13063,7 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
 
     let (drain_checkpoint_port, drain_gate_port, drain_server, mut drain_checkpoints) =
         start_crash_checkpoint_server().await;
-    let drain_agent_id = agent_id!("ToolStreamingCaller", "restart-drains-live-entity");
+    let drain_agent_id = agent_key!("ToolStreamingCaller", "restart-drains-live-entity");
     let drain_worker_id = executor
         .start_agent_with(
             &caller_component.id,
@@ -11870,7 +13081,7 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
             Vec::new(),
         )
         .await?;
-    let owned_drain_agent = OwnedAgentId::new(context.default_environment_id, &drain_worker_id);
+    let owned_drain_agent = drain_worker_id.clone();
     let drain_key = IdempotencyKey::fresh();
     let drain_invocation = tokio::spawn({
         let executor = executor.clone();
@@ -11928,7 +13139,7 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
         b"drain-me".as_slice()
     );
     let stored_drain_key = executor
-        .external_invocation_key(&drain_worker_id, &drain_key, "collect_capable")
+        .external_invocation_key(&drain_worker_id.agent_id, &drain_key, "collect_capable")
         .await?;
     let drain_oplog = executor
         .get_oplog(&drain_worker_id, OplogIndex::INITIAL)
@@ -12001,7 +13212,8 @@ async fn crash_at_held_invocation_success(
     worker_id: &golem_common::model::AgentId,
     original_success: AgentInvocationSuccessGateHandle,
 ) -> anyhow::Result<()> {
-    let (crash, ()) = tokio::join!(executor.simulated_crash(worker_id), async {
+    let owned_worker_id = OwnedAgentId::new(executor.context.default_environment_id, worker_id);
+    let (crash, ()) = tokio::join!(executor.simulated_crash(&owned_worker_id), async {
         original_success.abort_as_restart();
     });
     crash?;
@@ -12158,7 +13370,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         }
         _ => "hold_completed_reconstruction_before_exclusive_clock",
     };
-    let agent_id = agent_id!("ToolStreamingCaller", case_name);
+    let agent_id = agent_key!("ToolStreamingCaller", case_name);
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
@@ -12176,8 +13388,8 @@ async fn run_completed_reconstruction_exclusive_p2_case(
     })
     .await
     .map_err(|_| anyhow::anyhow!("timed out waiting for caller initialization"))??;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
-    let mut original_success = executor.gate_next_agent_invocation_success(&worker_id);
+    let owned_agent_id = worker_id.clone();
+    let mut original_success = executor.gate_next_agent_invocation_success(&worker_id.agent_id);
     let invocation =
         executor.invoke_and_await_agent(&caller_component, &agent_id, method, data_value!());
     tokio::pin!(invocation);
@@ -12191,7 +13403,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         .map_err(|_| anyhow::anyhow!("original agent invocation did not reach success gate"))?;
         wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
         let reconstruction_start =
-            wait_for_completed_entity_terminal(&executor, &worker_id).await?;
+            wait_for_completed_entity_terminal(&executor, &worker_id.agent_id).await?;
         if case == CompletedReconstructionExclusiveCase::RestartDuringBodyValidation {
             let recorded = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
             let clock = golem_common::model::oplog::host_functions::HostFunctionName::WallClockNow
@@ -12223,8 +13435,9 @@ async fn run_completed_reconstruction_exclusive_p2_case(
             CompletedReconstructionExclusiveCase::CrashReplayClaimWindow
                 | CompletedReconstructionExclusiveCase::EntityCustomRootCrashReplay
         ) {
-            let mut claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
-            crash_at_held_invocation_success(&executor, &worker_id, original_success).await?;
+            let mut claim = executor.gate_next_entity_reconstruction_claim(&worker_id.agent_id);
+            crash_at_held_invocation_success(&executor, &worker_id.agent_id, original_success)
+                .await?;
             let start = tokio::time::timeout(std::time::Duration::from_secs(30), claim.entered())
                 .await
                 .map_err(|_| {
@@ -12235,12 +13448,13 @@ async fn run_completed_reconstruction_exclusive_p2_case(
             return Ok::<_, anyhow::Error>(reconstruction_start);
         }
         let mut reconstruction_body =
-            executor.gate_next_completed_entity_reconstruction(&worker_id);
+            executor.gate_next_completed_entity_reconstruction(&worker_id.agent_id);
         if case == CompletedReconstructionExclusiveCase::Divergence {
-            executor.diverge_next_completed_entity_reconstruction(&worker_id);
+            executor.diverge_next_completed_entity_reconstruction(&worker_id.agent_id);
         }
-        let mut replayed_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
-        crash_at_held_invocation_success(&executor, &worker_id, original_success).await?;
+        let mut replayed_claim =
+            executor.gate_next_entity_reconstruction_claim(&worker_id.agent_id);
+        crash_at_held_invocation_success(&executor, &worker_id.agent_id, original_success).await?;
         let claimed_start =
             tokio::time::timeout(std::time::Duration::from_secs(30), replayed_claim.entered())
                 .await
@@ -12248,7 +13462,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         assert_eq!(claimed_start, reconstruction_start);
         replayed_claim.release();
         let mut replayed_success = (case == CompletedReconstructionExclusiveCase::Success)
-            .then(|| executor.gate_next_agent_invocation_success(&worker_id));
+            .then(|| executor.gate_next_agent_invocation_success(&worker_id.agent_id));
 
         match case {
             CompletedReconstructionExclusiveCase::Success => {
@@ -12301,7 +13515,8 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                     futures::poll!(owner_failure.as_mut()),
                     std::task::Poll::Pending
                 ));
-                let mut source_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
+                let mut source_claim =
+                    executor.gate_next_entity_reconstruction_claim(&worker_id.agent_id);
                 reconstruction_body.release();
                 let owner_failure =
                     tokio::time::timeout(std::time::Duration::from_secs(30), owner_failure)
@@ -12354,7 +13569,8 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 .map_err(|_| {
                     anyhow::anyhow!("completed reconstruction did not reach body validation gate")
                 })?;
-                let mut next_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
+                let mut next_claim =
+                    executor.gate_next_entity_reconstruction_claim(&worker_id.agent_id);
                 eprintln!(
                     "LIFECYCLE_PROBE restart while historical body {reconstruction_start} is held before validation"
                 );
@@ -12632,7 +13848,7 @@ async fn completed_reconstruction_validates_before_delivering_result(
         caller_checkpoint_server,
         mut caller_checkpoints,
     ) = start_crash_checkpoint_server().await;
-    let agent_id = agent_id!("ToolStreamingCaller", "completed-reconstruction-barrier");
+    let agent_id = agent_key!("ToolStreamingCaller", "completed-reconstruction-barrier");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
@@ -12658,7 +13874,7 @@ async fn completed_reconstruction_validates_before_delivering_result(
             Vec::new(),
         )
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
 
     let invocation = executor.invoke_and_await_agent(
         &caller_component,
@@ -12678,9 +13894,10 @@ async fn completed_reconstruction_validates_before_delivering_result(
         wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
         let original_live =
             next_crash_checkpoint(&mut caller_checkpoints, "reconstruction-live-effect").await?;
-        let mut reconstruction_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
+        let mut reconstruction_claim =
+            executor.gate_next_entity_reconstruction_claim(&worker_id.agent_id);
         let mut reconstruction_body =
-            executor.gate_next_completed_entity_reconstruction(&worker_id);
+            executor.gate_next_completed_entity_reconstruction(&worker_id.agent_id);
         executor.simulated_crash(&worker_id).await?;
         drop(original_live.release);
         let reconstruction_start = tokio::time::timeout(
@@ -12691,7 +13908,7 @@ async fn completed_reconstruction_validates_before_delivering_result(
         .map_err(|_| anyhow::anyhow!("historical reconstruction claim was not reached"))?;
         assert_eq!(
             reconstruction_start,
-            wait_for_completed_entity_terminal(&executor, &worker_id).await?
+            wait_for_completed_entity_terminal(&executor, &worker_id.agent_id).await?
         );
 
         reconstruction_claim.release();
@@ -12794,7 +14011,7 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
         caller_checkpoint_server,
         mut caller_checkpoints,
     ) = start_crash_checkpoint_server().await;
-    let agent_id = agent_id!(
+    let agent_id = agent_key!(
         "ToolStreamingCaller",
         "incomplete-custom-reconstruction-barrier"
     );
@@ -12815,8 +14032,9 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
             Vec::new(),
         )
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
-    let mut original_body = executor.gate_next_live_entity_body_completion(&worker_id, "streaming");
+    let owned_agent_id = worker_id.clone();
+    let mut original_body =
+        executor.gate_next_live_entity_body_completion(&worker_id.agent_id, "streaming");
 
     let invocation = executor.invoke_and_await_agent(
         &caller_component,
@@ -12835,8 +14053,9 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
         .await?;
         original_body.release();
         wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
-        executor.commit_oplog(&worker_id).await?;
-        let entity_start = wait_for_completed_entity_terminal(&executor, &worker_id).await?;
+        executor.commit_oplog(&worker_id.agent_id).await?;
+        let entity_start =
+            wait_for_completed_entity_terminal(&executor, &worker_id.agent_id).await?;
         original_before_custom
             .release
             .send(())
@@ -12872,9 +14091,10 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
             matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == custom_start)
                 || matches!(&entry.entry, PublicOplogEntry::Cancelled(params) if params.start_index == custom_start)
         }));
-        let mut reconstruction_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
+        let mut reconstruction_claim =
+            executor.gate_next_entity_reconstruction_claim(&worker_id.agent_id);
         let mut reconstruction_body =
-            executor.gate_next_completed_entity_reconstruction(&worker_id);
+            executor.gate_next_completed_entity_reconstruction(&worker_id.agent_id);
         // Keep the original gate unresolved while recovery starts so the custom call cannot gain
         // a terminal during teardown.
         executor.simulated_crash(&worker_id).await?;
@@ -13000,7 +14220,7 @@ async fn incomplete_custom_durability_waits_for_overlapping_completed_reconstruc
         caller_checkpoint_server,
         mut caller_checkpoints,
     ) = start_crash_checkpoint_server().await;
-    let agent_id = agent_id!(
+    let agent_id = agent_key!(
         "ToolStreamingCaller",
         "incomplete-custom-reconstruction-overlap"
     );
@@ -13029,7 +14249,7 @@ async fn incomplete_custom_durability_waits_for_overlapping_completed_reconstruc
             Vec::new(),
         )
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
 
     let invocation = executor.invoke_and_await_agent(
         &caller_component,
@@ -13060,7 +14280,8 @@ async fn incomplete_custom_durability_waits_for_overlapping_completed_reconstruc
             .map_err(|_| anyhow::anyhow!("original custom-start gate was dropped"))?;
         let original_custom =
             next_crash_checkpoint(&mut caller_checkpoints, "reconstruction-custom-effect").await?;
-        let entity_start = wait_for_completed_entity_terminal(&executor, &worker_id).await?;
+        let entity_start =
+            wait_for_completed_entity_terminal(&executor, &worker_id.agent_id).await?;
         let original_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
         let custom_start = original_oplog
             .iter()
@@ -13077,9 +14298,10 @@ async fn incomplete_custom_durability_waits_for_overlapping_completed_reconstruc
             matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == custom_start)
                 || matches!(&entry.entry, PublicOplogEntry::Cancelled(params) if params.start_index == custom_start)
         }));
-        let mut reconstruction_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
+        let mut reconstruction_claim =
+            executor.gate_next_entity_reconstruction_claim(&worker_id.agent_id);
         let mut reconstruction_body =
-            executor.gate_next_completed_entity_reconstruction(&worker_id);
+            executor.gate_next_completed_entity_reconstruction(&worker_id.agent_id);
         executor.simulated_crash(&worker_id).await?;
         let reconstruction_start = tokio::time::timeout(
             std::time::Duration::from_secs(30),
@@ -13221,7 +14443,7 @@ async fn run_clocked_stream_recovery(
         )),
     );
 
-    let agent_id = agent_id!("ToolStreamingCaller", "clocked-incomplete-stream");
+    let agent_id = agent_key!("ToolStreamingCaller", "clocked-incomplete-stream");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
@@ -13243,7 +14465,7 @@ async fn run_clocked_stream_recovery(
     let second: Vec<u8> = (192..255).collect();
     let expected = [first.as_slice(), second.as_slice()].concat();
     let mut original_body_start =
-        (!incomplete_clock).then(|| executor.gate_next_entity_body_start(&worker_id));
+        (!incomplete_clock).then(|| executor.gate_next_entity_body_start(&worker_id.agent_id));
     let path = if incomplete_clock {
         "hold-body:/clocked-stream.bin"
     } else {
@@ -13277,7 +14499,7 @@ async fn run_clocked_stream_recovery(
     if let Some(checkpoint) = &original_checkpoint {
         assert_eq!(checkpoint.name, "capable-body");
     }
-    executor.commit_oplog(&worker_id).await?;
+    executor.commit_oplog(&worker_id.agent_id).await?;
     let original_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let clock_starts: Vec<_> = original_oplog
         .iter()
@@ -13314,7 +14536,7 @@ async fn run_clocked_stream_recovery(
     );
     let recorded_elapsed = clocks[clocks.len() - 1].saturating_sub(clocks[clocks.len() - 2]);
     let incomplete_start = if incomplete_clock {
-        let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let owner = worker_id.clone();
         let mut clock = executor.gate_next_monotonic_clock_start(&owner).await?;
         original_checkpoint
             .expect("capable body checkpoint")
@@ -13340,7 +14562,7 @@ async fn run_clocked_stream_recovery(
             })
             .expect("persisted clock Start");
         assert!(oplog.iter().all(|entry| !matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == start)));
-        wait_for_completed_entity_terminal(&executor, &worker_id).await?;
+        wait_for_completed_entity_terminal(&executor, &worker_id.agent_id).await?;
         clock.abort_as_restart();
         Some(start)
     } else {
@@ -13648,7 +14870,7 @@ async fn deterministic_stream_crash_checkpoint_matrix(
         {
             continue;
         }
-        let agent_id = agent_id!(
+        let agent_id = agent_key!(
             "ToolStreamingCaller",
             format!("crash-{}", checkpoint.name())
         );
@@ -13669,9 +14891,9 @@ async fn deterministic_stream_crash_checkpoint_matrix(
                 Vec::new(),
             )
             .await?;
-        let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let owned_agent_id = worker_id.clone();
         let mut original_body = (checkpoint.name() == "before-input")
-            .then(|| executor.gate_next_entity_body_start(&worker_id));
+            .then(|| executor.gate_next_entity_body_start(&worker_id.agent_id));
         match checkpoint {
             Checkpoint::Incapable { checkpoint, .. } => {
                 executor
@@ -14109,7 +15331,7 @@ async fn dual_output_reconstruction_preserves_independent_history_and_effects(
     ];
 
     for (checkpoint, expected_stdout, expected_stderr) in cases {
-        let agent_id = agent_id!(
+        let agent_id = agent_key!(
             "ToolStreamingCaller",
             format!("dual-output-reconstruction-{checkpoint}")
         );
@@ -14134,7 +15356,7 @@ async fn dual_output_reconstruction_preserves_independent_history_and_effects(
                 Vec::new(),
             )
             .await?;
-        let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let owned_agent_id = worker_id.clone();
         let invocation = executor.invoke_and_await_agent(
             &caller_component,
             &agent_id,
@@ -14270,7 +15492,7 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
         )),
     );
 
-    let agent_id = agent_id!("ToolStreamingCaller", "capable-terminal-crash");
+    let agent_id = agent_key!("ToolStreamingCaller", "capable-terminal-crash");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
@@ -14288,11 +15510,11 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
             Vec::new(),
         )
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
     let input = b"terminal-before-publication".to_vec();
     let output_path = "/capable-terminal-crash.bin";
     let mut child_completion_gate =
-        executor.gate_next_live_entity_body_completion(&worker_id, "streaming");
+        executor.gate_next_live_entity_body_completion(&worker_id.agent_id, "streaming");
 
     let call = executor.invoke_and_await_agent(
         &caller_component,
@@ -14320,7 +15542,7 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
         .await
         .map_err(|_| anyhow::anyhow!("original retained child completion gate timed out"))?;
         let mut replayed_child_completion =
-            executor.gate_next_incomplete_entity_reconstruction(&worker_id, "streaming");
+            executor.gate_next_incomplete_entity_reconstruction(&worker_id.agent_id, "streaming");
 
         let terminal_boundary = tokio::time::timeout(std::time::Duration::from_secs(30), async {
             loop {
@@ -14608,7 +15830,7 @@ async fn entity_generated_key_replay_reserves_position_for_incomplete_http_retry
         )),
     );
 
-    let agent_id = agent_id!("ToolStreamingCaller", "entity-idempotency-recovery");
+    let agent_id = agent_key!("ToolStreamingCaller", "entity-idempotency-recovery");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
@@ -14741,7 +15963,7 @@ async fn typescript_generated_client_streams_live(
         )),
     );
 
-    let agent_id = agent_id!("TsToolStreamingCaller", "ts-live");
+    let agent_id = agent_key!("TsToolStreamingCaller", "ts-live");
     let worker = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
@@ -14885,7 +16107,7 @@ async fn scala_generated_client_streams_live(
         )),
     );
 
-    let agent_id = agent_id!("ScalaToolStreamingCaller", "scala-live");
+    let agent_id = agent_key!("ScalaToolStreamingCaller", "scala-live");
     let evidence: ScalaStreamEvidence = executor
         .invoke_and_await_agent(
             &stored_component,
@@ -15017,11 +16239,11 @@ async fn moonbit_generated_client_streams_live(
         )),
     );
 
-    let agent_id = agent_id!("MoonBitToolStreamingCaller", "moonbit-live");
+    let agent_id = agent_key!("MoonBitToolStreamingCaller", "moonbit-live");
     let worker_id = executor
         .start_agent(&stored_component.id, agent_id.clone())
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
     let payload = b"moonbit-live".to_vec();
     let payload_value = TypedSchemaValue::new(
         SchemaGraph::anonymous(SchemaType::binary(BinaryRestrictions::default())),
@@ -15153,7 +16375,7 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
     let worker_id = executor
         .start_agent(
             &caller_component.id,
-            agent_id!("ToolStreamingCaller", "native-session"),
+            agent_key!("ToolStreamingCaller", "native-session"),
         )
         .await?;
     let metadata = executor.get_worker_metadata(&worker_id).await?;
@@ -15173,7 +16395,7 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
     let (sender, receiver) = tokio::sync::mpsc::channel(8);
     let start_request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
-            agent_id: Some(worker_id.clone().into()),
+            target: Some(crate::agent::id_target(&worker_id)),
             idempotency_key: Some(key.clone().into()),
             auth_ctx: Some(executor.auth_ctx().into()),
             caller: Some(callers::account(context.account_id).into()),
@@ -15288,7 +16510,7 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
         .send(InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
                 idempotency_key: accepted.idempotency_key,
-                agent_id: start.agent_id,
+                agent_id: accepted.agent_id,
                 environment_id: start.environment_id,
                 attachment_id: accepted.attachment_id,
                 attempt_id: Some(uuid::Uuid::new_v4().into()),
@@ -15443,7 +16665,7 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
         .send(InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
                 idempotency_key: accepted.idempotency_key,
-                agent_id: accepted.agent_id.clone(),
+                agent_id: accepted.agent_id,
                 environment_id: accepted.environment_id,
                 attachment_id: accepted.attachment_id,
                 attempt_id: Some(uuid::Uuid::new_v4().into()),
@@ -15513,7 +16735,7 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
     let after: String = executor
         .invoke_and_await_agent(
             &caller_component,
-            &agent_id!("ToolStreamingCaller", "native-session"),
+            &agent_key!("ToolStreamingCaller", "native-session"),
             "record_native_order",
             data_value!("R"),
         )
@@ -15580,7 +16802,7 @@ async fn exercise_filesystem_tools(
         Some(deployment),
     );
 
-    let agent_id = agent_id!("ToolStreamingCaller", "filesystem-tools");
+    let agent_id = agent_key!("ToolStreamingCaller", "filesystem-tools");
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
@@ -15590,7 +16812,7 @@ async fn exercise_filesystem_tools(
 
     let write = invoke_filesystem_tool_success(
         executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definitions,
@@ -15623,7 +16845,7 @@ async fn exercise_filesystem_tools(
 
     let read = invoke_filesystem_tool_success(
         executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definitions,
@@ -15667,7 +16889,7 @@ async fn exercise_filesystem_tools(
 
     let edit = invoke_filesystem_tool_success(
         executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definitions,
@@ -15704,7 +16926,7 @@ async fn exercise_filesystem_tools(
 
     let full_read = invoke_filesystem_tool_success(
         executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definitions,
@@ -15749,7 +16971,7 @@ async fn exercise_filesystem_tools(
     let root = "workspace/filesystem-tools".to_string();
     let ls = invoke_filesystem_tool_success(
         executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definitions,
@@ -15810,7 +17032,7 @@ async fn exercise_filesystem_tools(
 
     let grep = invoke_filesystem_tool_success(
         executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definitions,
@@ -15909,7 +17131,7 @@ async fn exercise_filesystem_tools(
         .await?;
     let oversized_directory = invoke_filesystem_tool_success(
         executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definitions,
@@ -15965,7 +17187,7 @@ async fn exercise_filesystem_tools(
 
     let bounded_read = invoke_filesystem_tool_success(
         executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definitions,
@@ -16045,7 +17267,7 @@ async fn exercise_filesystem_tools(
 
     let stale = invoke_filesystem_tool(
         executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definitions,
@@ -16073,7 +17295,7 @@ async fn exercise_filesystem_tools(
 
     let replace = invoke_filesystem_tool_success(
         executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definitions,
@@ -16106,7 +17328,7 @@ async fn exercise_filesystem_tools(
 
     let ambiguous = invoke_filesystem_tool(
         executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definitions,
@@ -16133,7 +17355,7 @@ async fn exercise_filesystem_tools(
     let overlap_path = "workspace/filesystem-tools/overlap.txt".to_string();
     invoke_filesystem_tool_success(
         executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definitions,
@@ -16159,7 +17381,7 @@ async fn exercise_filesystem_tools(
     .await?;
     let overlapping = invoke_filesystem_tool(
         executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definitions,
@@ -16187,7 +17409,7 @@ async fn exercise_filesystem_tools(
 
     let traversal = invoke_filesystem_tool(
         executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definitions,
@@ -16224,7 +17446,7 @@ async fn exercise_filesystem_tools(
     let denied_worker = executor
         .start_agent(
             &caller_component.id,
-            agent_id!("ToolStreamingCaller", "filesystem-tools-denied"),
+            agent_key!("ToolStreamingCaller", "filesystem-tools-denied"),
         )
         .await?;
     let denied_fingerprint = executor
@@ -16315,7 +17537,7 @@ async fn exercise_filesystem_tools(
         };
         let denied = invoke_filesystem_tool(
             executor,
-            &denied_worker,
+            &denied_worker.agent_id,
             denied_fingerprint,
             caller.clone(),
             &definitions,
@@ -16375,7 +17597,7 @@ async fn exercise_guest_invoked_filesystem_tools(
     let evidence: Vec<String> = executor
         .invoke_and_await_agent(
             caller_component,
-            &agent_id!("ToolStreamingCaller", "filesystem-tools-guest"),
+            &agent_key!("ToolStreamingCaller", "filesystem-tools-guest"),
             "filesystem_tool_roundtrip",
             data_value!(),
         )
@@ -16504,7 +17726,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
         caller_component.revision,
         Some(deployment),
     );
-    let agent_id = agent_id!("ToolStreamingCaller", "filesystem-discovery");
+    let agent_id = agent_key!("ToolStreamingCaller", "filesystem-discovery");
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
@@ -16519,7 +17741,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
         for index in 0..count {
             write_filesystem_tool_file(
                 &executor,
-                &worker_id,
+                &worker_id.agent_id,
                 fingerprint,
                 caller.clone(),
                 &definitions,
@@ -16529,7 +17751,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
         }
         let (ls, ls_growth) = invoke_filesystem_tool_measuring_oplog(
             &executor,
-            &worker_id,
+            &worker_id.agent_id,
             fingerprint,
             caller.clone(),
             &definitions,
@@ -16539,7 +17761,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
         .await?;
         let (grep, grep_growth) = invoke_filesystem_tool_measuring_oplog(
             &executor,
-            &worker_id,
+            &worker_id.agent_id,
             fingerprint,
             caller.clone(),
             &definitions,
@@ -16577,7 +17799,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
     for index in 0..130 {
         write_filesystem_tool_file(
             &executor,
-            &worker_id,
+            &worker_id.agent_id,
             fingerprint,
             caller.clone(),
             &definitions,
@@ -16587,7 +17809,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
     }
     let (ls, ls_all_growth) = invoke_filesystem_tool_measuring_oplog(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definitions,
@@ -16602,7 +17824,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
     );
     let grep = invoke_filesystem_tool_success(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definitions,
@@ -16619,7 +17841,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
     // `ls` reads the size only of a file that it returns.
     let (ls, ls_one_growth) = invoke_filesystem_tool_measuring_oplog(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definitions,
@@ -16651,7 +17873,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
     for path in ["mid/x.txt", "z.txt"] {
         write_filesystem_tool_file(
             &executor,
-            &worker_id,
+            &worker_id.agent_id,
             fingerprint,
             caller.clone(),
             &definitions,
@@ -16662,7 +17884,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
     let oversized = format!("{root}/oversized-directory");
     let tree = invoke_filesystem_tool_success(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definitions,
@@ -16703,7 +17925,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
     );
     let tree_matches = invoke_filesystem_tool_success(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definitions,
@@ -16744,7 +17966,7 @@ async fn builtin_filesystem_discovery_reads_each_directory_once(
     .await?;
     let replayed_tree = invoke_filesystem_tool_success(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definitions,
@@ -16924,7 +18146,10 @@ async fn invoke_filesystem_tool_measuring_oplog(
 ) -> anyhow::Result<(SchemaValue, usize)> {
     executor.commit_oplog(worker_id).await?;
     let start = executor
-        .get_oplog(worker_id, OplogIndex::INITIAL)
+        .get_oplog(
+            &OwnedAgentId::new(executor.context.default_environment_id, worker_id),
+            OplogIndex::INITIAL,
+        )
         .await?
         .last()
         .map_or(OplogIndex::INITIAL, |entry| entry.oplog_index.next());
@@ -16939,7 +18164,13 @@ async fn invoke_filesystem_tool_measuring_oplog(
     )
     .await?;
     executor.commit_oplog(worker_id).await?;
-    let growth = executor.get_oplog(worker_id, start).await?.len();
+    let growth = executor
+        .get_oplog(
+            &OwnedAgentId::new(executor.context.default_environment_id, worker_id),
+            start,
+        )
+        .await?
+        .len();
     Ok((result, growth))
 }
 
@@ -17632,7 +18863,7 @@ async fn typescript_guest_recursive_rm_removes_tool_created_output(
         let result = executor
             .invoke_and_await_agent(
                 &caller_component,
-                &agent_id!("TsToolStreamingCaller", format!("guest-rm-{promises}")),
+                &agent_key!("TsToolStreamingCaller", format!("guest-rm-{promises}")),
                 "recursiveRmToolOutput",
                 data_value!(promises),
             )
@@ -17705,7 +18936,7 @@ async fn builtin_node_unreferenced_timer_is_replayed_after_restart(
     let worker_id = executor
         .start_agent(
             &caller_component.id,
-            agent_id!("ToolStreamingCaller", agent_name),
+            agent_key!("ToolStreamingCaller", agent_name),
         )
         .await?;
 
@@ -17730,7 +18961,7 @@ async fn builtin_node_unreferenced_timer_is_replayed_after_restart(
             }
         }
         loop {
-            executor.commit_oplog(&worker_id).await?;
+            executor.commit_oplog(&worker_id.agent_id).await?;
             let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
             let completed_clock_read = entries.iter().any(|read| {
                 let PublicOplogEntry::Start(start) = &read.entry else {
@@ -17776,7 +19007,7 @@ async fn builtin_node_unreferenced_timer_is_replayed_after_restart(
     assert_eq!(unreferenced.stdout, b"done\n");
     assert!(unreferenced.stderr.is_empty());
 
-    executor.commit_oplog(&worker_id).await?;
+    executor.commit_oplog(&worker_id.agent_id).await?;
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let terminal_of = |start: OplogIndex| {
         oplog.iter().find_map(|entry| match &entry.entry {
@@ -18430,7 +19661,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         Some(deployment),
     );
 
-    let agent_id = agent_id!("ToolStreamingCaller", "git-tool-lifecycle");
+    let agent_id = agent_key!("ToolStreamingCaller", "git-tool-lifecycle");
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
@@ -18441,7 +19672,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
     // Optional arguments reach git from a command line both when given and when left out.
     invoke_git_tool_argv_success(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &git_definition,
@@ -18454,7 +19685,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
     ] {
         invoke_git_tool_success(
             &executor,
-            &worker_id,
+            &worker_id.agent_id,
             fingerprint,
             caller.clone(),
             &git_definition,
@@ -18471,7 +19702,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
     }
     invoke_filesystem_tool_success(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &filesystem_definitions,
@@ -18497,7 +19728,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
     .await?;
     invoke_git_tool_success(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &git_definition,
@@ -18513,7 +19744,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
     .await?;
     let commit = invoke_git_tool_success(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &git_definition,
@@ -18540,7 +19771,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
 
     invoke_filesystem_tool_success(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &filesystem_definitions,
@@ -18566,7 +19797,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
     .await?;
     invoke_git_tool_success(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &git_definition,
@@ -18582,7 +19813,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
     .await?;
     invoke_filesystem_tool_success(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &filesystem_definitions,
@@ -18622,7 +19853,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
     );
     let config = invoke_git_tool_success(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &git_definition,
@@ -18652,7 +19883,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
 
     let status = invoke_git_tool_success(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &git_definition,
@@ -18714,7 +19945,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
 
     let log = invoke_git_tool_argv_success(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &git_definition,
@@ -18731,7 +19962,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
 
     let cached_diff = invoke_git_tool_success(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &git_definition,
@@ -18762,7 +19993,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
 
     let diff = invoke_git_tool_success(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &git_definition,
@@ -18793,7 +20024,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
 
     invoke_git_tool_success(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &git_definition,
@@ -18831,7 +20062,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
 
     invoke_git_tool_success(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &git_definition,
@@ -18859,7 +20090,7 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
 
     invoke_git_tool_success(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &git_definition,
@@ -18892,7 +20123,7 @@ struct GitToolHarness {
     environment_state: Arc<TestEnvironmentStateService>,
     executor: TestWorkerExecutor,
     caller_component: golem_common::model::component::ComponentDto,
-    worker_id: golem_common::model::AgentId,
+    worker_id: golem_common::model::OwnedAgentId,
     fingerprint: golem_common::model::AgentFingerprint,
     caller: golem_common::model::caller::Caller,
     git_definition: golem_common::schema::tool::Tool,
@@ -19001,7 +20232,7 @@ async fn start_git_tool_harness(
         Some(deployment),
     );
 
-    let agent_id = agent_id!("ToolStreamingCaller", instance_name);
+    let agent_id = agent_key!("ToolStreamingCaller", instance_name);
     let worker_id = executor.start_agent(&caller_component.id, agent_id).await?;
     let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
     let caller = callers::account(context.account_id);
@@ -19021,7 +20252,7 @@ async fn start_git_tool_harness(
 async fn initialize_git_harness(harness: &GitToolHarness, branch: &str) -> anyhow::Result<()> {
     invoke_git_tool_success(
         &harness.executor,
-        &harness.worker_id,
+        &harness.worker_id.agent_id,
         harness.fingerprint,
         harness.caller.clone(),
         &harness.git_definition,
@@ -19040,7 +20271,7 @@ async fn initialize_git_harness(harness: &GitToolHarness, branch: &str) -> anyho
     ] {
         invoke_git_tool_success(
             &harness.executor,
-            &harness.worker_id,
+            &harness.worker_id.agent_id,
             harness.fingerprint,
             harness.caller.clone(),
             &harness.git_definition,
@@ -19094,7 +20325,7 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
     let cancelled_id = harness
         .executor
         .finalized_invocation_key(
-            &harness.worker_id,
+            &harness.worker_id.agent_id,
             &golem_common::model::InvocationRequestKey::Internal(cancelled_key.clone()),
             "tool:git/config",
         )
@@ -19103,10 +20334,10 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
     {
         let mut active_git_gate = harness
             .executor
-            .gate_next_entity_body_start(&harness.worker_id);
+            .gate_next_entity_body_start(&harness.worker_id.agent_id);
         let active_git = invoke_git_tool_success(
             &harness.executor,
-            &harness.worker_id,
+            &harness.worker_id.agent_id,
             harness.fingerprint,
             harness.caller.clone(),
             &harness.git_definition,
@@ -19128,7 +20359,7 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
 
         let filesystem_write = invoke_filesystem_tool_success(
             &harness.executor,
-            &harness.worker_id,
+            &harness.worker_id.agent_id,
             harness.fingerprint,
             harness.caller.clone(),
             &harness.filesystem_definitions,
@@ -19161,7 +20392,7 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
 
         let cancelled_config = invoke_git_tool_success_with_key(
             &harness.executor,
-            &harness.worker_id,
+            &harness.worker_id.agent_id,
             harness.fingerprint,
             cancelled_key.clone(),
             harness.caller.clone(),
@@ -19215,7 +20446,7 @@ async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutatio
     );
     let config = invoke_git_tool_success(
         &harness.executor,
-        &harness.worker_id,
+        &harness.worker_id.agent_id,
         harness.fingerprint,
         harness.caller,
         &harness.git_definition,
@@ -19262,7 +20493,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
     let baseline_oid = git_commit_oid(
         invoke_git_tool_success(
             &harness.executor,
-            &harness.worker_id,
+            &harness.worker_id.agent_id,
             harness.fingerprint,
             harness.caller.clone(),
             &harness.git_definition,
@@ -19279,7 +20510,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
     )?;
     invoke_filesystem_tool_success(
         &harness.executor,
-        &harness.worker_id,
+        &harness.worker_id.agent_id,
         harness.fingerprint,
         harness.caller.clone(),
         &harness.filesystem_definitions,
@@ -19305,7 +20536,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
     .await?;
     invoke_git_tool_success(
         &harness.executor,
-        &harness.worker_id,
+        &harness.worker_id.agent_id,
         harness.fingerprint,
         harness.caller.clone(),
         &harness.git_definition,
@@ -19322,12 +20553,12 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
 
     let mut completion = harness
         .executor
-        .gate_next_live_entity_body_completion(&harness.worker_id, "git");
+        .gate_next_live_entity_body_completion(&harness.worker_id.agent_id, "git");
     let key = IdempotencyKey::fresh();
     {
         let mut commit = Box::pin(invoke_git_tool_success_with_key(
             &harness.executor,
-            &harness.worker_id,
+            &harness.worker_id.agent_id,
             harness.fingerprint,
             key.clone(),
             harness.caller.clone(),
@@ -19345,7 +20576,10 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
             () = completion.entered() => {}
             result = &mut commit => anyhow::bail!("git commit settled before its completion checkpoint: {result:?}"),
         }
-        harness.executor.commit_oplog(&harness.worker_id).await?;
+        harness
+            .executor
+            .commit_oplog(&harness.worker_id.agent_id)
+            .await?;
     }
     let oplog = harness
         .executor
@@ -19397,7 +20631,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
             std::time::Duration::from_secs(60),
             invoke_git_tool_success_with_key(
                 &executor,
-                &worker_id,
+                &worker_id.agent_id,
                 fingerprint,
                 key,
                 caller.clone(),
@@ -19431,7 +20665,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
     );
     let log = invoke_git_tool_success(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &git_definition,
@@ -19464,7 +20698,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
         .collect::<anyhow::Result<Vec<_>>>()?;
     assert_eq!(commit_oids, [recovered_oid.as_str(), baseline_oid.as_str()]);
 
-    let isolated_id = agent_id!("ToolStreamingCaller", "git-tool-other-owner");
+    let isolated_id = agent_key!("ToolStreamingCaller", "git-tool-other-owner");
     let isolated_worker = executor
         .start_agent(&caller_component.id, isolated_id)
         .await?;
@@ -19474,7 +20708,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
         .fingerprint;
     invoke_git_tool_success(
         &executor,
-        &isolated_worker,
+        &isolated_worker.agent_id,
         isolated_fingerprint,
         caller.clone(),
         &git_definition,
@@ -19489,7 +20723,7 @@ async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_
     .await?;
     invoke_filesystem_tool_success(
         &executor,
-        &isolated_worker,
+        &isolated_worker.agent_id,
         isolated_fingerprint,
         caller,
         &filesystem_definitions,
@@ -19615,7 +20849,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
         .component_dep(&context.default_environment_id, probe)
         .store()
         .await?;
-    let agent_id = agent_id!("GitNetworkProbe", "web-transport");
+    let agent_id = agent_key!("GitNetworkProbe", "web-transport");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -19940,7 +21174,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
     };
     invoke_git_tool_success(
         &harness.executor,
-        &harness.worker_id,
+        &harness.worker_id.agent_id,
         harness.fingerprint,
         harness.caller.clone(),
         &harness.git_definition,
@@ -19971,7 +21205,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
     {
         let recovery = invoke_git_tool_success(
             &harness.executor,
-            &harness.worker_id,
+            &harness.worker_id.agent_id,
             harness.fingerprint,
             harness.caller.clone(),
             &harness.git_definition,
@@ -20007,7 +21241,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
         );
     }
 
-    let caller_agent = agent_id!("ToolStreamingCaller", "git-tool-pack-transfer");
+    let caller_agent = agent_key!("ToolStreamingCaller", "git-tool-pack-transfer");
     let gate = harness
         .executor
         .invoke_and_await_agent(
@@ -20039,7 +21273,11 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
         }
         harness
             .executor
-            .complete_promise(&gate_promise_id, vec![])
+            .complete_promise(
+                &harness.executor.context.default_environment_id,
+                &gate_promise_id,
+                vec![],
+            )
             .await?;
         let cancelled: bool = tokio::time::timeout(Duration::from_secs(30), &mut cancellation)
             .await
@@ -20066,7 +21304,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
     }
     let usable = invoke_git_tool_success(
         &harness.executor,
-        &harness.worker_id,
+        &harness.worker_id.agent_id,
         harness.fingerprint,
         harness.caller.clone(),
         &harness.git_definition,
@@ -20087,7 +21325,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
     assert!(matches!(&fields[0], SchemaValue::List { elements } if elements.is_empty()));
     invoke_filesystem_tool_success(
         &harness.executor,
-        &harness.worker_id,
+        &harness.worker_id.agent_id,
         harness.fingerprint,
         harness.caller.clone(),
         &harness.filesystem_definitions,
@@ -20113,7 +21351,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
     .await?;
     invoke_git_tool_success(
         &harness.executor,
-        &harness.worker_id,
+        &harness.worker_id.agent_id,
         harness.fingerprint,
         harness.caller.clone(),
         &harness.git_definition,
@@ -20130,7 +21368,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
     let pushed_oid = git_commit_oid(
         invoke_git_tool_success(
             &harness.executor,
-            &harness.worker_id,
+            &harness.worker_id.agent_id,
             harness.fingerprint,
             harness.caller.clone(),
             &harness.git_definition,
@@ -20147,7 +21385,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
     )?;
     invoke_git_tool_success(
         &harness.executor,
-        &harness.worker_id,
+        &harness.worker_id.agent_id,
         harness.fingerprint,
         harness.caller.clone(),
         &harness.git_definition,
@@ -20174,7 +21412,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
     assert_eq!(pushed.lock().unwrap().as_ref().unwrap().0, pushed_oid);
     invoke_git_tool_success(
         &harness.executor,
-        &harness.worker_id,
+        &harness.worker_id.agent_id,
         harness.fingerprint,
         harness.caller.clone(),
         &harness.git_definition,
@@ -20250,7 +21488,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
     let interrupted = tokio::time::timeout(
         Duration::from_secs(30),
         harness.executor.invoke_external_tool(
-            &harness.worker_id,
+            &harness.worker_id.agent_id,
             harness.fingerprint,
             interrupted_key.clone(),
             ToolName::try_from("git").unwrap(),
@@ -20292,7 +21530,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
         Duration::from_secs(30),
         invoke_git_tool_success(
             &harness.executor,
-            &harness.worker_id,
+            &harness.worker_id.agent_id,
             harness.fingerprint,
             harness.caller.clone(),
             &harness.git_definition,
@@ -20310,7 +21548,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
     let replayed = tokio::time::timeout(
         Duration::from_secs(30),
         harness.executor.invoke_external_tool(
-            &harness.worker_id,
+            &harness.worker_id.agent_id,
             harness.fingerprint,
             interrupted_key,
             ToolName::try_from("git").unwrap(),
@@ -20328,7 +21566,7 @@ async fn git_network_probe_transfers_authenticated_pack_over_wasi_http(
         Duration::from_secs(30),
         invoke_git_tool_success(
             &harness.executor,
-            &harness.worker_id,
+            &harness.worker_id.agent_id,
             harness.fingerprint,
             harness.caller.clone(),
             &harness.git_definition,
@@ -20535,7 +21773,7 @@ async fn builtin_git_remote_secrets_redirects_and_discovery(
     let invoke = |repository: &str, heads: bool, tags: bool, symref: bool| {
         invoke_git_tool_success(
             &harness.executor,
-            &harness.worker_id,
+            &harness.worker_id.agent_id,
             harness.fingerprint,
             harness.caller.clone(),
             &harness.git_definition,
@@ -20607,7 +21845,7 @@ async fn builtin_git_remote_secrets_redirects_and_discovery(
     );
     invoke_git_tool_success(
         &harness.executor,
-        &harness.worker_id,
+        &harness.worker_id.agent_id,
         harness.fingerprint,
         harness.caller.clone(),
         &harness.git_definition,
@@ -20735,7 +21973,7 @@ async fn clock_races_complete_through_tool_entity_without_suspending_owner(
         )),
     );
 
-    let agent = agent_id!("ToolStreamingCaller", "clock-race-tool-owner");
+    let agent = agent_key!("ToolStreamingCaller", "clock-race-tool-owner");
     let worker = executor
         .start_agent(&caller_component.id, agent.clone())
         .await?;
@@ -20816,12 +22054,12 @@ async fn tool_bodies_read_pending_card_events_without_scanning_the_invocation_op
         )),
     );
 
-    let agent = agent_id!("ToolStreamingCaller", "card-boundary-tool-owner");
+    let agent = agent_key!("ToolStreamingCaller", "card-boundary-tool-owner");
     let worker = executor
         .start_agent(&caller_component.id, agent.clone())
         .await?;
     let boundary = executor.oplog_max_index(&worker).await?;
-    let entries_read_before = executor.oplog_entries_read(&worker);
+    let entries_read_before = executor.oplog_entries_read(&worker.agent_id);
     let completed = executor
         .invoke_and_await_agent(
             &caller_component,
@@ -20832,7 +22070,7 @@ async fn tool_bodies_read_pending_card_events_without_scanning_the_invocation_op
         .await?
         .into_typed::<u32>()?;
     assert_eq!(completed, TOOL_CALLS);
-    let entries_read = executor.oplog_entries_read(&worker) - entries_read_before;
+    let entries_read = executor.oplog_entries_read(&worker.agent_id) - entries_read_before;
 
     let interval = executor.get_oplog(&worker, boundary).await?;
     let tool_bodies = interval
@@ -20913,11 +22151,11 @@ async fn long_clock_through_tool_entity_suspends_and_reconstructs_owner(
         )),
     );
 
-    let agent = agent_id!("ToolStreamingCaller", "long-clock-tool-owner");
+    let agent = agent_key!("ToolStreamingCaller", "long-clock-tool-owner");
     let worker = executor
         .start_agent(&caller_component.id, agent.clone())
         .await?;
-    let loads = executor.instance_load_count(&worker);
+    let loads = executor.instance_load_count(&worker.agent_id);
     let invocation = executor.invoke_and_await_agent(
         &caller_component,
         &agent,
@@ -20929,7 +22167,7 @@ async fn long_clock_through_tool_entity_suspends_and_reconstructs_owner(
         result = &mut invocation => panic!("tool timer finished before suspension: {result:?}"),
         unloaded = tokio::time::timeout(Duration::from_secs(15), async {
             executor.wait_for_status(&worker, AgentStatus::Suspended, Duration::from_secs(10)).await?;
-            while executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &worker)).await {
+            while executor.worker_is_loaded(&worker.clone()).await {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             Ok::<(), anyhow::Error>(())
@@ -20939,7 +22177,7 @@ async fn long_clock_through_tool_entity_suspends_and_reconstructs_owner(
         .await??
         .into_typed::<Vec<String>>()?;
     assert_eq!(result, ["20", "settled"]);
-    assert!(executor.instance_load_count(&worker) > loads);
+    assert!(executor.instance_load_count(&worker.agent_id) > loads);
     let follow_up = executor
         .invoke_and_await_agent(
             &caller_component,
@@ -21006,11 +22244,11 @@ async fn aggregate_clocks_through_tool_entities_suspend_after_short_result(
             metadata.tools,
         )),
     );
-    let agent = agent_id!("ToolStreamingCaller", "aggregate-clock-tool-owner");
+    let agent = agent_key!("ToolStreamingCaller", "aggregate-clock-tool-owner");
     let worker = executor
         .start_agent(&caller_component.id, agent.clone())
         .await?;
-    let loads = executor.instance_load_count(&worker);
+    let loads = executor.instance_load_count(&worker.agent_id);
     let invocation = executor.invoke_and_await_agent(
         &caller_component,
         &agent,
@@ -21022,7 +22260,7 @@ async fn aggregate_clocks_through_tool_entities_suspend_after_short_result(
         result = &mut invocation => panic!("aggregate finished before suspension: {result:?}"),
         unloaded = tokio::time::timeout(Duration::from_secs(15), async {
             executor.wait_for_status(&worker, AgentStatus::Suspended, Duration::from_secs(10)).await?;
-            while executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &worker)).await {
+            while executor.worker_is_loaded(&worker.clone()).await {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             Ok::<(), anyhow::Error>(())
@@ -21053,7 +22291,7 @@ async fn aggregate_clocks_through_tool_entities_suspend_after_short_result(
         .await??
         .into_typed::<Vec<String>>()?;
     assert_eq!(result, ["20", "2", "settled"]);
-    assert!(executor.instance_load_count(&worker) > loads);
+    assert!(executor.instance_load_count(&worker.agent_id) > loads);
     let follow_up = executor
         .invoke_and_await_agent(
             &caller_component,
@@ -21165,7 +22403,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
         Some(deployment),
     );
 
-    let agent_id = agent_id!("ToolStreamingCaller", "web-fetch");
+    let agent_id = agent_key!("ToolStreamingCaller", "web-fetch");
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
@@ -21189,7 +22427,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
     let html = expect_web_fetch_success(
         invoke_web_fetch(
             &executor,
-            &worker_id,
+            &worker_id.agent_id,
             fingerprint,
             caller.clone(),
             &definition,
@@ -21210,7 +22448,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
     let converted_html = expect_web_fetch_success(
         invoke_web_fetch(
             &executor,
-            &worker_id,
+            &worker_id.agent_id,
             fingerprint,
             caller.clone(),
             &definition,
@@ -21237,7 +22475,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
     let missing = expect_web_fetch_success(
         invoke_web_fetch(
             &executor,
-            &worker_id,
+            &worker_id.agent_id,
             fingerprint,
             caller.clone(),
             &definition,
@@ -21252,7 +22490,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
     let relative = expect_web_fetch_success(
         invoke_web_fetch(
             &executor,
-            &worker_id,
+            &worker_id.agent_id,
             fingerprint,
             caller.clone(),
             &definition,
@@ -21267,7 +22505,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
     let cross_host = expect_web_fetch_success(
         invoke_web_fetch(
             &executor,
-            &worker_id,
+            &worker_id.agent_id,
             fingerprint,
             caller.clone(),
             &definition,
@@ -21288,7 +22526,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
             std::time::Duration::from_secs(2),
             invoke_web_fetch(
                 &executor,
-                &worker_id,
+                &worker_id.agent_id,
                 fingerprint,
                 caller.clone(),
                 &definition,
@@ -21310,7 +22548,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
     ] {
         let result = invoke_web_fetch(
             &executor,
-            &worker_id,
+            &worker_id.agent_id,
             fingerprint,
             caller.clone(),
             &definition,
@@ -21323,7 +22561,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
 
     let no_redirects = invoke_web_fetch(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definition,
@@ -21335,7 +22573,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
 
     let invalid_limit = invoke_web_fetch(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definition,
@@ -21354,7 +22592,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
     let timed_out = {
         let timed_out = invoke_web_fetch(
             &executor,
-            &worker_id,
+            &worker_id.agent_id,
             fingerprint,
             caller.clone(),
             &definition,
@@ -21378,7 +22616,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
 
     let header_timeout = invoke_web_fetch(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definition,
@@ -21393,7 +22631,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
     let first = expect_web_fetch_success(
         invoke_web_fetch(
             &executor,
-            &worker_id,
+            &worker_id.agent_id,
             fingerprint,
             caller.clone(),
             &definition,
@@ -21410,7 +22648,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
         web_fetch_input(source_url("/interrupted"), Some(10_000), None, None, None);
     let interrupted = invoke_web_fetch(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definition,
@@ -21457,7 +22695,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
     let replayed_interrupted = expect_web_fetch_success(
         invoke_web_fetch(
             &executor,
-            &worker_id,
+            &worker_id.agent_id,
             fingerprint,
             caller.clone(),
             &definition,
@@ -21471,7 +22709,7 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
     let replayed = expect_web_fetch_success(
         invoke_web_fetch(
             &executor,
-            &worker_id,
+            &worker_id.agent_id,
             fingerprint,
             caller,
             &definition,
@@ -21555,7 +22793,7 @@ async fn native_external_tool_scalar_admission(
         Some(deployment.clone()),
     );
 
-    let agent_id = agent_id!("ToolStreamingCaller", "native-external-tool");
+    let agent_id = agent_key!("ToolStreamingCaller", "native-external-tool");
     let env = HashMap::from([(
         "NATIVE_ORDER_HTTP_PORT".to_string(),
         native_order_port.to_string(),
@@ -21587,13 +22825,13 @@ async fn native_external_tool_scalar_admission(
         },
     );
 
-    let missing_id = golem_common::model::AgentId {
-        component_id: caller_component.id,
-        agent_id: agent_id!("ToolStreamingCaller", "missing-native-owner").to_string(),
-    };
+    let missing_id = crate::agent::keyed_agent_id(
+        caller_component.environment_id,
+        &agent_key!("ToolStreamingCaller", "missing-native-owner"),
+    );
     executor
         .invoke_external_tool(
-            &missing_id,
+            &missing_id.agent_id,
             golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
             IdempotencyKey::fresh(),
             ToolName::try_from("streaming").unwrap(),
@@ -21613,7 +22851,7 @@ async fn native_external_tool_scalar_admission(
     let wrong_fingerprint = golem_common::model::AgentFingerprint(uuid::Uuid::new_v4());
     let error = executor
         .invoke_external_tool(
-            &worker_id,
+            &worker_id.agent_id,
             wrong_fingerprint,
             IdempotencyKey::fresh(),
             ToolName::try_from("streaming").unwrap(),
@@ -21629,7 +22867,7 @@ async fn native_external_tool_scalar_admission(
 
     let output = executor
         .invoke_external_tool(
-            &worker_id,
+            &worker_id.agent_id,
             fingerprint,
             key.clone(),
             ToolName::try_from("streaming").unwrap(),
@@ -21676,7 +22914,7 @@ async fn native_external_tool_scalar_admission(
     );
     let cached = executor
         .invoke_external_tool(
-            &worker_id,
+            &worker_id.agent_id,
             fingerprint,
             key.clone(),
             ToolName::try_from("streaming").unwrap(),
@@ -21707,7 +22945,7 @@ async fn native_external_tool_scalar_admission(
     // existing owner, and the completed tool effect must replay rather than execute a second time.
     let restarted = executor
         .invoke_external_tool(
-            &worker_id,
+            &worker_id.agent_id,
             fingerprint,
             key,
             ToolName::try_from("streaming").unwrap(),
@@ -21795,7 +23033,7 @@ async fn native_external_tool_scalar_admission(
     );
     let failed_mutation = executor
         .invoke_external_tool(
-            &worker_id,
+            &worker_id.agent_id,
             fingerprint,
             IdempotencyKey::fresh(),
             ToolName::try_from("streaming").unwrap(),
@@ -21829,7 +23067,7 @@ async fn native_external_tool_scalar_admission(
 
     let fresh = executor
         .invoke_external_tool(
-            &worker_id,
+            &worker_id.agent_id,
             fingerprint,
             IdempotencyKey::fresh(),
             ToolName::try_from("streaming").unwrap(),
@@ -22050,9 +23288,14 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
     let second = second?;
     assert!(Arc::ptr_eq(&first, &second));
     let owner_id = first.agent_id();
+    let owner_owned = OwnedAgentId::new(context.default_environment_id, &owner_id);
     assert_eq!(
-        owner_id.agent_id,
-        OwnerKind::external_tool_instance_name(&key)
+        owner_id,
+        golem_common::model::AgentId::external_tool_owner(
+            context.default_environment_id,
+            caller_component.id,
+            &key
+        )
     );
     let owner_metadata = first.get_latest_worker_metadata().await;
     assert_eq!(owner_metadata.owner_kind, OwnerKind::EphemeralExternalTool);
@@ -22093,7 +23336,9 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
         .test_gate_next_monotonic_clock_start();
     let check_initialization = async {
         initializer.entered().await;
-        let oplog = executor.get_oplog(&owner_id, OplogIndex::INITIAL).await?;
+        let oplog = executor
+            .get_oplog(&owner_owned, OplogIndex::INITIAL)
+            .await?;
         assert_eq!(
             oplog
                 .iter()
@@ -22133,7 +23378,9 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
             owner_metadata.last_known_status.component_size
         ),
     );
-    let oplog = executor.get_oplog(&owner_id, OplogIndex::INITIAL).await?;
+    let oplog = executor
+        .get_oplog(&owner_owned, OplogIndex::INITIAL)
+        .await?;
     assert!(oplog.iter().take_while(|entry| !matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
         .any(|entry| matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name == "monotonic_clock::now")),
         "the real component's core initializer must run before tool dispatch");
@@ -22161,6 +23408,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
         )
         .await?;
     let interrupted_id = interrupted.agent_id();
+    let interrupted_owned = OwnedAgentId::new(context.default_environment_id, &interrupted_id);
     let interrupted_fingerprint = interrupted.get_latest_worker_metadata().await.fingerprint;
     let mut interrupted_gate = executor.gate_next_entity_body_start(&interrupted_id);
     let interrupted_call = || {
@@ -22178,7 +23426,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
     };
     let crash = async {
         interrupted_gate.entered().await;
-        executor.simulated_crash(&interrupted_id).await
+        executor.simulated_crash(&interrupted_owned).await
     };
     let (interrupted_result, crash_result) =
         tokio::time::timeout(std::time::Duration::from_secs(15), async {
@@ -22193,7 +23441,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
         .expect_err("same-key retry must not restart the lost external owner");
     assert_eq!(effects.load(Ordering::SeqCst), 1);
     assert_eq!(owner_loads.load(Ordering::SeqCst), 2);
-    executor.delete_worker(&interrupted_id).await?;
+    executor.delete_worker(&interrupted_owned).await?;
     drop(interrupted_gate);
     drop(interrupted);
 
@@ -22208,6 +23456,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
         )
         .await?;
     let startup_id = startup.agent_id();
+    let startup_owned = OwnedAgentId::new(context.default_environment_id, &startup_id);
     let startup_fingerprint = startup.get_latest_worker_metadata().await.fingerprint;
     let mut initializer = startup
         .owner_execution()
@@ -22240,7 +23489,9 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
     );
     assert_eq!(owner_loads.load(Ordering::SeqCst), 3);
     assert_eq!(effects.load(Ordering::SeqCst), 1);
-    let startup_oplog = executor.get_oplog(&startup_id, OplogIndex::INITIAL).await?;
+    let startup_oplog = executor
+        .get_oplog(&startup_owned, OplogIndex::INITIAL)
+        .await?;
     assert!(
         !startup_oplog
             .iter()
@@ -22251,7 +23502,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
             .iter()
             .any(|entry| matches!(entry.entry, PublicOplogEntry::Interrupted(_)))
     );
-    executor.delete_worker(&startup_id).await?;
+    executor.delete_worker(&startup_owned).await?;
     drop(startup);
 
     let fresh_key = IdempotencyKey::fresh();
@@ -22268,19 +23519,24 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
 
     // Agent exports exist, but an external owner must not construct or update any agent type.
     first
-        .enqueue_manual_update(caller_component.revision)
+        .enqueue_manual_update(
+            caller_component.revision,
+            golem_common::model::caller::Caller::anonymous(),
+        )
         .await
         .expect_err("virtual owners cannot update a primary guest");
     first
         .clone()
         .invoke(golem_common::model::AgentInvocation::ManualUpdate {
             target_revision: caller_component.revision,
+            requester: golem_common::model::caller::Caller::anonymous(),
         })
         .await
         .err()
         .expect("regular ingress cannot execute a primary guest on a virtual owner");
 
     let lost_id = fresh.agent_id();
+    let lost_owned = OwnedAgentId::new(context.default_environment_id, &lost_id);
     let lost_fingerprint = fresh.get_latest_worker_metadata().await.fingerprint;
     let mut body_gate = executor.gate_next_entity_body_start(&lost_id);
     {
@@ -22301,7 +23557,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
             result = &mut pending => anyhow::bail!("invocation ended before body gate: {result:?}"),
         }
         let update_error = executor
-            .auto_update_worker(&lost_id, ComponentRevision::new(1000).unwrap(), false)
+            .auto_update_worker(&lost_owned, ComponentRevision::new(1000).unwrap(), false)
             .await
             .expect_err("automatic update must not interrupt a virtual owner's invocation");
         assert!(
@@ -22362,8 +23618,8 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
     assert!(failed.to_string().contains("ephemeral"), "{failed}");
     assert_eq!(effects.load(Ordering::SeqCst), 1);
     assert_eq!(owner_loads.load(Ordering::SeqCst), 4);
-    executor.delete_worker(&lost_id).await?;
-    executor.delete_worker(&owner_id).await?;
+    executor.delete_worker(&lost_owned).await?;
+    executor.delete_worker(&owner_owned).await?;
     drop(body_gate);
 
     Ok(())
@@ -22442,7 +23698,7 @@ async fn native_tool_secret_permissions_and_completed_replay(
                 metadata.tools,
             )),
         );
-        let agent = agent_id!("ToolStreamingCaller", "native-secret");
+        let agent = agent_key!("ToolStreamingCaller", "native-secret");
         let worker_id = executor
             .start_agent(&caller_component.id, agent.clone())
             .await?;
@@ -22476,7 +23732,7 @@ async fn native_tool_secret_permissions_and_completed_replay(
             );
             let output = executor
                 .invoke_external_tool(
-                    &worker_id,
+                    &worker_id.agent_id,
                     fingerprint,
                     IdempotencyKey::fresh(),
                     ToolName::try_from("streaming").unwrap(),
@@ -22614,7 +23870,7 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
         (false, true, true, false),
         (false, false, false, true),
     ] {
-        let agent = agent_id!(
+        let agent = agent_key!(
             "ToolStreamingCaller",
             format!("accepted-unread-{acknowledged}-{crash}-{markerless_crash}-{storage_failure}")
         );
@@ -22629,24 +23885,24 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
                 Vec::new(),
             )
             .await?;
-        let loads = executor.instance_load_count(&worker);
+        let loads = executor.instance_load_count(&worker.agent_id);
         let write_start_gate = markerless_crash.then(|| {
             executor.gate_next_replay_access_admission(
-                &worker,
+                &worker.agent_id,
                 "tool-output-writer::write",
                 ReplayAdmissionStage::BeforeLiveStart,
             )
         });
         let mut acceptance = (!acknowledged && !storage_failure).then(|| {
             executor.gate_next_replay_access_admission(
-                &worker,
+                &worker.agent_id,
                 "tool-output-writer::write",
                 ReplayAdmissionStage::AfterToolOutputAccepted,
             )
         });
         let mut failure_gate = storage_failure.then(|| {
             executor.gate_next_oplog_function_end(
-                &worker,
+                &worker.agent_id,
                 golem_common::model::oplog::host_functions::HostFunctionName::GolemToolOutputWrite,
                 true,
             )
@@ -22660,7 +23916,7 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
         tokio::pin!(invocation);
         let synchronize = async {
             let before = next_promise_checkpoint(&mut checkpoints, "unread-before-cancel").await?;
-            wait_for_promise_checkpoint_to_await(&executor, &worker, &before).await?;
+            wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &before).await?;
             if let Some(mut write_start_gate) = write_start_gate {
                 // The checkpoint commit must not incidentally persist the output write.
                 tokio::time::timeout(Duration::from_secs(30), write_start_gate.entered()).await?;
@@ -22670,13 +23926,14 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
                 tokio::time::timeout(Duration::from_secs(30), entered).await??;
                 executor
                     .complete_promise(
+                        &executor.context.default_environment_id,
                         &executor.promise_id(&worker, before.oplog_idx).await?,
                         Vec::new(),
                     )
                     .await?;
                 tokio::time::timeout(Duration::from_secs(30), async {
                     loop {
-                        executor.commit_oplog(&worker).await?;
+                        executor.commit_oplog(&worker.agent_id).await?;
                         let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
                         if entries.iter().any(|entry| matches!(&entry.entry,
                             PublicOplogEntry::Log(log) if log.message.contains("pending-output-write-dropped")
@@ -22695,7 +23952,7 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
                 Some(
                     tokio::time::timeout(Duration::from_secs(30), async {
                         loop {
-                            executor.commit_oplog(&worker).await?;
+                            executor.commit_oplog(&worker.agent_id).await?;
                             let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
                             if let Some(index) = entries.iter().find_map(|entry| {
                                 matches!(&entry.entry, PublicOplogEntry::Log(log)
@@ -22712,7 +23969,7 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
             };
             if markerless_crash {
                 // Acceptance appends the local write but does not commit it to storage.
-                executor.commit_oplog(&worker).await?;
+                executor.commit_oplog(&worker.agent_id).await?;
                 let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
                 let write = entries
                     .iter()
@@ -22743,12 +24000,13 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
             }
             executor
                 .complete_promise(
+                    &executor.context.default_environment_id,
                     &executor.promise_id(&worker, before.oplog_idx).await?,
                     Vec::new(),
                 )
                 .await?;
             let after = next_promise_checkpoint(&mut checkpoints, "unread-after-cancel").await?;
-            wait_for_promise_checkpoint_to_await(&executor, &worker, &after).await?;
+            wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &after).await?;
             let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
             let entity_start = entries
                 .iter()
@@ -22819,7 +24077,7 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
             );
             if crash {
                 let mut regeneration = executor.gate_next_replay_access_admission(
-                    &worker,
+                    &worker.agent_id,
                     "tool-output-writer::write",
                     ReplayAdmissionStage::BeforeScope,
                 );
@@ -22848,7 +24106,9 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
         // Releasing either gate can settle the invocation before the release returns.
         // Only race invocation completion against reaching the checkpoint, not releasing it.
         if let Some(after) = after {
-            executor.complete_promise(&after, Vec::new()).await?;
+            executor
+                .complete_promise(&executor.context.default_environment_id, &after, Vec::new())
+                .await?;
         }
         if let Some((_, release)) = failure_gate {
             release
@@ -22891,7 +24151,7 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
         }
         let output = result?.into_typed::<Vec<u8>>()?;
         assert_eq!(output, b"marker:");
-        let reloaded = executor.instance_load_count(&worker);
+        let reloaded = executor.instance_load_count(&worker.agent_id);
         if crash {
             assert!(reloaded > loads, "crash must reload the owner instance");
         }
@@ -23037,7 +24297,7 @@ async fn accepted_uncommitted_tool_output_is_regenerated_after_executor_loss(
         )),
     );
     let (port, server, mut checkpoints) = start_promise_checkpoint_server().await;
-    let agent = agent_id!("ToolStreamingCaller", "accepted-uncommitted");
+    let agent = agent_key!("ToolStreamingCaller", "accepted-uncommitted");
     let worker = executor
         .start_agent_with(
             &caller_component.id,
@@ -23050,12 +24310,12 @@ async fn accepted_uncommitted_tool_output_is_regenerated_after_executor_loss(
         )
         .await?;
     let mut write_start = executor.gate_next_replay_access_admission(
-        &worker,
+        &worker.agent_id,
         "tool-output-writer::write",
         ReplayAdmissionStage::BeforeLiveStart,
     );
     let mut accepted = executor.gate_next_replay_access_admission(
-        &worker,
+        &worker.agent_id,
         "tool-output-writer::write",
         ReplayAdmissionStage::AfterToolOutputAccepted,
     );
@@ -23070,14 +24330,14 @@ async fn accepted_uncommitted_tool_output_is_regenerated_after_executor_loss(
         )
         .await?;
     let before = next_promise_checkpoint(&mut checkpoints, "unread-before-cancel").await?;
-    wait_for_promise_checkpoint_to_await(&executor, &worker, &before).await?;
+    wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &before).await?;
     let before_promise = executor.promise_id(&worker, before.oplog_idx).await?;
     tokio::time::timeout(Duration::from_secs(30), write_start.entered()).await?;
-    let committed = executor.stored_oplog(&worker).await;
+    let committed = executor.stored_oplog(&worker.agent_id).await;
     write_start.release();
     tokio::time::timeout(Duration::from_secs(30), accepted.entered()).await?;
     assert_eq!(
-        executor.stored_oplog(&worker).await,
+        executor.stored_oplog(&worker.agent_id).await,
         committed,
         "acceptance must leave the output write buffered, not persisted"
     );
@@ -23089,9 +24349,8 @@ async fn accepted_uncommitted_tool_output_is_regenerated_after_executor_loss(
     // Restart interrupts can commit the buffered suffix; executor loss must discard it instead.
     drop(executor);
     context.wait_for_shut_down_executors().await?;
-    let owned_worker = OwnedAgentId::new(context.default_environment_id, &worker);
     assert_eq!(
-        golem_worker_executor_test_utils::agent_oplog_length(deps, &context, &owned_worker).await?,
+        golem_worker_executor_test_utils::agent_oplog_length(deps, &context, &worker).await?,
         committed.len() as u64,
         "teardown must not persist the buffered output write"
     );
@@ -23100,8 +24359,8 @@ async fn accepted_uncommitted_tool_output_is_regenerated_after_executor_loss(
     executor.resume(&worker, true).await?;
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            if executor.worker_is_loaded(&owned_worker).await {
-                executor.commit_oplog(&worker).await?;
+            if executor.worker_is_loaded(&worker).await {
+                executor.commit_oplog(&worker.agent_id).await?;
                 let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
                 if entries.iter().any(|entry| {
                     matches!(&entry.entry,
@@ -23116,12 +24375,17 @@ async fn accepted_uncommitted_tool_output_is_regenerated_after_executor_loss(
     })
     .await??;
     executor
-        .complete_promise(&before_promise, Vec::new())
+        .complete_promise(
+            &executor.context.default_environment_id,
+            &before_promise,
+            Vec::new(),
+        )
         .await?;
     let after = next_promise_checkpoint(&mut checkpoints, "unread-after-cancel").await?;
-    wait_for_promise_checkpoint_to_await(&executor, &worker, &after).await?;
+    wait_for_promise_checkpoint_to_await(&executor, &worker.agent_id, &after).await?;
     executor
         .complete_promise(
+            &executor.context.default_environment_id,
             &executor.promise_id(&worker, after.oplog_idx).await?,
             Vec::new(),
         )
@@ -23214,7 +24478,7 @@ struct RunningExternalToolCall {
     context: TestContext,
     environment_state: Arc<TestEnvironmentStateService>,
     executor: TestWorkerExecutor,
-    worker_id: golem_common::model::AgentId,
+    worker_id: golem_common::model::OwnedAgentId,
     sender: tokio::sync::mpsc::Sender<golem_api_grpc::proto::golem::worker::InvocationRequest>,
     responses: tonic::Streaming<golem_api_grpc::proto::golem::worker::InvocationResponse>,
     accepted: golem_api_grpc::proto::golem::worker::InvocationAccepted,
@@ -23228,7 +24492,7 @@ struct EndedExternalToolCall {
     context: TestContext,
     environment_state: Arc<TestEnvironmentStateService>,
     executor: TestWorkerExecutor,
-    worker_id: golem_common::model::AgentId,
+    worker_id: golem_common::model::OwnedAgentId,
 }
 
 /// Starts `streaming run` in `mode` from outside the agent, with stdin and stdout attached.
@@ -23289,13 +24553,21 @@ async fn start_external_tool_command(
         ExternalToolInvocation, InvocationRequest, InvocationStart, invocation_request,
         invocation_response,
     };
-    let metadata = executor.get_worker_metadata(worker_id).await?;
+    let metadata = executor
+        .get_worker_metadata(&OwnedAgentId::new(
+            executor.context.default_environment_id,
+            worker_id,
+        ))
+        .await?;
     let key = IdempotencyKey::fresh();
     let (sender, receiver) = tokio::sync::mpsc::channel(8);
     sender
         .send(InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
-                agent_id: Some(worker_id.clone().into()),
+                target: Some(crate::agent::id_target(&OwnedAgentId::new(
+                    context.default_environment_id,
+                    worker_id,
+                ))),
                 idempotency_key: Some(key.clone().into()),
                 auth_ctx: Some(executor.auth_ctx().into()),
                 caller: Some(callers::account(context.account_id).into()),
@@ -23356,14 +24628,20 @@ async fn local_stream_id_of_external_role(
         .handle;
     assert_eq!(&handle.producer, worker_id);
     let mut matching = Vec::new();
-    for entry in executor.get_oplog(worker_id, OplogIndex::INITIAL).await? {
+    for entry in executor
+        .get_oplog(
+            &OwnedAgentId::new(executor.context.default_environment_id, worker_id),
+            OplogIndex::INITIAL,
+        )
+        .await?
+    {
         if matches!(entry.entry, PublicOplogEntry::StreamRegistered(_))
             && StreamId::derive(
                 handle.producer_environment_id,
                 &handle.producer,
                 handle.expected_producer_fingerprint,
                 entry.oplog_index,
-            )? == handle.stream_id
+            ) == handle.stream_id
         {
             matching.push(LocalStreamId(entry.oplog_index));
         }
@@ -23517,7 +24795,7 @@ async fn start_an_agent_with_the_streaming_tool(
     TestContext,
     Arc<TestEnvironmentStateService>,
     TestWorkerExecutor,
-    golem_common::model::AgentId,
+    golem_common::model::OwnedAgentId,
 )> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
@@ -23569,7 +24847,10 @@ async fn start_an_agent_with_the_streaming_tool(
         Some(deployment),
     );
     let worker_id = executor
-        .start_agent(&caller_component.id, agent_id!("ToolStreamingCaller", name))
+        .start_agent(
+            &caller_component.id,
+            agent_key!("ToolStreamingCaller", name),
+        )
         .await?;
     Ok((context, environment_state, executor, worker_id))
 }
@@ -23595,7 +24876,7 @@ async fn start_an_external_tool_call(
     )
     .await?;
     let (sender, mut responses, accepted) =
-        start_external_streaming_run(&executor, &context, &worker_id, mode).await?;
+        start_external_streaming_run(&executor, &context, &worker_id.agent_id, mode).await?;
     let mut stdout = Vec::new();
     tokio::time::timeout(Duration::from_secs(60), async {
         while stdout.len() < RUN_MARKER.len() {
@@ -23716,8 +24997,11 @@ async fn stdin_cancel_reaches_a_tool_that_waits_on_a_long_clock(
     .await?;
     // A client's open stdin keeps the owner in memory, so the cancel reaches a tool that was
     // never unloaded.
-    let owned = OwnedAgentId::new(call.context.default_environment_id, &call.worker_id);
-    let loads = call.executor.instance_load_count(&call.worker_id);
+    let owned = OwnedAgentId::new(
+        call.context.default_environment_id,
+        &call.worker_id.agent_id,
+    );
+    let loads = call.executor.instance_load_count(&call.worker_id.agent_id);
     let held_open = std::time::Instant::now();
     while held_open.elapsed() < Duration::from_secs(3) {
         assert!(
@@ -23728,7 +25012,7 @@ async fn stdin_cancel_reaches_a_tool_that_waits_on_a_long_clock(
     }
     assert!(
         call.executor
-            .get_oplog(&call.worker_id, OplogIndex::INITIAL)
+            .get_oplog(&owned, OplogIndex::INITIAL)
             .await?
             .iter()
             .all(|entry| !matches!(entry.entry, PublicOplogEntry::Suspend(_))),
@@ -23739,7 +25023,12 @@ async fn stdin_cancel_reaches_a_tool_that_waits_on_a_long_clock(
         ended.stdout_after_marker,
         "stdin-failed:ByteStreamFailure::Failed(\"stream producer cancelled\")"
     );
-    assert_eq!(ended.executor.instance_load_count(&ended.worker_id), loads);
+    assert_eq!(
+        ended
+            .executor
+            .instance_load_count(&ended.worker_id.agent_id),
+        loads
+    );
     Ok(())
 }
 
@@ -23824,7 +25113,7 @@ async fn a_cancelled_stdin_is_replayed_after_a_restart(
         .await?;
         let stdin_id = local_stream_id_of_external_role(
             &call.executor,
-            &call.worker_id,
+            &call.worker_id.agent_id,
             &call.accepted,
             ToolByteStreamRole::Stdin,
         )
@@ -23902,7 +25191,7 @@ async fn external_tool_stdout_failures_are_replayed_after_a_restart(
         .await?;
         let durable_stdout_id = local_stream_id_of_external_role(
             &call.executor,
-            &call.worker_id,
+            &call.worker_id.agent_id,
             &call.accepted,
             ToolByteStreamRole::Stdout,
         )
@@ -24020,7 +25309,7 @@ async fn external_tool_stdout_attachment_limit_is_replayed_after_a_restart(
     let (sender, mut responses, accepted) = start_external_tool_command(
         &executor,
         &context,
-        &worker_id,
+        &worker_id.agent_id,
         "capable-streaming",
         "run-capable",
         input,
@@ -24028,7 +25317,7 @@ async fn external_tool_stdout_attachment_limit_is_replayed_after_a_restart(
     .await?;
     let durable_stdout_id = local_stream_id_of_external_role(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         &accepted,
         ToolByteStreamRole::Stdout,
     )
@@ -24318,7 +25607,7 @@ async fn the_agent_answers_after_a_restart(
     )
     .await?;
     let (_stdin, mut responses, _) =
-        start_external_streaming_run(&executor, &context, &worker_id, "empty").await?;
+        start_external_streaming_run(&executor, &context, &worker_id.agent_id, "empty").await?;
     let next_call =
         stdout_of_a_successful_run(&mut responses, "the end of the call after the restart").await;
 
@@ -24375,11 +25664,11 @@ async fn a_call_that_ends_with_its_stdin_open_leaves_the_agent_usable(
         Default::default(),
     )
     .await?;
-    let loads = executor.instance_load_count(&worker_id);
+    let loads = executor.instance_load_count(&worker_id.agent_id);
     // The tool returns without a read of its stdin, and the client never closes that stdin.
     for call in 1..=3 {
         let (_stdin, mut responses, _) =
-            start_external_streaming_run(&executor, &context, &worker_id, "empty").await?;
+            start_external_streaming_run(&executor, &context, &worker_id.agent_id, "empty").await?;
         stdout_of_a_successful_run(
             &mut responses,
             &format!("the end of call {call} with an open stdin"),
@@ -24387,7 +25676,7 @@ async fn a_call_that_ends_with_its_stdin_open_leaves_the_agent_usable(
         .await?;
     }
     assert_eq!(
-        executor.instance_load_count(&worker_id),
+        executor.instance_load_count(&worker_id.agent_id),
         loads,
         "the agent was restarted between the calls"
     );
@@ -24404,7 +25693,7 @@ async fn a_call_that_ends_with_its_stdin_open_leaves_the_agent_usable(
     )
     .await?;
     let (_stdin, mut responses, _) =
-        start_external_streaming_run(&executor, &context, &worker_id, "empty").await?;
+        start_external_streaming_run(&executor, &context, &worker_id.agent_id, "empty").await?;
     let next_call =
         stdout_of_a_successful_run(&mut responses, "the end of the call after the restart").await;
 
@@ -24555,7 +25844,13 @@ async fn stream_cancels(
 ) -> anyhow::Result<Vec<golem_common::model::durable_stream::StreamTerminalRecord>> {
     use golem_common::model::durable_stream::{StreamError, StreamTerminal, StreamTerminalRecord};
     let mut cancels = Vec::new();
-    for entry in executor.get_oplog(worker_id, OplogIndex::INITIAL).await? {
+    for entry in executor
+        .get_oplog(
+            &OwnedAgentId::new(executor.context.default_environment_id, worker_id),
+            OplogIndex::INITIAL,
+        )
+        .await?
+    {
         if let PublicOplogEntry::StreamTerminal(terminal) = &entry.entry {
             let record = StreamTerminalRecord::from_value(terminal.record.value())
                 .map_err(anyhow::Error::msg)?;
@@ -24629,11 +25924,17 @@ async fn start_an_external_native_run(
     let worker_id = executor
         .start_agent(
             &caller_component,
-            agent_id!("ToolStreamingCaller", "external-native"),
+            agent_key!("ToolStreamingCaller", "external-native"),
         )
         .await?;
-    let (sender, responses, accepted) =
-        start_external_run_of(&executor, &context, &worker_id, "native-streaming", mode).await?;
+    let (sender, responses, accepted) = start_external_run_of(
+        &executor,
+        &context,
+        &worker_id.agent_id,
+        "native-streaming",
+        mode,
+    )
+    .await?;
     Ok(RunningExternalToolCall {
         context,
         environment_state,
@@ -24672,7 +25973,7 @@ async fn a_native_tool_reads_the_stdin_of_a_client_call_to_its_clean_end(
         stdout_of_a_successful_run(&mut call.responses, "the end of the native call").await?,
     );
     assert_eq!(String::from_utf8_lossy(&call.stdout), "native:abcde");
-    let cancels = stream_cancels(&call.executor, &call.worker_id).await?;
+    let cancels = stream_cancels(&call.executor, &call.worker_id.agent_id).await?;
     assert!(
         cancels.is_empty(),
         "nothing cancels a stdin that was read to its clean end: {cancels:?}"
@@ -24711,4 +26012,319 @@ async fn a_native_tool_reads_a_cancelled_stdin_of_a_client_call_as_cancelled(
         "the call did not fail on the interrupted read of the tool: {failure}"
     );
     Ok(())
+}
+
+/// The tool calls that background work makes after its method returned run in the method's tool
+/// parent, which stays open until the background work drained: the caller gets the result first,
+/// then an incapable and a capable tool call complete, both live and after an executor restart
+/// that replays the recorded result. Each call starts and ends between the method's
+/// `AgentInvocationFinished` and its single `AgentInvocationSettled`. A second executor restart
+/// after the settlement replays those calls without making them again.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn tool_calls_after_the_return_settle_between_the_result_and_settled(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = || TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        ..Default::default()
+    };
+    let mut executor = start_with_agent_sockets(deps, &context, overrides()).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider_path = deps
+        .component_directory
+        .join(format!("{}.wasm", provider.wasm_name));
+    let metadata = extract_component_metadata(&provider_path, false, true).await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let (promise_port, promise_server, mut promise_checkpoints) =
+        start_promise_checkpoint_server().await;
+
+    for restart in [false, true] {
+        let value = if restart { "replayed" } else { "live" };
+        let agent_id = agent_key!(
+            "ToolStreamingCaller",
+            format!("tool-calls-after-return-{value}")
+        );
+        let worker_id = executor
+            .start_agent_with(
+                &caller_component.id,
+                agent_id.clone(),
+                HashMap::from([(
+                    "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
+                    promise_port.to_string(),
+                )]),
+                Vec::new(),
+            )
+            .await?;
+        let result: String = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            executor.invoke_and_await_agent(
+                &caller_component,
+                &agent_id,
+                "tool_calls_after_return",
+                data_value!(value),
+            ),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("the result waited for the background tool calls"))??
+        .into_typed()?;
+        assert_eq!(result, format!("returned({value})"));
+        let checkpoint =
+            next_promise_checkpoint(&mut promise_checkpoints, "tool-calls-after-return").await?;
+
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let invocation = after_return_invocation(&oplog);
+        let finished = after_return_finished(&oplog, &invocation)
+            .expect("the result is recorded before the background tool calls");
+        assert!(
+            after_return_settled(&oplog, &invocation).is_empty(),
+            "the method is not settled while its background work waits"
+        );
+        assert!(
+            after_return_tool_starts(&oplog).is_empty(),
+            "no tool call starts before the background work continues"
+        );
+
+        if restart {
+            drop(executor);
+            executor = start_with_agent_sockets(deps, &context, overrides()).await?;
+        }
+        executor
+            .complete_promise(
+                &worker_id.environment_id,
+                &executor
+                    .promise_id(&worker_id, checkpoint.oplog_idx)
+                    .await?,
+                Vec::new(),
+            )
+            .await?;
+
+        let oplog = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            loop {
+                let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+                if !after_return_settled(&oplog, &invocation).is_empty() {
+                    return Ok::<_, anyhow::Error>(oplog);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("the background tool calls did not settle ({value})"))??;
+        let settled = after_return_settled(&oplog, &invocation);
+        assert_eq!(
+            settled.len(),
+            1,
+            "the method settles exactly once ({value})"
+        );
+        let settled = settled[0];
+        assert!(settled > finished);
+        let tool_starts = after_return_tool_starts(&oplog);
+        assert_eq!(
+            tool_starts.len(),
+            2,
+            "the incapable and the capable tool call each start once ({value})"
+        );
+        for start in tool_starts {
+            assert!(
+                finished < start && start < settled,
+                "the tool call at {start} starts between the result at {finished} and the \
+                 settlement at {settled} ({value})"
+            );
+            let ends = oplog
+                .iter()
+                .filter(|entry| {
+                    matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start)
+                })
+                .map(|entry| entry.oplog_index)
+                .collect::<Vec<_>>();
+            assert!(
+                ends.len() == 1 && finished < ends[0] && ends[0] < settled,
+                "the tool call at {start} ends once between the result and the settlement: \
+                 {ends:?} ({value})"
+            );
+        }
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+                .count(),
+            0,
+            "no tool call fails ({value})"
+        );
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|entry| matches!(
+                    &entry.entry,
+                    PublicOplogEntry::AgentInvocationStarted(started)
+                        if matches!(
+                            &started.invocation,
+                            PublicAgentInvocation::AgentMethodInvocation(method)
+                                if method.method_name.replace('-', "_") == "tool_calls_after_return"
+                        )
+                ))
+                .count(),
+            1,
+            "the method runs once ({value})"
+        );
+        assert_eq!(
+            executor
+                .get_file_contents(&worker_id, "/after-return-capable.bin")
+                .await?,
+            value.as_bytes()
+        );
+        assert_eq!(
+            executor
+                .get_file_contents(&worker_id, "/after-return-incapable.txt")
+                .await?,
+            format!("no-stream:{value}").as_bytes()
+        );
+
+        if restart {
+            // A restart after the settlement replays the tool calls that lie between the result
+            // and the settlement without making them again.
+            let starts = |oplog: &[PublicOplogEntryWithIndex]| {
+                oplog
+                    .iter()
+                    .filter(|entry| matches!(entry.entry, PublicOplogEntry::Start(_)))
+                    .map(|entry| entry.oplog_index)
+                    .collect::<Vec<_>>()
+            };
+            drop(executor);
+            executor = start_with_agent_sockets(deps, &context, overrides()).await?;
+            let probe: String = executor
+                .invoke_and_await_agent(&caller_component, &agent_id, "replay_probe", data_value!())
+                .await?
+                .into_typed()?;
+            assert_eq!(probe, "replayed");
+            let replayed = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            assert_eq!(
+                starts(&replayed),
+                starts(&oplog),
+                "the replay after the settlement makes no durable call again"
+            );
+            assert_eq!(
+                after_return_settled(&replayed, &invocation),
+                vec![settled],
+                "the replayed method keeps its single settlement"
+            );
+            assert_eq!(
+                executor
+                    .get_file_contents(&worker_id, "/after-return-capable.bin")
+                    .await?,
+                value.as_bytes()
+            );
+            assert_eq!(
+                executor
+                    .get_file_contents(&worker_id, "/after-return-incapable.txt")
+                    .await?,
+                format!("no-stream:{value}").as_bytes()
+            );
+        }
+    }
+
+    promise_server.abort();
+    Ok(())
+}
+
+/// The invocation ID of the started `tool_calls_after_return` invocation.
+fn after_return_invocation(
+    oplog: &[PublicOplogEntryWithIndex],
+) -> golem_common::model::InvocationId {
+    oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(started) => match &started.invocation {
+                PublicAgentInvocation::AgentMethodInvocation(method)
+                    if method.method_name.replace('-', "_") == "tool_calls_after_return" =>
+                {
+                    Some(method.invocation_id)
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("tool_calls_after_return started")
+}
+
+fn after_return_finished(
+    oplog: &[PublicOplogEntryWithIndex],
+    invocation: &golem_common::model::InvocationId,
+) -> Option<OplogIndex> {
+    oplog.iter().find_map(|entry| match &entry.entry {
+        PublicOplogEntry::AgentInvocationFinished(finished)
+            if finished.invocation_id == *invocation =>
+        {
+            Some(entry.oplog_index)
+        }
+        _ => None,
+    })
+}
+
+fn after_return_settled(
+    oplog: &[PublicOplogEntryWithIndex],
+    invocation: &golem_common::model::InvocationId,
+) -> Vec<OplogIndex> {
+    oplog
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationSettled(settled)
+                    if settled.invocation_id == *invocation
+            )
+        })
+        .map(|entry| entry.oplog_index)
+        .collect()
+}
+
+/// The `Start`s of the tool entity invocations in `oplog`.
+fn after_return_tool_starts(oplog: &[PublicOplogEntryWithIndex]) -> Vec<OplogIndex> {
+    oplog
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(parameters)
+                    if parameters.function_name == "golem::entity::invoke"
+            ) && matches!(
+                &entry.attribution,
+                PublicOplogEntryAttribution::Entity(entity)
+                    if entity.invocation.entity.kind == PublicAgentEntityKind::Tool
+            )
+        })
+        .map(|entry| entry.oplog_index)
+        .collect()
 }

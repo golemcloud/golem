@@ -33,6 +33,23 @@ pub mod proto {
 
     pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("services");
 
+    impl golem::worker::AgentTarget {
+        /// The agent ID of an ID target. A key target has none.
+        pub fn agent_id(&self) -> Option<&golem::worker::AgentId> {
+            match &self.target {
+                Some(golem::worker::agent_target::Target::Id(id)) => Some(id),
+                _ => None,
+            }
+        }
+    }
+
+    impl golem::worker::InvocationStart {
+        /// The agent ID of a start whose target is an ID target.
+        pub fn target_agent_id(&self) -> Option<&golem::worker::AgentId> {
+            self.target.as_ref().and_then(|target| target.agent_id())
+        }
+    }
+
     impl IntoSchema for UpdateMode {
         fn type_id() -> TypeId {
             TypeId::new("golem_api_grpc.proto.golem.worker.UpdateMode")

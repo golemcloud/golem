@@ -22,15 +22,15 @@ pub async fn[Request : @schema.IntoSchema, Response : @schema.IntoSchema + @sche
 
 pub fn fork() -> @host.ForkResult
 
-pub fn fork_agent(@types.AgentId, @types.AgentId, UInt64) -> Unit
+pub fn fork_agent(@schema.AgentId, UInt64) -> @schema.AgentId
 
 pub fn generate_idempotency_key() -> @schema.Uuid
 
 pub fn generate_idempotency_key_string() -> String
 
-pub fn get_agent_metadata(@types.AgentId) -> @host.AgentMetadata?
+pub fn get_agent_metadata(@schema.AgentId) -> @host.AgentMetadata?
 
-pub fn get_agents(@types.ComponentId, @host.AgentAnyFilter?, Bool) -> AgentsPager
+pub fn get_agents(String, @host.AgentAnyFilter?, Bool) -> AgentsPager
 
 pub fn get_promise(@types.PromiseId) -> PromiseResult
 
@@ -46,17 +46,13 @@ pub fn oplog_commit(Byte) -> Unit
 
 pub fn remove_retry_policy(String) -> Unit
 
-pub fn resolve_agent_id(String, String) -> @types.AgentId?
-
-pub fn resolve_agent_id_strict(String, String) -> @types.AgentId?
-
 pub fn resolve_component_id(String) -> @types.ComponentId?
 
 pub fn resolve_retry_policy(String, String, Array[(String, @retry.PredicateValue)]) -> Result[@retry.RetryPolicy?, String]
 
 pub async fn[T, E] retry_local(@retry.RetryPolicy, async () -> Result[T, E], properties? : (E) -> Array[(String, @retry.PredicateValue)]) -> Result[T, E]
 
-pub fn revert_agent(@types.AgentId, @host.RevertAgentTarget) -> Unit
+pub fn revert_agent(@schema.AgentId, @host.RevertAgentTarget) -> Unit
 
 pub fn set_named_policy(NamedPolicy) -> Unit raise RetryBuilderError
 
@@ -64,7 +60,7 @@ pub fn set_retry_policy(@retry.NamedRetryPolicy) -> Unit
 
 pub fn trap(String) -> Unit
 
-pub fn update_agent(@types.AgentId, UInt64, @host.UpdateMode) -> Unit
+pub fn update_agent(@schema.AgentId, UInt64, @host.UpdateMode) -> Unit
 
 pub fn use_named_policy(NamedPolicy) -> RetryPolicyGuard raise RetryBuilderError
 
@@ -226,9 +222,9 @@ pub using @host {type AgentCreatedAtFilter}
 
 pub using @host {type AgentEnvFilter}
 
-pub using @host {type AgentMetadata}
+pub using @host {type AgentKeyFilter}
 
-pub using @host {type AgentNameFilter}
+pub using @host {type AgentMetadata}
 
 pub using @host {type AgentPropertyFilter}
 

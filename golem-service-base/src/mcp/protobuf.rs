@@ -13,6 +13,8 @@ impl From<CompiledMcpToolExport> for golem_api_grpc::proto::golem::mcp::Compiled
             owner_component_name: value.owner_component_name.0,
             tool_name: value.tool_name.to_string(),
             command_path: value.command_path,
+            mcp_root_name: value.mcp_root_name,
+            mcp_command_path: value.mcp_command_path,
             definition: Some(value.definition.into()),
             input_schema: Some(value.input_schema.into()),
         }
@@ -39,6 +41,8 @@ impl TryFrom<golem_api_grpc::proto::golem::mcp::CompiledMcpToolExport> for Compi
             ),
             tool_name: value.tool_name.parse()?,
             command_path: value.command_path,
+            mcp_root_name: value.mcp_root_name,
+            mcp_command_path: value.mcp_command_path,
             definition: value
                 .definition
                 .ok_or("Missing tool definition")?

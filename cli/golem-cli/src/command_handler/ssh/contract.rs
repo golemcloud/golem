@@ -20,6 +20,7 @@ use super::syntax::{TokenKind, is_complete, scan};
 use crate::context::GlobalEnvironmentSelector;
 use golem_client::invocation_session::SessionTransportError;
 use golem_client::model::{NativeToolFailure, NativeToolResult, NativeToolSuccess};
+use golem_common::base_model::api;
 use golem_common::model::invocation_session_public::{
     PublicErrorCode, PublicInvocationResult, PublicTypedValue,
 };
@@ -684,18 +685,18 @@ pub enum CancelOutcome {
     Running { error: Option<String> },
 }
 
-/// Reads the answer to a cancel request: whether it cancelled, or the failed request's message.
-/// Golem cancels a call only while it is queued. For one that already has its result it
-/// answers that nothing was cancelled, and for a running one that the invocation was not
-/// found, which is an answer and not a failure.
-pub fn classify_cancel(answer: Result<bool, String>) -> CancelOutcome {
+/// Reads the answer to a cancel request: whether it cancelled, or the failed request's error code
+/// and message. Golem cancels a call only while it is queued. For one that already has its result
+/// it answers that nothing was cancelled, and for a running one that it cannot cancel it yet
+/// (`CANNOT_CANCEL_RUNNING_INVOCATION`), which is an answer and not a failure.
+pub fn classify_cancel(answer: Result<bool, (Option<String>, String)>) -> CancelOutcome {
     match answer {
         Ok(true) => CancelOutcome::Cancelled,
         Ok(false) => CancelOutcome::Finished,
-        Err(message) if message.contains("Invocation not found") => {
+        Err((Some(code), _)) if code == api::error_code::CANNOT_CANCEL_RUNNING_INVOCATION => {
             CancelOutcome::Running { error: None }
         }
-        Err(message) => CancelOutcome::Running {
+        Err((_, message)) => CancelOutcome::Running {
             error: Some(message),
         },
     }
@@ -1645,11 +1646,23 @@ mod tests {
         // Golem answers "not cancelled" only for a call that already has its result.
         assert_eq!(classify_cancel(Ok(false)), CancelOutcome::Finished);
         assert_eq!(
-            classify_cancel(Err("Invalid request: Invocation not found".to_string())),
+            classify_cancel(Err((
+                Some("CANNOT_CANCEL_RUNNING_INVOCATION".to_string()),
+                "Cannot cancel a running invocation".to_string()
+            ))),
             CancelOutcome::Running { error: None }
         );
         assert_eq!(
-            classify_cancel(Err("connection refused".to_string())),
+            classify_cancel(Err((
+                Some("INVOCATION_NOT_FOUND".to_string()),
+                "Invocation not found".to_string()
+            ))),
+            CancelOutcome::Running {
+                error: Some("Invocation not found".to_string())
+            }
+        );
+        assert_eq!(
+            classify_cancel(Err((None, "connection refused".to_string()))),
             CancelOutcome::Running {
                 error: Some("connection refused".to_string())
             }

@@ -65,7 +65,7 @@ pub(super) async fn extract_local_component(
     Agents,
 )> {
     let metadata = match package_bytes {
-        Some(bytes) => {
+        Some(bytes) if !app.installed_components.contains_key(name) => {
             let metadata =
                 crate::model::agent::extraction::extract_component_metadata_from_bytes(bytes)
                     .await?;
@@ -73,7 +73,7 @@ pub(super) async fn extract_local_component(
                 .add_cached_component_metadata(name, metadata)
                 .await?
         }
-        None => {
+        _ => {
             extract_and_store_component_metadata(&BuildContext::new(app, &BuildConfig::new()), name)
                 .await?
         }
@@ -102,8 +102,8 @@ fn resolve_ifs_entry(
     })
 }
 
-fn resolve_tool_ifs_entry(
-    file: &crate::model::app::ToolProvisionFile,
+pub(super) fn resolve_provision_file(
+    file: &crate::model::app::ProvisionFile,
 ) -> anyhow::Result<InitialComponentFile> {
     resolve_ifs_entry(&file.file, &file.source)
 }
@@ -327,7 +327,9 @@ impl<'a> ComponentStager<'a> {
     }
 
     pub async fn open_wasm_if_changed(&self) -> anyhow::Result<Option<File>> {
-        if self.diff.wasm_changed() {
+        let package_metadata_changed =
+            matches!(&self.diff, ComponentDiff::Diff { diff } if diff.package_metadata_changed);
+        if self.diff.wasm_changed() || package_metadata_changed {
             Ok(Some(self.open_wasm().await?))
         } else {
             Ok(None)
@@ -347,7 +349,7 @@ impl<'a> ComponentStager<'a> {
                     let files = manifest_config
                         .files
                         .iter()
-                        .map(|file| resolve_ifs_entry(file, &manifest_config.files_source))
+                        .map(resolve_provision_file)
                         .collect::<anyhow::Result<Vec<_>>>()?;
 
                     result.insert(
@@ -386,7 +388,7 @@ impl<'a> ComponentStager<'a> {
                         .provision
                         .files
                         .iter()
-                        .map(resolve_tool_ifs_entry)
+                        .map(resolve_provision_file)
                         .collect::<anyhow::Result<Vec<_>>>()?;
                     result.insert(tool_name.clone(), expand_component_files(&files).await?);
                 }
@@ -428,7 +430,7 @@ impl<'a> ComponentStager<'a> {
                     let files = config
                         .files
                         .iter()
-                        .map(resolve_tool_ifs_entry)
+                        .map(resolve_provision_file)
                         .collect::<anyhow::Result<Vec<_>>>()?;
                     result.insert(name.clone(), expand_component_files(&files).await?);
                 }
@@ -1757,6 +1759,7 @@ mod tests {
             diff: diff::ComponentDiff {
                 component_config_changed: false,
                 wasm_changed: false,
+                package_metadata_changed: false,
                 agent_type_changes: BTreeMap::new(),
                 agent_type_provision_config_changes: BTreeMap::new(),
                 tool_deployment_config_changes: BTreeMap::new(),
@@ -1776,6 +1779,7 @@ mod tests {
             diff: diff::ComponentDiff {
                 component_config_changed: false,
                 wasm_changed: false,
+                package_metadata_changed: false,
                 agent_type_changes: BTreeMap::from([(
                     "Counter".to_string(),
                     diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::HashDiff {
@@ -1801,6 +1805,7 @@ mod tests {
             diff: diff::ComponentDiff {
                 component_config_changed: true,
                 wasm_changed: false,
+                package_metadata_changed: false,
                 agent_type_changes: BTreeMap::new(),
                 agent_type_provision_config_changes: BTreeMap::new(),
                 tool_deployment_config_changes: BTreeMap::new(),
@@ -1820,6 +1825,7 @@ mod tests {
             diff: diff::ComponentDiff {
                 component_config_changed: false,
                 wasm_changed: true,
+                package_metadata_changed: false,
                 agent_type_changes: BTreeMap::new(),
                 agent_type_provision_config_changes: BTreeMap::new(),
                 tool_deployment_config_changes: BTreeMap::new(),
@@ -1838,6 +1844,7 @@ mod tests {
             diff: diff::ComponentDiff {
                 component_config_changed: false,
                 wasm_changed: false,
+                package_metadata_changed: false,
                 agent_type_changes: BTreeMap::new(),
                 agent_type_provision_config_changes: BTreeMap::new(),
                 tool_deployment_config_changes: BTreeMap::from([(
@@ -1859,6 +1866,7 @@ mod tests {
             diff: diff::ComponentDiff {
                 component_config_changed: false,
                 wasm_changed: false,
+                package_metadata_changed: false,
                 agent_type_changes: BTreeMap::new(),
                 agent_type_provision_config_changes: BTreeMap::new(),
                 tool_deployment_config_changes: BTreeMap::from([(

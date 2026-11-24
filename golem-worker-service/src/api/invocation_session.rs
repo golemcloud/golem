@@ -39,6 +39,8 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_common::SafeDisplay;
 use golem_common::model::InvocationId;
+#[cfg(test)]
+use golem_common::model::invocation_session_public::encode_client_text;
 use golem_common::model::invocation_session_public::{
     BinaryMessage, BinaryMessageKind, BinaryMessageMetadata, DecimalU64, MAX_LOGICAL_VALUE_SIZE,
     MAX_STREAM_MAPPINGS, MAX_WEBSOCKET_MESSAGE_SIZE, PublicAttachmentRevokedReason,
@@ -459,6 +461,7 @@ struct ProvisionalBinding {
 
 struct AdapterState {
     protocol_state: InvocationSessionState,
+    raw_input: Option<golem_common::model::agent::JsonMethodInput>,
     graph: Option<SchemaGraph>,
     output_schema: Option<SchemaType>,
     identity: Option<SessionAgentIdentity>,
@@ -491,6 +494,7 @@ impl AdapterState {
     fn with_first_channel(first_channel: u32) -> Self {
         Self {
             protocol_state: InvocationSessionState::default(),
+            raw_input: None,
             graph: None,
             output_schema: None,
             identity: None,
@@ -512,14 +516,28 @@ impl AdapterState {
         self.protocol_state
             .validate_trusted_request(&started.initial_request)
             .map_err(AdapterError::protocol)?;
+        if let Some(invocation_request::Request::Start(start)) = &started.initial_request.request
+            && let Some(input) = &start.captured_method_input
+        {
+            let input = golem_common::serialization::deserialize(input)
+                .map_err(|error| AdapterError::protocol(error.to_string()))?;
+            if let golem_common::model::agent::AgentMethodInput::PublicJson(input) = input {
+                self.raw_input = Some(input);
+                self.next_transport_id = 0;
+            }
+        }
         self.graph = Some(started.schema.clone());
         self.output_schema = started.output_schema.clone();
         self.application = Some(started.application.0.clone());
         self.environment = Some(started.environment.0.clone());
         self.identity = Some(SessionAgentIdentity {
-            component_id: started.agent_id.component_id.0,
-            component_revision: started.component_revision.get(),
-            agent_id: started.agent_id.agent_id.clone(),
+            component_id: started.component_id.0,
+            component_revision: matches!(
+                started.target,
+                SessionInvocationTarget::ExternalTool { .. }
+            )
+            .then_some(started.component_revision.get()),
+            agent_id: started.agent_id,
             target: started.target.clone(),
         });
         Ok(())
@@ -917,6 +935,7 @@ pub async fn serve_public_invocation_session(
     keyring: Arc<InvocationSessionTokenKeyring>,
     auth: AuthCtx,
     config: InvocationSessionConfig,
+    environment_id: golem_common::model::environment::EnvironmentId,
 ) {
     serve_invocation_session_connection(
         invocation_session_websocket(socket, config),
@@ -926,6 +945,7 @@ pub async fn serve_public_invocation_session(
                 worker_service,
                 keyring,
                 auth,
+                environment_id,
                 outbound,
                 budgets,
                 setup_complete,
@@ -1059,12 +1079,20 @@ async fn serve_session_messages(
     worker_service: Arc<WorkerService>,
     keyring: Arc<InvocationSessionTokenKeyring>,
     auth: AuthCtx,
+    environment_id: golem_common::model::environment::EnvironmentId,
     outbound: Outbound,
     budgets: SessionBudgets,
     setup_complete: tokio::sync::oneshot::Sender<()>,
 ) {
     let bindings = token_bindings(&auth);
-    let initial = match receive_initial(&mut websocket_stream, &outbound, &keyring, &bindings).await
+    let initial = match receive_initial(
+        &mut websocket_stream,
+        &outbound,
+        &keyring,
+        &bindings,
+        environment_id,
+    )
+    .await
     {
         Ok(Some(initial)) => initial,
         Ok(None) | Err(()) => {
@@ -1213,6 +1241,7 @@ async fn serve_session_messages(
         );
         let server = handle_private_responses(
             responses,
+            Some(worker_service.clone()),
             outbound.clone(),
             state,
             keyring,
@@ -1308,6 +1337,7 @@ async fn receive_initial<S>(
     outbound: &Outbound,
     keyring: &InvocationSessionTokenKeyring,
     bindings: &InvocationSessionTokenBindings,
+    environment_id: golem_common::model::environment::EnvironmentId,
 ) -> Result<Option<InitialMessage>, ()>
 where
     S: futures::Stream<Item = std::io::Result<AdmittedMessage>> + Unpin,
@@ -1361,6 +1391,7 @@ where
                         ..
                     } => Ok(Some(InitialMessage::Start {
                         start: PublicAgentSessionStart {
+                            environment_id,
                             selector: *selector,
                             config,
                             idempotency_key,
@@ -1385,6 +1416,7 @@ where
                         ..
                     } => Ok(Some(InitialMessage::ToolStart {
                         start: PublicToolSessionStart {
+                            environment_id,
                             application,
                             environment,
                             target,
@@ -1498,6 +1530,7 @@ where
                             .collect();
                         Ok(Some(InitialMessage::Resume {
                             resume: PublicAgentSessionResume {
+                                environment_id,
                                 identity,
                                 session,
                                 attempt_id,
@@ -1886,6 +1919,7 @@ async fn translate_client_binary(
 
 async fn handle_private_responses<S>(
     mut responses: S,
+    worker_service: Option<Arc<WorkerService>>,
     outbound: Outbound,
     state: Arc<Mutex<AdapterState>>,
     keyring: Arc<InvocationSessionTokenKeyring>,
@@ -1914,6 +1948,74 @@ async fn handle_private_responses<S>(
                 return;
             }
         };
+        let (selected, original) = match response.response.as_ref() {
+            Some(invocation_response::Response::Ready(ready))
+            | Some(invocation_response::Response::Accepted(ready)) => (
+                ready.component_revision,
+                ready.captured_method_input.as_deref(),
+            ),
+            _ => (None, None),
+        };
+        if let (Some(service), Some(revision)) = (&worker_service, selected) {
+            let identity = state.lock().await.identity.clone();
+            if let Some(identity) = identity
+                && matches!(identity.target, SessionInvocationTarget::Method { .. })
+            {
+                let selected = async {
+                    let revision = golem_common::model::component::ComponentRevision::new(revision)
+                        .map_err(|error| AdapterError::protocol(error.to_string()))?;
+                    let (graph, output) = service
+                        .selected_public_method_schema(&identity, revision)
+                        .await
+                        .map_err(|error| AdapterError::protocol(error.to_string()))?;
+                    let mut state = state.lock().await;
+                    if state.raw_input.is_none()
+                        && state.provisional_refs.is_empty()
+                        && let Some(original) = original
+                    {
+                        let original = golem_common::serialization::deserialize(original)
+                            .map_err(|error| AdapterError::protocol(error.to_string()))?;
+                        if let golem_common::model::agent::AgentMethodInput::PublicJson(input) =
+                            original
+                        {
+                            state.raw_input = Some(input);
+                            state.next_transport_id = 0;
+                        }
+                    }
+                    if let Some(input) = state.raw_input.take() {
+                        let json = serde_json::from_str(input.as_str())
+                            .map_err(|error| AdapterError::protocol(error.to_string()))?;
+                        decode_public_schema_value_with_charge(
+                            &graph,
+                            &graph.root,
+                            &json,
+                            PublicStreamReferencePolicy::Provisional,
+                            |reference, schema| {
+                                state.register_provisional(
+                                    reference,
+                                    schema,
+                                    ProvisionalOwner::Initial,
+                                )
+                            },
+                        )?;
+                    }
+                    state.graph = Some(graph);
+                    state.output_schema = output;
+                    Ok::<_, AdapterError>(())
+                }
+                .await;
+                if selected.is_err() {
+                    fail_session(
+                        &outbound,
+                        &state,
+                        attempt_id,
+                        PublicErrorCode::InternalError,
+                    )
+                    .await;
+                    return;
+                }
+            }
+        }
         let translated = translate_private_response(
             response,
             &state,
@@ -2038,9 +2140,11 @@ async fn translate_private_response(
     let response = response
         .response
         .ok_or_else(|| AdapterError::protocol("private response has no payload"))?;
+    let ready = matches!(response, invocation_response::Response::Ready(_));
     match response {
-        invocation_response::Response::Accepted(accepted) => {
-            let message = translate_accepted(
+        invocation_response::Response::Accepted(accepted)
+        | invocation_response::Response::Ready(accepted) => {
+            let mut message = translate_accepted(
                 &mut state,
                 accepted,
                 keyring,
@@ -2048,6 +2152,27 @@ async fn translate_private_response(
                 token_key_id,
                 attempt_id,
             )?;
+            if ready {
+                let PublicServerMessage::InvocationAccepted {
+                    attempt_id,
+                    agent_id,
+                    idempotency_key,
+                    mappings,
+                    session_token,
+                    version,
+                } = message
+                else {
+                    unreachable!()
+                };
+                message = PublicServerMessage::InvocationReady {
+                    attempt_id,
+                    agent_id,
+                    idempotency_key,
+                    mappings,
+                    session_token,
+                    version,
+                };
+            }
             Ok(vec![frame(text_message(&message)?)])
         }
         invocation_response::Response::Rejected(rejected) => {
@@ -2230,7 +2355,6 @@ fn translate_accepted(
         .into();
     let agent_id: golem_common::model::AgentId = accepted
         .agent_id
-        .clone()
         .ok_or_else(|| AdapterError::protocol("accepted response has no agent identity"))?
         .try_into()
         .map_err(|_| AdapterError::protocol("accepted response has invalid agent identity"))?;
@@ -2238,13 +2362,13 @@ fn translate_accepted(
         .identity
         .as_mut()
         .ok_or_else(|| AdapterError::protocol("session identity is unavailable"))?;
-    if identity.component_id != agent_id.component_id.0 || identity.agent_id != agent_id.agent_id {
+    if identity.agent_id != agent_id {
         return Err(AdapterError::protocol(
             "accepted agent identity differs from the pinned invocation",
         ));
     }
     if let Some(revision) = accepted.component_revision {
-        identity.component_revision = revision;
+        identity.component_revision = Some(revision);
     }
     match &identity.target {
         SessionInvocationTarget::Method { method, .. } => {
@@ -2738,7 +2862,6 @@ fn sign_stream_token(
     let handle = private.mapping.handle.as_ref().unwrap();
     let producer: golem_common::model::AgentId = handle
         .producer
-        .clone()
         .ok_or_else(|| AdapterError::protocol("stream mapping has no producer"))?
         .try_into()
         .map_err(|_| AdapterError::protocol("stream mapping producer is invalid"))?;
@@ -2835,6 +2958,7 @@ fn public_start_error(error: PublicAgentSessionStartError) -> (PublicErrorCode, 
                     PublicErrorCode::ValidationError
                 }
                 WorkerServiceError::AuthError(AuthServiceError::Unauthorized(_))
+                | WorkerServiceError::AgentAccessDenied(_)
                 | WorkerServiceError::RegistryServiceError(
                     RegistryServiceError::Unauthorized(_)
                     | RegistryServiceError::CouldNotAuthenticate(_),
@@ -3287,7 +3411,6 @@ mod tests {
     use super::*;
     use crate::config::{InvocationSessionTokenConfig, InvocationSessionTokenKeyConfig};
     use golem_api_grpc::proto::golem::common::EnvironmentId;
-    use golem_api_grpc::proto::golem::component::ComponentId;
     use golem_api_grpc::proto::golem::worker::{
         AgentId as ProtoAgentId, DurableStreamHandle, IdempotencyKey as ProtoIdempotencyKey,
         InputStreamAck, InvocationStart, ResumeAttach, StreamInvocationIdentity,
@@ -3308,13 +3431,16 @@ mod tests {
         }
     }
 
+    fn session_agent_id() -> golem_common::model::AgentId {
+        golem_common::model::AgentId::from_parts(7, 20)
+    }
+
     fn proto_agent_id() -> ProtoAgentId {
-        ProtoAgentId {
-            component_id: Some(ComponentId {
-                value: Some(proto_uuid(20)),
-            }),
-            name: "agent".to_string(),
-        }
+        session_agent_id().into()
+    }
+
+    fn session_environment_id() -> golem_common::model::environment::EnvironmentId {
+        golem_common::model::environment::EnvironmentId(Uuid::from_u128(30))
     }
 
     fn idempotency_key() -> Option<ProtoUuid> {
@@ -3490,6 +3616,7 @@ mod tests {
             channels,
             channel_by_transport,
             provisional_refs: HashMap::new(),
+            raw_input: None,
             private_mappings: HashMap::new(),
             byte_roles: HashMap::new(),
             tokens: Some(TokenContext {
@@ -3621,6 +3748,7 @@ mod tests {
         let keyring = Arc::new(keyring());
         let server = handle_private_responses(
             tokio_stream::wrappers::ReceiverStream::new(received_responses),
+            None,
             outbound,
             state,
             keyring.clone(),
@@ -3676,10 +3804,7 @@ mod tests {
             },
             WorkerExecutorError::ShardingNotReady,
             WorkerExecutorError::OplogFenced {
-                agent_id: golem_common::model::AgentId {
-                    component_id: golem_common::model::component::ComponentId::new(),
-                    agent_id: "fenced".to_string(),
-                },
+                agent_id: session_agent_id(),
                 expected_epoch: 1,
                 actual_epoch: Some(2),
             },
@@ -4135,8 +4260,8 @@ mod tests {
             state.graph = Some(SchemaGraph::empty());
             state.identity = Some(SessionAgentIdentity {
                 component_id: Uuid::from_u128(20),
-                component_revision: 12,
-                agent_id: "agent".to_string(),
+                component_revision: Some(12),
+                agent_id: session_agent_id(),
                 target: if native {
                     SessionInvocationTarget::ExternalTool {
                         tool_name: "tool".to_string(),
@@ -4228,7 +4353,7 @@ mod tests {
                 decode_session_agent_identity(&session.agent)
                     .unwrap()
                     .component_revision,
-                revision.unwrap_or(12)
+                revision.or(Some(12))
             );
             assert_eq!(mappings.len(), if native { 2 } else { 0 });
             if native {
@@ -4284,8 +4409,8 @@ mod tests {
         let mut state = AdapterState::new();
         state.identity = Some(SessionAgentIdentity {
             component_id: Uuid::from_u128(20),
-            component_revision: 12,
-            agent_id: "agent".to_string(),
+            component_revision: Some(12),
+            agent_id: session_agent_id(),
             target: SessionInvocationTarget::Method {
                 agent_type: "test-agent".to_string(),
                 method: "run".to_string(),
@@ -4615,6 +4740,7 @@ mod tests {
             let outbound = Outbound { sender, budgets };
             handle_private_responses(
                 futures::stream::iter(responses),
+                None,
                 outbound,
                 state.clone(),
                 Arc::new(keyring()),
@@ -4751,6 +4877,7 @@ mod tests {
             )]),
             channel_by_transport: HashMap::from([(8, 1)]),
             provisional_refs: HashMap::new(),
+            raw_input: None,
             private_mappings: HashMap::new(),
             byte_roles: HashMap::new(),
             tokens: None,
@@ -4851,8 +4978,8 @@ mod tests {
         state.output_schema = Some(SchemaType::stream(Some(SchemaType::u8())));
         state.identity = Some(SessionAgentIdentity {
             component_id: Uuid::from_u128(20),
-            component_revision: 12,
-            agent_id: "agent".to_string(),
+            component_revision: Some(12),
+            agent_id: session_agent_id(),
             target: SessionInvocationTarget::Method {
                 agent_type: "test-agent".to_string(),
                 method: "run".to_string(),
@@ -5153,8 +5280,8 @@ mod tests {
         let logical_invocation_id = Uuid::from_u128(10);
         let identity = SessionAgentIdentity {
             component_id: Uuid::from_u128(20),
-            component_revision: 12,
-            agent_id: "agent".to_string(),
+            component_revision: Some(12),
+            agent_id: session_agent_id(),
             target: SessionInvocationTarget::Method {
                 agent_type: "test-agent".to_string(),
                 method: "run".to_string(),
@@ -5192,7 +5319,7 @@ mod tests {
             version: 1,
         };
         let budgets = SessionBudgets::new();
-        let message = Message::text(encode_text(&message).unwrap());
+        let message = Message::text(encode_client_text(&message).unwrap());
         let admission = budgets
             .admit_inbound_frame(message_size(&message))
             .await
@@ -5204,13 +5331,20 @@ mod tests {
             sender,
             budgets: budgets.clone(),
         };
-        let initial = receive_initial(&mut websocket, &outbound, &keyring, &bindings)
-            .await
-            .unwrap()
-            .unwrap();
+        let initial = receive_initial(
+            &mut websocket,
+            &outbound,
+            &keyring,
+            &bindings,
+            session_environment_id(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         let InitialMessage::Resume { resume, .. } = initial else {
             panic!("resume message was decoded as a start")
         };
+        assert_eq!(resume.environment_id, session_environment_id());
         assert_eq!(resume.identity, identity);
         assert_eq!(resume.operation, ResumeOperation::Takeover);
         assert_eq!(resume.cursors.len(), 1);
@@ -5234,8 +5368,8 @@ mod tests {
         let logical_invocation_id = Uuid::from_u128(10);
         let identity = SessionAgentIdentity {
             component_id: Uuid::from_u128(20),
-            component_revision: 12,
-            agent_id: "agent".to_string(),
+            component_revision: Some(12),
+            agent_id: session_agent_id(),
             target: SessionInvocationTarget::Method {
                 agent_type: "test-agent".to_string(),
                 method: "run".to_string(),
@@ -5278,7 +5412,7 @@ mod tests {
             version: 1,
         };
         let budgets = SessionBudgets::new();
-        let message = Message::text(encode_text(&message).unwrap());
+        let message = Message::text(encode_client_text(&message).unwrap());
         let admission = budgets
             .admit_inbound_frame(message_size(&message))
             .await
@@ -5290,7 +5424,15 @@ mod tests {
             sender,
             budgets: budgets.clone(),
         };
-        match receive_initial(&mut websocket, &outbound, &keyring, &bindings).await {
+        match receive_initial(
+            &mut websocket,
+            &outbound,
+            &keyring,
+            &bindings,
+            session_environment_id(),
+        )
+        .await
+        {
             Ok(Some(InitialMessage::Resume { resume, .. })) => Ok(resume),
             Ok(_) => panic!("resume message was not decoded as a resume"),
             Err(()) => {

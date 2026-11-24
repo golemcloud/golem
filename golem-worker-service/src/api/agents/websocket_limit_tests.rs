@@ -21,6 +21,7 @@ use crate::service::auth::{AuthService, AuthServiceError};
 use async_trait::async_trait;
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::auth::TokenSecret;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_session_public::{
     INVOCATION_SESSION_SUBPROTOCOL, MAX_WEBSOCKET_MESSAGE_SIZE,
 };
@@ -63,6 +64,7 @@ async fn spawn_agents_api(
             idempotency_key: None,
             oplog_index: None,
             agent_fingerprint: None,
+            background_failure: None,
         },
         AgentConstructorSchema {
             name: None,
@@ -95,8 +97,9 @@ async fn spawn_agents_api(
 
 async fn open_invocation_session(address: SocketAddr) -> TcpStream {
     let mut socket = TcpStream::connect(address).await.unwrap();
+    let environment_id = EnvironmentId::new();
     let handshake = format!(
-        "GET /v1/agents/invoke-agent-session HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Protocol: {INVOCATION_SESSION_SUBPROTOCOL}\r\nAuthorization: Bearer lDL3DP2d7I3EbgfgJ9YEjVdEXNETpPkGYwyb36jgs28\r\n\r\n"
+        "GET /v1/runtime/envs/{environment_id}/invoke-agent-session HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Protocol: {INVOCATION_SESSION_SUBPROTOCOL}\r\nAuthorization: Bearer lDL3DP2d7I3EbgfgJ9YEjVdEXNETpPkGYwyb36jgs28\r\n\r\n"
     );
     socket.write_all(handshake.as_bytes()).await.unwrap();
     let mut headers = Vec::new();

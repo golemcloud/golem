@@ -37,16 +37,13 @@ use test_r::test;
 
 #[test]
 fn deterministic_idempotency_key_same_inputs_produce_same_key() {
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "TestPlugin(test-worker)".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 1);
     let plugin_id = EnvironmentPluginGrantId::new();
     let first = OplogIndex::from_u64(10);
     let last = OplogIndex::from_u64(20);
 
-    let key1 = oplog_processor_idempotency_key(&agent_id, &plugin_id, first, last);
-    let key2 = oplog_processor_idempotency_key(&agent_id, &plugin_id, first, last);
+    let key1 = oplog_processor_idempotency_key(env(1), &agent_id, &plugin_id, first, last);
+    let key2 = oplog_processor_idempotency_key(env(1), &agent_id, &plugin_id, first, last);
 
     assert_eq!(
         key1, key2,
@@ -56,19 +53,18 @@ fn deterministic_idempotency_key_same_inputs_produce_same_key() {
 
 #[test]
 fn deterministic_idempotency_key_different_batch_range_produces_different_key() {
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "TestPlugin(test-worker)".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 1);
     let plugin_id = EnvironmentPluginGrantId::new();
 
     let key1 = oplog_processor_idempotency_key(
+        env(1),
         &agent_id,
         &plugin_id,
         OplogIndex::from_u64(10),
         OplogIndex::from_u64(20),
     );
     let key2 = oplog_processor_idempotency_key(
+        env(1),
         &agent_id,
         &plugin_id,
         OplogIndex::from_u64(21),
@@ -83,40 +79,50 @@ fn deterministic_idempotency_key_different_batch_range_produces_different_key() 
 
 #[test]
 fn deterministic_idempotency_key_different_worker_produces_different_key() {
-    let component_id = ComponentId::new();
-    let agent_id1 = AgentId {
-        component_id,
-        agent_id: "worker-a".to_string(),
-    };
-    let agent_id2 = AgentId {
-        component_id,
-        agent_id: "worker-b".to_string(),
-    };
+    let agent_id1 = AgentId::from_parts(7, 1);
+    let agent_id2 = AgentId::from_parts(7, 2);
     let plugin_id = EnvironmentPluginGrantId::new();
     let first = OplogIndex::from_u64(1);
     let last = OplogIndex::from_u64(5);
 
-    let key1 = oplog_processor_idempotency_key(&agent_id1, &plugin_id, first, last);
-    let key2 = oplog_processor_idempotency_key(&agent_id2, &plugin_id, first, last);
+    let key1 = oplog_processor_idempotency_key(env(1), &agent_id1, &plugin_id, first, last);
+    let key2 = oplog_processor_idempotency_key(env(1), &agent_id2, &plugin_id, first, last);
 
     assert_ne!(key1, key2, "Different workers must produce different keys");
 }
 
 #[test]
 fn deterministic_idempotency_key_different_plugin_produces_different_key() {
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "TestPlugin(test-worker)".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 1);
     let plugin_id1 = EnvironmentPluginGrantId::new();
     let plugin_id2 = EnvironmentPluginGrantId::new();
     let first = OplogIndex::from_u64(1);
     let last = OplogIndex::from_u64(5);
 
-    let key1 = oplog_processor_idempotency_key(&agent_id, &plugin_id1, first, last);
-    let key2 = oplog_processor_idempotency_key(&agent_id, &plugin_id2, first, last);
+    let key1 = oplog_processor_idempotency_key(env(1), &agent_id, &plugin_id1, first, last);
+    let key2 = oplog_processor_idempotency_key(env(1), &agent_id, &plugin_id2, first, last);
 
     assert_ne!(key1, key2, "Different plugins must produce different keys");
+}
+
+#[test]
+fn deterministic_idempotency_key_different_environment_produces_different_key() {
+    let agent_id = AgentId::from_parts(7, 1);
+    let plugin_id = EnvironmentPluginGrantId::new();
+    let first = OplogIndex::from_u64(1);
+    let last = OplogIndex::from_u64(5);
+
+    let key1 = oplog_processor_idempotency_key(env(1), &agent_id, &plugin_id, first, last);
+    let key2 = oplog_processor_idempotency_key(env(2), &agent_id, &plugin_id, first, last);
+
+    assert_ne!(
+        key1, key2,
+        "The same agent ID in two environments must produce different keys"
+    );
+}
+
+fn env(n: u128) -> EnvironmentId {
+    EnvironmentId(uuid::Uuid::from_u128(n))
 }
 
 // --------------------------------------------------------------------------
@@ -156,10 +162,7 @@ impl RecordingOplogProcessorPlugin {
             sends: async_lock::Mutex::new(Vec::new()),
             lookups: async_lock::Mutex::new(Vec::new()),
             send_gate: None,
-            target_agent_id: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "mock-target".to_string(),
-            },
+            target_agent_id: AgentId::from_parts(7, 1),
             resolve_count: std::sync::atomic::AtomicUsize::new(0),
             failed_sends_remaining: std::sync::atomic::AtomicUsize::new(0),
             target_is_local: std::sync::atomic::AtomicBool::new(true),
@@ -187,6 +190,7 @@ impl RecordingOplogProcessorPlugin {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogProcessorPlugin for RecordingOplogProcessorPlugin {
     async fn resolve_target(
         &self,
@@ -195,7 +199,7 @@ impl OplogProcessorPlugin for RecordingOplogProcessorPlugin {
     ) -> Result<AgentId, WorkerExecutorError> {
         self.resolve_count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(self.target_agent_id.clone())
+        Ok(self.target_agent_id)
     }
 
     async fn send(
@@ -207,7 +211,7 @@ impl OplogProcessorPlugin for RecordingOplogProcessorPlugin {
         entries: Vec<OplogEntry>,
     ) -> Result<(), WorkerExecutorError> {
         self.sends.lock().await.push(RecordedSend {
-            target_agent_id: target_agent_id.clone(),
+            target_agent_id: *target_agent_id,
             initial_oplog_index,
             entry_count: entries.len(),
             entries,
@@ -499,6 +503,7 @@ impl FakeComponentService {
                 plugin_version: "1.0.0".to_string(),
                 oplog_processor_component_id: Some(ComponentId::new()),
                 oplog_processor_component_revision: Some(ComponentRevision::INITIAL),
+                installed_by: golem_common::model::account::AccountId::new(),
             }],
         }
     }
@@ -511,6 +516,7 @@ impl FakeComponentService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentService for FakeComponentService {
     async fn get(
         &self,
@@ -578,6 +584,7 @@ impl ComponentService for FakeComponentService {
             ),
             created_at: chrono::Utc::now(),
             wasm_hash: diff::Hash::empty(),
+            package_metadata: None,
             object_store_key: String::new(),
         })
     }
@@ -659,6 +666,7 @@ impl Debug for InMemoryOplog {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Oplog for InMemoryOplog {
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
         let gate = if matches!(entry, OplogEntry::OplogProcessorCheckpoint { .. }) {
@@ -858,10 +866,7 @@ fn test_worker_metadata(
     AgentMetadata,
     read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
 ) {
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "TestPlugin(test-worker)".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 1);
     let environment_id = EnvironmentId::new();
     let account_id = AccountId::new();
     let status = AgentStatusRecord {
@@ -870,11 +875,11 @@ fn test_worker_metadata(
     };
 
     let metadata = AgentMetadata {
-        component_id: agent_id.component_id,
+        component_id: ComponentId(uuid::Uuid::from_u128(1)),
         agent_type_name: Some(golem_common::model::agent::AgentTypeName(
             "TestPlugin".into(),
         )),
-        canonical_key: Some(agent_id.agent_id.clone()),
+        canonical_key: Some("TestPlugin()".to_string()),
         agent_id,
         owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
         env: vec![],
@@ -885,7 +890,7 @@ fn test_worker_metadata(
         created_at: Timestamp::now_utc(),
         parent: None,
         last_known_status: status.clone(),
-        original_phantom_id: None,
+        constructor_parameters: None,
         fingerprint: AgentFingerprint::new(),
         agent_mode: AgentMode::Durable,
         create_request: golem_common::model::oplog::CreateRequest::new(
@@ -990,7 +995,7 @@ async fn a_fenced_checkpoint_stops_later_flushes_before_they_write() {
     in_memory.add(grow_memory(2)).await.unwrap();
     in_memory.commit(CommitLevel::Always).await.unwrap();
     in_memory.arm_fence(OplogFence {
-        agent_id: metadata.agent_id.clone(),
+        agent_id: metadata.agent_id,
         expected_epoch: ShardEpoch(1),
         actual_epoch: Some(ShardEpoch(2)),
     });
@@ -1332,6 +1337,7 @@ async fn reserved_start_forwarded_in_initiation_order_and_reaches_plugin() {
             function_name,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(request_payload),
             durable_function_type: DurableFunctionType::ReadRemote,
             span_started: None,
@@ -1572,7 +1578,7 @@ async fn reactivation_checkpoint_resumes_with_cached_suffix() {
     oplog.add(grow_memory(1)).await.unwrap();
     oplog.add(grow_memory(2)).await.unwrap();
 
-    let target = recording_plugin.target_agent_id.clone();
+    let target = recording_plugin.target_agent_id;
     publish_status(
         &status_writer,
         HashSet::from([grant_id]),

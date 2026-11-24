@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(any(test, target_os = "linux", target_os = "macos"))]
-use super::space_from_values;
+use super::capacity::space_from_values;
 use super::{FilesystemVolume, StorageVolumeError};
 use crate::filesystem::errors::OperationContext;
 use crate::filesystem::volume::FilesystemSpace;

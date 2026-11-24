@@ -167,6 +167,7 @@ impl ComponentDto {
 
         Ok(diff::Component {
             wasm_hash: self.wasm_hash,
+            package_metadata: self.package_metadata.clone(),
             agent_types: metadata
                 .agent_types()
                 .iter()
@@ -363,9 +364,11 @@ mod tests {
             metadata: metadata.into(),
             created_at: chrono::Utc::now(),
             wasm_hash,
+            package_metadata: None,
         };
         let expected = diff::Component {
             wasm_hash,
+            package_metadata: None,
             agent_types: BTreeMap::new(),
             component_config: diff::ComponentConfig::default().into(),
             agent_type_provision_configs: BTreeMap::new(),
@@ -412,6 +415,8 @@ mod protobuf {
                 oplog_processor_component_revision: value
                     .oplog_processor_component_revision
                     .map(|v| v.0),
+
+                installed_by: Some(value.installed_by.into()),
             }
         }
     }
@@ -443,6 +448,11 @@ mod protobuf {
                 oplog_processor_component_revision: value
                     .oplog_processor_component_revision
                     .map(ComponentRevision),
+
+                installed_by: value
+                    .installed_by
+                    .ok_or("Missing installed_by")?
+                    .try_into()?,
             })
         }
     }

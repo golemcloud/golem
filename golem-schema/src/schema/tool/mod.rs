@@ -126,6 +126,16 @@ impl Tool {
     }
 }
 
+/// The longest operation an invocation can have: an agent method name, or the
+/// [`tool_operation`] of a tool command. Deployment rejects longer ones.
+pub const MAX_INVOCATION_OPERATION_BYTES: usize = 512;
+
+/// The operation of an invocation of the command at the canonical `command_path` of the tool
+/// named `tool_name`: `tool:<tool>/<command path>`. Keyed invocation IDs are derived from it.
+pub fn tool_operation(tool_name: &impl std::fmt::Display, command_path: &[String]) -> String {
+    format!("tool:{tool_name}/{}", command_path.join("/"))
+}
+
 /// Metadata describing a tool middleware component.
 #[derive(
     Debug,

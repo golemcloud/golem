@@ -1,6 +1,3 @@
-// The platform TLS verifier honours SSL_CERT_FILE on Linux.
-#![cfg(target_os = "linux")]
-
 use crate::app::agents::{streaming_agent, streaming_invocation_context};
 use crate::app::{TestContext, cmd, test_binary_path, test_binary_profile};
 use rustls::pki_types::pem::PemObject;
@@ -19,8 +16,6 @@ const SERVER_CERT_PEM: &[u8] = include_bytes!(
 );
 const SERVER_KEY_PEM: &[u8] =
     include_bytes!("../../../../golem-registry-service/src/services/mcp_import/tls/server-key.pem");
-
-const INVOCATION_SESSION_PATH: &str = "/v1/agents/invoke-agent-session";
 
 /// Terminates TLS on `https://127.0.0.1:<port>` and forwards the plain bytes to the router port,
 /// including WebSocket upgrades. Returns the proxy URL and the path of the first request on each
@@ -192,11 +187,16 @@ async fn agent_invoke_and_stream_work_against_tls_endpoint_with_certificate_chec
 fn assert_websockets_used_tls(paths: &Mutex<Vec<String>>) {
     let mut paths = paths.lock().unwrap();
     assert!(
-        paths.iter().any(|path| path == INVOCATION_SESSION_PATH),
+        paths.iter().any(|path| path
+            .strip_prefix("/v1/runtime/envs/")
+            .and_then(|path| path.strip_suffix("/invoke-agent-session"))
+            .is_some_and(|environment| Uuid::parse_str(environment).is_ok())),
         "{paths:?}"
     );
     assert!(
-        paths.iter().any(|path| path.ends_with("/connect")),
+        paths
+            .iter()
+            .any(|path| path.starts_with("/v1/runtime/envs/") && path.ends_with("/connect")),
         "{paths:?}"
     );
     paths.clear();

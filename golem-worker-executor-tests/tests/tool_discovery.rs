@@ -36,7 +36,7 @@ use golem_common::schema::tool::{
     ToolMiddlewareScope,
 };
 use golem_common::schema::{FromSchema, SchemaGraph};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_mcp_import::tool::{Diagnostic, Limits, ProjectedTool};
 use golem_service_base::clients::registry::RegistryServiceError;
 use golem_service_base::model::auth::AuthCtx;
@@ -70,10 +70,10 @@ struct RecordedToolDiscoveryResponse {
 
 async fn assert_recorded_discovery_snapshot(
     executor: &golem_worker_executor_test_utils::TestWorkerExecutor,
-    worker_id: &golem_common::model::AgentId,
+    worker_id: &golem_common::model::OwnedAgentId,
     expected_revision: Option<u64>,
 ) -> anyhow::Result<SerializableToolDiscoverySnapshot> {
-    executor.commit_oplog(worker_id).await?;
+    executor.commit_oplog(&worker_id.agent_id).await?;
     let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
     let starts = oplog
         .iter()
@@ -242,6 +242,7 @@ fn binding(
         secret_keys_revealable: SecretKeyScope::All,
         filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
         source: tool.source.clone(),
+        shell: false,
     }
 }
 
@@ -483,11 +484,11 @@ async fn tool_discovery_host_filters_and_uses_caller_deployment_scope(
             &[("other-component", other_component_tool, true)],
         )),
     );
-    let agent_id = agent_id!("GolemHostApi", "tool-discovery-live");
+    let agent_id = agent_key!("GolemHostApi", "tool-discovery-live");
     executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
-    let other_component_agent_id = agent_id!("GolemHostApi", "tool-discovery-other-component");
+    let other_component_agent_id = agent_key!("GolemHostApi", "tool-discovery-other-component");
     executor
         .start_agent(&other_component.id, other_component_agent_id.clone())
         .await?;
@@ -517,7 +518,7 @@ async fn tool_discovery_host_filters_and_uses_caller_deployment_scope(
         vec![summary("other-component", other_component_tool)]
     );
 
-    let other_agent_id = agent_id!("ToolDiscoveryOther", "tool-discovery-other");
+    let other_agent_id = agent_key!("ToolDiscoveryOther", "tool-discovery-other");
     executor
         .start_agent(&component.id, other_agent_id.clone())
         .await?;
@@ -545,7 +546,7 @@ async fn tool_discovery_host_filters_and_uses_caller_deployment_scope(
             &[("other-environment", other_environment_tool_component, true)],
         )),
     );
-    let other_environment_agent_id = agent_id!("GolemHostApi", "tool-discovery-other-environment");
+    let other_environment_agent_id = agent_key!("GolemHostApi", "tool-discovery-other-environment");
     executor
         .start_agent(
             &other_environment_component.id,
@@ -639,7 +640,7 @@ async fn tool_discovery_host_filters_and_uses_caller_deployment_scope(
             &[("epsilon", epsilon_component, true)],
         )),
     );
-    let updated_agent_id = agent_id!("GolemHostApi", "tool-discovery-updated-component");
+    let updated_agent_id = agent_key!("GolemHostApi", "tool-discovery-updated-component");
     executor
         .start_agent(&updated_component.id, updated_agent_id.clone())
         .await?;
@@ -750,7 +751,7 @@ async fn tool_invocation_uses_caller_owned_tagged_snapshot_dispatch(
         Some(component_deployment),
     );
 
-    let component_caller = agent_id!("GolemHostApi", "component-snapshot-dispatch");
+    let component_caller = agent_key!("GolemHostApi", "component-snapshot-dispatch");
     executor
         .start_agent(&component.id, component_caller.clone())
         .await?;
@@ -808,7 +809,7 @@ async fn tool_invocation_uses_caller_owned_tagged_snapshot_dispatch(
         Some(host_deployment),
     );
 
-    let host_caller = agent_id!("GolemHostApi", "host-snapshot-dispatch");
+    let host_caller = agent_key!("GolemHostApi", "host-snapshot-dispatch");
     executor
         .start_agent(&updated_component.id, host_caller.clone())
         .await?;
@@ -894,7 +895,7 @@ async fn durable_tool_invocation_fails_when_middleware_component_is_missing(
         component.revision,
         Some(deployment),
     );
-    let agent_id = agent_id!("GolemHostApi", "middleware-fail-closed");
+    let agent_id = agent_key!("GolemHostApi", "middleware-fail-closed");
     executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -960,7 +961,7 @@ async fn tool_discovery_replay_rehydrates_exact_revision_without_live_lookup(
             &[("alpha", alpha_component, true)],
         )),
     );
-    let agent_id = agent_id!("GolemHostApi", "tool-discovery-replay");
+    let agent_id = agent_key!("GolemHostApi", "tool-discovery-replay");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1071,7 +1072,7 @@ async fn middleware_renamed_tool_keeps_binding_lookup_name_live_and_on_replay(
         component.revision,
         Some(deployment),
     );
-    let agent_id = agent_id!("GolemHostApi", "middleware-renamed-discovery");
+    let agent_id = agent_key!("GolemHostApi", "middleware-renamed-discovery");
     executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1133,7 +1134,7 @@ async fn tool_discovery_replay_distinguishes_absent_and_empty_deployments(
         .await?;
     let agent_type = AgentTypeName("GolemHostApi".to_string());
 
-    let absent_agent_id = agent_id!("GolemHostApi", "tool-discovery-absent-replay");
+    let absent_agent_id = agent_key!("GolemHostApi", "tool-discovery-absent-replay");
     let absent_worker_id = executor
         .start_agent(&component.id, absent_agent_id.clone())
         .await?;
@@ -1166,7 +1167,7 @@ async fn tool_discovery_replay_distinguishes_absent_and_empty_deployments(
             &[],
         )),
     );
-    let empty_agent_id = agent_id!("GolemHostApi", "tool-discovery-empty-replay");
+    let empty_agent_id = agent_key!("GolemHostApi", "tool-discovery-empty-replay");
     let empty_worker_id = executor
         .start_agent(&component.id, empty_agent_id.clone())
         .await?;
@@ -1288,7 +1289,7 @@ async fn dynamic_tool_discovery_records_ordered_observations_and_replays_without
         )),
     );
 
-    let agent_id = agent_id!("GolemHostApi", "dynamic-discovery-replay");
+    let agent_id = agent_key!("GolemHostApi", "dynamic-discovery-replay");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1427,7 +1428,7 @@ async fn dynamic_tool_lookup_is_cold_ordered_and_fail_closed(
         second.clone(),
         Ok(mcp_observation(second.clone(), &["winner", "later"])),
     );
-    let agent_id = agent_id!("GolemHostApi", "dynamic-lookup-cold");
+    let agent_id = agent_key!("GolemHostApi", "dynamic-lookup-cold");
     executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1520,7 +1521,7 @@ async fn dynamic_discovery_quota_exhaustion_suspends_without_completing_the_obse
             "monthly HTTP budget".into(),
         )),
     );
-    let agent_id = agent_id!("GolemHostApi", "dynamic-discovery-quota");
+    let agent_id = agent_key!("GolemHostApi", "dynamic-discovery-quota");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1644,7 +1645,7 @@ async fn dynamic_tool_invocation_quota_exhaustion_during_activation_resumes(
             oauth_grant_generation: None,
         },
     );
-    let agent_id = agent_id!("GolemHostApi", "dynamic-activation-quota");
+    let agent_id = agent_key!("GolemHostApi", "dynamic-activation-quota");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1814,7 +1815,7 @@ async fn dynamic_tool_invocation_replays_committed_response_without_upstream_or_
             oauth_grant_generation: Some(credential_generation),
         },
     );
-    let agent_id = agent_id!("GolemHostApi", "dynamic-invocation-admission");
+    let agent_id = agent_key!("GolemHostApi", "dynamic-invocation-admission");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1969,7 +1970,7 @@ async fn dynamic_tool_invocation_replays_committed_response_without_upstream_or_
         )
         .await?
         .into_typed::<Result<String, String>>()?;
-    assert_eq!(recovered_agent_id, Ok(agent_id.to_string()));
+    assert_eq!(recovered_agent_id, Ok(worker_id.agent_id.to_string()));
     assert_eq!(effects.lock().unwrap().len(), 2);
     assert_eq!(
         requests.lock().unwrap().len(),
@@ -2083,7 +2084,7 @@ async fn dynamic_tool_invalid_params_forces_refresh_to_distinguish_removal_from_
             oauth_grant_generation: None,
         },
     );
-    let agent_id = agent_id!("GolemHostApi", "dynamic-invalid-params-presence");
+    let agent_id = agent_key!("GolemHostApi", "dynamic-invalid-params-presence");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2207,7 +2208,7 @@ async fn dynamic_tool_invalid_params_forces_refresh_to_distinguish_removal_from_
         )
         .await?
         .into_typed::<Result<String, String>>()?;
-    assert_eq!(recovered, Ok(agent_id.to_string()));
+    assert_eq!(recovered, Ok(worker_id.agent_id.to_string()));
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     assert_eq!(
         service.mcp_observation_refreshes(),
@@ -2308,7 +2309,7 @@ async fn dynamic_tool_crash_retains_call_identity(
                 oauth_grant_generation: None,
             },
         );
-        let agent_id = agent_id!("GolemHostApi", "mcp-crash-recovery");
+        let agent_id = agent_key!("GolemHostApi", "mcp-crash-recovery");
         let worker_id = executor
             .start_agent(&component.id, agent_id.clone())
             .await?;
@@ -2480,7 +2481,7 @@ async fn dynamic_tool_http_limits_apply_before_dispatch(
                 oauth_grant_generation: None,
             },
         );
-        let agent_id = agent_id!(
+        let agent_id = agent_key!(
             "GolemHostApi",
             format!("mcp-limits-{per_invocation}-{monthly}")
         );

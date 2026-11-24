@@ -1,6 +1,6 @@
 ---
 name: golem-agent-reflection-rust
-description: "Composing caller-defined static, discovered, and fully dynamic Golem clients in Rust. Use when schemas are caller-owned or discovered at runtime, or a ParsedAgentId must be rebound."
+description: "Composing caller-defined static, discovered, and fully dynamic Golem clients in Rust. Use when schemas are caller-owned or discovered at runtime, or an existing agent must be reached by its AgentId."
 ---
 
 # Calling Agents with Runtime Reflection (Rust)
@@ -14,13 +14,14 @@ Choose the narrowest of four client approaches:
 | Discovered clients | The environment's immutable metadata snapshot | Types or methods are selected at runtime and need validation or JSON projection |
 | Fully dynamic clients | Manually packed `SchemaValue` / `TypedSchemaValue` | Infrastructure deliberately retains no schema authority |
 
-A method-only agent client binds an existing durable identity and never creates
-or discovers one. A full client declares the type, constructor, lifecycle, and
-optional config, so it owns durable, phantom, and ephemeral creation. Dynamic
-agent clients start from an existing durable identity; the explicit ephemeral
-constructor is a one-shot invocation address whose final identity comes from
-invocation metadata. Tool namespaces are discoverable but only nodes
-with command bodies are callable.
+An agent ID (`golem_rust::AgentId`) is a UUID that Golem issues; it cannot be
+computed from the constructor parameters. A method-only agent client connects to
+an existing durable agent by its `AgentId` and never creates or discovers one. A
+full client declares the type, constructor, lifecycle, and optional config, so it
+owns `upsert` (the keyed agent of the constructor parameters), `create`, and
+`get_by_id`; an ephemeral full client has only `upsert`. Dynamic agent clients
+connect to an existing durable agent by its `AgentId`. Tool namespaces are
+discoverable but only nodes with command bodies are callable.
 
 ## Validation and Optional Values
 
@@ -102,25 +103,44 @@ name:
 ```rust
 use serde_json::json;
 
-let counter = counter_type.client().get_json(&json!({ "name": "main" }))?;
+let counter = counter_type.client().upsert_json(&json!({ "name": "main" }))?;
 let result = counter
     .method("add")?
     .invoke_json(&json!({ "by": 5 }))
     .await?;
 
 println!("{:?}", result.value);
-println!("{}", result.metadata.agent_id.as_str());
+println!("{}", result.metadata.agent_id.uuid);
 ```
 
-Creation-time overrides can be supplied as canonical JSON with
-`get_json_with_config(&constructor_json, entries)` or as schema-native
-`AgentConfigValue` entries with `get_value_with_config`. Reflected types also
-expose `bind_with_json_config` and `bind_with_config` for existing identities.
-They reject undeclared paths, secret fields, and invalid values before
-constructing RPC. Component defaults may satisfy required local fields; the
-host validates effective config at creation and provisions secrets. An
-existing durable worker retains its persisted initial config even when a
-caller supplies overrides while binding its ID.
+The reflected factory has `upsert_json` / `upsert_value` (the keyed agent of the
+constructor, created when missing), the async `create_json` / `create_value`, and
+`get_by_id(&agent_id)` for an existing durable agent. Ephemeral types support only
+`upsert_*`. A reflected client's async `agent_id()` returns its `AgentId`.
+
+Creation-time overrides go into the `golem_rust::CreateOptions` of `create_json`
+(canonical JSON entries `(path, value)`) or `create_value` (schema-native
+`AgentConfigValue` entries). With `keyed: true`, `create` creates the keyed agent
+and fails with `GolemReflectError::Conflict` when it already exists; otherwise the
+new agent has no key and a new agent ID. `env` adds environment variables.
+Override entries with undeclared paths, secret fields, or invalid values are
+rejected before constructing RPC. Component defaults may satisfy required local
+fields; the host validates effective config at creation and provisions secrets.
+
+```rust
+let created = counter_type
+    .client()
+    .create_json(
+        &json!({ "name": "main" }),
+        golem_rust::CreateOptions {
+            keyed: false,
+            config: vec![(vec!["model".to_string()], json!("fast"))],
+            env: Vec::new(),
+        },
+    )
+    .await?;
+let agent_id = created.agent_id().await?;
+```
 
 Reflected methods also expose `trigger_value`, `pending_value`, and
 `schedule_value`. Pending invocations are futures and can be cancelled before
@@ -132,12 +152,12 @@ stream input.
 ## Define a Caller-Owned Typed Client
 
 `#[agent_client]` has two forms. A trait containing only instance
-methods is a method-only client: it can bind any existing durable `ParsedAgentId`, and
-the identity supplies the remote type name and constructor value. The trait's
-Rust `IntoSchema` and `FromSchema` codecs are the method-schema authority:
+methods is a method-only client: `get_by_id` connects it to any existing durable
+agent by its `AgentId`, whatever its type. The trait's Rust `IntoSchema` and
+`FromSchema` codecs are the method-schema authority:
 
 ```rust
-use golem_rust::{ParsedAgentId, agent_client};
+use golem_rust::{AgentId, agent_client};
 
 #[agent_client]
 trait CounterApi {
@@ -145,18 +165,16 @@ trait CounterApi {
     fn reset(&self);
 }
 
-fn bind(agent_id: &ParsedAgentId) -> Result<CounterApiClient, golem_rust::GolemReflectError> {
-    CounterApiClient::bind(agent_id)
+fn connect(agent_id: &AgentId) -> Result<CounterApiClient, golem_rust::GolemReflectError> {
+    CounterApiClient::get_by_id(agent_id)
 }
 ```
 
 Method-only clients do not declare a name, constructor, mode, or config and
-do not discover the remote lifecycle. Statically named methods are awaited
-calls. The client also generates
-`trigger_<method>`, `pending_<method>`, and `schedule_<method>`. Binding checks
-no constructor shape because the method-only client does not own one.
-Programmatic method-only definitions accept raw typed entries through
-`bind_with_entries(agent_id, entries)` without declaration-aware validation.
+do not discover the remote lifecycle. They never create an agent. Statically
+named methods are awaited calls. The client also generates
+`trigger_<method>`, `pending_<method>`, and `schedule_<method>`, and an async
+`agent_id()`.
 
 A fully defined client declares exactly one static constructor returning `Self`
 and must also declare `type_name`. Either half without the other is a compile
@@ -173,16 +191,27 @@ trait CounterApi {
     fn add(&self, by: u32) -> u32;
 }
 
-let ordinary = CounterApiClient::get("main".to_string())?;
-let known = CounterApiClient::get_phantom(phantom_id, "main".to_string())?;
-let fresh = CounterApiClient::new_phantom("main".to_string())?;
-let bound = CounterApiClient::bind(&agent_id)?;
+let keyed = CounterApiClient::upsert("main".to_string())?;
+let fresh = CounterApiClient::create(
+    "main".to_string(),
+    golem_rust::CreateOptions {
+        keyed: false,
+        config: CounterConfigRpc { model: Some("fast".to_string()) },
+        env: Vec::new(),
+    },
+)
+.await?;
+let existing = CounterApiClient::get_by_id(&agent_id)?;
+let id = fresh.agent_id().await?;
 ```
 
-Fully defined durable binding checks both the declared type name and the locally
-declared constructor shape before creating RPC transport. A fully defined ephemeral
-client uses `mode = "ephemeral"`, supports fresh and known phantom factories,
-and deliberately has no generic `ParsedAgentId` binding.
+A fully defined client encodes the constructor through its locally declared
+constructor shape before creating RPC transport, so `upsert` and `create` return
+`Result`. `get_by_id` connects only to an agent of the declared type name; an
+unknown ID or an agent of another type is `GolemReflectError::RemoteNotFound`.
+`create` without `keyed` creates a new agent without a key; with `keyed: true` it
+fails with `GolemReflectError::Conflict` when the keyed agent exists. A fully
+defined ephemeral client uses `mode = "ephemeral"` and has only `upsert`.
 
 The programmatic equivalent starts by selecting the method-only form:
 
@@ -198,81 +227,70 @@ let full = MethodOnlyAgentClientDefinition::builder()
     .build();
 
 let constructor = CounterId { name: "main".to_string() };
-let agent_id = full.agent_id(&constructor, None)?;
-let bound = full.bind(&agent_id)?;
-let ordinary = full.get(&constructor)?;
-let known = full.get_phantom(phantom_id, &constructor)?;
-let fresh = full.new_phantom(&constructor)?;
-let configured = full.get_with_config(
-    &constructor,
-    CounterConfigRpc { model: Some("fast".to_string()) },
-)?;
+let keyed = full.upsert(&constructor)?;
+let configured = full
+    .create(
+        &constructor,
+        golem_rust::CreateOptions {
+            keyed: true,
+            config: CounterConfigRpc { model: Some("fast".to_string()) },
+            env: Vec::new(),
+        },
+    )
+    .await?;
+let existing = full.get_by_id(&agent_id)?;
+let any_type = method_only.get_by_id(&agent_id)?;
 
 let ephemeral = MethodOnlyAgentClientDefinition::builder()
     .ephemeral::<CounterId>("CounterRequest")
     .method::<AddInput, u32>("add")?
     .build();
-let logical = ephemeral.new_phantom(&constructor)?;
-let known_ephemeral = ephemeral.get_phantom(phantom_id, &constructor)?;
+let logical = ephemeral.upsert(&constructor)?;
 ```
 
-Only fully defined durable clients expose `bind`. It checks the declared agent
-name and validates the parsed constructor value against `CounterId`; an ID
-with a different constructor shape is rejected before transport creation.
-Config-aware factories exist only after `.config::<C>()`, and accept
-`C::RpcType`, the typed override carrier generated by `ConfigSchema`.
-They also provide `bind_with_config(agent_id, config)` for fully defined durable
-clients. Every method on a fully defined caller-authored `#[agent_client]`
+`upsert` and `create` validate the constructor value against `CounterId`
+before transport creation. Only fully defined durable clients expose `create`
+and `get_by_id`; the method-only definition has only `get_by_id`. The config of
+`create` is `C::RpcType`, the typed override carrier generated by
+`ConfigSchema`, after `.config::<C>()`, and `()` without it. Every method on a
+fully defined caller-authored `#[agent_client]`
 reports invocation failures through `Result`; ordinary RPC clients
 keep their established call signatures. Malformed declared remote outputs,
 including unexpected unit values on awaited or pending calls, report
 `GolemReflectError::MalformedRemoteOutput`.
 
-## Construct and Bind Agent IDs
+## Look Up and Connect by Agent ID
 
-When reflected metadata is available, let the reflected constructor schema
-validate the identity:
+An `AgentId` comes from Golem: from a client's `agent_id()`, from invocation
+metadata, or from agent metadata. To find the agent ID of an existing keyed
+agent, let the reflected constructor schema validate the constructor and ask the
+host. The lookup never creates the agent and returns `None` when no keyed agent
+of these constructor parameters exists:
 
 ```rust
 use serde_json::json;
 
-let agent_id = counter_type.agent_id_json(&json!({ "name": "main" }), None)?;
-let reflected = agent_id.reflected_client(&counter_type)?;
-let typed = CounterApiClient::bind(&agent_id)?;
+if let Some(agent_id) = counter_type.lookup_agent_id_json(&json!({ "name": "main" }))? {
+    let reflected = counter_type.client().get_by_id(&agent_id)?;
+    let typed = CounterApiClient::get_by_id(&agent_id)?;
+}
 ```
 
-`get_agent_type_for(&agent_id)` resolves the currently registered type for an
-existing identity. It does not create the agent.
-
-For fully dynamic infrastructure, construct an environment-scoped ID from a type
-name, manually packed constructor record, and optional phantom UUID:
-
-```rust
-use golem_rust::{ParsedAgentId, SchemaValue};
-
-let agent_id = ParsedAgentId::from_value(
-    "CounterAgent",
-    SchemaValue::Record {
-        fields: vec![SchemaValue::String("main".to_string())],
-    },
-    None,
-)?;
-```
-
-This path performs no local schema or lifecycle verification. Constructor
-record fields must be in declaration order; the runtime authoritatively accepts
-or rejects the attempted identity or invocation.
+`get_agent_type_for(&agent_id)` resolves the currently registered type from the
+type tag of an agent ID. It does not create the agent.
 
 ## Invoke Direct Schema Values
 
-Use `dynamic_client` only when the caller intentionally owns manually packed
-Golem values and arbitrary method names:
+Use `DynamicAgentClient` only when the caller intentionally owns manually packed
+Golem values and arbitrary method names. `DynamicAgentClient::from_agent_id`
+connects to the existing agent with the ID, whatever its type, and never creates
+it. Constructor and input record fields must be in declaration order; the
+runtime authoritatively accepts or rejects the invocation:
 
 ```rust
 use golem_rust::SchemaValue;
 
-let result = agent_id
-    .dynamic_client()?
+let result = golem_rust::DynamicAgentClient::from_agent_id(&agent_id)?
     .method("add")
     .invoke_value(SchemaValue::Record {
         fields: vec![SchemaValue::U32(5)],
@@ -290,7 +308,7 @@ explicitly. Moving a packed value into `DynamicAgentClient` does not make that
 client validate it:
 
 ```rust
-use golem_rust::{AgentMode, GolemReflectError, get_agent_type};
+use golem_rust::{AgentMode, DynamicAgentClient, GolemReflectError, get_agent_type};
 use serde_json::{Value, json};
 
 async fn search_dynamically() -> Result<Value, GolemReflectError> {
@@ -306,9 +324,12 @@ async fn search_dynamically() -> Result<Value, GolemReflectError> {
         .input()
         .pack_json(&json!({ "query": "golem", "cursor": null }))?;
 
-    let agent_id = agent_type.agent_id_json(&json!({ "tenant": "docs" }), None)?;
-    let result = match agent_id
-        .dynamic_client()?
+    let agent_id = agent_type
+        .client()
+        .upsert_json(&json!({ "tenant": "docs" }))?
+        .agent_id()
+        .await?;
+    let result = match DynamicAgentClient::from_agent_id(&agent_id)?
         .method(method.name())
         .invoke_value(input)
         .await
@@ -419,41 +440,37 @@ typed schema before transport creation and invocation but intentionally do not
 discover the remote tool. Use `DynamicToolClient` only for already packed
 `TypedSchemaValue` inputs and explicit command paths.
 
-## Phantom and Ephemeral Lifecycles
+## Durable and Ephemeral Lifecycles
 
-Reflected durable factories support normal lookup, known phantom UUIDs, and
-new phantom UUIDs. A new durable phantom returns its client, reusable agent ID,
-and phantom UUID together.
+Reflected durable factories support `upsert_*` for the keyed agent, `create_*`
+for a new agent (keyed or without a key), and `get_by_id` for an existing agent.
 
-Create ephemeral agents through a full reflected or caller-owned client. A
-reflected factory returns a one-shot client without a reusable pre-invocation
-identity:
+Ephemeral agent types have only `upsert_*`. The client is a logical proxy, and
+each invocation runs on a new one-shot instance:
 
 ```rust
-use golem_rust::{NewPhantomClient, get_agent_type};
+use golem_rust::{AgentMode, SchemaValue, get_agent_type};
 use serde_json::json;
 
 let request_type = get_agent_type("RequestAgent")?;
-let NewPhantomClient::Ephemeral(request) = request_type
-    .client()
-    .new_phantom_json(&json!({ "task": "summarize" }))?
-else {
+if request_type.mode() != AgentMode::Ephemeral {
     return Err("RequestAgent must be ephemeral".into());
-};
+}
+let request = request_type
+    .client()
+    .upsert_json(&json!({ "task": "summarize" }))?;
 
-assert!(request.agent_id().is_none());
 let result = request
-    .method("run")
+    .method("run")?
     .invoke_value(SchemaValue::Record {
         fields: vec![SchemaValue::String("hello".to_string())],
     })
     .await?;
-println!("{}", result.metadata.agent_id.as_str());
+println!("{}", result.metadata.agent_id.uuid);
 ```
 
-No reusable pre-invocation identity is guaranteed for an ephemeral call. The
-final identity comes from invocation metadata and cannot be resumed or invoked
-again.
+No reusable identity exists for an ephemeral call. The agent ID of the one-shot
+instance comes from invocation metadata and cannot be resumed or invoked again.
 
 ## Choose an Invocation Path
 
@@ -463,4 +480,4 @@ again.
 | Caller-owned typed method subset | method-only or full `#[agent_client]` |
 | Type or method selected at runtime with JSON | `get_agent_type` plus `invoke_json` |
 | Explicit runtime-schema packing | `SchemaRef::pack_json`, `invoke_value`, `unpack_json` |
-| Fully dynamic infrastructure with packed Golem values | `ParsedAgentId::from_value` and `dynamic_client` |
+| Fully dynamic infrastructure with packed Golem values | `DynamicAgentClient::from_agent_id` and `invoke_value` |

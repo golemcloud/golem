@@ -151,7 +151,7 @@ type counterState struct{ N int64 }
 
 type opsState struct{}
 
-func counterClient(name string) golem.Client[CounterID] { return Counter.Get(CounterID{Name: name}) }
+func counterClient(name string) golem.Client[CounterID] { return Counter.Upsert(CounterID{Name: name}) }
 
 func init() {
 	shelf := Shelf.Implement(func(id ShelfID) *shelfState { return &shelfState{id: id} })
@@ -214,7 +214,7 @@ func init() {
 
 	// Unstructured and multimodal content round-trips through another agent.
 	ops.Handle(Content, func(*golem.Context[opsState], golem.Unit) string {
-		out := EchoContent.MustCall(Source.Get(SourceID{Name: "content"}), ContentIn{
+		out := EchoContent.MustCall(Source.Upsert(SourceID{Name: "content"}), ContentIn{
 			Doc: golem.UnstructuredText[EnOrDe]{Text: "hallo", Language: "de"},
 			Media: golem.Multimodal{
 				golem.TextModality{Value: golem.UnstructuredText[golem.AnyLanguage]{URL: "https://example.com/a.txt"}},
@@ -236,7 +236,7 @@ func init() {
 			}
 			r.Commit(1)
 		}
-		child := Spend.MustCall(Source.Get(SourceID{Name: "quota"}), SpendIn{Token: tok.Split(1)})
+		child := Spend.MustCall(Source.Upsert(SourceID{Name: "quota"}), SpendIn{Token: tok.Split(1)})
 		_, err := tok.Reserve(1)
 		var failed *golem.FailedReservation
 		return fmt.Sprintf("%s|exhausted:%t", child, errors.As(err, &failed))
@@ -244,7 +244,7 @@ func init() {
 
 	// A secret received from another agent is revealed through the host.
 	ops.Handle(SharedKey, func(*golem.Context[opsState], golem.Unit) string {
-		return "revealed:" + Share.MustCall(Greeter.Get(GreeterID{Name: "keeper"}), golem.Unit{}).MustGet()
+		return "revealed:" + Share.MustCall(Greeter.Upsert(GreeterID{Name: "keeper"}), golem.Unit{}).MustGet()
 	})
 
 	ops.Handle(Sleepy, func(*golem.Context[opsState], golem.Unit) string {
@@ -256,7 +256,7 @@ func init() {
 	ops.Handle(TimerVsRPC, func(*golem.Context[opsState], golem.Unit) string {
 		start := time.Now()
 		done := make(chan string, 1)
-		fut := Slow.CallAsync(Source.Get(SourceID{Name: "slow"}), golem.Unit{})
+		fut := Slow.CallAsync(Source.Upsert(SourceID{Name: "slow"}), golem.Unit{})
 		go func() { done <- fut.MustGet() }()
 		select {
 		case r := <-done:
@@ -287,13 +287,13 @@ func init() {
 		if !found {
 			return "not discovered"
 		}
-		_, err := t.Get(map[string]any{"name": "x"}, reflection.WithConfigJSON([]string{"greting"}, "typo"))
+		_, err := t.Create(map[string]any{"name": "x"}, reflection.Keyed(), reflection.WithConfigJSON([]string{"greting"}, "typo"))
 		if err == nil {
 			return "an undeclared path was accepted"
 		}
-		c, err := t.Get(map[string]any{"name": "r"}, reflection.WithConfigJSON([]string{"greeting"}, "hej"))
+		c, err := t.Create(map[string]any{"name": "r"}, reflection.Keyed(), reflection.WithConfigJSON([]string{"greeting"}, "hej"))
 		if err != nil {
-			return "get: " + err.Error()
+			return "create: " + err.Error()
 		}
 		called, _, err := c.Call("greet", map[string]any{})
 		if err != nil {
@@ -307,12 +307,12 @@ func init() {
 		if err != nil {
 			return "wait: " + err.Error()
 		}
-		return fmt.Sprintf("%v|%v|%t", called, awaited, pending.Metadata.AgentID == c.AgentID())
+		return fmt.Sprintf("%v|%v|%t", called, awaited, pending.Metadata.AgentID == golem.Must(c.AgentID()))
 	})
 
 	// A failed production must not reach the reader as a clean end.
 	ops.Handle(ReadFailing, func(*golem.Context[opsState], golem.Unit) string {
-		items, err := Failing.MustCall(Source.Get(SourceID{Name: "s"}), golem.Unit{}).Collect()
+		items, err := Failing.MustCall(Source.Upsert(SourceID{Name: "s"}), golem.Unit{}).Collect()
 		var failure *golem.StreamError
 		if !errors.As(err, &failure) || failure.Kind != golem.StreamFailed {
 			panic(fmt.Sprintf("unexpected stream outcome: %v", err))
@@ -321,9 +321,10 @@ func init() {
 		return fmt.Sprintf("caught:%v:%s", items, message)
 	})
 
-	ops.Handle(Self, func(*golem.Context[opsState], golem.Unit) string {
+	ops.Handle(Self, func(ctx *golem.Context[opsState], _ golem.Unit) string {
 		md := golem.MustGetSelfMetadata()
-		return fmt.Sprintf("%s %s", md.AgentID.AgentID, md.Status)
+		typeName, _ := md.AgentTypeName.Get()
+		return fmt.Sprintf("%s %s %t", typeName, md.Status, md.AgentID == ctx.AgentID())
 	})
 
 	// Each durable call advances the counter until it reaches the target.
@@ -338,13 +339,13 @@ func init() {
 
 	ops.Handle(ForkJoin, func(*golem.Context[opsState], golem.Unit) string {
 		result := golem.NewPromise[string]()
-		forked, phantom := golem.MustForkSelf()
+		forked, forkedID := golem.MustForkSelf()
 		if forked {
 			golem.CompletePromise(result.ID(), "from-fork")
 			return "fork"
 		}
-		if phantom == (golem.UUID{}) {
-			panic("fork returned no phantom id")
+		if forkedID.IsZero() {
+			panic("fork returned no agent id")
 		}
 		return "original+" + result.MustAwait()
 	})
@@ -353,23 +354,26 @@ func init() {
 		c := counterClient(in.Name)
 		Increment.MustCall(c, golem.Unit{})
 		Increment.MustCall(c, golem.Unit{})
-		id, ok := golem.ResolveAgentIDStrict("go-agent-ops:main", c.AgentID())
-		if !ok {
-			panic("the counter agent did not resolve")
-		}
-		golem.MustRevertAgent(id, golem.RevertLastInvocations(1))
+		golem.MustRevertAgent(c.MustAgentID(), golem.RevertLastInvocations(1))
 		return Value.MustCall(c, golem.Unit{})
 	})
 
+	// Listing is per agent type: it finds the keyed counters, and only agents of that type.
 	ops.Handle(Counters, func(*golem.Context[opsState], golem.Unit) string {
-		self := golem.MustGetSelfMetadata()
-		var names []string
-		for md := range golem.MustGetAgents(self.AgentID.ComponentID, golem.GetAgentsOptions{
-			Filter: golem.AgentNameFilter(golem.StringFilterStartsWith, "CounterAgent"),
+		listed := map[golem.AgentID]bool{}
+		onlyCounters := true
+		for md := range golem.MustGetAgents("CounterAgent", golem.GetAgentsOptions{
+			Filter: golem.AgentKeyFilter(golem.StringFilterStartsWith, "CounterAgent("),
 		}) {
-			names = append(names, md.AgentID.AgentID)
+			listed[md.AgentID] = true
+			typeName, _ := md.AgentTypeName.Get()
+			onlyCounters = onlyCounters && typeName == "CounterAgent"
 		}
-		return strings.Join(names, ",")
+		var found []string
+		for _, name := range []string{"retry", "undo"} {
+			found = append(found, fmt.Sprintf("%s:%t", name, listed[counterClient(name).MustAgentID()]))
+		}
+		return fmt.Sprintf("%s|only-counters:%t", strings.Join(found, ","), onlyCounters)
 	})
 
 	// Reading a whole oplog lowers large pages into guest memory, which can

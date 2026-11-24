@@ -14,6 +14,37 @@
       "type": "string",
       "description": "Application name"
     },
+    "package": {
+      "type": "object",
+      "description": "Publisher identity for package pack. Only allowed in the root manifest.",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
+        "version": { "type": "string", "maxLength": 128, "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-zA-Z0-9.-]+)?$" },
+        "calls": {
+          "type": "array",
+          "description": "Published names of agent types this package calls.",
+          "items": { "type": "string", "pattern": "\\S" }
+        }
+      }
+    },
+    "packages": {
+      "type": "object",
+      "description": "Installed file packages by name. Only allowed in the root manifest. Use golem install to set these pins and golem.lock together.",
+      "maxProperties": 64,
+      "propertyNames": { "pattern": "^[a-z][a-z0-9-]{0,63}$" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "version", "digest"],
+        "properties": {
+          "source": { "type": "string", "minLength": 1, "maxLength": 4096 },
+          "version": { "type": "string", "maxLength": 128, "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-zA-Z0-9.-]+)?$" },
+          "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+        }
+      }
+    },
     "includes": {
       "type": "array",
       "description": "Include paths or globs for searching for application manifest documents. Only allowed in root application manifest documents.",
@@ -633,6 +664,11 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "package": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$",
+          "description": "Installed package that exports this agent type under its published name."
+        },
         "templates": {
           "$ref": "#/definitions/lenientTokenList"
         },

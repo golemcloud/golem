@@ -24,6 +24,7 @@ harness = false
 
 [dependencies]
 golem-api-grpc = { workspace = true }
+golem-async-trait = { workspace = true }
 golem-common = { workspace = true, default-features = true }
 golem-mcp-import = { workspace = true }
 golem-native-tool = { workspace = true }
@@ -87,6 +88,7 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }
 tonic-reflection = { workspace = true }

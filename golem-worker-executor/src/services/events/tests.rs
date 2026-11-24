@@ -17,16 +17,12 @@ use uuid::Uuid;
 use golem_common::model::InvocationId;
 
 use super::*;
-use golem_common::base_model::component::ComponentId;
 use golem_common::model::{AgentInvocationOutput, AgentInvocationResult};
 use golem_common::schema::SchemaValue;
 use test_r::{test, timeout};
 
 fn agent_id(name: &str) -> AgentId {
-    AgentId {
-        component_id: ComponentId::new(),
-        agent_id: name.to_string(),
-    }
+    crate::test_agent_id(name)
 }
 
 fn output(value: &str) -> AgentInvocationOutput {
@@ -41,6 +37,7 @@ fn output(value: &str) -> AgentInvocationOutput {
         idempotency_key: None,
         oplog_index: None,
         agent_fingerprint: None,
+        background_failure: None,
     }
 }
 
@@ -70,7 +67,7 @@ async fn waiters_ignore_multiple_unrelated_large_outputs_and_match_agent_and_key
         ));
     }
     events.publish(invocation_completed(
-        first_agent.clone(),
+        first_agent,
         "wrong-key",
         "same-agent-wrong-key",
     ));
@@ -80,7 +77,7 @@ async fn waiters_ignore_multiple_unrelated_large_outputs_and_match_agent_and_key
         "wrong-agent-same-key",
     ));
     events.publish(invocation_completed(
-        second_agent.clone(),
+        second_agent,
         "wrong-key",
         "same-second-agent-wrong-key",
     ));
@@ -90,12 +87,12 @@ async fn waiters_ignore_multiple_unrelated_large_outputs_and_match_agent_and_key
         "other-agent-same-second-key",
     ));
     events.publish(invocation_completed(
-        first_agent.clone(),
+        first_agent,
         "first-key",
         "first-result",
     ));
     events.publish(invocation_completed(
-        second_agent.clone(),
+        second_agent,
         "second-key",
         "second-result",
     ));
@@ -164,12 +161,12 @@ async fn worker_loaded_matches_agent_and_start_attempt() {
         result: Err(WorkerExecutorError::unknown("wrong agent")),
     });
     events.publish(Event::WorkerLoaded {
-        agent_id: target_agent.clone(),
+        agent_id: target_agent,
         start_attempt: Uuid::new_v4(),
         result: Err(WorkerExecutorError::unknown("wrong attempt")),
     });
     events.publish(Event::WorkerLoaded {
-        agent_id: target_agent.clone(),
+        agent_id: target_agent,
         start_attempt: target_attempt,
         result: Ok(()),
     });
