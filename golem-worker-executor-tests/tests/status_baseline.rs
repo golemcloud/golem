@@ -136,8 +136,13 @@ async fn increment(
 }
 
 /// A completed archive keeps the status baseline. After a real restart with no cached status, the
-/// status folds from the baseline: an archived chunk before the baseline that does not decode is
-/// never read, where a full fold of the oplog would fail on it.
+/// status fold starts from the baseline and never reads the oplog below it: an archived chunk
+/// before the baseline that does not decode is not read, where a full fold of the oplog would
+/// fail on it.
+///
+/// The test reads the status through the status fold and does not ask for the metadata of the
+/// agent. The invocation result index is not part of the baseline: a cold load of the agent
+/// rebuilds it from index 1, so that load reads the chunk that does not decode.
 #[test]
 #[timeout("4m")]
 #[tracing::instrument]
@@ -199,11 +204,17 @@ async fn a_restart_after_a_completed_archive_folds_the_status_from_the_baseline(
     .await?;
 
     let executor = start(deps, &context).await?;
-    let metadata = executor.get_worker_metadata(&owned_agent_id).await?;
+    let status = executor
+        .folded_status(&agent_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("the status fold gave no status"))?;
+    let last_oplog_index = executor.last_oplog_index(&agent_id).await?;
 
     assert!(before_last_archive.is_some());
     assert_eq!(after_last_archive, before_last_archive);
-    assert_eq!(metadata.status, AgentStatus::Idle);
+    assert_eq!(status.status, AgentStatus::Idle);
+    assert!(last_oplog_index >= baseline.oplog_idx);
+    assert_eq!(status.oplog_idx, last_oplog_index);
     assert_eq!(executor.status_checkpoint(&agent_id).await?, Some(baseline));
     Ok(())
 }

@@ -1590,6 +1590,45 @@ impl TestWorkerExecutor {
             .await?)
     }
 
+    /// The status of the durable agent that the status fold gives with no cached status: the
+    /// fold starts from the clean status checkpoint, or from index 1 when the agent has none or
+    /// the fold refuses it. It reads no invocation result index and writes nothing.
+    pub async fn folded_status(
+        &self,
+        agent_id: &AgentId,
+    ) -> anyhow::Result<Option<AgentStatusRecord>> {
+        let services = self
+            .services
+            .as_ref()
+            .expect("test service graph is captured");
+        let fingerprint = self.agent_fingerprint(agent_id).await?;
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        golem_worker_executor::worker::status::calculate_last_known_status_with_checkpoint(
+            services,
+            &owned_agent_id,
+            fingerprint,
+            AgentMode::Durable,
+            None,
+        )
+        .await
+        .map_err(anyhow::Error::msg)
+    }
+
+    /// The index of the last entry of the oplog of the durable agent.
+    pub async fn last_oplog_index(&self, agent_id: &AgentId) -> anyhow::Result<OplogIndex> {
+        use golem_worker_executor::services::HasOplogService;
+
+        let services = self
+            .services
+            .as_ref()
+            .expect("test service graph is captured");
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        Ok(services
+            .oplog_service()
+            .get_last_index(&owned_agent_id, AgentMode::Durable)
+            .await?)
+    }
+
     pub async fn attached_agent_status(
         &self,
         agent_id: &AgentId,
