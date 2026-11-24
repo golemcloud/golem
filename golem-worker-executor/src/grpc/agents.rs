@@ -150,7 +150,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 CreateIntent::Invocation {
                     owner,
                     idempotency_key: request.idempotency_key.map(Into::into),
-                    invocation: request.invocation,
+                    invocation: request.invocation.map(Box::new),
                 }
             } else {
                 CreateIntent::Create {
