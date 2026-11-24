@@ -28279,6 +28279,12 @@ components:
         oplogProcessorComponentRevision:
           type: integer
           format: uint64
+        installedBy:
+          description: |-
+            The account that installed the plugin. An oplog processor processes each batch with
+            this account as its original caller.
+          type: string
+          format: uuid
       required:
       - environmentPluginGrantId
       - priority
@@ -28286,6 +28292,7 @@ components:
       - pluginRegistrationId
       - pluginName
       - pluginVersion
+      - installedBy
     KnownExports:
       title: KnownExports
       description: |-

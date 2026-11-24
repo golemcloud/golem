@@ -643,6 +643,7 @@ async fn checkpoint_after_plugin_removal_uses_recorded_source_revision() {
         plugin_version: "1.0".to_string(),
         oplog_processor_component_id: Some(ComponentId::new()),
         oplog_processor_component_revision: Some(source_revision),
+        installed_by: golem_common::model::account::AccountId::new(),
     };
     let component_id = ComponentId::new();
     let environment_id = EnvironmentId::new();
@@ -865,6 +866,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
                     plugin_version: "1.0".to_string(),
                     oplog_processor_component_id: Some(ComponentId::new()),
                     oplog_processor_component_revision: Some(revision),
+                    installed_by: golem_common::model::account::AccountId::new(),
                 }],
                 ..Default::default()
             },

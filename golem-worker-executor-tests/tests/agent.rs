@@ -822,7 +822,6 @@ async fn constructor_failure_refuses_admission_on_an_already_acquired_worker(
             worker = golem_worker_executor::worker::Worker::get_exact_existing_suspended(
                 healthy_worker.all(),
                 &worker_id,
-                callers::anonymous(),
             )
             .await?;
         }
@@ -3628,7 +3627,6 @@ async fn a_key_collision_hides_the_other_agents_constructor_failure(
             golem_worker_executor::worker::Worker::get_exact_existing_suspended(
                 worker.all(),
                 &collided,
-                callers::anonymous(),
             )
             .await?;
         }

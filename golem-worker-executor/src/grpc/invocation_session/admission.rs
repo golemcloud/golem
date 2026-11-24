@@ -524,7 +524,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         let pinned = Worker::get_exact_existing_suspended_for_response(
                             self,
                             &owned_agent_id,
-                            caller.clone(),
                             Some(expected),
                         )
                         .await?;

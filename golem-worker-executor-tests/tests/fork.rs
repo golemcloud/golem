@@ -1012,11 +1012,12 @@ impl WorkerProxy for LocalResumeProxy {
         first: OplogIndex,
         entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
         auth: &AuthCtx,
+        caller: &golem_common::model::caller::Caller,
     ) -> Result<(), WorkerProxyError> {
         self.inner
             .process_oplog_entries(
                 agent, env, component, revision, key, account, config, metadata, first, entries,
-                auth,
+                auth, caller,
             )
             .await
     }
