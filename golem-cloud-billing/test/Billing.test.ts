@@ -2197,10 +2197,32 @@ describe("Polar billing", () => {
       ])
     })
 
-    it("settles nothing with the free USD order of a customer who selected the price of 0 for EUR orders, and logs an error", async () => {
+    it.each([
+      [
+        "eur",
+        "the USD price of 0 that the customer selected",
+        "price_ad_hoc_usd",
+        "A settlement order is in another currency than the orders that it settles",
+        { orderIds: "order_1", orderCurrencies: "eur" }
+      ],
+      [
+        "eur",
+        "the price of 0 of the settlement product, after an update with only the product",
+        "price_settlement",
+        "A settlement order is in another currency than the orders that it settles",
+        { orderIds: "order_1", orderCurrencies: "eur" }
+      ],
+      [
+        "usd",
+        "the price of 0 of the settlement product, after an update with only the product",
+        "price_settlement",
+        "A settlement paid less than the paid overage of its orders",
+        { paid: 0, amount: 345 }
+      ]
+    ] as const)("settles nothing for %s orders with a free USD order at %s, and logs an error", async (currency, _, priceId, message, annotations) => {
       const { jar, accountId } = await signedIn()
-      await deliver("subscription.revoked", subscription(accountId, { currency: "eur", ...ended }))
-      await deliver("order.created", order(accountId, { currency: "eur", ...lastOrder }))
+      await deliver("subscription.revoked", subscription(accountId, { currency, ...ended }))
+      await deliver("order.created", order(accountId, { currency, ...lastOrder }))
       await postSettle(jar)
 
       await deliver(
@@ -2209,28 +2231,24 @@ describe("Polar billing", () => {
           currency: "usd",
           subtotal_amount: 0,
           net_amount: 0,
-          items: [{ product_price_id: "price_ad_hoc_usd", amount: 0, tax_amount: 0 }]
+          items: [{ product_price_id: priceId, amount: 0, tax_amount: 0 }]
         })
       )
 
       expect(await settledOrders()).toEqual([])
       expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
-      expect(await page(jar)).toContain("Settle €3.45")
+      expect(await page(jar)).toContain(currency === "eur" ? "Settle €3.45" : "Settle $3.45")
       expect(
         logs.filter((line) => (line["annotations"] as Record<string, unknown>)["golemAccountId"] === accountId)
       ).toContainEqual(
         expect.objectContaining({
+          message,
           level: "ERROR",
-          annotations: expect.objectContaining({
-            settlementOrderId: "order_settlement_1",
-            currency: "usd",
-            orderIds: "order_1",
-            orderCurrencies: "eur"
-          })
+          annotations: expect.objectContaining({ settlementOrderId: "order_settlement_1", currency: "usd", ...annotations })
         })
       )
 
-      await deliver("order.paid", settlementOrder(accountId, { id: "order_settlement_2", currency: "eur" }))
+      await deliver("order.paid", settlementOrder(accountId, { id: "order_settlement_2", currency }))
       expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
     })
 

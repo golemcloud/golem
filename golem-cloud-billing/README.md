@@ -348,6 +348,13 @@ USD price of 0. The customer can select that price through the public checkout u
 and the checkout currency then follows the price. Only Polar can refuse that change. At 0, the
 change charges nothing: Polar makes a free order, and the webhook settles nothing.
 
+A public checkout update that names only the product, with no price, replaces the ad-hoc prices
+with the prices of the product, in USD when the product has no price in the currency of the
+checkout. The `update_order` tool that the checkout page of Polar gives to AI agents sends such an
+update. So the settlement product has one fixed price of 0 in USD, and that update charges nothing
+either. The webhook then settles nothing: the currency of the order is wrong, or the payment is
+below the paid overage.
+
 A paid order of the settlement product records a settlement for each order in its metadata that
 the account still owes. When the account owes one of those orders in another currency than the
 settlement order, the app records nothing and logs `A settlement order is in another currency than
@@ -585,7 +592,7 @@ until the cleanup has deleted the user of the deleted account (see
 | `POLAR_API_URL` | | `https://sandbox-api.polar.sh` or `https://api.polar.sh`. |
 | `POLAR_ACCESS_TOKEN` | | An organization access token of Polar. The web app needs `checkouts:write` (which also reads a checkout) and `customer_sessions:write`, `push-usage` needs `events:write`, and `cleanup-deleted-accounts` needs `customers:write`. Each gets its own token. |
 | `POLAR_PRODUCT_ID` | | The Polar product of the paid plan. |
-| `POLAR_SETTLEMENT_PRODUCT_ID` | | The Polar product of a settlement: a private one-time product with a fixed price in USD, which each checkout replaces with ad-hoc prices (see [Unpaid orders](#unpaid-orders)). It must differ from `POLAR_PRODUCT_ID` and have the same tax category. |
+| `POLAR_SETTLEMENT_PRODUCT_ID` | | The Polar product of a settlement: a private one-time product with one fixed price of 0 in USD, which each checkout replaces with ad-hoc prices. A public checkout update that names only the product brings that price back, so it must be 0 (see [Unpaid orders](#unpaid-orders)). It must differ from `POLAR_PRODUCT_ID` and have the same tax category. |
 | `POLAR_WEBHOOK_SECRET` | | The secret that Polar signs the webhooks with (`whsec_...`). |
 
 ## Endpoints

@@ -97,9 +97,12 @@ export interface SettlementCheckoutRequest extends CheckoutRequest {
  * also gets a fixed price of 0 in the default currency. The checkout names `currency`, but the
  * customer can select another price of the checkout through the public checkout update of Polar,
  * and the checkout currency then follows that price. At 0, that price charges nothing: Polar makes
- * a free order, and a settlement order in another currency than its orders settles nothing. The
- * amount of a settlement is a valid price in every currency (`Settlement.SETTLEMENT_MINIMUM` and
- * `Settlement.SETTLEMENT_MAXIMUM`).
+ * a free order, and a settlement order in another currency than its orders settles nothing. A
+ * public checkout update that names only the product replaces the ad-hoc prices with the prices of
+ * the product, in the default currency when the product has none in `currency`. So the settlement
+ * product has one fixed price of 0 in the default currency, and that update charges nothing
+ * either. The amount of a settlement is a valid price in every currency
+ * (`Settlement.SETTLEMENT_MINIMUM` and `Settlement.SETTLEMENT_MAXIMUM`).
  */
 const settlementPrices = (currency: Currency, amount: number) =>
   [...new Set([organizationCurrency, currency])].map((priceCurrency) => ({

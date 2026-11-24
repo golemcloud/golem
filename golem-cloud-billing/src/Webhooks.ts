@@ -187,8 +187,8 @@ export const makeHandler = Effect.gen(function* () {
   /**
    * A paid order of the settlement product settles each order in its metadata that the account
    * owes, and reconciles the account. It settles nothing and logs an error when the account owes
-   * one of those orders in another currency, for example after the customer selected the price of 0
-   * in the default currency through the public checkout update of Polar (`Polar.settlementPrices`).
+   * one of those orders in another currency, for example after a public checkout update of Polar
+   * changed the checkout to a price of 0 in the default currency (`Polar.settlementPrices`).
    * The currencies of the orders come from the database, not from the checkout. It also settles
    * nothing when its price, the subtotal after the discount, is smaller than what the invoices of
    * those orders charge for paid overage. The price includes the tax, so the net amount is smaller
