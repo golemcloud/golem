@@ -383,7 +383,7 @@ mod authorizer {
             environment_id: EnvironmentId(Uuid::from_u128(0xe0)),
             agent_type: AgentTypeName("Report".to_string()),
             agent_id: AgentId::from_parts(7, h),
-            fingerprint: AgentFingerprint(Uuid::from_u128(0xf1)),
+            fingerprint: Some(AgentFingerprint(Uuid::from_u128(0xf1))),
         })
     }
 

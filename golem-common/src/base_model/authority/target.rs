@@ -163,9 +163,11 @@ pub struct AgentTarget {
     pub environment_id: EnvironmentId,
     pub agent_type: AgentTypeName,
     pub agent_id: AgentId,
-    /// The fingerprint of the agent's current lifetime. A grant that recorded another
-    /// fingerprint does not reach it.
-    pub fingerprint: AgentFingerprint,
+    /// The fingerprint of the agent's current lifetime, or `None` when the request makes a new
+    /// lifetime: a creation, or an upsert of an agent that does not exist. A grant that recorded
+    /// a fingerprint reaches only that fingerprint, never another one and never `None`, so a
+    /// missing fingerprint can only deny.
+    pub fingerprint: Option<AgentFingerprint>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

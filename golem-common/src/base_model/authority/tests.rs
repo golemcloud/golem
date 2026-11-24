@@ -27,12 +27,16 @@ use std::net::IpAddr;
 use test_r::test;
 use uuid::Uuid;
 
+fn fingerprint() -> AgentFingerprint {
+    AgentFingerprint(Uuid::from_u128(0xf1))
+}
+
 fn agent() -> AgentTarget {
     AgentTarget {
         environment_id: EnvironmentId(Uuid::from_u128(0xe0)),
         agent_type: AgentTypeName("Relay".to_string()),
         agent_id: AgentId::from_parts(7, 0xa1),
-        fingerprint: AgentFingerprint(Uuid::from_u128(0xf1)),
+        fingerprint: Some(fingerprint()),
     }
 }
 
@@ -269,7 +273,20 @@ fn requests_round_trip_through_json_and_desert() {
         .unwrap(),
     );
 
-    for request in [hosted_exec, close_webhook, retry] {
+    let create = AuthorizationRequest::new(
+        sample_caller(),
+        Operation::single(
+            CatalogOperation::CreateAgent,
+            Resource::None,
+            Target::Agent(AgentTarget {
+                fingerprint: None,
+                ..agent()
+            }),
+        )
+        .unwrap(),
+    );
+
+    for request in [hosted_exec, close_webhook, retry, create] {
         assert_eq!(round_trip_json(&request), request);
         assert_eq!(round_trip_desert(&request), request);
     }
@@ -512,7 +529,7 @@ fn task_input_needs_invocation_read_on_the_task_and_promise_send_on_its_input_pr
     let input_promise = Target::Promise(PromiseTarget {
         promise_id: PromiseId {
             agent_id: agent().agent_id,
-            fingerprint: agent().fingerprint,
+            fingerprint: fingerprint(),
             oplog_idx: OplogIndex::from_u64(42),
         },
         owner: agent(),

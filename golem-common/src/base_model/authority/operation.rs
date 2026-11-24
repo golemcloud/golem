@@ -90,7 +90,8 @@ macro_rules! catalog {
 catalog! {
     // Invocation: request authority.
 
-    /// Fresh-agent creation, decided against the newly allocated agent ID and fingerprint.
+    /// Fresh-agent creation. It is decided before the agent exists, so its agent target has no
+    /// fingerprint.
     CreateAgent("create-agent") => [(Verb::Agent(AgentVerb::Create), None, [Agent])],
     InvokeAgent("invoke-agent") => [(Verb::Agent(AgentVerb::Invoke), Method, [Agent])],
     /// A standalone tool invocation.
