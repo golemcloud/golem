@@ -15,7 +15,7 @@ Caller-defined static tool clients use caller-owned typed definitions.
 
 An agent ID is a UUID that Golem issues; it carries a tag of the agent's type but not its constructor parameters, so no SDK computes it offline. Agents are stored and addressed per environment and agent ID. Get an ID from a client (`agentId` / `agent_id`), from invocation metadata, or from agent metadata. A keyed agent is also reachable by its key, the canonical `Type(parameters)` text of its constructor parameters; `upsert` always uses a key. An agent created without a key is reachable only by its ID.
 
-Constructor values contain only caller-supplied fields. The host injects principal fields separately. An ephemeral client is a logical proxy: each invocation runs on a new one-shot instance whose agent ID only the invocation metadata reports, and that ID cannot be used for another call.
+Constructor values contain only caller-supplied fields; the invocation context is not one of them. An ephemeral client is a logical proxy: each invocation runs on a new one-shot instance whose agent ID only the invocation metadata reports, and that ID cannot be used for another call.
 
 Discovery lookups are optional: a name or agent-ID lookup returns no type when the deployment is missing or the caller cannot view it. Parsing an agent ID is strict and reports malformed input. Neither discovery nor connecting by ID ever creates the target agent; an unknown ID, or the ID of an agent of another type, is a typed not-found error. A keyed create of an existing key is a typed conflict error.
 
