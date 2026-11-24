@@ -163,7 +163,7 @@ export const budget = {
   example: {
     heading: "Memory usage example",
     calculation: "256 MiB × 100 active hours = 25 GiB-hours",
-    body: "That is one agent holding 256 MiB for 100 hours of active time. Pro's 912.5 GiB-hours cover 36 such agents a month. Measure compute separately in GCU. Request count and elapsed time do not convert to GCU at a fixed rate.",
+    body: "That is one agent holding 256 MiB for 100 hours of active time. An agent's memory includes its language runtime and the libraries it loads, so it depends on the language and framework. Measure your own agents. Measure compute separately in GCU. Request count and elapsed time do not convert to GCU at a fixed rate.",
   },
   externalCosts:
     "Golem Cloud runs your agent code and tools. Budget separately for model APIs and other services billed through your provider accounts.",
