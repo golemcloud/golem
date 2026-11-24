@@ -636,10 +636,16 @@ export const SecureAgent = defineAgent({
 
 // Or per-endpoint:
 adminOnly: method({
-  input: { principal: s.principal() }, // principal contains the authenticated user's identity
+  input: {},
   returns: AdminData,
   http: http.get('/admin', { auth: true }),
 }),
+
+// In the implementation, the second argument is the invocation context:
+adminOnly(_input, ctx) {
+  const user = ctx.caller.original; // the authenticated user
+  // ...
+},
 ```
 </Tabs.Tab>
 <Tabs.Tab>
@@ -651,7 +657,7 @@ export const SecureAgent = defineAgent({
   http: Http.mount("/secure/{name}", { auth: true }),
   methods: {
     adminOnly: method({
-      input: { principal: Principal.PrincipalSchema },
+      input: {},
       success: AdminData,
       http: [Http.get("/admin", { auth: true })],
     }),
@@ -659,9 +665,7 @@ export const SecureAgent = defineAgent({
 })
 ```
 
-The handler receives `{ principal }` with the authenticated caller's identity. Golem injects this input; clients do not send it. Import `Principal` from `@golemcloud/effect-golem`.
-
-Non-read-only handlers can alternatively read `yield* Principal.Principal` as an Effect service. Read-only methods must declare the principal input, which also makes their cache principal-dependent.
+The handler reads the authenticated user from the `InvocationContext.InvocationContext` service: `(yield* InvocationContext.InvocationContext).caller.original`. Import `InvocationContext` from `@golemcloud/effect-golem`. Clients send nothing for it.
 </Tabs.Tab>
 <Tabs.Tab>
 ```rust
@@ -673,8 +677,8 @@ pub trait SecureAgent {
 
 // Or per-endpoint:
 #[endpoint(get = "/admin", auth = true)]
-fn admin_only(&self, principal: Principal) -> AdminData;
-// principal contains the authenticated user's identity
+fn admin_only(&self, ctx: InvocationContext) -> AdminData;
+// ctx.caller().original() is the authenticated user
 ```
 </Tabs.Tab>
 <Tabs.Tab>
@@ -687,8 +691,8 @@ trait SecureAgent extends BaseAgent {
 
 // Or per-endpoint:
 @endpoint(method = "GET", path = "/admin", auth = true)
-def adminOnly(principal: Principal): Future[AdminData]
-// principal contains the authenticated user's identity
+def adminOnly(context: InvocationContext): Future[AdminData]
+// context.caller.original is the authenticated user
 ```
 </Tabs.Tab>
 <Tabs.Tab>
@@ -704,8 +708,8 @@ pub(all) struct SecureAgent {
 // Or per-endpoint:
 #derive.endpoint(get = "/admin")
 #derive.endpoint_auth(true)
-pub fn SecureAgent::admin_only(self : Self, principal : Principal) -> AdminData {
-  // principal contains the authenticated user's identity
+pub fn SecureAgent::admin_only(self : Self, ctx : @agents.InvocationContext) -> AdminData {
+  // ctx.caller().original is the authenticated user
 }
 ```
 </Tabs.Tab>
@@ -718,19 +722,17 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 })
 
 // Or per-endpoint:
-type AdminOnlyIn struct {
-	Principal golem.Principal // contains the authenticated user's identity
-}
-
-var AdminOnly = Agent.Method[AdminOnlyIn, AdminData]("adminOnly",
+var AdminOnly = Agent.Method[golem.Unit, AdminData]("adminOnly",
 	golem.HTTP(golem.GET("/admin", golem.EndpointAuth(true))))
+
+// In the implementation, ctx.Caller().Original is the authenticated user.
 ```
 
-The host fills a `golem.Principal` input field; it is never bound from the path, query, headers, or body. `golem.EndpointAuth(false)` opens a single endpoint on an otherwise protected mount.
+`golem.EndpointAuth(false)` opens a single endpoint on an otherwise protected mount.
 </Tabs.Tab>
 </Tabs>
 
-When authentication is enabled, agent constructors and methods can optionally receive a `Principal` parameter containing information about the authenticated caller.
+When authentication is enabled, agent constructors and methods read the authenticated caller from their invocation context (`ctx.caller`). The invocation context is not part of the request: it is never bound from the path, query, headers or body, and clients do not send it.
 
 ## Agents without a key
 

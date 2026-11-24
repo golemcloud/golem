@@ -3,7 +3,7 @@ import { Tabs } from "@/components/tabs"
 # Make Secure HTTP APIs
 
 Golem API gateway has built-in authentication support to identify users using the OpenID protocol.
-When authentication is enabled on a mount or endpoint, agent constructors and methods can receive a `Principal` parameter containing information about the authenticated caller.
+When authentication is enabled on a mount or endpoint, Golem signs the user in before any agent code runs. Agent constructors and methods then read the signed-in user from the invocation context: `ctx.caller`.
 
 ## Setup Security for your API routes in Golem
 
@@ -55,13 +55,14 @@ By now, you are having a security scheme registered with `golem` which enables a
 
 ### Enable authentication in your agent code
 
-Once the security scheme is registered, enable authentication using the `auth` option on your agent's mount or on individual endpoints:
+Once the security scheme is registered, enable authentication using the `auth` option on your agent's mount or on individual endpoints.
+A handler reads who is calling from its invocation context. `ctx.caller.original` is the principal that started the chain of calls; for a request from a signed-in browser user, it is a `user` principal with the user's claims. `ctx.caller.immediate` is the principal that made this call. A user's claims never leave the invocation context: they are not part of the HTTP request binding, and callers do not send them.
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 import { z } from 'zod';
-import { defineAgent, method, http, Principal } from '@golemcloud/golem-ts-sdk';
+import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
 
 const Profile = z.object({ email: z.string().optional(), name: z.string().optional() });
 type Profile = z.infer<typeof Profile>;
@@ -78,16 +79,22 @@ export const SecureAgent = defineAgent({
 export const SecureAgentImpl = SecureAgent.implement({
   init: () => ({}),
   methods: {
-    getProfile(): Profile {
-      const principal: Principal = this.getPrincipal();
-      if (principal.tag !== 'oidc') {
-        throw new Error('Expected an OIDC principal');
+    getProfile(_input, ctx): Profile {
+      const caller = ctx.caller.original;
+      if (caller.kind !== 'user') {
+        throw new Error('Expected a signed-in user');
       }
-      return { email: principal.email, name: principal.name };
+      const { email, name } = caller.claims;
+      return {
+        email: typeof email === 'string' ? email : undefined,
+        name: typeof name === 'string' ? name : undefined,
+      };
     },
   },
 });
 ```
+
+Every method handler receives the invocation context as its second argument, and `init` receives it as its `ctx`.
 </Tabs.Tab>
 <Tabs.Tab>
 ```typescript
@@ -95,8 +102,8 @@ import { Effect, Schema } from "effect"
 import {
   defineAgent,
   Http,
+  InvocationContext,
   method,
-  Principal,
 } from "@golemcloud/effect-golem"
 
 const Profile = Schema.Struct({
@@ -121,40 +128,93 @@ export const SecureAgent = defineAgent({
   methods: () => ({
     getProfile: () =>
       Effect.gen(function* () {
-        const principal = yield* Principal.Principal
-        if (principal.tag !== "oidc") {
-          return yield* Effect.dieMessage("Expected an OIDC principal")
+        const { caller } = yield* InvocationContext.InvocationContext
+        const user = caller.original
+        if (user.kind !== "user") {
+          return yield* Effect.die(new Error("Expected a signed-in user"))
         }
-        return { email: principal.val.email, name: principal.val.name }
+        const { email, name } = user.claims
+        return {
+          email: typeof email === "string" ? email : undefined,
+          name: typeof name === "string" ? name : undefined,
+        }
       }),
   }),
 })
 ```
 
-`Principal.Principal` provides the current invocation's authenticated caller without adding an HTTP input parameter.
+The `InvocationContext.InvocationContext` service gives the caller of the running invocation in every constructor and handler. It adds no HTTP input.
 </Tabs.Tab>
 <Tabs.Tab>
 ```rust
+use golem_rust::agentic::{InvocationContext, Principal};
+use golem_rust::{agent_definition, agent_implementation, endpoint, Schema};
+
+#[derive(Schema)]
+pub struct Profile {
+    pub email: Option<String>,
+    pub name: Option<String>,
+}
+
 #[agent_definition(mount = "/secure/{name}", auth = true)]
 pub trait SecureAgent {
     fn new(name: String) -> Self;
 
     #[endpoint(get = "/profile")]
-    fn get_profile(&self, principal: Principal) -> Profile;
-    // principal contains the authenticated user's identity
+    fn get_profile(&self, ctx: InvocationContext) -> Profile;
+}
+
+struct SecureAgentImpl {
+    _name: String,
+}
+
+#[agent_implementation]
+impl SecureAgent for SecureAgentImpl {
+    fn new(name: String) -> Self {
+        Self { _name: name }
+    }
+
+    fn get_profile(&self, ctx: InvocationContext) -> Profile {
+        let Principal::User(user) = ctx.caller().original() else {
+            panic!("expected a signed-in user");
+        };
+        let claims = user.claims().unwrap_or_default();
+        Profile {
+            email: claims["email"].as_str().map(String::from),
+            name: claims["name"].as_str().map(String::from),
+        }
+    }
 }
 ```
+
+An `InvocationContext` parameter can appear in `new` and in any method. The SDK supplies it; it is not part of the method's input.
 </Tabs.Tab>
 <Tabs.Tab>
 ```scala
+import golem.{BaseAgent, InvocationContext, Principal}
+import golem.runtime.annotations.{agentDefinition, agentImplementation, endpoint}
+
+import scala.concurrent.Future
+
 @agentDefinition(mount = "/secure/{name}", auth = true)
 trait SecureAgent extends BaseAgent {
   class Id(val name: String)
 
   @endpoint(method = "GET", path = "/whoami")
-  def whoAmI(principal: Principal): Future[String]
+  def whoAmI(context: InvocationContext): Future[String]
+}
+
+@agentImplementation()
+final class SecureAgentImpl(private val name: String) extends SecureAgent {
+  override def whoAmI(context: InvocationContext): Future[String] =
+    context.caller.original match {
+      case user: Principal.User => Future.successful(user.subject)
+      case other                => Future.failed(new IllegalStateException(s"expected a signed-in user, got $other"))
+    }
 }
 ```
+
+`Principal.User` also carries the sign-in's claims as JSON text (`claimsJson`). An `InvocationContext` parameter is supplied by the SDK; it is not part of the method's input.
 </Tabs.Tab>
 <Tabs.Tab>
 ```moonbit
@@ -165,12 +225,21 @@ struct SecureAgent {
   name : String
 }
 
+fn SecureAgent::new(name : String) -> SecureAgent {
+  { name, }
+}
+
 #derive.endpoint(get = "/whoami")
-pub fn SecureAgent::who_am_i(self: Self, principal: Principal) -> String {
-  // principal contains authenticated user info
-  principal.subject
+pub fn SecureAgent::who_am_i(
+  self : Self,
+  ctx : @agents.InvocationContext,
+) -> String {
+  // A signed-in user prints as `user ("<issuer>","<subject>")`, never with its claims.
+  ctx.caller().original.to_string()
 }
 ```
+
+A signed-in user is the `User` case of the principal; its `claims` field holds the claim set as JSON text. An `@agents.InvocationContext` parameter is supplied by the SDK; it is not part of the method's input.
 </Tabs.Tab>
 <Tabs.Tab>
 ```go
@@ -181,12 +250,8 @@ import "github.com/golemcloud/golem/sdks/go/golem"
 type ID struct{ Name string }
 
 type Profile struct {
-	Email golem.Option[string]
-	Name  golem.Option[string]
-}
-
-type GetProfileIn struct {
-	Principal golem.Principal // filled by the host from the authentication context
+	Email string
+	Name  string
 }
 
 var Agent = golem.DefineAgent[ID](golem.Spec{
@@ -194,18 +259,25 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 	HTTP: &golem.Mount{Path: "/secure/{name}", Auth: true}, // all endpoints require authentication
 })
 
-var GetProfile = Agent.Method[GetProfileIn, Profile]("getProfile", golem.HTTP(golem.GET("/profile")))
+var GetProfile = Agent.Method[golem.Unit, Profile]("getProfile", golem.HTTP(golem.GET("/profile")))
 ```
 
 In the implementation package:
 
 ```go
-agent.Handle(secure.GetProfile, func(_ *golem.Context[state], in secure.GetProfileIn) secure.Profile {
-	p, ok := in.Principal.(golem.OidcPrincipal)
+agent.Handle(secure.GetProfile, func(ctx *golem.Context[state], _ golem.Unit) secure.Profile {
+	user, ok := ctx.Caller().Original.(golem.UserPrincipal)
 	if !ok {
-		panic("expected an OIDC principal")
+		panic("expected a signed-in user")
 	}
-	return secure.Profile{Email: p.Email, Name: p.Name}
+	var profile secure.Profile // user.Claims is the claim set as JSON text
+	if err := json.Unmarshal([]byte(user.Claims), &struct {
+		Email *string `json:"email"`
+		Name  *string `json:"name"`
+	}{&profile.Email, &profile.Name}); err != nil {
+		panic(err)
+	}
+	return profile
 })
 ```
 
@@ -213,7 +285,7 @@ agent.Handle(secure.GetProfile, func(_ *golem.Context[state], in secure.GetProfi
 </Tabs.Tab>
 </Tabs>
 
-The `Principal` parameter is automatically injected from the authentication context — it is not part of the HTTP request body.
+A `Principal` or a `Caller` cannot be a method parameter, a result or part of a stored value: the build fails with a message that points to `ctx.caller`. To remember who called, store `ctx.caller.original.ref`, a `PrincipalRef`: an issuer and a subject that grant nothing by themselves. Compare it later with `equals`.
 
 ## Authenticate a Separate Frontend with PKCE
 

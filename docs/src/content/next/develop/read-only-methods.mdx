@@ -37,7 +37,7 @@ In exchange for honoring this contract, Golem provides:
 
 | Guarantee | What it means |
 |---|---|
-| Cached result | The result is cached per `(method, normalized input, optional principal)` on the worker. |
+| Cached result | The result is cached per `(method, normalized input, caller)` on the worker. |
 | Queue & loading bypass | A cache hit returns immediately — it never acquires the agent's invocation queue and never loads an evicted agent. |
 
 <Callout type="info">
@@ -61,41 +61,151 @@ results for that agent. While a mutation is queued or running, readers can still
 value. Updating or reverting the agent also invalidates its cache; evicting and reloading only the WebAssembly
 instance does not. `ttl(d)` entries additionally expire by time. `no-cache` never inserts into the cache.
 
-## Per-principal caching
+## Caching per caller
 
-By default a read-only result is **shared across all callers** in the executor: the cache key is `(method, input)`.
+The executor keys each cached result on the method, the normalized input and the full caller of the invocation:
+the original and immediate principals and the tokens (see
+[Make Secure HTTP APIs](/next/invoke/making-custom-apis/authentication)). Two calls by the same signed-in user can
+share an entry. Calls by two different users never share one. All anonymous calls share one entry. There is no
+option for this, and a method needs no extra parameter for it.
 
-When the result depends on *who* is calling (for example, an authorization-scoped view), add a `Principal`
-parameter to the method and enable per-principal caching:
+So a read-only method can return a view that depends on who is calling. It reads its caller from the invocation
+context, like any other handler. In this example, each user sees only their own notes:
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
-        Add a direct `s.principal()` input to the method. The TypeScript SDK automatically enables
-        per-principal caching.
+        ```typescript
+        import { z } from "zod"
+        import { defineAgent, method, PrincipalRef } from "@golemcloud/golem-ts-sdk"
+
+        type Note = { author: PrincipalRef; text: string }
+
+        export const NotesAgent = defineAgent({
+          name: "NotesAgent",
+          id: { name: z.string() },
+          methods: {
+            addNote: method({ input: { text: z.string() }, returns: z.void() }),
+            // Read-only: cached per caller, so each caller gets their own entry
+            myNotes: method({ input: {}, returns: z.array(z.string()), readOnly: true }),
+          },
+        })
+
+        export const NotesAgentImpl = NotesAgent.implement({
+          init: () => ({ notes: [] as Note[] }),
+          methods: {
+            addNote({ text }, ctx) {
+              const author = ctx.caller.original.ref
+              if (author === undefined) {
+                throw new Error("Sign in to add a note")
+              }
+              this.notes.push({ author, text })
+            },
+            myNotes(_input, ctx) {
+              const me = ctx.caller.original
+              return this.notes.filter(note => me.equals(note.author)).map(note => note.text)
+            },
+          },
+        })
+        ```
     </Tabs.Tab>
     <Tabs.Tab>
-        Add a `PrincipalSchema` input to the method. The Effect SDK automatically enables per-principal caching.
+        ```typescript
+        import { Effect, Ref, Schema } from "effect"
+        import { defineAgent, InvocationContext, method } from "@golemcloud/effect-golem"
+
+        type Note = { readonly author: InvocationContext.PrincipalRef; readonly text: string }
+
+        export const NotesAgent = defineAgent({
+          name: "NotesAgent",
+          id: { name: Schema.String },
+          methods: {
+            addNote: method({ input: { text: Schema.String }, success: Schema.Void }),
+            // Read-only: cached per caller, so each caller gets their own entry
+            myNotes: method({ input: {}, success: Schema.Array(Schema.String), readOnly: true }),
+          },
+        }).implement({
+          init: () => Ref.make<ReadonlyArray<Note>>([]),
+          methods: (notes) => ({
+            addNote: ({ text }) =>
+              Effect.gen(function* () {
+                const { caller } = yield* InvocationContext.InvocationContext
+                const author = caller.original.ref
+                if (author === undefined) {
+                  return yield* Effect.die(new Error("Sign in to add a note"))
+                }
+                yield* Ref.update(notes, (all) => [...all, { author, text }])
+              }),
+            myNotes: () =>
+              Effect.gen(function* () {
+                const { caller } = yield* InvocationContext.InvocationContext
+                const all = yield* Ref.get(notes)
+                return all.filter((note) => caller.original.equals(note.author)).map((note) => note.text)
+              }),
+          }),
+        })
+        ```
     </Tabs.Tab>
     <Tabs.Tab>
-        Add a `Principal` parameter to the method. The Rust SDK automatically enables per-principal caching.
+        ```rust
+        use golem_rust::agentic::InvocationContext;
+
+        #[read_only]
+        fn my_notes(&self, ctx: InvocationContext) -> Vec<String>;
+
+        // In the implementation:
+        fn my_notes(&self, ctx: InvocationContext) -> Vec<String> {
+            let me = ctx.caller().original();
+            self.notes
+                .iter()
+                .filter(|note| me.principal_ref().is_some_and(|me| me.equals(&note.author)))
+                .map(|note| note.text.clone())
+                .collect()
+        }
+        ```
     </Tabs.Tab>
     <Tabs.Tab>
-        Add a `Principal` parameter to the method. The Scala SDK automatically enables per-principal caching.
+        ```scala
+        import golem.InvocationContext
+        import golem.runtime.annotations.readOnly
+
+        @readOnly()
+        def myNotes(context: InvocationContext): Future[List[String]]
+
+        // In the implementation:
+        override def myNotes(context: InvocationContext): Future[List[String]] =
+          Future.successful(notes.filter(note => context.caller.original.isSameAs(note.author)).map(_.text).toList)
+        ```
     </Tabs.Tab>
     <Tabs.Tab>
-        Add a `Principal` parameter to the method. The MoonBit SDK automatically enables per-principal caching.
+        ```moonbit
+        #derive.read_only
+        pub fn NotesAgent::my_notes(
+          self : Self,
+          ctx : @agents.InvocationContext,
+        ) -> Array[String] {
+          let me = ctx.caller().original
+          self.notes.filter(fn(note) { me.equals_ref(note.author) }).map(fn(note) { note.text })
+        }
+        ```
     </Tabs.Tab>
     <Tabs.Tab>
-        Add a `Principal` parameter to the method. The Go SDK automatically enables per-principal caching.
+        ```go
+        agent.Handle(notes.MyNotes, func(ctx *golem.Context[state], _ golem.Unit) []string {
+            me := ctx.Caller().Original
+            var mine []string
+            for _, note := range ctx.State.notes {
+                if me.EqualsRef(note.author) {
+                    mine = append(mine, note.text)
+                }
+            }
+            return mine
+        })
+        ```
     </Tabs.Tab>
 </Tabs>
 
-With per-principal caching enabled, the calling principal becomes part of the cache key, so each principal gets
-its own cached entry. This does not determine HTTP cache visibility; see [HTTP cache headers](#http-cache-headers)
-for the separate response privacy rules.
-
-The `Principal` parameter is marked as auto-injected in the method's input schema. The runtime supplies it;
-callers do not pass it.
+The stored author is a `PrincipalRef`: an issuer and a subject, which grant nothing by themselves. This cache key does
+not decide HTTP cache visibility; see [HTTP cache headers](#http-cache-headers) for the response privacy rules.
 
 ## Read-only and ephemeral are mutually exclusive
 
@@ -140,7 +250,7 @@ also reject it earlier.
         ```
 
         `readOnly: true` uses the default `until-write` cache policy. For finer control, pass an object instead of
-        the boolean. A direct `s.principal()` input automatically enables per-principal caching:
+        the boolean:
 
         ```typescript
         methods: {
@@ -155,12 +265,6 @@ also reject it earlier.
             input: { x: z.number(), y: z.number() },
             returns: z.number(),
             readOnly: { cache: "no-cache" },
-          }),
-          // Principal-aware: cached per caller principal
-          myVisibleItems: method({
-            input: { caller: s.principal() },
-            returns: z.array(Item),
-            readOnly: true,
           }),
         }
         ```
@@ -188,11 +292,9 @@ also reject it earlier.
         })
         ```
 
-        Use the object form for another cache policy. Principal-aware caching is inferred when the input contains `Principal.PrincipalSchema`:
+        Use the object form for another cache policy:
 
         ```typescript
-        import { Principal } from "@golemcloud/effect-golem"
-
         const recentSummary = method({
           input: {},
           success: Summary,
@@ -203,12 +305,6 @@ also reject it earlier.
           input: { x: Schema.Number, y: Schema.Number },
           success: Schema.Number,
           readOnly: { cache: "no-cache" },
-        })
-
-        const myVisibleItems = method({
-          input: { principal: Principal.PrincipalSchema },
-          success: Schema.Array(Item),
-          readOnly: true,
         })
         ```
     </Tabs.Tab>
@@ -231,21 +327,14 @@ also reject it earlier.
         }
         ```
 
-        Choose a cache policy via attribute arguments; per-principal caching is automatic when the method takes a
-        `Principal` parameter:
+        Choose a cache policy via attribute arguments:
 
         ```rust
-        use golem_rust::agentic::Principal;
-
         #[read_only(cache = "ttl", ttl = "30s")]
         fn recent_summary(&self) -> Summary;
 
         #[read_only(cache = "no_cache")]
         fn pure_compute(&self, x: u32, y: u32) -> u32;
-
-        // Principal-aware: cached per principal (uses_principal auto-derived)
-        #[read_only]
-        fn my_visible_items(&self, principal: Principal) -> Vec<Item>;
         ```
     </Tabs.Tab>
     <Tabs.Tab>
@@ -270,22 +359,16 @@ also reject it earlier.
         }
         ```
 
-        Choose a cache policy via the `cache` string argument; per-principal caching is automatic when the method
-        receives a `Principal`:
+        Choose a cache policy via the `cache` string argument:
 
         ```scala
         import golem.runtime.annotations.readOnly
-        import golem.Principal
 
         @readOnly(cache = "ttl(30 seconds)")
         def recentSummary(): Future[Summary]
 
         @readOnly(cache = "no-cache")
         def pureCompute(x: Int, y: Int): Future[Int]
-
-        // Principal-aware: cached per principal (usesPrincipal auto-derived)
-        @readOnly
-        def myVisibleItems(principal: Principal): Future[List[Item]]
         ```
     </Tabs.Tab>
     <Tabs.Tab>
@@ -315,8 +398,7 @@ also reject it earlier.
         }
         ```
 
-        Choose a cache policy via attribute arguments (TTL is given in nanoseconds); per-principal caching is
-        automatic when the method takes a `Principal` parameter:
+        Choose a cache policy via attribute arguments (TTL is given in nanoseconds):
 
         ```moonbit
         #derive.read_only(cache="ttl", ttl="30000000000") // 30s in nanoseconds
@@ -326,10 +408,6 @@ also reject it earlier.
         pub fn CounterAgent::pure_compute(self: Self, x: UInt, y: UInt) -> UInt {
           x + y
         }
-
-        // Principal-aware: cached per principal (uses_principal auto-derived)
-        #derive.read_only
-        pub fn CounterAgent::my_visible_items(self: Self, principal: Principal) -> Array[Item] { /* ... */ }
         ```
     </Tabs.Tab>
     <Tabs.Tab>
@@ -367,15 +445,12 @@ also reject it earlier.
         }
         ```
 
-        Choose a cache policy by passing one to `golem.ReadOnly`; per-principal caching is automatic when the
-        method's input has a `golem.Principal` field:
+        Choose a cache policy by passing one to `golem.ReadOnly`:
 
         ```go
         import "time"
 
         type ComputeIn struct{ X, Y uint32 }
-
-        type PrincipalIn struct{ Principal golem.Principal }
 
         var (
             RecentSummary = Agent.Method[golem.Unit, Summary]("recentSummary",
@@ -383,9 +458,6 @@ also reject it earlier.
 
             PureCompute = Agent.Method[ComputeIn, uint32]("pureCompute",
                 golem.ReadOnly(golem.NoCache()))
-
-            // Principal-aware: cached per principal
-            MyVisibleItems = Agent.Method[PrincipalIn, []Item]("myVisibleItems", golem.ReadOnly())
         )
         ```
     </Tabs.Tab>
@@ -419,12 +491,13 @@ even for TTL methods. An existing `no-store` policy remains stronger: authentica
 `Cache-Control: private, no-store`. Responses that issue credentials also receive `private, no-store`.
 Response headers cannot weaken these privacy requirements.
 
-HTTP privacy depends on request authentication, not on whether the method uses the principal. Principal usage
-still determines the executor's cache key. Anonymous responses vary on `Authorization`, `Cookie` and
+HTTP privacy depends on whether the request is authenticated. The executor's cache key always holds the caller
+(see [Caching per caller](#caching-per-caller)). Anonymous responses vary on `Authorization`, `Cookie` and
 `Golem-Token`. Golem also merges header-bound method parameters and any configured session header into `Vary`.
 
-A request that repeats the returned ETag in `If-None-Match` is revalidated cheaply. If it still matches the
-agent's current agent-instance fingerprint and oplog position, Golem returns `304 Not Modified` without executing
+A request that repeats the returned ETag in `If-None-Match` is revalidated cheaply. The ETag holds a digest of the
+caller, so it never revalidates another caller's request. If it still matches the caller, the agent's current
+agent-instance fingerprint and oplog position, Golem returns `304 Not Modified` without executing
 the agent method or loading its WebAssembly instance.
 
 A response a CDN or browser sees for an anonymous request to an `until-write` method therefore looks like:
