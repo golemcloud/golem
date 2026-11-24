@@ -55,11 +55,22 @@ impl AgentOwnerLeafPattern {
             (Self::Agent(left), Self::Agent(right)) => left == right,
             (Self::AgentTypeWildcard(left), Self::Agent(right)) => right
                 .strip_prefix(left.as_str())
+                .map(strip_phantom_id_suffix)
                 .is_some_and(|suffix| suffix.starts_with('(') && suffix.ends_with(')')),
             (Self::AgentTypeWildcard(left), Self::AgentTypeWildcard(right)) => left == right,
             (Self::Agent(_), Self::AgentTypeWildcard(_)) => false,
         }
     }
+}
+
+/// Removes the `[<uuid>]` that follows the parameters in the name of an agent with a phantom ID.
+/// The value stays the same when its last `[...]` does not hold a UUID.
+fn strip_phantom_id_suffix(value: &str) -> &str {
+    value
+        .strip_suffix(']')
+        .and_then(|rest| rest.rsplit_once('['))
+        .filter(|(_, phantom_id)| uuid::Uuid::parse_str(phantom_id).is_ok())
+        .map_or(value, |(params, _)| params)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
