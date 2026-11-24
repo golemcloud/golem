@@ -10,13 +10,13 @@ This page describes the configuration of the `golem` binary and of the [`golemse
 
 | Listener | Default address | Serves |
 | --- | --- | --- |
-| `router.address`, `router.port` | `127.0.0.1:9881` | The management API: the registry and worker service APIs, which the `golem` CLI uses. With `router.management_host`, also the HTTP API and MCP deployments: see [One port](#one-port) |
-| `worker_service.bind_address`, `worker_service.custom_request_port` | `127.0.0.1:9006` | HTTP API deployments and MCP deployments, chosen by the request's host |
-| `worker_service.bind_address`, `worker_service.mcp_port` | `127.0.0.1:9007` | MCP deployments only |
+| `advanced.server.router.address`, `advanced.server.router.port` | `127.0.0.1:9881` | The management API: the registry and worker service APIs, which the `golem` CLI uses. With `advanced.server.router.management_host`, also the HTTP API and MCP deployments: see [One port](#one-port) |
+| `advanced.worker_service.bind_address`, `advanced.worker_service.custom_request_port` | `127.0.0.1:9006` | HTTP API deployments and MCP deployments, chosen by the request's host |
+| `advanced.worker_service.bind_address`, `advanced.worker_service.mcp_port` | `127.0.0.1:9007` | MCP deployments only |
 
 ## One port
 
-Set `router.management_host` (`GOLEM_ADVANCED__SERVER__ROUTER__MANAGEMENT_HOST`) to the host name of the management API, for example `golem.example.com`. The main API port then routes each request by its host: requests for the management host reach the management API, and requests for every other host reach the HTTP API and MCP deployments of that host. So one port serves everything, and a reverse proxy or a platform that routes one port per service can send all host names to it. The server also adds the management host to `registry_service.domain_registration.reserved_domains`, so that no environment can register it as a deployment domain.
+Set `advanced.server.router.management_host` (`GOLEM_ADVANCED__SERVER__ROUTER__MANAGEMENT_HOST`) to the host name of the management API, for example `golem.example.com`. The main API port then routes each request by its host: requests for the management host reach the management API, and requests for every other host reach the HTTP API and MCP deployments of that host. So one port serves everything, and a reverse proxy or a platform that routes one port per service can send all host names to it. The server also adds the management host to `advanced.registry_service.domain_registration.reserved_domains`, so that no environment can register it as a deployment domain.
 
 The custom request and MCP ports still serve the deployments. Leave them on `127.0.0.1` when the main API port serves everything.
 
@@ -66,11 +66,11 @@ The default configuration uses public secrets. Replace all of them:
 
 | Setting | Environment variable | Value |
 | --- | --- | --- |
-| `registry_service.initial_accounts.root.token` | `GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN` | The admin token: at least 16 characters, each an ASCII letter, a digit, `-` or `_` |
-| `worker_service.webhook_callback_handler.hmac_key` | `GOLEM_ADVANCED__WORKER_SERVICE__WEBHOOK_CALLBACK_HANDLER__HMAC_KEY` | 32 random bytes, base64 |
-| `worker_executor.agent_webhooks_service.hmac_key` | `GOLEM_ADVANCED__WORKER_EXECUTOR__AGENT_WEBHOOKS_SERVICE__HMAC_KEY` | The same value as the webhook HMAC key of the worker service |
-| `worker_service.invocation_session_tokens.active_key.id` | `GOLEM_ADVANCED__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__ID` | A name for the key, for example `key-1` |
-| `worker_service.invocation_session_tokens.active_key.key` | `GOLEM_ADVANCED__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__KEY` | 32 random bytes, base64 |
+| `advanced.registry_service.initial_accounts.root.token` | `GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN` | The admin token: at least 16 characters, each an ASCII letter, a digit, `-` or `_` |
+| `advanced.worker_service.webhook_callback_handler.hmac_key` | `GOLEM_ADVANCED__WORKER_SERVICE__WEBHOOK_CALLBACK_HANDLER__HMAC_KEY` | 32 random bytes, base64 |
+| `advanced.worker_executor.agent_webhooks_service.hmac_key` | `GOLEM_ADVANCED__WORKER_EXECUTOR__AGENT_WEBHOOKS_SERVICE__HMAC_KEY` | The same value as the webhook HMAC key of the worker service |
+| `advanced.worker_service.invocation_session_tokens.active_key.id` | `GOLEM_ADVANCED__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__ID` | A name for the key, for example `key-1` |
+| `advanced.worker_service.invocation_session_tokens.active_key.key` | `GOLEM_ADVANCED__WORKER_SERVICE__INVOCATION_SESSION_TOKENS__ACTIVE_KEY__KEY` | 32 random bytes, base64 |
 
 Keep the secrets out of the TOML file, in an environment file that only the server can read:
 

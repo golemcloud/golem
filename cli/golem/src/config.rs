@@ -948,7 +948,7 @@ impl Provider for Layer {
     }
 
     fn data(&self) -> figment::Result<figment::value::Map<Profile, Dict>> {
-        Ok(Profile::Default.collect(self.dict.clone()))
+        Serialized::defaults(&self.dict).data()
     }
 }
 
@@ -2888,6 +2888,40 @@ mod tests {
                 jail.set_env(key, value);
                 let error = jail_error(load(None, &run_args_with_data_dir("/data")));
                 assert!(error.contains("advanced channel"), "{key}: {error}");
+                Ok(())
+            });
+        });
+    }
+
+    #[test]
+    fn invalid_advanced_settings_name_the_field_and_source() {
+        ["file", "environment"].into_iter().for_each(|source| {
+            Jail::expect_with(|jail| {
+                jail.clear_env();
+                let mut args = run_args_with_data_dir("/data");
+                let expected_source = if source == "file" {
+                    jail.create_file(
+                        "settings.toml",
+                        r#"
+                            [advanced.worker_service.route_resolver]
+                            trusted_ingress_addresses = ["10.0.0.1"]
+                        "#,
+                    )?;
+                    args.config = Some(PathBuf::from("settings.toml"));
+                    "settings.toml"
+                } else {
+                    jail.set_env(
+                        "GOLEM_ADVANCED__WORKER_SERVICE__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES",
+                        r#"["10.0.0.1"]"#,
+                    );
+                    "the environment variables"
+                };
+                let error = jail_error(load(None, &args));
+                assert!(
+                    error.contains("worker_service.route_resolver.trusted_ingress_addresses"),
+                    "{error}"
+                );
+                assert!(error.contains(expected_source), "{error}");
                 Ok(())
             });
         });

@@ -62,7 +62,6 @@ use crate::{command_name, init_tracing};
 use anyhow::anyhow;
 use clap::CommandFactory;
 use clap_complete::Shell;
-#[cfg(feature = "server-commands")]
 use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
 use std::marker::PhantomData;
@@ -160,6 +159,14 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
         command_parse_result: GolemCliCommandParseResult,
         hooks: Arc<Hooks>,
     ) -> ExitCode {
+        Self::handle_with_tracing(command_parse_result, hooks, init_tracing).await
+    }
+
+    async fn handle_with_tracing(
+        command_parse_result: GolemCliCommandParseResult,
+        hooks: Arc<Hooks>,
+        initialize: impl FnOnce(Verbosity, bool),
+    ) -> ExitCode {
         #[cfg(feature = "server-commands")]
         let server_run = requires_executor_runtime(&command_parse_result);
         #[cfg(not(feature = "server-commands"))]
@@ -210,7 +217,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 let pretty_mode = false;
 
                 if !server_run {
-                    init_tracing(verbosity, pretty_mode);
+                    initialize(verbosity, pretty_mode);
                 }
 
                 if !is_server && !is_mcp_server {
@@ -254,7 +261,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 fallback_command,
                 partial_match,
             } => {
-                init_tracing(fallback_command.global_flags.verbosity(), false);
+                initialize(fallback_command.global_flags.verbosity(), false);
 
                 debug!(partial_match = ?partial_match, "Partial match");
                 debug_log_parse_error(&error);
@@ -283,7 +290,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 error,
                 fallback_command,
             } => {
-                init_tracing(fallback_command.global_flags.verbosity(), false);
+                initialize(fallback_command.global_flags.verbosity(), false);
                 debug_log_parse_error(&error);
                 end_on_closed_pipe(error.print());
 
@@ -896,9 +903,88 @@ fn debug_log_parse_error(error: &clap::Error) {
 
 #[cfg(all(test, feature = "server-commands"))]
 mod tests {
-    use super::requires_executor_runtime;
+    use super::{CommandHandler, CommandHandlerHooks, requires_executor_runtime};
     use crate::command::GolemCliCommand;
+    use crate::command::server::ServerSubcommand;
+    use crate::context::Context;
+    use clap_verbosity_flag::Verbosity;
+    use std::cell::Cell;
+    use std::process::ExitCode;
+    use std::sync::{Arc, Mutex};
     use test_r::test;
+
+    #[derive(Default)]
+    struct RecordingServer {
+        received: Mutex<Option<(bool, Option<tracing::Level>)>>,
+    }
+
+    impl CommandHandlerHooks for RecordingServer {
+        async fn handler_server_commands(
+            &self,
+            _ctx: Arc<Context>,
+            subcommand: ServerSubcommand,
+            verbosity: Verbosity,
+        ) -> anyhow::Result<()> {
+            *self.received.lock().unwrap() = Some((
+                matches!(subcommand, ServerSubcommand::Run { .. }),
+                verbosity.tracing_level(),
+            ));
+            Ok(())
+        }
+
+        async fn run_server() -> anyhow::Result<()> {
+            panic!("dispatch must not start a service")
+        }
+
+        fn override_verbosity(_verbosity: Verbosity) -> Verbosity {
+            Verbosity::new(4, 0)
+        }
+
+        fn override_pretty_mode() -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn server_dispatch_skips_cli_tracing_only_for_run_and_forwards_overridden_verbosity() {
+        figment::Jail::expect_with(|jail| {
+            jail.clear_env();
+            jail.set_env("HOME", jail.directory().display().to_string());
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            ["run", "clean"].into_iter().for_each(|subcommand| {
+                let command = GolemCliCommand::try_parse_from_lenient(
+                    ["golem", "-X", "-L", "server", subcommand],
+                    true,
+                );
+                let hooks = Arc::new(RecordingServer::default());
+                let initialized = Cell::new(None);
+                let result = runtime.block_on(CommandHandler::handle_with_tracing(
+                    command,
+                    hooks.clone(),
+                    |verbosity, pretty| {
+                        assert!(
+                            initialized
+                                .replace(Some((verbosity.tracing_level(), pretty)))
+                                .is_none()
+                        );
+                    },
+                ));
+                assert_eq!(result, ExitCode::SUCCESS);
+                assert_eq!(
+                    *hooks.received.lock().unwrap(),
+                    Some((subcommand == "run", Some(tracing::Level::TRACE)))
+                );
+                assert_eq!(
+                    initialized.get(),
+                    (subcommand == "clean").then_some((Some(tracing::Level::TRACE), true))
+                );
+            });
+            Ok(())
+        });
+    }
 
     fn requires_executor_runtime_for(args: &[&str]) -> bool {
         let result = GolemCliCommand::try_parse_from_lenient(args, true);

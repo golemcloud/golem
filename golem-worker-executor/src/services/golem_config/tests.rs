@@ -805,6 +805,8 @@ fn the_golem_issuer_is_not_a_configuration_key_of_the_executor() {
 
     Jail::expect_with(|jail| {
         jail.clear_env();
+        jail.create_dir("config")?;
+        jail.create_file("config/worker-executor.toml", "")?;
         jail.set_env(
             "GOLEM_ADVANCED__WORKER_EXECUTOR__GOLEM_ISSUER",
             "https://id.acme.example",

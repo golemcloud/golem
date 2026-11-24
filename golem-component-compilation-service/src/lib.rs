@@ -172,3 +172,65 @@ async fn start_grpc_server(
 fn create_wasmtime_config(engine_config: &config::EngineConfig) -> wasmtime::Config {
     golem_common::wasmtime_config::create_wasmtime_config(engine_config.enable_fs_cache)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_service_base::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
+    use std::time::Duration;
+    use test_r::test;
+
+    #[test]
+    fn s3_startup_failure_stops_compilation_before_listeners() {
+        figment::Jail::expect_with(|jail| {
+            jail.clear_env();
+            jail.set_env("AWS_EC2_METADATA_DISABLED", true);
+            jail.create_file("aws-config", "")?;
+            jail.set_env(
+                "AWS_CONFIG_FILE",
+                jail.directory().join("aws-config").display(),
+            );
+            let config = ServerConfig {
+                blob_storage: BlobStorageConfig::S3(S3BlobStorageConfig {
+                    region: "us-east-1".to_string(),
+                    aws_endpoint_url: Some("abcde://nota#url".to_string()),
+                    aws_credentials: Some(S3BlobStorageCredentialsConfig::new(
+                        "startup-fixture",
+                        "startup-fixture",
+                        "startup-fixture",
+                    )),
+                    compilation_cache_bucket: "compilation-startup-only".to_string(),
+                    object_prefix: "objects-not-the-bucket".to_string(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let mut tasks = JoinSet::new();
+                let result = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    run(config, Registry::new(), &mut tasks),
+                )
+                .await
+                .expect("compilation startup did not stop at the S3 failure");
+                let error = result
+                    .err()
+                    .expect("S3 failure must stop service construction");
+                assert_eq!(
+                    error.to_string(),
+                    "S3 startup check failed for bucket compilation-startup-only"
+                );
+                assert_eq!(
+                    error.root_cause().to_string(),
+                    "Custom endpoint `abcde://nota#url` was not a valid URI"
+                );
+                assert!(tasks.is_empty(), "listeners must not start after S3 fails");
+            });
+            Ok(())
+        });
+    }
+}

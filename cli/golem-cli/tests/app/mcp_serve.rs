@@ -1407,7 +1407,10 @@ async fn mcp_serve_exports_one_bounded_oplog_report() {
         "",
         &[
             ("GOLEM_HTTP_BATCH_SIZE", "2"),
-            ("GOLEM__WORKER_EXECUTOR__LIMITS__SCAN_BUDGET__ENTRIES", "10"),
+            (
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__LIMITS__SCAN_BUDGET__ENTRIES",
+                "10",
+            ),
         ],
     )
     .await;

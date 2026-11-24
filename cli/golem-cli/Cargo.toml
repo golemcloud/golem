@@ -157,6 +157,7 @@ rustix = { workspace = true, features = ["pipe"] }
 [dev-dependencies]
 axum = { workspace = true }
 expectrl = { workspace = true }
+figment = { workspace = true, features = ["test"] }
 flate2 = { workspace = true }
 goldenfile = { workspace = true }
 golem-common = { workspace = true, features = ["proptest"] }

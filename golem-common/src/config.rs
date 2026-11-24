@@ -669,12 +669,49 @@ mod tests {
             "blob_store = false",
             "state_store = 'redis'",
             "blob_store = 'memory'",
+            "[cache]\ntype = 'Memory'",
+            "[cache]\ntype = false",
+            "number_of_shards = 17",
+            "retained_periodic_snapshots = 3",
+            "[filesystem_snapshots.config]\nretained_periodic_snapshots = 3",
         ]
         .into_iter()
         .for_each(|contents| {
             let (_dir, loader) = loader_with_file(contents);
             let result = loader.for_service("worker_executor").load();
             assert!(result.is_err(), "{contents} loaded defaults");
+        });
+    }
+
+    #[test]
+    fn self_host_defaults_and_environment_choose_the_storage_root() {
+        figment::Jail::expect_with(|jail| {
+            jail.clear_env();
+            jail.create_file("settings.toml", "")?;
+            let loader =
+                ConfigLoader::<LoaderTestConfig>::new(std::path::Path::new("settings.toml"))
+                    .for_service("worker_executor");
+            assert_eq!(
+                loader
+                    .figment()
+                    .extract_inner::<String>("key_value_storage.config.root_dir")?,
+                "/var/lib/golem/kv-store"
+            );
+            jail.create_file("settings.toml", "data_dir = '/file-state'")?;
+            assert_eq!(
+                loader
+                    .figment()
+                    .extract_inner::<String>("key_value_storage.config.root_dir")?,
+                "/file-state/kv-store"
+            );
+            jail.set_env("GOLEM__DATA_DIR", "/environment-state");
+            assert_eq!(
+                loader
+                    .figment()
+                    .extract_inner::<String>("key_value_storage.config.root_dir")?,
+                "/environment-state/kv-store"
+            );
+            Ok(())
         });
     }
 

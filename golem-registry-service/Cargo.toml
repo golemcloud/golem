@@ -113,6 +113,7 @@ zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
 assert2 = { workspace = true }
+figment = { workspace = true, features = ["test"] }
 futures = { workspace = true }
 golem-worker-executor-test-utils = { workspace = true }
 http-body-util = { workspace = true }

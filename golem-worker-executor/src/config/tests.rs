@@ -301,6 +301,8 @@ fn an_unknown_key_of_the_storage_mode_fails_to_load_with_its_name() {
 fn a_removed_storage_key_in_the_environment_fails_to_load_with_its_name() {
     Jail::expect_with(|jail| {
         jail.clear_env();
+        jail.create_dir("config")?;
+        jail.create_file("config/worker-executor.toml", "")?;
         jail.set_env(
             "GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MANAGED_XFS_ROOT_DIR",
             "/var/lib/golem/agents",
@@ -340,6 +342,8 @@ fn apfs_storage_mode_loads_and_roundtrips_with_its_root() {
 fn the_storage_mode_loads_from_the_environment() {
     Jail::expect_with(|jail| {
         jail.clear_env();
+        jail.create_dir("config")?;
+        jail.create_file("config/worker-executor.toml", "")?;
         jail.set_env(
             "GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__TYPE",
             "ReflinkXfs",
@@ -363,6 +367,8 @@ fn the_storage_mode_loads_from_the_environment() {
 fn environment_config_rejects_invalid_filesystem_policies_before_use() {
     Jail::expect_with(|jail| {
         jail.clear_env();
+        jail.create_dir("config")?;
+        jail.create_file("config/worker-executor.toml", "")?;
         jail.set_env(
             "GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__FILESYSTEM_OBJECT_LIMIT_POLICY__OBJECTS_PER_GIB",
             "0",

@@ -36,12 +36,13 @@ use crate::well_known_secrets::check_exposure;
 
 pub struct ServerCommandHandler;
 
-impl CommandHandlerHooks for ServerCommandHandler {
-    async fn handler_server_commands(
+impl ServerCommandHandler {
+    async fn handle_with_tracing<G>(
         &self,
         ctx: Arc<Context>,
         subcommand: ServerSubcommand,
         verbosity: Verbosity,
+        initialize: impl FnOnce(&golem_common::tracing::TracingConfig, &'static str) -> G,
     ) -> anyhow::Result<()> {
         match subcommand {
             ServerSubcommand::Run { args } => {
@@ -61,20 +62,10 @@ impl CommandHandlerHooks for ServerCommandHandler {
                     &args,
                     SnapshotRepositoryKeySource::ValidationOnly,
                 )?;
-                let directives = std::iter::once(
-                    verbosity
-                        .tracing_level()
-                        .map_or("off", |level| level.as_str())
-                        .parse()
-                        .expect("tracing levels are valid directives"),
-                )
-                .collect();
-                let _tracer = golem_common::tracing::init_tracing(
-                    &config.logging,
-                    golem_common::tracing::filter::for_all_outputs::info_env_with_directives(
-                        directives,
-                    ),
-                );
+                let level = verbosity
+                    .tracing_level()
+                    .map_or("off", |level| level.as_str());
+                let _tracer = initialize(&config.logging, level);
                 check_exposure(&config)?;
                 if args.clean && tokio::fs::metadata(&config.data_dir).await.is_ok() {
                     clean_server_data_dir(&ctx, &config).await?;
@@ -153,6 +144,28 @@ impl CommandHandlerHooks for ServerCommandHandler {
                 clean_server_data_dir(&ctx, &config).await
             }
         }
+    }
+}
+
+impl CommandHandlerHooks for ServerCommandHandler {
+    async fn handler_server_commands(
+        &self,
+        ctx: Arc<Context>,
+        subcommand: ServerSubcommand,
+        verbosity: Verbosity,
+    ) -> anyhow::Result<()> {
+        self.handle_with_tracing(ctx, subcommand, verbosity, |logging, level| {
+            let directives =
+                std::iter::once(level.parse().expect("tracing levels are valid directives"))
+                    .collect();
+            golem_common::tracing::init_tracing(
+                logging,
+                golem_common::tracing::filter::for_all_outputs::info_env_with_directives(
+                    directives,
+                ),
+            )
+        })
+        .await
     }
 
     async fn run_server() -> anyhow::Result<()> {
@@ -385,6 +398,77 @@ mod tests {
 
     fn local_server(value: LocalServer) -> ResolvedLocalServer {
         ResolvedLocalServer::from_raw_with_base_dir(&value, Path::new("/tmp/test-app"))
+    }
+
+    #[test]
+    fn server_tracing_receives_loaded_settings_before_exposure_refusal() {
+        figment::Jail::expect_with(|jail| {
+            jail.clear_env();
+            jail.set_env("HOME", jail.directory().display().to_string());
+            jail.create_file(
+                "settings.toml",
+                r#"
+                [logging.stdout]
+                enabled = false
+                json = true
+                [otlp]
+                enabled = true
+                host = "collector.startup.test"
+                port = 14318
+            "#,
+            )?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let mut flags = golem_cli::command::GolemCliGlobalFlags::default();
+                flags.local = true;
+                flags.disable_app_manifest_discovery = true;
+                flags.server_no_limit_change = true;
+                let ctx = Arc::new(Context::new(flags, None).await.unwrap());
+                let called = std::cell::Cell::new(false);
+                let result = ServerCommandHandler
+                    .handle_with_tracing(
+                        ctx,
+                        ServerSubcommand::Run {
+                            args: RunArgs {
+                                config: Some("settings.toml".into()),
+                                data_dir: Some(jail.directory().join("data")),
+                                router_addr: Some("0.0.0.0".to_string()),
+                                clean: true,
+                                ..Default::default()
+                            },
+                        },
+                        Verbosity::new(3, 0),
+                        |logging, level| {
+                            assert!(!called.replace(true), "tracing initializes once");
+                            assert!(!logging.stdout.enabled);
+                            assert!(logging.stdout.json);
+                            assert!(logging.otlp.enabled);
+                            assert_eq!(logging.otlp.host, "collector.startup.test");
+                            assert_eq!(logging.otlp.port, 14318);
+                            assert_eq!(level, "DEBUG");
+                        },
+                    )
+                    .await;
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("Refusing to listen")
+                );
+                assert!(
+                    called.get(),
+                    "tracing must initialize before the exposure refusal"
+                );
+                assert!(
+                    !jail.directory().join("data").exists(),
+                    "validation must not create or clean the data directory"
+                );
+            });
+            Ok(())
+        });
     }
 
     #[test]

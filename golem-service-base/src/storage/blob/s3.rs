@@ -424,11 +424,21 @@ async fn check_bucket_access(client: &Client, startup_bucket: &str) -> Result<()
 impl S3BlobStorage {
     /// Connects to S3 and checks access to the bucket needed at startup.
     pub async fn new(config: S3BlobStorageConfig, startup_bucket: &str) -> Result<Self, Error> {
-        config.validate()?;
-        let region = config.region.clone();
+        Self::with_config_loader(
+            config,
+            startup_bucket,
+            aws_config::defaults(BehaviorVersion::latest()),
+        )
+        .await
+    }
 
-        let mut config_builder =
-            aws_config::defaults(BehaviorVersion::latest()).region(Region::new(region));
+    async fn with_config_loader(
+        config: S3BlobStorageConfig,
+        startup_bucket: &str,
+        config_builder: aws_config::ConfigLoader,
+    ) -> Result<Self, Error> {
+        config.validate()?;
+        let mut config_builder = config_builder.region(Region::new(config.region.clone()));
 
         if let Some(endpoint_url) = &config.aws_endpoint_url {
             info!("The AWS endpoint url for blob storage is {}", &endpoint_url);

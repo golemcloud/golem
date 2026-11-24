@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::{
-    BodyLengthError, ContentRange, RETRIABLE_SERVICE_ERROR_CODES, S3BlobStorage,
-    check_bucket_access, cut_range, parse_content_range, ranged_object_size, read_body,
+    BodyLengthError, ContentRange, RETRIABLE_SERVICE_ERROR_CODES, S3BlobStorage, cut_range,
+    parse_content_range, ranged_object_size, read_body,
 };
 use crate::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use crate::replayable_stream::ReplayableStream;
@@ -433,93 +433,122 @@ fn startup_constructor_propagates_the_selected_bucket_check_failure() {
     });
 }
 
-#[test]
-#[timeout("5s")]
-async fn startup_access_check_sends_one_bucket_root_head() {
-    let (storage, requests) = scripted_storage("", |_, _| Answer::new(200, ""));
-
-    check_bucket_access(&storage.client, "startup-probe-only")
-        .await
-        .unwrap();
-
-    let requests = sent(&requests);
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].method, "HEAD");
-    assert_eq!(requests[0].uri, "http://s3.test/startup-probe-only/");
-}
-
-#[test]
-#[timeout("5s")]
-async fn startup_access_check_retains_a_service_refusal() {
-    let (storage, requests) = scripted_storage("", |_, _| Answer::new(403, ""));
-
-    let error = check_bucket_access(&storage.client, "startup-probe-only")
-        .await
-        .unwrap_err();
-
-    let sdk_error = error
-        .downcast_ref::<SdkError<HeadBucketError>>()
-        .expect("the original HEAD error must remain in the chain");
-    match sdk_error {
-        SdkError::ServiceError(failure) => assert_eq!(failure.raw().status().as_u16(), 403),
-        other => panic!("expected a service refusal, got {other:?}"),
-    }
-    assert!(error.to_string().contains("startup-probe-only"));
-    let requests = sent(&requests);
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].method, "HEAD");
-    assert_eq!(requests[0].uri, "http://s3.test/startup-probe-only/");
-}
-
-#[test]
-#[timeout("5s")]
-async fn startup_access_check_retains_a_transport_failure() {
-    let (storage, requests) = scripted_storage("", |_, _| {
-        Answer::transport_error(ConnectorError::io(Box::new(std::io::Error::new(
-            std::io::ErrorKind::ConnectionRefused,
-            "selected bucket transport refusal",
-        ))))
+fn with_startup_constructor<F: Future<Output = ()>>(
+    script: impl Fn(&SentRequest, usize) -> Answer + Send + Sync + 'static,
+    check: impl FnOnce(S3BlobStorageConfig, aws_config::ConfigLoader, SentRequests) -> F,
+) {
+    figment::Jail::expect_with(|jail| {
+        let mut config = constructor_config(jail);
+        config.aws_endpoint_url = Some("http://s3.test".to_string());
+        let transport = ScriptedTransport {
+            requests: Arc::default(),
+            script: Arc::new(script),
+        };
+        let requests = transport.requests.clone();
+        let connector = SharedHttpConnector::new(transport);
+        let loader = aws_config::defaults(BehaviorVersion::latest())
+            .timeout_config(TimeoutConfig::disabled())
+            .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
+            .http_client(http_client_fn(move |_, _| connector.clone()));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .start_paused(true)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(30), check(config, loader, requests))
+                .await
+                .expect("the whole-constructor watchdog expired");
+        });
+        Ok(())
     });
+}
 
-    let error = check_bucket_access(&storage.client, "startup-probe-only")
-        .await
-        .unwrap_err();
+#[test]
+fn startup_access_check_sends_one_bucket_root_head() {
+    with_startup_constructor(
+        |_, _| Answer::new(200, ""),
+        |config, loader, requests| async move {
+            S3BlobStorage::with_config_loader(config, "startup-probe-only", loader)
+                .await
+                .unwrap();
 
-    let sdk_error = error
-        .downcast_ref::<SdkError<HeadBucketError>>()
-        .expect("the original HEAD error must remain in the chain");
-    assert!(matches!(sdk_error, SdkError::DispatchFailure(_)));
-    let cause = error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<std::io::Error>())
-        .expect("the original transport cause must remain in the chain");
-    assert_eq!(cause.kind(), std::io::ErrorKind::ConnectionRefused);
-    assert_eq!(cause.to_string(), "selected bucket transport refusal");
-    assert!(error.to_string().contains("startup-probe-only"));
-    let requests = sent(&requests);
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].method, "HEAD");
-    assert_eq!(requests[0].uri, "http://s3.test/startup-probe-only/");
+            let requests = sent(&requests);
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].method, "HEAD");
+            assert_eq!(requests[0].uri, "http://s3.test/startup-probe-only/");
+        },
+    );
+}
+
+#[test]
+fn startup_access_check_retains_a_service_refusal() {
+    with_startup_constructor(
+        |_, _| Answer::new(403, ""),
+        |config, loader, requests| async move {
+            let error = S3BlobStorage::with_config_loader(config, "startup-probe-only", loader)
+                .await
+                .expect_err("the empty-body refusal must stop construction");
+            let sdk_error = error
+                .downcast_ref::<SdkError<HeadBucketError>>()
+                .expect("the original HEAD error must remain in the chain");
+            match sdk_error {
+                SdkError::ServiceError(failure) => assert_eq!(failure.raw().status().as_u16(), 403),
+                other => panic!("expected a service refusal, got {other:?}"),
+            }
+            assert!(error.to_string().contains("startup-probe-only"));
+            let requests = sent(&requests);
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].method, "HEAD");
+            assert_eq!(requests[0].uri, "http://s3.test/startup-probe-only/");
+        },
+    );
+}
+
+#[test]
+fn startup_access_check_retains_a_transport_failure() {
+    with_startup_constructor(
+        |_, _| {
+            Answer::transport_error(ConnectorError::io(Box::new(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                "selected bucket transport refusal",
+            ))))
+        },
+        |config, loader, requests| async move {
+            let error = S3BlobStorage::with_config_loader(config, "startup-probe-only", loader)
+                .await
+                .expect_err("a transport failure must stop construction");
+            let sdk_error = error
+                .downcast_ref::<SdkError<HeadBucketError>>()
+                .expect("the original HEAD error must remain in the chain");
+            assert!(matches!(sdk_error, SdkError::DispatchFailure(_)));
+            let cause = error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+                .expect("the original transport cause must remain in the chain");
+            assert_eq!(cause.kind(), std::io::ErrorKind::ConnectionRefused);
+            assert_eq!(cause.to_string(), "selected bucket transport refusal");
+            assert!(error.to_string().contains("startup-probe-only"));
+            let requests = sent(&requests);
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].method, "HEAD");
+            assert_eq!(requests[0].uri, "http://s3.test/startup-probe-only/");
+        },
+    );
 }
 
 #[test]
 fn startup_access_check_times_out_at_ten_seconds() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .start_paused(true)
-        .build()
-        .unwrap();
-
-    runtime.block_on(async {
-        tokio::time::timeout(Duration::from_secs(30), async {
-            let arrived = Arc::new(tokio::sync::Notify::new());
-            let notify = arrived.clone();
-            let (storage, requests) = scripted_storage("", move |_, _| {
-                notify.notify_one();
-                Answer::pending()
-            });
+    let arrived = Arc::new(tokio::sync::Notify::new());
+    let notify = arrived.clone();
+    with_startup_constructor(
+        move |_, _| {
+            notify.notify_one();
+            Answer::pending()
+        },
+        |config, loader, requests| async move {
             let started = tokio::time::Instant::now();
-            let check = check_bucket_access(&storage.client, "startup-probe-only");
+            let check = S3BlobStorage::with_config_loader(config, "startup-probe-only", loader);
             tokio::pin!(check);
 
             tokio::select! {
@@ -545,10 +574,8 @@ fn startup_access_check_times_out_at_ten_seconds() {
                 .expect("the access-check deadline must retain the Tokio cause");
             assert!(error.to_string().contains("startup-probe-only"));
             assert_eq!(sent(&requests).len(), 1);
-        })
-        .await
-        .expect("the whole-scenario watchdog expired");
-    });
+        },
+    );
 }
 
 /// Gives the path of the URI of each request, without the endpoint and the query. The path style

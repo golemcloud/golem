@@ -42,4 +42,5 @@ uuid = { workspace = true }
 wasmtime = { workspace = true }
 
 [dev-dependencies]
+figment = { workspace = true, features = ["test"] }
 test-r = { workspace = true }

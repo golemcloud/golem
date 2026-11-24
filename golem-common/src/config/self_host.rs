@@ -415,7 +415,7 @@ impl Provider for ServiceSettings<'_> {
         } else {
             projected
         };
-        projected.data()
+        Serialized::defaults(projected.extract::<Value>()?).data()
     }
 }
 
@@ -738,6 +738,12 @@ mod tests {
                     .unwrap(),
                 schema
             );
+            assert_eq!(
+                config
+                    .extract_inner::<u32>(&format!("{path}.config.max_connections"))
+                    .unwrap(),
+                10
+            );
         });
         [
             "registry_service",
@@ -801,5 +807,144 @@ mod tests {
         let worker = project("worker_service", &input);
         assert_eq!(worker.extract_inner::<u16>("port").unwrap(), 18124);
         assert!(worker.extract_inner::<u16>("http_port").is_err());
+    }
+
+    #[test]
+    fn internal_tls_reaches_each_service_and_its_clients() {
+        [true, false].into_iter().for_each(|enabled| {
+            let input = Figment::from(Serialized::defaults(json!({
+                "internal_grpc_tls": {
+                    "enabled": enabled,
+                    "cert_file": "/certs/service.pem",
+                    "key_file": "/certs/service.key",
+                    "ca_cert_file": "/certs/internal-ca.pem",
+                    "server_name": "services.internal",
+                },
+                "etcd": {"tls": {"ca_cert_file": "/certs/etcd-ca.pem"}},
+            })));
+            [
+                ("registry_service", &["component_compilation.config"][..]),
+                ("shard_manager", &["registry_service", "worker_executors"]),
+                (
+                    "worker_service",
+                    &["registry_service", "worker_executor", "shard_manager"],
+                ),
+                (
+                    "worker_executor",
+                    &["registry_service", "shard_manager", "public_worker_api"],
+                ),
+                ("component_compilation_service", &["compile_worker"]),
+            ]
+            .into_iter()
+            .for_each(|(service, clients)| {
+                let config = project(service, &input).extract::<Value>().unwrap();
+                let server = if enabled {
+                    json!({"type": "Enabled", "config": {
+                        "server_cert_file": "/certs/service.pem",
+                        "server_key_file": "/certs/service.key",
+                        "client_ca_cert_file": "/certs/internal-ca.pem",
+                    }})
+                } else {
+                    json!({"type": "Disabled", "config": {}})
+                };
+                assert_eq!(config.pointer("/grpc/tls"), Some(&server), "{service}");
+                clients.iter().for_each(|client| {
+                    let tls = project(service, &input)
+                        .extract_inner::<Value>(&format!("{client}.tls"))
+                        .unwrap();
+                    let expected = if enabled {
+                        json!({"type": "Enabled", "config": {
+                            "client_cert_file": "/certs/service.pem",
+                            "client_key_file": "/certs/service.key",
+                            "server_ca_cert_file": "/certs/internal-ca.pem",
+                            "server_domain_name": "services.internal",
+                        }})
+                    } else {
+                        json!({"type": "Disabled", "config": {}})
+                    };
+                    assert_eq!(tls, expected, "{service}: {client}");
+                });
+                assert_eq!(
+                    config
+                        .pointer("/persistence/config/tls/ca_cert_file")
+                        .and_then(Value::as_str),
+                    (service == "shard_manager").then_some("/certs/etcd-ca.pem"),
+                    "{service}"
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn snapshot_retention_follows_the_executor_variant() {
+        [
+            (json!({"filesystem_snapshots": {"type": "Enabled"}}), Some(2)),
+            (json!({"filesystem_snapshots": {"type": "Disabled"}}), None),
+            (json!({"retained_update_snapshots": 7}), Some(7)),
+            (json!({"advanced": {"worker_executor": {"filesystem_snapshots": {"type": "Enabled"}}}}), Some(2)),
+        ]
+        .into_iter()
+        .for_each(|(value, retained)| {
+            let input = Figment::from(Serialized::defaults(value));
+            let executor = project("worker_executor", &input).extract::<Value>().unwrap();
+            assert_eq!(
+                executor.pointer("/filesystem_snapshots/config/retained_update_snapshots").and_then(Value::as_u64),
+                retained
+            );
+            let worker = project("worker_service", &input).extract::<Value>().unwrap();
+            assert!(worker.get("filesystem_snapshots").is_none());
+        });
+    }
+
+    #[test]
+    fn server_advanced_inherits_only_settings_for_new_variants() {
+        let lower = Figment::from(Serialized::defaults(json!({
+            "retained_update_snapshots": 7,
+            "etcd": {"tls": {"ca_cert_file": "/certs/inherited-etcd.pem"}},
+            "advanced": {
+                "shard_manager": {"persistence": {"type": "InMemory"}},
+                "worker_executor": {"filesystem_snapshots": {"type": "Disabled"}},
+            },
+        })));
+        let layer = Figment::from(Serialized::defaults(json!({
+            "advanced": {
+                "shard_manager": {"persistence": {"type": "Etcd"}},
+                "worker_executor": {"filesystem_snapshots": {"type": "Enabled"}},
+            },
+        })));
+        let projected = server_advanced(&layer, &lower).unwrap();
+        assert_eq!(
+            projected
+                .extract_inner::<String>("shard_manager.persistence.config.tls.ca_cert_file")
+                .unwrap(),
+            "/certs/inherited-etcd.pem"
+        );
+        assert_eq!(
+            projected
+                .extract_inner::<u32>(
+                    "worker_executor.filesystem_snapshots.config.retained_update_snapshots"
+                )
+                .unwrap(),
+            7
+        );
+        let repeated = server_advanced(&layer, &lower.clone().merge(&layer)).unwrap();
+        assert!(
+            repeated
+                .extract_inner::<Value>("shard_manager.persistence.config.tls")
+                .is_err()
+        );
+        let unchanged = server_advanced(&Figment::new(), &lower).unwrap();
+        assert!(
+            unchanged
+                .extract_inner::<Value>("shard_manager.persistence.config.tls")
+                .is_err()
+        );
+        assert!(
+            unchanged
+                .extract_inner::<Value>(
+                    "worker_executor.filesystem_snapshots.config.retained_update_snapshots"
+                )
+                .is_err()
+        );
     }
 }
