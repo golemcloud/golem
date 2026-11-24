@@ -389,7 +389,7 @@ set -eu
 if [ "$1" = metadata ]; then printf '{"target_directory":"%s"}' "$CARGO_MAKE_CRATE_TARGET_DIRECTORY"; fi
 if [ "$1" = build ]; then
  mkdir -p "$CARGO_MAKE_CRATE_TARGET_DIRECTORY/wasm32-wasip2/release"
- for name in retention_empty retention_non_reflective retention_reflection; do printf 'retention:%s' "$name" > "$CARGO_MAKE_CRATE_TARGET_DIRECTORY/wasm32-wasip2/release/$name.wasm"; done
+ for name in retention_canonical_floor retention_empty retention_non_reflective retention_reflection; do printf 'retention:%s' "$name" > "$CARGO_MAKE_CRATE_TARGET_DIRECTORY/wasm32-wasip2/release/$name.wasm"; done
 fi
 `
     ),
@@ -421,7 +421,9 @@ fi
   await shell("benchmarks", "rebuild")
   const cold = await exports()
   expect(Object.keys(cold).length).toBeGreaterThan(30)
-  for (const name of ["retention_empty", "retention_non_reflective", "retention_reflection"]) {
+  for (
+    const name of ["retention_canonical_floor", "retention_empty", "retention_non_reflective", "retention_reflection"]
+  ) {
     expect(cold[`${name}.wasm`]).toBe(`retention:${name}`)
   }
   await execute(publish(pending, cache))

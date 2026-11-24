@@ -14,7 +14,9 @@ use golem_common::schema::{
     render::{from_json_value, to_json_value},
 };
 use golem_size_analysis::breakdown::Bucket;
-use golem_size_analysis::collect::{CollectInputs, collect, read_module_map, to_json};
+use golem_size_analysis::collect::{
+    CollectInputs, collect, read_go_packages, read_module_map, to_json,
+};
 use golem_size_analysis::fixtures::{
     CallTarget, CheckedCall, Fixture, FixtureDescriptor, FixtureKind, HttpExpected, Sdk,
     ToolArguments, ToolExpected,
@@ -560,6 +562,11 @@ async fn collect_fixture(
                 let bundle_dir =
                     ctx.cwd_path_join(format!("golem-temp/ts-dist/{}", component.to_kebab_case()));
                 let map = read_module_map(&bundle_dir.join("main.modules.json"))?;
+                ensure!(
+                    map.keys().all(|id| !Path::new(id).is_absolute()
+                        && !id.contains(&ctx.cwd_path().display().to_string())),
+                    "the module map contains an absolute application path"
+                );
                 if fixture.kind == FixtureKind::RepresentativeAgent {
                     ensure!(
                         map.iter().any(
@@ -628,6 +635,33 @@ async fn collect_fixture(
                 uploaded.to_vec()
             };
             inputs.named = Some(&named);
+            let packages = tokio::time::timeout(
+                Duration::from_secs(1200),
+                tokio::process::Command::new("go")
+                    .args([
+                        "list",
+                        "-deps",
+                        "-json",
+                        "-buildmode=c-shared",
+                        "-tags=componentizego_async",
+                        ".",
+                    ])
+                    .envs(&ctx.env)
+                    .env("GOOS", "wasip1")
+                    .env("GOARCH", "wasm")
+                    .current_dir(&directory)
+                    .kill_on_drop(true)
+                    .output(),
+            )
+            .await
+            .context("Go package resolution exceeded its deadline")??;
+            ensure!(
+                packages.status.success(),
+                "Go package resolution failed: {}",
+                String::from_utf8_lossy(&packages.stderr)
+            );
+            std::fs::write(evidence.join("go-packages.json"), &packages.stdout)?;
+            inputs.go_packages = Some(read_go_packages(&packages.stdout)?);
         }
         Sdk::Moonbit => {
             let manifest = std::fs::read_to_string(ctx.cwd_path_join("moon.mod"))?;
@@ -1533,6 +1567,13 @@ async fn sdk_fixtures(sdk: Sdk) {
                             serde_yaml::Value::Mapping(Default::default());
                     }
                     std::fs::write(manifest, serde_yaml::to_string(&yaml)?)?;
+                }
+                if kind == FixtureKind::StarterAgent && matches!(sdk, Sdk::Ts | Sdk::Effect) {
+                    let map = ctx.cwd_path_join(format!("golem-temp/ts-dist/{}/main.modules.json", component.to_kebab_case()));
+                    let before = std::fs::read(&map)?;
+                    std::fs::remove_file(&map)?;
+                    command(&ctx, vec![flag::YES.into(), "-P".into(), preset.into(), cmd::BUILD.into()]).await?;
+                    ensure!(std::fs::read(map)? == before, "an up-to-date build did not restore the module map");
                 }
                 command(
                     &ctx,

@@ -20,6 +20,7 @@ componentTemplates:
           - "{{ appRootDir }}/package.json"
           targets:
           - "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
+          - "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.modules.json"
         - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm"
           module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
           into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
@@ -41,6 +42,7 @@ componentTemplates:
           - "{{ appRootDir }}/package.json"
           targets:
           - "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
+          - "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.modules.json"
         - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm"
           module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
           into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"

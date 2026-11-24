@@ -57,7 +57,7 @@ marked TS comment is the same comment, marked, in Go.
   `impl.Handle`, `Tool.Body[A, O]`, ...).
 - **gofmt 1.27:** the script calls `"$(go env GOROOT)/bin/gofmt"` from the
   harness directory (an older `gofmt` on PATH cannot parse generic methods).
-- **The patched Golem Go toolchain `go1.27.1-golem.5`** (github.com/golemcloud/go),
+- **The patched Golem Go toolchain `go1.27.1-golem.6`** (github.com/golemcloud/go),
   needed only to link components. check.sh installs it the way the Golem CLI
   does (`cli/golem-cli/src/app/build/go_toolchain.rs`, pins in
   `cli/golem-cli/src/versions.rs`): it downloads

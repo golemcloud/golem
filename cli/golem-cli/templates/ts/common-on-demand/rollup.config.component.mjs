@@ -203,6 +203,10 @@ function componentRollupConfig() {
     if (!golemTemp) {
         throw new Error("GOLEM_TEMP is not set");
     }
+    const appRootDir = process.env.GOLEM_APP_ROOT;
+    if (!appRootDir) {
+        throw new Error("GOLEM_APP_ROOT is not set");
+    }
     const componentDir = process.cwd();
     const parsedTsConfig = loadComponentTsConfig(componentDir);
 
@@ -256,7 +260,14 @@ function componentRollupConfig() {
                     type: "asset",
                     fileName: "main.modules.json",
                     source: JSON.stringify(Object.fromEntries(
-                        modules.map(([id, module]) => [id, module.renderedLength]),
+                        modules.map(([id, module]) => {
+                            const virtual = id.startsWith("\0") ? "\0" : "";
+                            const filename = virtual ? id.slice(1) : id;
+                            const relative = path.isAbsolute(filename)
+                                ? path.relative(appRootDir, filename).split(path.sep).join("/")
+                                : filename;
+                            return [virtual + relative, module.renderedLength];
+                        }),
                     )),
                 });
             },

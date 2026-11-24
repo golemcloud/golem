@@ -121,7 +121,14 @@ const configuration = () => ({
           type: "asset",
           fileName: "main.modules.json",
           source: JSON.stringify(Object.fromEntries(
-            modules.map(([id, module]) => [id, module.renderedLength]),
+            modules.map(([id, module]) => {
+              const virtual = id.startsWith("\0") ? "\0" : "";
+              const filename = virtual ? id.slice(1) : id;
+              const relative = path.isAbsolute(filename)
+                ? path.relative(appRootDir, filename).split(path.sep).join("/")
+                : filename;
+              return [virtual + relative, module.renderedLength];
+            }),
           )),
         });
       },

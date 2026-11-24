@@ -243,6 +243,12 @@ impl FixtureDescriptor {
             }
         }
         for call in &mut bound.calls {
+            if call.arguments.to_string().contains("${") || call.expected.to_string().contains("${")
+            {
+                return Err(
+                    "tokens are only allowed in agent binding strings and HTTP paths".into(),
+                );
+            }
             match &mut call.target {
                 CallTarget::Invoke { agent, method } => {
                     if !bound.agents.contains_key(agent)
@@ -401,6 +407,26 @@ mod tests {
         invalid.calls.clear();
         assert!(invalid.bind("run").is_err());
         assert!(descriptor.bind("not/a/path").is_err());
+        for index in 0..descriptor.calls.len() {
+            for token in ["${run}", "${unknown}"] {
+                let mut invalid = descriptor.clone();
+                invalid.calls[index].arguments = match index {
+                    0 => serde_json::json!([{"nested": [token]}]),
+                    1 => serde_json::json!({"nested": [token]}),
+                    _ => serde_json::json!({"argv": [token], "stdin": []}),
+                };
+                assert!(invalid.bind("run").is_err());
+                let mut invalid = descriptor.clone();
+                invalid.calls[index].expected = match index {
+                    0 => serde_json::json!({"nested": [token]}),
+                    1 => serde_json::json!({"status": 200, "body": {"nested": [token]}}),
+                    _ => {
+                        serde_json::json!({"result": {"nested": [token]}, "stdout": [], "stderr": []})
+                    }
+                };
+                assert!(invalid.bind("run").is_err());
+            }
+        }
         let mut missing_result = descriptor.clone();
         missing_result.calls[2]
             .expected

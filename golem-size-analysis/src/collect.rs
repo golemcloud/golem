@@ -5,8 +5,8 @@ use std::path::Path;
 
 use crate::attribution::{Symbol, group_by_owner};
 use crate::breakdown::{
-    Breakdown, JsComponent, SymbolClassifier, js_breakdown, rust_breakdown, scala_breakdown,
-    scaled_breakdown,
+    Breakdown, GoPackage, JsComponent, SymbolClassifier, js_breakdown, rust_breakdown,
+    scala_breakdown, scaled_breakdown,
 };
 use crate::fixtures::Sdk;
 use crate::sections::{SectionRow, SizeSummary, section_table, summarize};
@@ -21,6 +21,8 @@ pub struct CollectInputs<'a> {
     pub dynamic: Option<&'a [u8]>,
     /// TS and Effect: the rollup module map, module id to rendered length.
     pub module_map: Option<BTreeMap<String, u64>>,
+    /// Go: the resolved packages of the same Wasm build, from `go list -deps -json`.
+    pub go_packages: Option<Vec<GoPackage>>,
     /// Rust, Go and MoonBit: a build of the same source that keeps its `name` section. Without
     /// it, Rust attributes the uploaded file itself, which must then be named.
     pub named: Option<&'a [u8]>,
@@ -71,7 +73,13 @@ pub fn collect(sdk: Sdk, inputs: &CollectInputs<'_>) -> anyhow::Result<(Collecte
             let user = inputs.user.context("compiled SDKs need --user")?;
             let classifier = match sdk {
                 Sdk::Rust => SymbolClassifier::rust(&user.replace('-', "_")),
-                Sdk::Go => SymbolClassifier::go(user),
+                Sdk::Go => SymbolClassifier::go(
+                    user,
+                    inputs
+                        .go_packages
+                        .as_deref()
+                        .context("Go components need --go-packages")?,
+                ),
                 _ => SymbolClassifier::moonbit(user),
             };
             naming = Some(classifier.naming);
@@ -110,9 +118,57 @@ pub fn read_module_map(path: &Path) -> anyhow::Result<BTreeMap<String, u64>> {
     })
 }
 
+/// Reads the JSON object stream produced by `go list -deps -json`.
+pub fn read_go_packages(json: &[u8]) -> anyhow::Result<Vec<GoPackage>> {
+    let packages = serde_json::Deserializer::from_slice(json)
+        .into_iter::<GoPackage>()
+        .collect::<Result<Vec<_>, _>>()?;
+    anyhow::ensure!(!packages.is_empty(), "the Go package list is empty");
+    Ok(packages)
+}
+
 /// Pretty JSON with a trailing newline, the form every artifact of this crate is written in.
 pub fn to_json(value: &impl Serialize) -> anyhow::Result<Vec<u8>> {
     let mut json = serde_json::to_vec_pretty(value)?;
     json.push(b'\n');
     Ok(json)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::breakdown::Bucket;
+    use test_r::test;
+
+    #[test]
+    fn go_collection_uses_resolved_module_ownership() {
+        let metadata = br#"
+            {"ImportPath":"log","Standard":true}
+            {"ImportPath":"log-shipper","Module":{"Path":"log-shipper"}}
+            {"ImportPath":"net_utils","Module":{"Path":"net_utils"}}
+            {"ImportPath":"example.com/app-extra","Module":{"Path":"example.com/app-extra"}}
+            {"ImportPath":"example.com/app/internal/store","Module":{"Path":"example.com/app"}}
+        "#;
+        for (name, bucket) in [
+            ("log.Printf", Bucket::Runtime),
+            ("log_shipper.Send", Bucket::Dependencies),
+            ("net_utils.Dial", Bucket::Dependencies),
+            ("example.com_app_extra.Helper", Bucket::Dependencies),
+            ("example.com_app_internal_store.Get", Bucket::UserCode),
+        ] {
+            let wasm = wat::parse_str(format!("(component (core module (func ${name})))")).unwrap();
+            let mut inputs = CollectInputs {
+                uploaded: &wasm,
+                named: Some(&wasm),
+                user: Some("example.com/app"),
+                ..Default::default()
+            };
+            assert!(collect(Sdk::Go, &inputs).is_err());
+            inputs.go_packages = Some(read_go_packages(metadata).unwrap());
+            let (measurement, _) = collect(Sdk::Go, &inputs).unwrap();
+            assert!(measurement.breakdown.bucket(bucket) > 0, "{name}");
+        }
+        assert!(read_go_packages(b"").is_err());
+        assert!(read_go_packages(br#"{"ImportPath":"log"} broken"#).is_err());
+    }
 }

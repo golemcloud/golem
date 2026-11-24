@@ -43,8 +43,9 @@ SHA-256 is `e7694100ad6d20e0586fe5af2e3322f8561886cfa5c13fc8ec10c49665bf57d9`.
 
 Measure only the selected preset's resolved `componentWasm`. The harness compares the deployed
 revision's downloaded bytes with that file, then passes the same bytes to the existing collector.
-TS/Effect retain `main.modules.json` from the final Rollup output; Scala retains one linked-bundle
-bucket. Compiled SDKs use named/debug companion artifacts where needed. Proportional JS ownership
+TS/Effect retain `main.modules.json` from the final Rollup output, with app-relative paths
+including virtual CommonJS modules. The map is a build target and is regenerated when missing.
+Scala retains one linked-bundle bucket. Compiled SDKs use named/debug companion artifacts where needed. Proportional JS ownership
 and scaled compiled attribution are estimates, not exact ownership of anonymous data segments.
 
 The first call and an equivalent call on a fresh agent must have equal checked results and complete
@@ -86,7 +87,7 @@ cargo run -p golem-size-analysis -- collect --sdk rust --wasm component.wasm \
 cargo run -p golem-size-analysis -- collect --sdk ts --wasm app.preinitialized.wasm \
   --guest agent_guest.wasm --dynamic app.dynamic.wasm --module-map modules.json
 cargo run -p golem-size-analysis -- collect --sdk go --wasm release.wasm \
-  --named-wasm debug.wasm --user example.com/app
+  --named-wasm debug.wasm --user example.com/app --go-packages go-packages.json
 ```
 
 The buckets add up to the uploaded file:
@@ -105,7 +106,11 @@ The buckets add up to the uploaded file:
 - Go and MoonBit: twiggy over the `name` section of a debug build, scaled to the release file and
   marked approximate.
 
-Go symbols are matched against package paths using the pinned linker's Wasm name encoding
+Go requires the resolved package list from `go list -deps -json .`, saved as `go-packages.json`
+using the build's toolchain and flags. These fixtures use `GOOS=wasip1`, `GOARCH=wasm`,
+`-buildmode=c-shared` and `-tags=componentizego_async`. Module ownership and the `Standard` flag
+select the buckets; only full package paths match symbol boundaries.
+Go symbols are matched against those paths using the pinned linker's Wasm name encoding
 (characters other than ASCII letters, digits, `_` and `.` become `_`). This encoding is lossy;
 the fixture evidence retains raw matching symbols instead of claiming to recover package paths.
 The standard library of the pinned Go toolchain, its
