@@ -41,6 +41,18 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
   private val externalSpan              = ExternalSpanData("span2")
   private val spanDatas: List[SpanData] = List(SpanData.LocalSpan(localSpan), SpanData.ExternalSpan(externalSpan))
 
+  private val sampleCaller = PublicCaller(
+    original = PublicPrincipal.User(PublicPrincipalRef("https://idp.example", "bob"), ts),
+    immediate = PublicPrincipal.Agent(
+      PublicPrincipalRef("https://golem.example", "agent:relay"),
+      new java.util.UUID(3L, 4L),
+      "Relay(\"r\")",
+      "Relay",
+      new java.util.UUID(5L, 6L)
+    ),
+    tokens = List(PublicTokenProvenance(new java.util.UUID(7L, 8L), None))
+  )
+
   private val agentInvocations: List[AgentInvocation] = List(
     AgentInvocation.ExportedFunction(
       AgentMethodInvocationParameters(
@@ -49,10 +61,12 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
         Some(List(sampleTyped)),
         "trace1",
         List("state1"),
-        List(spanDatas)
+        List(spanDatas),
+        sampleCaller
       )
     ),
-    AgentInvocation.ManualUpdate(BigInt(2))
+    AgentInvocation.ManualUpdate(BigInt(2), sampleCaller),
+    AgentInvocation.SaveSnapshot(sampleCaller)
   )
 
   private val updateDescs: List[UpdateDescription] = List(
@@ -94,6 +108,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     case OplogEntry.AgentInvocationStarted(p)       => s"export(${p.functionName})"
     case OplogEntry.AgentInvocationFinished(p)      => s"completed(${p.consumedFuel})"
     case OplogEntry.AgentInvocationFailed(p)        => s"failed(${p.error})"
+    case OplogEntry.AgentInvocationSettled(p)       => s"settled(${p.consumedFuel})"
     case OplogEntry.Suspend(t)                      => s"suspend(${t.seconds})"
     case OplogEntry.Error(p)                        => s"error(${p.kind},${p.error})"
     case OplogEntry.RecoverySucceeded(t)            => s"recovery-succeeded(${t.seconds})"
@@ -213,11 +228,12 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
           "trace-1",
           List("state"),
           List(spanDatas),
-          walletPin
+          walletPin,
+          Some(sampleCaller)
         )
       ),
       OplogEntry.PendingAgentInvocation(PendingAgentInvocationParameters(ts, agentInvocations.head, None)),
-      OplogEntry.PendingUpdate(PendingUpdateParameters(ts, BigInt(3), UpdateDescription.AutoUpdate)),
+      OplogEntry.PendingUpdate(PendingUpdateParameters(ts, BigInt(3), UpdateDescription.AutoUpdate, sampleCaller)),
       OplogEntry.SuccessfulUpdate(SuccessfulUpdateParameters(ts, BigInt(3), BigInt(1024), List(pluginDesc))),
       OplogEntry.FailedUpdate(FailedUpdateParameters(ts, BigInt(3), Some("compile error"))),
       OplogEntry.FailedUpdate(FailedUpdateParameters(ts, BigInt(3), None)),
@@ -273,13 +289,23 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     },
     test("AgentInvocation exhaustive match") {
       agentInvocations.foreach {
-        case AgentInvocation.ExportedFunction(p)    => Predef.assert(p.functionName.nonEmpty)
-        case AgentInvocation.ManualUpdate(rev)      => Predef.assert(rev > 0)
-        case AgentInvocation.AgentInitialization(k) => Predef.assert(k == invocationUuid)
-        case AgentInvocation.ExternalTool(k)        => Predef.assert(k == invocationUuid)
-        case AgentInvocation.SaveSnapshot           => ()
-        case AgentInvocation.LoadSnapshot           => ()
-        case AgentInvocation.ProcessOplogEntries(k) => Predef.assert(k == invocationUuid)
+        case AgentInvocation.ExportedFunction(p)       => Predef.assert(p.functionName.nonEmpty)
+        case AgentInvocation.ManualUpdate(rev, r)      => Predef.assert(rev > 0 && r.tokens.nonEmpty)
+        case AgentInvocation.AgentInitialization(k, _) => Predef.assert(k == invocationUuid)
+        case AgentInvocation.ExternalTool(k, _)        => Predef.assert(k == invocationUuid)
+        case AgentInvocation.SaveSnapshot(c)           => Predef.assert(c.tokens.nonEmpty)
+        case AgentInvocation.LoadSnapshot(c)           => Predef.assert(c.tokens.nonEmpty)
+        case AgentInvocation.ProcessOplogEntries(k, _) => Predef.assert(k == invocationUuid)
+      }
+      assertCompletes
+    },
+    test("PublicPrincipal exhaustive match") {
+      List(sampleCaller.original, sampleCaller.immediate, PublicPrincipal.Anonymous).foreach {
+        case PublicPrincipal.User(pair, _)           => Predef.assert(pair.subject.nonEmpty)
+        case PublicPrincipal.Account(pair, _, _)     => Predef.assert(pair.subject.nonEmpty)
+        case PublicPrincipal.Agent(pair, _, _, _, _) => Predef.assert(pair.subject.nonEmpty)
+        case PublicPrincipal.Tool(pair, _, _)        => Predef.assert(pair.subject.nonEmpty)
+        case PublicPrincipal.Anonymous               => ()
       }
       assertCompletes
     },

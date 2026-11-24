@@ -557,6 +557,17 @@
               "type": "string"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
@@ -568,7 +579,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -578,7 +605,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -690,6 +752,17 @@
               "type": "string"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "requestBody": {
@@ -721,7 +794,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -731,7 +820,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -753,6 +877,17 @@
               "type": "string"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
@@ -764,7 +899,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -774,7 +925,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -888,6 +1074,17 @@
               "type": "string"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "requestBody": {
@@ -927,7 +1124,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -937,7 +1150,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -981,6 +1229,17 @@
               "type": "string"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
@@ -992,7 +1251,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -1002,7 +1277,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -1046,6 +1356,17 @@
               "type": "string"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
@@ -1057,7 +1378,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -1067,7 +1404,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -1116,6 +1488,17 @@
               "x-golem-minimum": "0"
             },
             "style": "form"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
@@ -1127,7 +1510,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -1137,7 +1536,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -1155,6 +1589,17 @@
             "in": "path",
             "name": "agent-name",
             "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
             "schema": {
               "type": "string"
             },
@@ -1218,7 +1663,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -1228,7 +1689,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -1264,6 +1760,17 @@
               "type": "integer"
             },
             "style": "form"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
@@ -1277,7 +1784,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -1287,7 +1810,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -1353,6 +1911,17 @@
               }
             },
             "style": "deepObject"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
@@ -1367,7 +1936,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -1377,7 +1962,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -1443,6 +2063,17 @@
               }
             },
             "style": "deepObject"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
@@ -1457,7 +2088,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -1467,7 +2114,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -1567,6 +2249,17 @@
               "type": "string"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
@@ -1581,7 +2274,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -1591,7 +2300,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -1620,6 +2364,17 @@
             "in": "path",
             "name": "id",
             "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
             "schema": {
               "type": "string"
             },
@@ -1655,7 +2410,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -1665,7 +2436,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -1698,6 +2504,17 @@
               "type": "string"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
@@ -1709,7 +2526,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -1719,7 +2552,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -1741,6 +2609,17 @@
               "type": "string"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
@@ -1753,11 +2632,41 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "307": {
             "description": "Response 307",
             "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
               "Location": {
                 "description": "Response header: Location",
                 "required": true,
@@ -1776,7 +2685,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -1809,6 +2753,17 @@
               "type": "string"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
@@ -1821,11 +2776,41 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "307": {
             "description": "Response 307",
             "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
               "Location": {
                 "description": "Response header: Location",
                 "required": true,
@@ -1844,10 +2829,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Response 404"
+            "description": "Response 404",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "500": {
             "content": {
@@ -1857,7 +2874,42 @@
                 }
               }
             },
-            "description": "Response 500"
+            "description": "Response 500",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -1890,6 +2942,17 @@
               "type": "string"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
@@ -1913,12 +2976,40 @@
                   "type": "string"
                 },
                 "style": "simple"
+              },
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
               }
             }
           },
           "307": {
             "description": "Response 307",
             "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
               "Location": {
                 "description": "Response header: Location",
                 "required": true,
@@ -1937,10 +3028,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Response 404"
+            "description": "Response 404",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "500": {
             "content": {
@@ -1950,7 +3073,42 @@
                 }
               }
             },
-            "description": "Response 500"
+            "description": "Response 500",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -1972,6 +3130,17 @@
               "type": "string"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
@@ -1983,7 +3152,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -1993,7 +3178,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -2015,11 +3235,38 @@
               "type": "string"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
           "204": {
-            "description": "Response 204"
+            "description": "Response 204",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -2029,7 +3276,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -2062,6 +3344,17 @@
               "type": "boolean"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
@@ -2074,11 +3367,41 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "307": {
             "description": "Response 307",
             "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
               "Location": {
                 "description": "Response header: Location",
                 "required": true,
@@ -2097,10 +3420,61 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Response 404"
+            "description": "Response 404",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -2133,6 +3507,17 @@
               "type": "boolean"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
@@ -2144,7 +3529,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -2154,10 +3555,61 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Response 404"
+            "description": "Response 404",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -2190,6 +3642,17 @@
               "type": "boolean"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
@@ -2201,7 +3664,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -2211,7 +3690,23 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "500": {
             "content": {
@@ -2221,7 +3716,42 @@
                 }
               }
             },
-            "description": "Response 500"
+            "description": "Response 500",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -2243,6 +3773,17 @@
               "type": "string"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
@@ -2254,7 +3795,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -2264,10 +3821,61 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "500": {
-            "description": "Response 500"
+            "description": "Response 500",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -2289,11 +3897,38 @@
               "type": "string"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
           "204": {
-            "description": "Response 204"
+            "description": "Response 204",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -2303,7 +3938,23 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "500": {
             "content": {
@@ -2313,7 +3964,42 @@
                 }
               }
             },
-            "description": "Response 500"
+            "description": "Response 500",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -2347,6 +4033,17 @@
               "type": "string"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
@@ -2358,7 +4055,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -2368,7 +4081,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -2401,6 +4149,17 @@
               "type": "string"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "requestBody": {
@@ -2428,7 +4187,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -2438,7 +4213,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -2471,6 +4281,17 @@
               "type": "string"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
@@ -2482,7 +4303,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -2492,7 +4329,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -2525,6 +4397,17 @@
               "type": "string"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "requestBody": {
@@ -2552,7 +4435,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -2562,7 +4461,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -2580,6 +4514,17 @@
             "in": "path",
             "name": "agent-name",
             "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
             "schema": {
               "type": "string"
             },
@@ -2608,7 +4553,23 @@
         },
         "responses": {
           "204": {
-            "description": "Response 204"
+            "description": "Response 204",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -2618,7 +4579,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -2640,6 +4636,17 @@
               "type": "string"
             },
             "style": "simple"
+          },
+          {
+            "description": "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.",
+            "explode": false,
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
           }
         ],
         "responses": {
@@ -2651,7 +4658,23 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 200",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "content": {
@@ -2661,7 +4684,42 @@
                 }
               }
             },
-            "description": "Response 400"
+            "description": "Response 400",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [],

@@ -4,6 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at http://license.golem.cloud/LICENSE
 
+use super::{assert_invocation_receipt, assert_no_invocation_receipt};
 use crate::custom_api::http_test_context::{HttpTestContext, make_test_context};
 use base64::Engine;
 use golem_common::agent_key;
@@ -1057,10 +1058,12 @@ async fn post_input_accepts_json_batches_and_is_idempotently_closed(
 
     let batch = append_json(agent, &input, serde_json::json!(["a", "b"]), false).await?;
     assert_eq!(batch.status(), StatusCode::NO_CONTENT);
+    assert_invocation_receipt(agent, &batch).await?;
     assert!(!batch.headers().contains_key("stream-closed"));
     let first_offset = header(&batch, "stream-next-offset");
     let single = append_json(agent, &input, serde_json::json!("c"), false).await?;
     assert_eq!(single.status(), StatusCode::NO_CONTENT);
+    assert_no_invocation_receipt(&single);
     assert!(header(&single, "stream-next-offset") > first_offset);
 
     for value in ["true", "TRUE"] {
@@ -1373,8 +1376,15 @@ async fn post_input_enforces_external_producer_sequence_and_epoch(
         StatusCode::BAD_REQUEST
     );
 
+    let initial_gap = post("7", "1", "gap").send().await?;
+    assert_eq!(initial_gap.status(), StatusCode::CONFLICT);
+    assert_eq!(header(&initial_gap, "producer-expected-seq"), "0");
+    assert_eq!(header(&initial_gap, "producer-received-seq"), "1");
+    assert_invocation_receipt(agent, &initial_gap).await?;
+
     let first = post("7", "0", "zero").send().await?;
     assert_eq!(first.status(), StatusCode::OK);
+    assert_no_invocation_receipt(&first);
     let first_offset = header(&first, "stream-next-offset");
     let second = post("7", "1", "one").send().await?;
     assert_eq!(second.status(), StatusCode::OK);
@@ -1543,6 +1553,7 @@ async fn lifecycle_json_binary_head_and_methods(
         .send()
         .await?;
     assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+    assert_no_invocation_receipt(&rejected);
     let mismatch = agent
         .client
         .put(agent.base_url.join(&json)?)
@@ -1562,10 +1573,17 @@ async fn lifecycle_json_binary_head_and_methods(
 
     let first = create(agent, &json).await?;
     assert_eq!(first.status(), StatusCode::CREATED);
+    let receipt = assert_invocation_receipt(agent, &first).await?;
     assert_eq!(header(&first, CONTENT_TYPE.as_str()), "application/json");
     assert!(first.headers().contains_key("stream-next-offset"));
-    let repeated = create(agent, &json).await?;
+    let repeated = agent
+        .client
+        .put(agent.base_url.join(&json)?)
+        .header("Idempotency-Key", "unrelated-external-key")
+        .send()
+        .await?;
     assert_eq!(repeated.status(), StatusCode::OK);
+    assert_eq!(assert_invocation_receipt(agent, &repeated).await?, receipt);
     assert_eq!(
         agent
             .client
@@ -1585,6 +1603,7 @@ async fn lifecycle_json_binary_head_and_methods(
     assert_eq!(head.status(), StatusCode::OK);
     assert_eq!(header(&head, CONTENT_TYPE.as_str()), "application/json");
     assert_eq!(header(&head, CACHE_CONTROL.as_str()), "no-store");
+    assert_no_invocation_receipt(&head);
     assert!(head.bytes().await?.is_empty());
 
     wait_for_closed(agent, &json).await?;
@@ -1728,6 +1747,7 @@ async fn generated_session_location_and_manifest(
     let base = format!("/durable-stream-agents/generated-{}/json/2", Uuid::new_v4());
     let created = create(agent, &format!("{base}?delay_ms=0")).await?;
     assert_eq!(created.status(), StatusCode::CREATED);
+    let receipt = assert_invocation_receipt(agent, &created).await?;
     let location = header(&created, "location");
     let session = location
         .strip_prefix(&format!("{base}/invocations/"))
@@ -1744,6 +1764,7 @@ async fn generated_session_location_and_manifest(
         .await?;
     assert_eq!(metadata.status(), StatusCode::OK);
     assert_eq!(header(&metadata, "cache-control"), "no-store");
+    assert_no_invocation_receipt(&metadata);
     let metadata = metadata.json::<Value>().await?;
     assert_eq!(metadata["session"], session);
     assert_eq!(metadata["closed"], true);
@@ -1763,18 +1784,17 @@ async fn generated_session_location_and_manifest(
     assert_eq!(header(&head, "content-type"), "application/json");
     assert_eq!(header(&head, "stream-closed"), "true");
     assert!(head.bytes().await?.is_empty());
-    assert_eq!(
-        create(agent, &format!("{location}?delay_ms=0"))
-            .await?
-            .status(),
-        StatusCode::OK
-    );
-    assert_eq!(
-        create(agent, &format!("{location}?delay_ms=1"))
-            .await?
-            .status(),
-        StatusCode::UNPROCESSABLE_ENTITY
-    );
+    let replay = agent
+        .client
+        .put(agent.base_url.join(&format!("{location}?delay_ms=0"))?)
+        .header("Idempotency-Key", "different-from-session-identity")
+        .send()
+        .await?;
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(assert_invocation_receipt(agent, &replay).await?, receipt);
+    let conflict = create(agent, &format!("{location}?delay_ms=1")).await?;
+    assert_eq!(conflict.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_no_invocation_receipt(&conflict);
     let data = agent
         .client
         .get(agent.base_url.join(&stream)?)
@@ -2021,6 +2041,7 @@ async fn session_put_binds_body_query_header_and_path(
         );
     }
 
+    let mut receipt = None;
     for expected in [StatusCode::CREATED, StatusCode::OK] {
         let response = agent
             .client
@@ -2030,6 +2051,11 @@ async fn session_put_binds_body_query_header_and_path(
             .send()
             .await?;
         assert_eq!(response.status(), expected);
+        let current = assert_invocation_receipt(agent, &response).await?;
+        if let Some(previous) = &receipt {
+            assert_eq!(&current, previous);
+        }
+        receipt = Some(current);
     }
     for (label, message) in [
         ("different-header", "body-value"),
@@ -2043,6 +2069,7 @@ async fn session_put_binds_body_query_header_and_path(
             .send()
             .await?;
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_no_invocation_receipt(&response);
     }
 
     for (method, path) in [
@@ -2068,7 +2095,17 @@ async fn session_put_binds_body_query_header_and_path(
         assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
     }
 
-    assert_eq!(create(agent, &stream).await?.status(), StatusCode::OK);
+    let existing_slot = agent
+        .client
+        .put(agent.base_url.join(&stream)?)
+        .header("Idempotency-Key", "unrelated-slot-key")
+        .send()
+        .await?;
+    assert_eq!(existing_slot.status(), StatusCode::OK);
+    assert_eq!(
+        Some(assert_invocation_receipt(agent, &existing_slot).await?),
+        receipt
+    );
     wait_for_closed(agent, &stream).await?;
     let response = agent
         .client

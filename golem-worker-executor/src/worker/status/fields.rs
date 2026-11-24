@@ -666,6 +666,10 @@ pub struct InvocationRequests {
     /// cancellation stays its result. Kept across folds, and in the status as
     /// `AgentStatusRecord::withdrawn_again`, so a split pair is attributed the same.
     pub withdrawn_again: Option<InvocationId>,
+    /// The invocation whose result was recorded at the export's return and whose background work
+    /// has not settled. Kept across folds, and in the status as
+    /// `AgentStatusRecord::settling_result`, so a give-up in a later fold is attributed to it.
+    pub settling: Option<SettlingInvocation>,
 }
 
 impl InvocationRequests {
@@ -691,6 +695,7 @@ impl InvocationRequests {
                 .collect(),
             cancelled: None,
             withdrawn_again: status.withdrawn_again,
+            settling: status.settling_result.clone(),
         }
     }
 
@@ -721,6 +726,15 @@ impl InvocationRequests {
 /// rejection of a cancelled pending invocation. A retry error of a background task that outlives
 /// its invocation, or of an entity body, therefore never replaces a finished result. `Exited`
 /// names no invocation and is attributed to the running one.
+///
+/// A result recorded at the export's return (`awaits_settlement`) stays settling until its
+/// `AgentInvocationSettled`. When the agent gives up while a successful result settles and no
+/// invocation runs, the result becomes [`InvocationEnd::BackgroundFailed`]. The give-up is an
+/// `Exited`, or an invocation `Error` that names no invocation, belongs to no entity body and has
+/// an exhausted retry state: every give-up during the drain writes one, and every retry that may
+/// still recover writes a state that is not exhausted. The background failure stays when a revived
+/// agent later settles the invocation: every result changes at the entry being folded, which the
+/// recent results and the persisted index rely on.
 ///
 /// A withdrawal, a result whose end is [`InvocationEnd::Cancelled`], is the result of its
 /// invocation only when the invocation has no result yet: the invocation loop also withdraws a
@@ -778,6 +792,7 @@ pub(crate) fn fold_invocation_result_entries(
                     Some(pending) => (pending.accepted_at, pending.operation),
                     None => (changed_at, request_operation(entry)),
                 };
+                requests.settling = None;
                 requests.current = Some(RunningInvocation {
                     key: *invocation_id,
                     request: InvocationRequestRef {
@@ -789,10 +804,15 @@ pub(crate) fn fold_invocation_result_entries(
                     last_change_at: changed_at,
                 });
             }
-            OplogEntry::AgentInvocationFinished { invocation_id, .. }
+            OplogEntry::AgentInvocationFinished {
+                invocation_id,
+                awaits_settlement,
+                ..
+            }
             | OplogEntry::AgentInvocationFailed {
                 invocation_id,
                 entity_parent_start_index: None,
+                awaits_settlement,
                 ..
             } => {
                 let end = if matches!(entry, OplogEntry::AgentInvocationFinished { .. }) {
@@ -800,13 +820,22 @@ pub(crate) fn fold_invocation_result_entries(
                 } else {
                     InvocationEnd::Failed
                 };
-                observe_result(
-                    invocation_id,
-                    position(end, requests.request_of(invocation_id)),
-                );
+                let result = position(end, requests.request_of(invocation_id));
+                if *awaits_settlement {
+                    requests.settling = Some(SettlingInvocation {
+                        key: *invocation_id,
+                        result: result.clone(),
+                    });
+                }
+                observe_result(invocation_id, result);
                 if requests.is_current(invocation_id) {
                     requests.current = None;
                 }
+            }
+            OplogEntry::AgentInvocationSettled { invocation_id, .. } => {
+                requests
+                    .settling
+                    .take_if(|settling| settling.key == *invocation_id);
             }
             OplogEntry::CancelPendingInvocation { invocation_id, .. } => {
                 if !requests.is_current(invocation_id) {
@@ -853,11 +882,27 @@ pub(crate) fn fold_invocation_result_entries(
                     running.last_change_at = changed_at;
                 }
             }
+            OplogEntry::Error {
+                kind: OplogErrorKind::Invocation,
+                invocation_id: None,
+                entity_parent_start_index: None,
+                retry_policy_state: Some(retry_policy_state),
+                ..
+            } if retry_policy_state.is_exhausted() => {
+                observe_background_failure(requests, *oplog_idx, changed_at, &mut observe_result);
+            }
             OplogEntry::Exited { .. } => {
                 if let Some(running) = &requests.current {
                     observe_result(
                         &running.key,
                         position(InvocationEnd::Failed, Some(&running.request)),
+                    );
+                } else {
+                    observe_background_failure(
+                        requests,
+                        *oplog_idx,
+                        changed_at,
+                        &mut observe_result,
                     );
                 }
             }
@@ -872,6 +917,29 @@ pub(crate) fn fold_invocation_result_entries(
             }
             _ => {}
         }
+    }
+}
+
+/// Makes the successful result that settles [`InvocationEnd::BackgroundFailed`], at the give-up
+/// entry `failure`, when no invocation runs. The first give-up stays the failure.
+fn observe_background_failure(
+    requests: &mut InvocationRequests,
+    failure: OplogIndex,
+    changed_at: Timestamp,
+    observe_result: &mut impl FnMut(&InvocationId, InvocationResultPosition),
+) {
+    if requests.current.is_some() {
+        return;
+    }
+    if let Some(settling) = &mut requests.settling
+        && settling.result.end == InvocationEnd::Completed
+    {
+        settling.result = InvocationResultPosition {
+            end: InvocationEnd::BackgroundFailed { failure },
+            changed_at,
+            ..settling.result.clone()
+        };
+        observe_result(&settling.key, settling.result.clone());
     }
 }
 

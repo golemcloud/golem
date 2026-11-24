@@ -249,6 +249,7 @@ mod tests {
             },
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: None,
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,

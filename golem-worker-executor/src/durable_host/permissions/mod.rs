@@ -72,9 +72,12 @@ use grants::parse_grants;
 use grants::parse_pattern_grant;
 use grants::permission_error_from_algebra;
 use grants::permission_error_from_parse;
+use grants::wallet_permission_error_from_algebra;
 use handles::handle_card_id;
 use handles::permission_card_scope_card;
+use handles::permission_card_scope_lineage_of_child;
 use handles::permission_card_snapshot;
+use handles::refuse_cut_off_scope_card;
 pub(crate) use handles::resolve_invocation_scope_card;
 use handles::resolve_permission_card;
 use handles::resolve_permission_card_handle;
@@ -164,6 +167,9 @@ enum PermissionCardEntry {
         /// stays in the table until the guest drops its handle, so the handle never names another
         /// entry, but it can no longer be attached or used as a parent.
         invocation_key: Option<golem_common::model::InvocationId>,
+        /// The scope cards that the card was derived from, directly or through other scope
+        /// cards of the invocation.
+        lineage: BTreeSet<CardId>,
     },
 }
 

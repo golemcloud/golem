@@ -396,7 +396,7 @@ async fn cold_session_mapping_loads_its_local_registration() {
 async fn persisted_metadata_restores_entity_attribution() {
     let fixture = Fixture::new().await;
     let producer = fixture.producer().await;
-    let entity_parent_start_index = Some(OplogIndex::from_u64(42));
+    let entity_parent_start_index = Some(OplogIndex::INITIAL);
     let mut request = fixture.registration(0);
     request.entity_parent_start_index = entity_parent_start_index;
     let handle = producer.register(None, request).await.unwrap().value;
@@ -554,7 +554,7 @@ async fn persisted_metadata_restores_entity_attribution() {
 #[timeout("60s")]
 async fn result_without_owned_outputs_retains_entity_attribution_after_reload() {
     let fixture = Fixture::new().await;
-    let attribution = Some(OplogIndex::from_u64(73));
+    let attribution = Some(OplogIndex::INITIAL);
     fixture
         .producer()
         .await

@@ -1,1 +1,8 @@
 warnings = "-44-unused_value-declaration_unimplemented"
+
+// BEGIN generated backend
+#cfg(target = "wasm-gc")
+import {
+  "golemcloud/golem_sdk/gen/cabi" @witCabi,
+}
+// END generated backend

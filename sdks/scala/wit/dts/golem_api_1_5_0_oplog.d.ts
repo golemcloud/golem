@@ -209,6 +209,11 @@ declare module 'golem:api/oplog@1.5.0' {
    * variants for the payload shapes.
    * `denial` is the reason the host denied the call before it ran. A denied
    * call never runs its operation, and its `end` holds the denied response.
+   * `driver` is the oplog index of the agent invocation whose settlement waits
+   * for this call. It is present in two cases: a store task that records after
+   * its spawning invocation closed records the invocation that resumed it, and
+   * agent-level work recorded while an invocation runs records that invocation,
+   * even when the call's invocation id is anchored at the same invocation.
    */
   export type StartParameters = {
     timestamp: Datetime;
@@ -216,6 +221,7 @@ declare module 'golem:api/oplog@1.5.0' {
     functionName: string;
     invocationId?: DurableInvocationId;
     observationalOwner?: OplogIndex;
+    driver?: OplogIndex;
     request?: TypedSchemaValue;
     durableFunctionType: WrappedFunctionType;
     spanStarted?: SpanStarted;
@@ -320,6 +326,11 @@ declare module 'golem:api/oplog@1.5.0' {
     invocationId: Uuid;
     error: string;
     startIndex: OplogIndex;
+  };
+  export type AgentInvocationSettledParameters = {
+    timestamp: Datetime;
+    invocationId: Uuid;
+    consumedFuel: bigint;
   };
   export type OplogErrorKind = "invocation" | "recovery";
   export type ErrorParameters = {
@@ -464,12 +475,95 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     record: TypedSchemaValue;
   };
+  /**
+   * The (issuer, subject) pair of a principal. golem:agent imports golem:api, so this
+   * interface cannot use golem:agent/common.principal-ref; this record has the same fields.
+   */
+  export type PublicPrincipalRef = {
+    issuer: string;
+    subject: string;
+  };
+  export type PublicAccountAuthentication = "api-token" | "bootstrap-token" | "sign-in";
+  /**
+   * A user, authenticated by a sign-in provider: the provider's pair. The oplog never gives
+   * a user's claims to a guest.
+   */
+  export type PublicUserPrincipal = {
+    pair: PublicPrincipalRef;
+    authenticatedAt: Datetime;
+  };
+  /**
+   * An account: (Golem issuer, "account:<account-id>").
+   */
+  export type PublicAccountPrincipal = {
+    pair: PublicPrincipalRef;
+    accountId: AccountId;
+    authentication: PublicAccountAuthentication;
+  };
+  /**
+   * An agent: (Golem issuer, "agent:<agent-id>/<fingerprint>").
+   */
+  export type PublicAgentPrincipal = {
+    pair: PublicPrincipalRef;
+    agentId: AgentId;
+    agentType: string;
+    environmentId: EnvironmentId;
+  };
+  /**
+   * A tool: (Golem issuer, "tool:<environment-id>/<tool-name>").
+   */
+  export type PublicToolPrincipal = {
+    pair: PublicPrincipalRef;
+    environmentId: EnvironmentId;
+    toolName: string;
+  };
+  /**
+   * One principal, as Golem verified it. Every kind except anonymous has a pair.
+   */
+  export type PublicPrincipal =
+  {
+    tag: 'user'
+    val: PublicUserPrincipal
+  } |
+  {
+    tag: 'account'
+    val: PublicAccountPrincipal
+  } |
+  {
+    tag: 'agent'
+    val: PublicAgentPrincipal
+  } |
+  {
+    tag: 'tool'
+    val: PublicToolPrincipal
+  } |
+  {
+    tag: 'anonymous'
+  };
+  /**
+   * A token that the request presented, and the pair of its maker. It never holds the
+   * token's value.
+   */
+  export type PublicTokenProvenance = {
+    id: Uuid;
+    maker?: PublicPrincipalRef;
+  };
+  /**
+   * Who started the chain, who made this call, and the tokens presented at the entry point.
+   * Both roles are always present, also when they are the same principal.
+   */
+  export type PublicCaller = {
+    original: PublicPrincipal;
+    immediate: PublicPrincipal;
+    tokens: PublicTokenProvenance[];
+  };
   export type AgentInitializationParameters = {
     invocationId: Uuid;
     constructorParameters: TypedSchemaValue;
     traceId: string;
     traceStates: string[];
     invocationContext: SpanData[][];
+    caller: PublicCaller;
   };
   export type AgentMethodInvocationParameters = {
     invocationId: Uuid;
@@ -478,12 +572,19 @@ declare module 'golem:api/oplog@1.5.0' {
     traceId: string;
     traceStates: string[];
     invocationContext: SpanData[][];
+    caller: PublicCaller;
+  };
+  export type SaveSnapshotParameters = {
+    caller: PublicCaller;
   };
   export type ProcessOplogEntriesParameters = {
     invocationId: Uuid;
+    caller: PublicCaller;
   };
   export type ManualUpdateParameters = {
     targetRevision: ComponentRevision;
+    /** Who requested the update. It is not the caller of the update's snapshot save. */
+    requester: PublicCaller;
   };
   export type ExternalToolInvocationParameters = {
     invocationId: Uuid;
@@ -493,6 +594,7 @@ declare module 'golem:api/oplog@1.5.0' {
     traceId: string;
     traceStates: string[];
     invocationContext: SpanData[][];
+    caller: PublicCaller;
   };
   export type ToolInvocationResult = {
     result?: TypedSchemaValue;
@@ -531,6 +633,8 @@ declare module 'golem:api/oplog@1.5.0' {
     targetRevision: ComponentRevision;
     description: UpdateDescription;
     updateAttemptIndex: OplogIndex;
+    /** Who requested the update. It is never the caller of the update's snapshot save or load. */
+    requester: PublicCaller;
   };
   export type SnapshotAssistedUpdateDetails = {
     pendingUpdateIndex: OplogIndex;
@@ -552,6 +656,35 @@ declare module 'golem:api/oplog@1.5.0' {
    */
   export type UpdateFailureClass = "divergence" | "target-trap" | "not-replayable" | "target-rejected" | "interrupted" | "operational" | "other";
   /**
+   * A recovery replay from a loaded snapshot
+   */
+  export type ReplaySnapshotStart = {
+    /** The oplog index of the loaded snapshot */
+    snapshotIndex: OplogIndex;
+    /**
+     * The oplog indexes of the automatic snapshots that the recovery rejected before it, in
+     * ascending order
+     */
+    rejectedSnapshots: OplogIndex[];
+  };
+  /**
+   * Where a recovery replay started
+   */
+  export type ReplayStart =
+  /** From a loaded snapshot */
+  {
+    tag: 'snapshot'
+    val: ReplaySnapshotStart
+  } |
+  /**
+   * Without a snapshot, after the recovery rejected the automatic snapshots at these oplog
+   * indexes, in ascending order; empty when no snapshot was involved
+   */
+  {
+    tag: 'full-replay'
+    val: OplogIndex[]
+  };
+  /**
    * The identity of a recorded `Start`, or of the call that a replay made in its place
    */
   export type ReplayHostCall = {
@@ -560,6 +693,8 @@ declare module 'golem:api/oplog@1.5.0' {
     parentStartIndex?: OplogIndex;
     invocationId?: DurableInvocationId;
     observationalOwner?: OplogIndex;
+    /** The invocation that drives the call when it is not the invocation the call belongs to */
+    driver?: OplogIndex;
     /** Whether the call carries a request: true for a durable call, false for a durable scope */
     carriesRequest: boolean;
     /** The request of the call, when it is known */
@@ -590,7 +725,7 @@ declare module 'golem:api/oplog@1.5.0' {
   /**
    * An identity field of a recorded `Start`, which a replayed host call must match
    */
-  export type StartIdentityField = "function-name" | "function-type" | "invocation-id" | "observational-owner" | "request-presence" | "parent";
+  export type StartIdentityField = "function-name" | "function-type" | "invocation-id" | "observational-owner" | "request-presence" | "parent" | "driver";
   /**
    * The first entry at which a replay did not reproduce the recorded execution
    */
@@ -603,6 +738,8 @@ declare module 'golem:api/oplog@1.5.0' {
     actual: ReplayStep;
     /** The identity fields on which the two steps differ; empty when the steps differ in kind */
     mismatched: StartIdentityField[];
+    /** Where the replay that diverged started; none for a divergence outside a recovery replay */
+    replayStart?: ReplayStart;
   };
   export type FailedSnapshotAssistedUpdateDetails = {
     pendingUpdateIndex: OplogIndex;
@@ -687,6 +824,7 @@ declare module 'golem:api/oplog@1.5.0' {
   };
   export type LoadSnapshotParameters = {
     snapshot: SnapshotData;
+    caller: PublicCaller;
   };
   export type AgentInvocation =
   {
@@ -703,6 +841,7 @@ declare module 'golem:api/oplog@1.5.0' {
   } |
   {
     tag: 'save-snapshot'
+    val: SaveSnapshotParameters
   } |
   {
     tag: 'load-snapshot'
@@ -930,6 +1069,7 @@ declare module 'golem:api/oplog@1.5.0' {
     functionName: string;
     invocationId?: DurableInvocationId;
     observationalOwner?: OplogIndex;
+    driver?: OplogIndex;
     request?: OplogPayload;
     durableFunctionType: WrappedFunctionType;
     spanStarted?: SpanStarted;
@@ -1094,6 +1234,11 @@ declare module 'golem:api/oplog@1.5.0' {
     error: WorkerError;
     startIndex: OplogIndex;
   };
+  export type RawAgentInvocationSettledParameters = {
+    timestamp: Datetime;
+    invocationId: Uuid;
+    consumedFuel: bigint;
+  };
   export type RawErrorParameters = {
     timestamp: Datetime;
     kind: OplogErrorKind;
@@ -1158,6 +1303,11 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     description: RawUpdateDescription;
     updateAttemptIndex?: OplogIndex;
+    /**
+     * Who requested the update, in the oplog's binary encoding, as an `oplog-payload` holds the
+     * caller of an invocation. `enrich-oplog-entries` gives it as a `public-caller`.
+     */
+    requester: Uint8Array;
   };
   export type RawSuccessfulUpdateParameters = {
     timestamp: Datetime;
@@ -1252,6 +1402,11 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'agent-invocation-failed'
     val: RawAgentInvocationFailedParameters
+  } |
+  /** The background work of an agent invocation ended after its result was recorded */
+  {
+    tag: 'agent-invocation-settled'
+    val: RawAgentInvocationSettledParameters
   } |
   /** Agent suspended */
   {
@@ -1535,6 +1690,11 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'agent-invocation-failed'
     val: AgentInvocationFailedParameters
+  } |
+  /** The background work of an agent invocation ended after its result was recorded */
+  {
+    tag: 'agent-invocation-settled'
+    val: AgentInvocationSettledParameters
   } |
   /** Agent suspended */
   {

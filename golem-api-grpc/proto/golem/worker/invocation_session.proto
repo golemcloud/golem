@@ -266,6 +266,9 @@ message InvocationSessionResult {
   optional uint64 oplog_index = 8;
   optional golem.common.UUID agent_fingerprint = 9;
   repeated DurableStreamMapping new_stream_mappings = 10;
+  // Set by a result lookup when the agent gave up during the background work of the invocation,
+  // after it recorded the result: `previous_invocation_failed` or `previous_invocation_exited`.
+  optional golem.worker.v1.WorkerExecutionError background_failure = 12;
 }
 
 enum InvocationRejectionReason {

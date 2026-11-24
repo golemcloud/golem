@@ -19,7 +19,8 @@ use golem_common::model::{
     InvocationResultMembership, InvocationResultPosition, OplogProcessorCheckpointState,
     OwnedAgentId, PendingCardEventRef, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
     ReceivedCardTransferIndex, ReceivedCardTransferState, RetryConfig, RetryPolicyState,
-    RunningInvocation, SnapshotFiles, SuccessfulUpdateRecord, Timestamp, UsableAutomaticSnapshot,
+    RunningInvocation, SettlingInvocation, SnapshotFiles, SuccessfulUpdateRecord, Timestamp,
+    UsableAutomaticSnapshot,
 };
 use golem_common::serialization::decode;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -267,18 +268,25 @@ fn update_status_with_precomputed_regions(
     let skipped_regions = &skipped;
     let active_plugins = last_known.active_plugins.clone();
     let requests = InvocationRequests::of_status(&last_known);
-    let (status, last_error_kind, current_retry_state, current_retry_at, overridden_retry_config) =
-        calculate_latest_worker_status(
-            last_known.status,
-            last_known.last_error_kind,
-            last_known.current_retry_state,
-            last_known.current_retry_at,
-            last_known.overridden_retry_config,
-            default_retry_policy,
-            skipped_regions,
-            deleted_regions,
-            &new_entries,
-        );
+    let (
+        status,
+        last_error_kind,
+        current_retry_state,
+        current_retry_at,
+        overridden_retry_config,
+        settling_invocation,
+    ) = calculate_latest_worker_status(
+        last_known.status,
+        last_known.last_error_kind,
+        last_known.current_retry_state,
+        last_known.current_retry_at,
+        last_known.overridden_retry_config,
+        last_known.settling_invocation,
+        default_retry_policy,
+        skipped_regions,
+        deleted_regions,
+        &new_entries,
+    );
 
     let pending_invocations =
         calculate_pending_invocations(last_known.pending_invocations, steps, &new_entries);
@@ -453,6 +461,8 @@ fn update_status_with_precomputed_regions(
         pending_durable_stream_cancellations,
         running: requests.current,
         withdrawn_again: requests.withdrawn_again,
+        settling_invocation,
+        settling_result: requests.settling,
         component_revision,
         component_size,
         owned_resources,
