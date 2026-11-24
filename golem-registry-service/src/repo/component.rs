@@ -25,6 +25,7 @@ use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
 use futures::future::BoxFuture;
+use golem_common::model::account::AccountId;
 use golem_common::model::card::{
     CardId, CardManagedBy, CardManagedByAgentInitial, CardManagedByComponentInitial,
 };
@@ -34,16 +35,22 @@ use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo::Blob;
 use golem_service_base::repo::{RepoError, RepoResult, ResultExt, SqlDateTime};
+use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, ExistsResult};
 use indoc::indoc;
 use sqlx::{Database, Row};
 use std::fmt::Debug;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct ComponentUpload {
     pub object_key: String,
-    pub digest: String,
+    pub(crate) digest: String,
+    pub(crate) storage: Arc<dyn BlobStorage>,
+    pub(crate) bytes: Arc<[u8]>,
 }
 
 #[async_trait]
@@ -1415,9 +1422,43 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
         "# })
                 .bind(account_id)
                 .bind(upload.digest)
-                .bind(upload.object_key),
+                .bind(&upload.object_key),
             )
             .await?;
+
+        // Check either key, so fresh and reused uploads take the same normal storage path.
+        // Repair the object in place while the mapping lock still excludes collection.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let namespace = BlobStorageNamespace::ComponentUploads {
+                account_id: AccountId(account_id),
+            };
+            let path = Path::new(&object_key);
+            match upload
+                .storage
+                .exists("component_files", "attach_upload", namespace.clone(), path)
+                .await?
+            {
+                ExistsResult::File => {}
+                ExistsResult::DoesNotExist => {
+                    let _ = upload
+                        .storage
+                        .put_raw_if_absent(
+                            "component_files",
+                            "attach_upload",
+                            namespace,
+                            path,
+                            &upload.bytes,
+                        )
+                        .await?;
+                }
+                ExistsResult::Directory => {
+                    anyhow::bail!("Found a directory at a component upload key")
+                }
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .map_err(anyhow::Error::from)??;
         Ok(object_key)
     }
 

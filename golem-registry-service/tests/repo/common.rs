@@ -3430,50 +3430,66 @@ fn default_card_contains_current_application_permissions(
 }
 
 pub async fn test_component_upload_reference_lifetime(deps: &Deps) {
-    use golem_registry_service::repo::component::ComponentUpload;
-
     let user = deps.create_account().await;
     let account = user.revision.account_id;
     let app = deps.create_application(account).await;
     let first = deps.create_env(app.revision.application_id).await;
     let second = deps.create_env(app.revision.application_id).await;
     let repo = deps.component_repo.as_ref();
-    let digest = "a".repeat(64);
-    let primary = new_repo_uuid().to_string();
-    let duplicate = new_repo_uuid().to_string();
-    for (environment_id, key) in [
-        (first.revision.environment_id, &primary),
-        (second.revision.environment_id, &duplicate),
-    ] {
-        repo.register_upload(
-            account,
-            key,
-            (chrono::Utc::now() + chrono::TimeDelta::hours(1)).into(),
-        )
+    let store = ComponentObjectStore::new(deps.blob_storage.clone());
+    let bytes: &[u8] = b"same content";
+    let (hash, primary_upload) = store
+        .stage(repo, AccountId(account), bytes.into())
         .await
         .unwrap();
+    let (_, duplicate_upload) = store
+        .stage(repo, AccountId(account), bytes.into())
+        .await
+        .unwrap();
+    let primary = primary_upload.object_key.clone();
+    let duplicate = duplicate_upload.object_key.clone();
+    for (environment_id, upload) in [
+        (first.revision.environment_id, primary_upload),
+        (second.revision.environment_id, duplicate_upload),
+    ] {
         let revision = repo
             .create_with_upload(
                 environment_id,
                 "dedup",
                 ComponentRevisionRecord::creation(
                     ComponentId(new_repo_uuid()),
-                    12,
+                    bytes.len() as u64,
                     ComponentMetadata::default(),
-                    blake3::hash(b"same content").into(),
+                    hash.clone(),
                     None,
-                    key.clone(),
+                    upload.object_key.clone(),
                     AccountId(account),
                 ),
                 vec![],
-                Some(ComponentUpload {
-                    object_key: key.clone(),
-                    digest: digest.clone(),
-                }),
+                Some(upload),
             )
             .await
             .unwrap();
         assert_eq!(revision.revision.object_store_key, primary);
+        assert_eq!(
+            store.get(AccountId(account), &primary).await.unwrap(),
+            bytes
+        );
+        if environment_id == first.revision.environment_id {
+            let _ = deps
+                .blob_storage
+                .delete(
+                    "test",
+                    "simulate_lost_upload",
+                    BlobStorageNamespace::ComponentUploads {
+                        account_id: AccountId(account),
+                    },
+                    &PathBuf::from(&primary),
+                )
+                .await
+                .unwrap();
+            assert!(store.get(AccountId(account), &primary).await.is_err());
+        }
     }
 
     let primary_row = (account, primary);

@@ -150,7 +150,15 @@ impl ComponentObjectStore {
                 ),
         )
         .await??;
-        Ok((hash, ComponentUpload { object_key, digest }))
+        Ok((
+            hash,
+            ComponentUpload {
+                object_key,
+                digest,
+                storage: self.blob_storage.clone(),
+                bytes: data,
+            },
+        ))
     }
 
     pub async fn run_upload_cleanup(&self, repo: &dyn ComponentRepo) {
