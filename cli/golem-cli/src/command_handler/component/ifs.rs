@@ -762,30 +762,38 @@ mod tests {
     use url::Url;
 
     #[cfg(unix)]
-    #[test]
-    async fn package_initial_files_stay_inside_the_application() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("app");
-        let files = root.join("files");
-        std::fs::create_dir_all(&files).unwrap();
-        let outside = temp.path().join("outside.txt");
-        std::fs::write(&outside, "not part of the application").unwrap();
-        std::os::unix::fs::symlink(outside, files.join("link.txt")).unwrap();
-        let source = Url::from_file_path(files).unwrap();
-        let entry = InitialComponentFile {
-            source: InitialComponentFileSource::new(source.as_str(), Path::new("/golem.yaml"))
-                .unwrap(),
-            target: CanonicalFilePathWithPermissions {
-                path: CanonicalFilePath::from_abs_str("/files").unwrap(),
-                permissions: AgentFilePermissions::ReadOnly,
-            },
-        };
-        let root = std::fs::canonicalize(root).unwrap();
-        let error = match super::expand_package_files(&[entry], &root).await {
-            Ok(_) => panic!("An initial file outside the application was staged"),
-            Err(error) => error,
-        };
-        assert!(error.to_string().contains("leaves the application root"));
+    mod unix {
+        use super::*;
+        use test_r::test;
+
+        #[test]
+        async fn package_initial_files_stay_inside_the_application() {
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path().join("app");
+            let files = root.join("files");
+            std::fs::create_dir_all(&files).unwrap();
+            let outside = temp.path().join("outside.txt");
+            std::fs::write(&outside, "not part of the application").unwrap();
+            std::os::unix::fs::symlink(outside, files.join("link.txt")).unwrap();
+            let source = Url::from_file_path(files).unwrap();
+            let entry = InitialComponentFile {
+                source: InitialComponentFileSource::new(source.as_str(), Path::new("/golem.yaml"))
+                    .unwrap(),
+                target: CanonicalFilePathWithPermissions {
+                    path: CanonicalFilePath::from_abs_str("/files").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                },
+            };
+            let root = std::fs::canonicalize(root).unwrap();
+            let error =
+                match crate::command_handler::component::ifs::expand_package_files(&[entry], &root)
+                    .await
+                {
+                    Ok(_) => panic!("An initial file outside the application was staged"),
+                    Err(error) => error,
+                };
+            assert!(error.to_string().contains("leaves the application root"));
+        }
     }
 
     #[test]

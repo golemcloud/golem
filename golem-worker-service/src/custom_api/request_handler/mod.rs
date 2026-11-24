@@ -208,6 +208,11 @@ impl RequestHandler {
                     .handle_call_agent_behaviour(request, resolved_route, behaviour)
                     .await
             }
+            RichRouteBehaviour::CreateAgent(behaviour) => {
+                self.mounted_dispatch
+                    .create(request, resolved_route, behaviour)
+                    .await
+            }
 
             RichRouteBehaviour::CorsPreflight(_) => Err(RequestHandlerError::invariant_violated(
                 "OpenAPI preflight projection selected for dispatch",
@@ -527,6 +532,7 @@ mod mounted_tests {
                 idempotency_key: None,
                 oplog_index: None,
                 agent_fingerprint: None,
+                background_failure: None,
             },
             AgentConstructorSchema {
                 name: None,
@@ -620,6 +626,7 @@ mod mounted_tests {
     struct UnknownSiteLookup;
 
     #[async_trait::async_trait]
+    #[golem_async_trait::region_simple]
     impl crate::custom_api::api_definition_lookup::HttpApiDefinitionsLookup for UnknownSiteLookup {
         async fn get(
             &self,

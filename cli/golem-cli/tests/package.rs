@@ -163,20 +163,20 @@ async fn development_package_build_reads_its_current_component_without_a_lock() 
         String::from_utf8_lossy(&result.stderr)
     );
     let manifest = dev.join("golem.yaml");
-    fs::write(
-        &manifest,
-        format!(
-            "{}\ntools:\n  borrowed: {{package: other, tool: echo}}\n",
-            fs::read_to_string(&manifest).unwrap()
+    let base = fs::read_to_string(&manifest).unwrap();
+    for (selector, error) in [
+        (
+            "tools:\n  borrowed: {package: other, tool: echo}\n",
+            "Development package tool borrowed cannot select a file package",
         ),
-    )
-    .unwrap();
-    assert_cli_error(
-        root,
-        &["build"],
-        "Development package tool borrowed cannot select a file package",
-    )
-    .await;
+        (
+            "agents:\n  Borrowed: {package: other}\n",
+            "Development package agent Borrowed cannot select a file package",
+        ),
+    ] {
+        fs::write(&manifest, format!("{base}\n{selector}")).unwrap();
+        assert_cli_error(root, &["build"], error).await;
+    }
 }
 
 #[test]

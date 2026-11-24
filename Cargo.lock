@@ -4074,6 +4074,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-async-trait"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "test-r",
+ "tracing",
+]
+
+[[package]]
 name = "golem-cli"
 version = "0.0.0"
 dependencies = [
@@ -4129,6 +4141,7 @@ dependencies = [
  "minijinja",
  "phf",
  "poem",
+ "poem-openapi",
  "portable-pty",
  "pretty_assertions",
  "prettyplease 0.2.37",
@@ -4499,6 +4512,7 @@ dependencies = [
  "fd-lock",
  "futures",
  "golem-api-grpc",
+ "golem-async-trait",
  "golem-common",
  "golem-mcp-import",
  "golem-native-tool",
@@ -4682,6 +4696,7 @@ dependencies = [
  "poem-openapi-derive",
  "pretty_assertions",
  "prometheus",
+ "proptest",
  "prost",
  "prost-types",
  "rand 0.9.5",
@@ -4824,6 +4839,7 @@ dependencies = [
  "golem-client",
  "golem-common",
  "golem-model-mock",
+ "golem-schema",
  "golem-service-base",
  "heck",
  "hex",
@@ -4835,6 +4851,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry_sdk",
  "prometheus",
+ "prost",
  "redis",
  "reqwest 0.13.4",
  "reqwest-middleware",
@@ -4904,6 +4921,7 @@ dependencies = [
  "futures",
  "futures-concurrency",
  "golem-api-grpc",
+ "golem-async-trait",
  "golem-common",
  "golem-mcp-import",
  "golem-native-tool",
@@ -4995,7 +5013,7 @@ dependencies = [
  "blake3",
  "bytes",
  "chrono",
- "desert_rust",
+ "desert_rust 0.1.11",
  "futures",
  "golem-api-grpc",
  "golem-common",
@@ -5121,6 +5139,7 @@ dependencies = [
  "fred",
  "futures",
  "golem-api-grpc",
+ "golem-async-trait",
  "golem-client",
  "golem-common",
  "golem-schema",
@@ -6111,6 +6130,7 @@ dependencies = [
  "redis",
  "reqwest 0.13.4",
  "rlimit",
+ "rmcp",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -9449,6 +9469,7 @@ dependencies = [
  "pin-project-lite",
  "process-wrap",
  "rand 0.10.2",
+ "reqwest 0.13.4",
  "rmcp-macros",
  "schemars 1.2.2",
  "serde",
@@ -12495,9 +12516,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2987f7103fe52f649f578338ce13a0bde4ca2f44334f06d93dbd19d999ba3e2a"
+checksum = "85cfb93435d4d85af6cf25dcecd0038ebf420533c3fbea0a1aa635eb899568ba"
 dependencies = [
  "anyhow",
  "bytes",

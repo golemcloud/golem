@@ -11,6 +11,32 @@ fn stream_failure(error : @toolStreams.ByteStreamFailure) -> ToolStreamError {
 }
 
 ///|
+#cfg(target="wasm-gc")
+fn byte_view_buffer(data : ArrayView[Byte]) -> FixedArray[Byte] = "%arrayview.buf"
+
+///|
+#cfg(target="wasm-gc")
+fn snapshot_bytes(data : ArrayView[Byte]) -> FixedArray[Byte] {
+  // The GC buffer uses the fixed byte-array representation. Copy only the view,
+  // not its spare capacity, and keep the snapshot independent of the source.
+  FixedArray::make_and_blit(
+    byte_view_buffer(data),
+    allocate_len=data.length(),
+    init=0,
+    len=data.length(),
+    src_offset=data.start_offset(),
+  )
+}
+
+///|
+#cfg(not(target="wasm-gc"))
+#inline
+#owned(data)
+fn snapshot_bytes(data : ArrayView[Byte]) -> FixedArray[Byte] {
+  FixedArray::from_array(data)
+}
+
+///|
 priv struct ToolByteStreamSource {
   source : @async-core.Stream[
     Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
@@ -29,7 +55,9 @@ fn ToolByteStreamSource::read_pending(
   guard self.pending is Some(bytes) else { return None }
   let remaining = bytes.length() - self.pending_offset
   let length = if remaining < count { remaining } else { count }
-  let result = FixedArray::makei(length, i => bytes[self.pending_offset + i])
+  let result = snapshot_bytes(
+    bytes[self.pending_offset:self.pending_offset + length],
+  )
   self.pending_offset += length
   if self.pending_offset == bytes.length() {
     self.pending = None

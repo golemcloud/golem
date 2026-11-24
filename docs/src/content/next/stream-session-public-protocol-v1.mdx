@@ -208,16 +208,23 @@ An invocation selector is:
 {
   "agentType":"counter",
   "application":"shopping",
-  "constructorParameters":{"kind":"record","value":{"fields":[{"kind":"string","value":"cart-1"}]}},
+  "target":{"kind":"key","constructorParameters":{"kind":"record","value":{"fields":[{"kind":"string","value":"cart-1"}]}}},
   "environment":"prod",
   "method":"ingest"
 }
 ```
 
-`application`, `environment`, `agentType`, `constructorParameters`, and
+`application`, `environment`, `agentType`, `target`, and
 `method` are required. `application` and `environment` must name the
-environment of the endpoint path. The agent type and its constructor parameters select one
-keyed agent. Constructor parameters MUST NOT contain streams.
+environment of the endpoint path. A `key` target supplies `constructorParameters` and upserts
+the keyed agent. Constructor parameters MUST NOT contain streams. An `id` target supplies
+`agentId` and an optional `expectedFingerprint`, for example
+`{"kind":"id","agentId":"00000007-0000-8000-8000-000000000001"}`.
+It never creates an agent. A missing, deleted, wrong-type or other-environment ID fails as
+not found. When supplied, the fingerprint must match the existing incarnation.
+Clients returned by create or getById send the ID and fingerprint; upsert clients keep sending
+their key. Durable Key and Id sessions reject nonempty configuration overrides; overrides
+are accepted only at create.
 
 ### 4.2 Configuration entry
 
@@ -273,7 +280,7 @@ direction, element schema, producer, or structural coordinate.
   "selector":{
     "agentType":"media",
     "application":"demo",
-    "constructorParameters":{"kind":"record","value":{"fields":[{"kind":"string","value":"encoder"}]}},
+    "target":{"kind":"key","constructorParameters":{"kind":"record","value":{"fields":[{"kind":"string","value":"encoder"}]}}},
     "environment":"default",
     "method":"transcode"
   },

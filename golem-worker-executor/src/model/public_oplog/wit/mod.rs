@@ -46,6 +46,9 @@ use values::{
 mod tests;
 
 use crate::preview2::golem_api_1_x::oplog;
+use golem_common::base_model::caller::{
+    AccountAuthentication, Pair, PublicCaller, PublicPrincipal,
+};
 use golem_common::base_model::oplog::{
     CardInstallFailure, PublicQueuedCardEvent, QueuedCardEvent, QueuedCardEventCard,
 };
@@ -56,23 +59,23 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::payload::types::{SerializableToolError, SerializableToolRpcError};
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFailedParams, AgentInvocationFinishedParams,
-    AgentInvocationStartedParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams,
-    CardInstalledParams, CardRevokedParams, CommittedRemoteTransactionParams,
-    CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
-    DeactivatePluginParams, DropResourceParams, EndParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
-    LogParams, ManualUpdateParameters, MemorySizeReconciledParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PluginInstallationDescription,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, PublicAgentInvocation,
-    PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
-    PublicExternalToolResult, PublicSpanAttributes, PublicSpanData, PublicSpanFinished,
-    PublicSpanKind, PublicSpanOutcome, PublicSpanStarted, RecoverySucceededParams,
-    RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
-    SnapshotParams, SpanClosedParams, StartParams, StreamItemsParams, StreamRegisteredParams,
-    StreamSessionParams, StreamTerminalParams, StringAttributeValue, SuccessfulUpdateParams,
-    SuspendParams, ToolAttachmentControlParams, ToolAttachmentReadParams,
+    AgentInvocationSettledParams, AgentInvocationStartedParams, BeginRemoteTransactionParams,
+    CancelPendingInvocationParams, CancelledParams, CardEventQueuedParams, CardExpiredParams,
+    CardInstallFailedParams, CardInstalledParams, CardRevokedParams,
+    CommittedRemoteTransactionParams, CompletionDeliveredParams, CompletionDiscardedParams,
+    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndParams,
+    ErrorParams, ExitedParams, FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams,
+    InterruptedParams, JumpParams, LogParams, ManualUpdateParameters, MemorySizeReconciledParams,
+    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PluginInstallationDescription, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
+    PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicExternalToolResult,
+    PublicSpanAttributes, PublicSpanData, PublicSpanFinished, PublicSpanKind, PublicSpanOutcome,
+    PublicSpanStarted, RecoverySucceededParams, RemoveRetryPolicyParams, RestartParams,
+    ResumedParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
+    SnapshotConfirmedParams, SnapshotParams, SpanClosedParams, StartParams, StreamItemsParams,
+    StreamRegisteredParams, StreamSessionParams, StreamTerminalParams, StringAttributeValue,
+    SuccessfulUpdateParams, SuspendParams, ToolAttachmentControlParams, ToolAttachmentReadParams,
 };
 
 use golem_common::model::Timestamp;

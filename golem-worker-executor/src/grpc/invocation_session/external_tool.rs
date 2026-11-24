@@ -124,6 +124,7 @@ where
             idempotency_key: None,
             oplog_index: None,
             agent_fingerprint: None,
+            background_failure: None,
         };
         if mode == Mode::Lookup {
             let key = request
@@ -492,6 +493,7 @@ where
                     prepared: Some(acceptance.prepared),
                     durable_replayed: acceptance.replayed,
                     joined_origin_observer: acceptance.joined_origin_observer,
+                    queued: None,
                 })
                 .map_err(|_| {
                     WorkerExecutorError::runtime(

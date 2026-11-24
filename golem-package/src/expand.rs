@@ -120,6 +120,8 @@ pub trait PackageEffects: Send {
 pub struct ExpandedPackages {
     pub declarations: Declarations,
     pub components: BTreeMap<ComponentName, InstalledComponent>,
+    pub agent_packages: BTreeMap<AgentTypeName, String>,
+    pub calls: BTreeMap<String, BTreeSet<AgentTypeName>>,
 }
 
 #[derive(Debug)]
@@ -273,6 +275,28 @@ async fn expand_one(
                 );
             }
         }
+    }
+
+    let config = package.config();
+    for agent in config
+        .components
+        .values()
+        .flat_map(|c| &c.metadata.agent_types)
+    {
+        if let Some(previous) = output
+            .agent_packages
+            .insert(agent.type_name.clone(), name.into())
+        {
+            bail!(
+                "Duplicate installed agent type {} in packages {previous:?} and {name:?}",
+                agent.type_name
+            );
+        }
+    }
+    if !config.package.calls.is_empty() {
+        output
+            .calls
+            .insert(name.into(), config.package.calls.clone());
     }
 
     let mut unpack = Unpack {

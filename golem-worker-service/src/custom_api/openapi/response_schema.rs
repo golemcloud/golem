@@ -23,8 +23,8 @@
 
 use super::route_schema::{ResponseModel, RouteSchema};
 use super::schema_mapping::{
-    arbitrary_binary_schema, render_output_schema, request_validation_error_schema,
-    string_enum_schema, string_schema,
+    api_type_schema, arbitrary_binary_schema, render_output_schema,
+    request_validation_error_schema, string_enum_schema, string_schema,
 };
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour};
 use golem_common::base_model::agent::HttpMethod;
@@ -105,6 +105,20 @@ pub fn get_route_response_schema(
     let mut responses = Responses::default();
 
     match &route.behavior {
+        RichRouteBehaviour::CreateAgent(_) => {
+            let reference = api_type_schema::<crate::api::agents::AgentReference>(components)?;
+            responses.insert(201, ResponseBodyOpenApiSchema::Known {
+                schema: reference,
+                content_type: "application/json".into(),
+            }).header("Location", serde_json::json!({ "type": "string", "format": "uri-reference", "description": "Origin-relative mount URL for the created agent." }), true);
+            responses.insert(
+                400,
+                ResponseBodyOpenApiSchema::Known {
+                    schema: request_validation_error_schema(components)?,
+                    content_type: "application/json".into(),
+                },
+            );
+        }
         RichRouteBehaviour::CallAgent(_) => {
             let response = route_schema.call_agent.as_ref().map(|ca| &ca.response);
             match response {

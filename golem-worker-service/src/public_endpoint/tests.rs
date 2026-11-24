@@ -54,6 +54,7 @@ struct HttpApiDomains {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl HttpApiDefinitionsLookup for HttpApiDomains {
     async fn get(&self, domain: &Domain) -> Result<CompiledRoutes, ApiDefinitionLookupError> {
         self.lookups.lock().unwrap().push(domain.clone());
@@ -353,6 +354,7 @@ async fn real_mcp_endpoint_with_body_limit(
             idempotency_key: None,
             oplog_index: None,
             agent_fingerprint: None,
+            background_failure: None,
         },
         AgentConstructorSchema {
             name: None,
@@ -377,16 +379,12 @@ async fn real_mcp_endpoint_with_body_limit(
         Arc::new(crate::custom_api::oidc::DefaultIdentityProvider),
         Arc::new(
             crate::custom_api::oidc::session_store::SqliteSessionStore::new(
-                pool.clone(),
+                pool,
                 std::time::Duration::from_secs(60),
                 std::time::Duration::from_secs(60),
             )
             .unwrap(),
         ),
-        Arc::new(crate::mcp::session::store::SqliteMcpSessionStore::new(
-            pool,
-            std::time::Duration::from_secs(60),
-        )),
         &Default::default(),
         max_body_size,
     );
@@ -420,7 +418,7 @@ async fn mcp_domain_serves_only_the_mcp_routes() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(response.headers().contains_key("Mcp-Session-Id"));
+    assert!(!response.headers().contains_key("Mcp-Session-Id"));
 
     let response = endpoint
         .get_response(request("10.0.0.2", TOOLS, "/orders/42").finish())
@@ -486,13 +484,13 @@ async fn mcp_other_methods_get_405_with_allow() {
     ];
     responses.iter().for_each(|response| {
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-        assert_eq!(response.headers()["Allow"], "GET, POST, DELETE");
+        assert_eq!(response.headers()["Allow"], "POST");
     });
 }
 
 #[test]
 #[test_r::timeout("30s")]
-async fn mcp_cors_allows_the_protocol_version_header() {
+async fn mcp_cors_allows_the_version_and_2026_method_and_name_headers_and_no_session_headers() {
     let (mcp, _db) = real_mcp_endpoint().await;
     let (endpoint, _) = dispatcher(mcp);
     let preflight = request("10.0.0.2", TOOLS, "/mcp")
@@ -501,7 +499,7 @@ async fn mcp_cors_allows_the_protocol_version_header() {
         .header("Access-Control-Request-Method", "POST")
         .header(
             "Access-Control-Request-Headers",
-            "mcp-protocol-version, mcp-session-id",
+            "mcp-method,mcp-name,mcp-protocol-version",
         )
         .finish();
     let response = endpoint.get_response(preflight).await;
@@ -511,6 +509,27 @@ async fn mcp_cors_allows_the_protocol_version_header() {
         .unwrap()
         .to_ascii_lowercase();
     assert!(allowed.contains("mcp-protocol-version"), "{allowed}");
+    assert!(allowed.contains("mcp-method"), "{allowed}");
+    assert!(allowed.contains("mcp-name"), "{allowed}");
+    assert!(!allowed.contains("mcp-session-id"), "{allowed}");
+    assert!(!allowed.contains("last-event-id"), "{allowed}");
+
+    let post = request("10.0.0.2", TOOLS, "/mcp")
+        .method(Method::POST)
+        .header("Origin", "https://app.example.com")
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .body(Body::from_json(json!({"jsonrpc": "2.0", "id": 1, "method": "ping"})).unwrap())
+        .finish();
+    let response = endpoint.get_response(post).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        !response
+            .headers()
+            .contains_key("Access-Control-Expose-Headers"),
+        "{:?}",
+        response.headers()
+    );
 }
 
 #[test]

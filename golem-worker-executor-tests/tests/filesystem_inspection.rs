@@ -22,6 +22,7 @@ use golem_common::model::filesystem::{FileByteSelection, FileReadExtent, FileRea
 use golem_common::model::oplog::{PublicAgentInvocation, PublicOplogEntry};
 use golem_common::model::{OplogIndex, OwnedAgentId};
 use golem_common::{agent_key, data_value};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::FileReadResponse;
 use golem_test_framework::dsl::{TestDsl, count_agent_invocation_pair_since};
 use golem_worker_executor_test_utils::callers;
@@ -120,6 +121,21 @@ pub(crate) async fn first_read_frame(
     let first = stream.message().await?.and_then(|frame| frame.result);
     let more = stream.message().await?.is_some();
     Ok((first, more))
+}
+
+pub(crate) async fn assert_read_agent_not_found(
+    executor: &TestWorkerExecutor,
+    agent: &OwnedAgentId,
+    path: &str,
+) -> anyhow::Result<()> {
+    let (frame, more) = first_read_frame(executor, agent, path).await?;
+    let Some(get_file_contents_response::Result::Failure(error)) = frame else {
+        anyhow::bail!("expected AgentNotFound, got {frame:?}");
+    };
+    let error = WorkerExecutorError::try_from(error).map_err(|error| anyhow::anyhow!(error))?;
+    assert_eq!(error, WorkerExecutorError::worker_not_found(agent.agent_id));
+    assert!(!more, "an AgentNotFound failure must end the stream");
+    Ok(())
 }
 
 pub(crate) async fn read_head(
@@ -266,12 +282,8 @@ async fn live_file_inspection_initializes_once_and_restores_without_exports(
             executor.get_worker_metadata_opt(&agent).await?.is_none(),
             "{id}"
         );
-        // A read never creates the agent: a missing agent is an absent file.
-        assert_eq!(
-            read_head(&executor, &agent, "/a.txt").await?,
-            FileReadHead::Absent,
-            "{id}"
-        );
+        // A missing agent is an error, not an absent file, and a read never creates it.
+        assert_read_agent_not_found(&executor, &agent, "/a.txt").await?;
         assert!(
             executor.get_worker_metadata_opt(&agent).await?.is_none(),
             "{id}"
@@ -1206,6 +1218,11 @@ async fn file_reads_and_listings_of_a_missing_or_deleted_agent_are_not_found_and
         b"abc"
     );
     assert!(!file_system_node_is_not_found(&executor, &deleted, "/").await?);
+    assert_eq!(
+        read_head(&executor, &deleted, "/missing.txt").await?,
+        FileReadHead::Absent,
+        "a missing file on an existing agent is absent"
+    );
     executor.delete_worker(&deleted).await?;
 
     for (name, agent) in [("missing", &missing), ("deleted", &deleted)] {
@@ -1213,11 +1230,7 @@ async fn file_reads_and_listings_of_a_missing_or_deleted_agent_are_not_found_and
             executor.get_worker_metadata_opt(agent).await?.is_none(),
             "{name}"
         );
-        assert_eq!(
-            read_head(&executor, agent, "/a.txt").await?,
-            FileReadHead::Absent,
-            "{name}"
-        );
+        assert_read_agent_not_found(&executor, agent, "/a.txt").await?;
         assert!(
             file_system_node_is_not_found(&executor, agent, "/").await?,
             "{name}"

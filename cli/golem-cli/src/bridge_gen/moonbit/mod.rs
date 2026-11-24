@@ -1767,7 +1767,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             "let response = @runtime.create_agent(configuration, {agent_type_name}, parameters, keyed~, config=agent_config, env~)"
         ));
         writer.line(format!(
-            "{{ resolved: @runtime.ResolvedAgent::new(configuration, {agent_type_name}, parameters=if keyed {{ Some(parameters) }} else {{ None }}, target=Some(response)) }}"
+            "{{ resolved: @runtime.ResolvedAgent::new(configuration, {agent_type_name}, parameters=None, target=Some(response)) }}"
         ));
         writer.dedent();
         writer.line("}");

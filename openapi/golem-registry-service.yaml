@@ -12624,6 +12624,20 @@ components:
             - Any
           value:
             $ref: '#/components/schemas/Empty'
+    AgentIdBinding:
+      type: object
+      title: AgentIdBinding
+      required:
+      - type
+      - name
+      properties:
+        type:
+          type: string
+          enum:
+          - Path
+          - Query
+        name:
+          type: string
     AgentMethodSchema:
       type: object
       required:
@@ -16295,7 +16309,9 @@ components:
             enum:
             - char
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
       - type: object
         required:
         - kind
@@ -17147,8 +17163,12 @@ components:
           $ref: '#/components/schemas/AgentHttpAuthDetails'
         phantomAgent:
           type: boolean
-        phantomIdBinding:
-          $ref: '#/components/schemas/PhantomIdBinding'
+        agentIdBinding:
+          $ref: '#/components/schemas/AgentIdBinding'
+        createRoute:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentPathSegment'
         corsOptions:
           $ref: '#/components/schemas/CorsOptions'
         webhookSuffix:
@@ -18701,23 +18721,6 @@ components:
           type: string
         data:
           $ref: '#/components/schemas/PermissionShareData'
-    PhantomIdBinding:
-      type: object
-      title: PhantomIdBinding
-      required:
-      - type
-      - name
-      - optional
-      properties:
-        type:
-          type: string
-          enum:
-          - Path
-          - Query
-        name:
-          type: string
-        optional:
-          type: boolean
     Plan:
       type: object
       title: Plan
@@ -19452,7 +19455,9 @@ components:
             enum:
             - delimited
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
       - type: object
         required:
         - kind
@@ -19463,7 +19468,9 @@ components:
             enum:
             - either
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
     ResourceCapacityLimit:
       type: object
       title: ResourceCapacityLimit
@@ -20671,7 +20678,9 @@ components:
             enum:
             - char
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
       - type: object
         required:
         - kind

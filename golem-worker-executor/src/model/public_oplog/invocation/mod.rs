@@ -90,13 +90,14 @@ pub(super) async fn agent_invocation_to_public(
     agent_type_name: Option<&AgentTypeName>,
     component_revision: ComponentRevision,
     invocation: AgentInvocation,
+    claims: ClaimVisibility,
 ) -> Result<PublicAgentInvocation, String> {
     match invocation {
         AgentInvocation::AgentInitialization {
             idempotency_key,
             input,
             invocation_context,
-            ..
+            caller,
         } => {
             let metadata = components
                 .get_metadata(owner_component_id, Some(component_revision))
@@ -125,6 +126,7 @@ pub(super) async fn agent_invocation_to_public(
                     trace_id: invocation_context.trace_id.clone(),
                     trace_states: invocation_context.trace_states.clone(),
                     invocation_context: encode_span_data(&span_data),
+                    caller: PublicCaller::new(&caller, claims),
                 },
             ))
         }
@@ -133,32 +135,11 @@ pub(super) async fn agent_invocation_to_public(
             method_name,
             input,
             invocation_context,
-            ..
+            caller,
+            scope_card: _,
+            allow_streams: _,
         } => {
-            let metadata = components
-                .get_metadata(owner_component_id, Some(component_revision))
-                .await
-                .map_err(|err| err.to_string())?;
-
-            let agent_type = agent_type_name
-                .and_then(|name| metadata.metadata.find_agent_type_by_name_ref(name));
-
-            let method = agent_type.and_then(|at| {
-                at.methods
-                    .iter()
-                    .find(|m| m.name == method_name)
-                    .map(|m| (at, m))
-            });
-
-            let function_input = match method {
-                Some((agent_type, method)) => input_value_to_typed_schema_value(
-                    &agent_type.schema,
-                    &method.input_schema,
-                    input,
-                )
-                .unwrap_or_else(|_| empty_typed_schema_value()),
-                None => empty_typed_schema_value(),
-            };
+            let function_input = input.to_public_value()?;
 
             let span_data = invocation_context.to_oplog_data();
 
@@ -170,6 +151,7 @@ pub(super) async fn agent_invocation_to_public(
                     trace_id: invocation_context.trace_id.clone(),
                     trace_states: invocation_context.trace_states.clone(),
                     invocation_context: encode_span_data(&span_data),
+                    caller: PublicCaller::new(&caller, claims),
                 },
             ))
         }
@@ -179,6 +161,7 @@ pub(super) async fn agent_invocation_to_public(
             command_path,
             input,
             invocation_context,
+            caller,
             ..
         } => {
             let span_data = invocation_context.to_oplog_data();
@@ -191,23 +174,34 @@ pub(super) async fn agent_invocation_to_public(
                     trace_id: invocation_context.trace_id.clone(),
                     trace_states: invocation_context.trace_states.clone(),
                     invocation_context: encode_span_data(&span_data),
+                    caller: PublicCaller::new(&caller, claims),
                 },
             ))
         }
         AgentInvocation::ManualUpdate { target_revision } => Ok(
             PublicAgentInvocation::ManualUpdate(ManualUpdateParameters { target_revision }),
         ),
-        AgentInvocation::SaveSnapshot { .. } => Ok(PublicAgentInvocation::SaveSnapshot(Empty {})),
-        AgentInvocation::LoadSnapshot { snapshot, .. } => Ok(PublicAgentInvocation::LoadSnapshot(
+        AgentInvocation::SaveSnapshot { caller, .. } => Ok(PublicAgentInvocation::SaveSnapshot(
+            SaveSnapshotParameters {
+                caller: PublicCaller::new(&caller, claims),
+            },
+        )),
+        AgentInvocation::LoadSnapshot {
+            snapshot, caller, ..
+        } => Ok(PublicAgentInvocation::LoadSnapshot(
             LoadSnapshotParameters {
                 snapshot: raw_snapshot_to_public(snapshot),
+                caller: PublicCaller::new(&caller, claims),
             },
         )),
         AgentInvocation::ProcessOplogEntries {
-            idempotency_key, ..
+            idempotency_key,
+            caller,
+            ..
         } => Ok(PublicAgentInvocation::ProcessOplogEntries(
             ProcessOplogEntriesParameters {
                 invocation_id: idempotency_key,
+                caller: PublicCaller::new(&caller, claims),
             },
         )),
     }

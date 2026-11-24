@@ -114,6 +114,39 @@ pub struct OplogExportHtmlWriter {
     entries: usize,
 }
 
+#[cfg(unix)]
+mod platform {
+    use anyhow::Context;
+    use std::path::Path;
+
+    pub(super) fn temporary(parent: &Path) -> std::io::Result<tempfile::NamedTempFile> {
+        tempfile::Builder::new()
+            .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o666))
+            .tempfile_in(parent)
+    }
+
+    pub(super) fn preserve_mode(file: &std::fs::File, path: &Path) -> anyhow::Result<()> {
+        if let Ok(existing) = std::fs::metadata(path) {
+            file.set_permissions(existing.permissions())
+                .with_context(|| format!("failed to set the mode of {}", path.display()))?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(unix))]
+mod platform {
+    use std::path::Path;
+
+    pub(super) fn temporary(parent: &Path) -> std::io::Result<tempfile::NamedTempFile> {
+        tempfile::NamedTempFile::new_in(parent)
+    }
+
+    pub(super) fn preserve_mode(_file: &std::fs::File, _path: &Path) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
 impl OplogExportHtmlWriter {
     pub fn create(path: &Path, title: &str) -> anyhow::Result<Self> {
         let parent = match path.parent() {
@@ -127,21 +160,11 @@ impl OplogExportHtmlWriter {
         // The file gets the mode that a plain `--html` write gives it: an existing target keeps
         // its mode, and a new file gets 0666 under the umask instead of the 0600 of a temporary
         // file.
-        #[cfg(unix)]
-        let file = tempfile::Builder::new()
-            .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o666))
-            .tempfile_in(&parent);
-        #[cfg(not(unix))]
-        let file = tempfile::NamedTempFile::new_in(&parent);
+        let file = platform::temporary(&parent);
         let mut file = file.with_context(|| {
             format!("failed to create a temporary file in {}", parent.display())
         })?;
-        #[cfg(unix)]
-        if let Ok(existing) = std::fs::metadata(path) {
-            file.as_file()
-                .set_permissions(existing.permissions())
-                .with_context(|| format!("failed to set the mode of {}", path.display()))?;
-        }
+        platform::preserve_mode(file.as_file(), path)?;
         let (prefix, suffix) = template_parts(title)?;
         file.write_all(prefix.as_bytes())?;
         Ok(Self {
@@ -279,6 +302,41 @@ mod tests {
         assert_eq!(embedded["entries"].as_array().unwrap().len(), 2);
         assert_eq!(embedded["entries"][1]["entry"]["type"], "Log");
         assert_eq!(embedded["entries"][1]["index"], 2);
+    }
+
+    /// The data document that a viewer page embeds.
+    fn embedded_document(html: &str) -> serde_json::Value {
+        let open_tag = "<script id=\"oplog-data\" type=\"application/json\">";
+        let start = html.find(open_tag).unwrap() + open_tag.len();
+        let end = start + html[start..].find("</script>").unwrap();
+        serde_json::from_str(&html[start..end]).unwrap()
+    }
+
+    /// The page of `agent oplog --show-claims --html` embeds the claims of a caller as a JSON
+    /// object, so the viewer shows them as it shows every other object of the entry. An entry
+    /// that the server gave without claims has none in the page.
+    #[test]
+    fn viewer_embeds_the_claims_of_a_caller_as_an_object() {
+        use crate::model::agent::oplog::test_support::{
+            CLAIMS, CLAIMS_POINTER, entry_of_a_signed_in_user,
+        };
+
+        let embedded = |with_claims: bool| {
+            let html =
+                render_oplog_viewer_html(&document(vec![entry_of_a_signed_in_user(with_claims)]))
+                    .unwrap();
+            embedded_document(&html)
+        };
+        let claims_pointer = format!("/entries/0{CLAIMS_POINTER}");
+
+        let shown = embedded(true);
+        let claims = shown.pointer(&claims_pointer).expect("the claims");
+        assert!(claims.is_object(), "{claims}");
+        assert_eq!(
+            claims,
+            &serde_json::from_str::<serde_json::Value>(CLAIMS).unwrap()
+        );
+        assert!(embedded(false).pointer(&claims_pointer).is_none());
     }
 
     #[test]
@@ -441,23 +499,28 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn export_html_writer_keeps_the_mode_of_a_plain_write() {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-        let dir = tempfile::tempdir().unwrap();
+    mod unix {
+        use super::*;
+        use test_r::test;
 
-        let plain = dir.path().join("plain.html");
-        std::fs::write(&plain, "x").unwrap();
-        let new = dir.path().join("new.html");
-        write_export(&new, &[]);
-        assert_eq!(mode(&new), mode(&plain));
+        #[test]
+        fn export_html_writer_keeps_the_mode_of_a_plain_write() {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            let dir = tempfile::tempdir().unwrap();
 
-        let existing = dir.path().join("existing.html");
-        std::fs::write(&existing, "old").unwrap();
-        std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o640)).unwrap();
-        write_export(&existing, &[]);
-        assert_eq!(mode(&existing), 0o640);
+            let plain = dir.path().join("plain.html");
+            std::fs::write(&plain, "x").unwrap();
+            let new = dir.path().join("new.html");
+            write_export(&new, &[]);
+            assert_eq!(mode(&new), mode(&plain));
+
+            let existing = dir.path().join("existing.html");
+            std::fs::write(&existing, "old").unwrap();
+            std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o640)).unwrap();
+            write_export(&existing, &[]);
+            assert_eq!(mode(&existing), 0o640);
+        }
     }
 
     #[test]

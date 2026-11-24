@@ -29,15 +29,20 @@ fn removing_a_missing_path_file_or_directory_verifies_absence() {
 }
 
 #[cfg(unix)]
-#[test]
-fn removing_a_link_does_not_remove_its_target() {
-    let parent = tempfile::tempdir().unwrap();
-    let target = parent.path().join("target");
-    std::fs::create_dir(&target).unwrap();
-    std::fs::write(target.join("file"), b"kept").unwrap();
-    let link = parent.path().join("link");
-    std::os::unix::fs::symlink(&target, &link).unwrap();
-    remove_and_verify(&link).unwrap();
-    assert!(!link.exists());
-    assert_eq!(std::fs::read(target.join("file")).unwrap(), b"kept");
+mod unix {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn removing_a_link_does_not_remove_its_target() {
+        let parent = tempfile::tempdir().unwrap();
+        let target = parent.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("file"), b"kept").unwrap();
+        let link = parent.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        remove_and_verify(&link).unwrap();
+        assert!(!link.exists());
+        assert_eq!(std::fs::read(target.join("file")).unwrap(), b"kept");
+    }
 }

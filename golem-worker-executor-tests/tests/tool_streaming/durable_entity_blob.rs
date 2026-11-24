@@ -1036,6 +1036,7 @@ fn oracle_fixture() -> OplogSnapshot {
             function_name: HostFunctionName::Custom("oracle-scope".into()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: None,
             denial: None,
             durable_function_type: DurableFunctionType::WriteLocal,
@@ -1063,6 +1064,10 @@ fn oracle_fixture() -> OplogSnapshot {
                 trace_id,
                 trace_states: Vec::new(),
                 invocation_context: encode_span_data(&context),
+                caller: golem_common::model::caller::PublicCaller::new(
+                    &callers::anonymous(),
+                    golem_common::model::caller::ClaimVisibility::Hidden,
+                ),
             }),
             wallet_pin: PublicInvocationWalletPin {
                 wallet_token: token,
@@ -1075,6 +1080,7 @@ fn oracle_fixture() -> OplogSnapshot {
             function_name: "oracle-scope".into(),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: None,
             denial: None,
             durable_function_type: DurableFunctionType::WriteLocal.into(),

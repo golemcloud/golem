@@ -196,6 +196,31 @@ fn a_queued_duplicate_of_a_finished_invocation_is_listed_as_its_result() {
     );
 }
 
+/// A background failure lists as `background-failed` at its give-up entry, and that change
+/// outranks the plain result that an older source still holds.
+#[test]
+fn a_background_failure_lists_at_its_give_up_and_outranks_the_older_result() {
+    let failed = key(1);
+    let background_failed = InvocationResultPosition {
+        changed_at: Timestamp::from(70),
+        ..result(3, InvocationEnd::BackgroundFailed { failure: index(7) })
+    };
+    assert_eq!(
+        states(
+            &AgentStatusRecord::default(),
+            HashMap::from([(failed, background_failed.clone())]),
+            0
+        ),
+        vec![(failed, InvocationState::BackgroundFailed, index(7))]
+    );
+
+    let mut results = HashMap::from([(failed, result(3, InvocationEnd::Completed))]);
+    super::keep_latest(&mut results, failed, background_failed.clone());
+    assert_eq!(results.get(&failed), Some(&background_failed));
+    super::keep_latest(&mut results, failed, result(3, InvocationEnd::Completed));
+    assert_eq!(results.get(&failed), Some(&background_failed));
+}
+
 #[test]
 fn a_scheduled_invocation_becomes_pending_at_its_deadline_without_moving() {
     let scheduled = key(1);

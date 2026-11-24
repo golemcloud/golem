@@ -65,6 +65,26 @@ instead of running the installed components. Build and deploy do not change
 `golem.lock`. If a pin is missing or differs, run `golem install` with the
 intended archive to repair it.
 
+An installed agent keeps its published type name. To configure an installed
+agent, declare it under its published name with `package: <name>`:
+
+```yaml
+agents:
+  SupportCall:
+    package: my-package
+```
+
+After deployment, use `golem agent create` and `golem agent invoke` as for a
+local agent. A tool called by the agent sees the agent in the installer's
+environment, not a publisher principal. If two installed packages export the
+same agent type, remove one from the application before deploying.
+
+If your package calls other agent types, list their published names in
+`package.calls` in the publisher manifest (for example, `calls: [SupportCall]`).
+Packing records the list in the archive. Build can succeed without these types,
+but deploy rejects the application if any listed type is missing from the
+deployment. A local component or another installed package can supply the type.
+
 Deploying an installed package does not expose any of the publisher's HTTP
 routes or MCP endpoints by default. To expose an installed agent, declare the
 HTTP API or MCP deployment in your own `golem.yaml` and deploy the application.
@@ -124,6 +144,9 @@ the entry name. Relative paths start at the consuming application's root.
 Edit the files in that directory and rebuild; you do not need to pack or install
 the package after each edit. A development path has no entry in `golem.lock` and
 cannot be included in a published package.
+
+Development packages cannot select agents or tools from the consuming
+application's installed file packages.
 
 TypeScript and Effect development packages need their own `package.json` in the
 package directory. The CLI installs npm dependencies there, not in the consuming

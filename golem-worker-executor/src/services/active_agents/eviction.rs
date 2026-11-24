@@ -472,6 +472,7 @@ async fn evict_at_most_memory<Ctx: WorkerCtx>(
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx> EvictionSource for WorkerEvictionSource<Ctx> {
     async fn evict_at_most(&self, priority: EvictionPriority, needed_bytes: u64) -> u64 {
         evict_at_most_memory(
@@ -534,6 +535,7 @@ impl Drop for GateCharge {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ChargeSource for GateChargeSource {
     type Charge = GateCharge;
 

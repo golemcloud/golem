@@ -260,7 +260,8 @@ fn agent(input: &Value) -> AgentTypeSchema {
             path_prefix: path(mounts[0].as_str().unwrap()),
             auth_details: None,
             phantom_agent: input["phantom"] == true,
-            phantom_id_binding: None,
+            agent_id_binding: None,
+            create_route: None,
             cors_options: CorsOptions {
                 allowed_patterns: vec![],
             },
@@ -296,23 +297,26 @@ fn corpus_category(error: &HttpAgentValidationError) -> &'static str {
         HttpAgentValidationError::HandlerEndpointPolicy(_) => "handler-endpoint-policy",
         HttpAgentValidationError::HandlerSchema(_) => "handler-schema",
         HttpAgentValidationError::UnboundConstructor(_) => "unbound-constructor",
-        HttpAgentValidationError::InvalidPhantomBinding(_) => "phantom-binding",
+        HttpAgentValidationError::InvalidIdBinding(_) => "id-binding",
     }
 }
 
 #[test]
-fn phantom_selector_metadata_validation() {
-    use crate::base_model::agent::PhantomIdBindingDetails;
-    use golem_schema::http::QueryVariable;
+fn id_mount_metadata_validation() {
+    use crate::base_model::agent::AgentIdBindingDetails;
+    use golem_schema::http::{HeaderVariable, QueryVariable};
     let mut original = from_case("metadata-live-typed-overlap");
     let mount = original.http_mount.as_mut().unwrap();
-    mount.filesystem_bindings.clear();
-    mount.path_prefix = path("/users/{id}/{instance}");
-    mount.phantom_id_binding = Some(PhantomIdBinding::Path(PhantomIdBindingDetails {
+    mount.path_prefix = path("/users/{instance}");
+    mount.agent_id_binding = Some(AgentIdBinding::Path(AgentIdBindingDetails {
         name: "instance".into(),
-        optional: true,
     }));
+    mount.create_route = Some(path("/users"));
     original.validate().unwrap();
+    let mut same_name = original.clone();
+    same_name.constructor.input_schema =
+        InputSchema::parameters([NamedField::user_supplied("instance", SchemaType::string())]);
+    same_name.validate().unwrap();
     for replacement in [
         path("/users/{id}"),
         path("/users/{id}/{instance}/{instance}"),
@@ -345,23 +349,27 @@ fn phantom_selector_metadata_validation() {
     invalid.kind = AgentTypeKind::HttpRouter;
     assert!(invalid.validate().is_err());
     let mut invalid = original.clone();
-    invalid.http_mount.as_mut().unwrap().filesystem_bindings =
-        from_case("metadata-live-typed-overlap")
-            .http_mount
-            .unwrap()
-            .filesystem_bindings;
+    invalid.http_mount.as_mut().unwrap().phantom_agent = true;
     assert!(invalid.validate().is_err());
     let mut invalid = original.clone();
-    invalid.http_mount.as_mut().unwrap().phantom_id_binding =
-        Some(PhantomIdBinding::Path(PhantomIdBindingDetails {
+    invalid.http_mount.as_mut().unwrap().agent_id_binding =
+        Some(AgentIdBinding::Path(AgentIdBindingDetails {
             name: "id".into(),
-            optional: false,
         }));
     assert!(invalid.validate().is_err());
-    original.http_mount.as_mut().unwrap().phantom_id_binding =
-        Some(PhantomIdBinding::Query(PhantomIdBindingDetails {
+    let mut invalid = original.clone();
+    invalid.http_mount.as_mut().unwrap().agent_id_binding = None;
+    assert!(invalid.validate().is_err());
+    let mut invalid = original.clone();
+    invalid.http_mount.as_mut().unwrap().create_route = Some(path("/users/{id}"));
+    assert!(invalid.validate().is_err());
+    let mut invalid = original.clone();
+    invalid.http_mount.as_mut().unwrap().path_prefix = path("/users/{id}/{instance}");
+    assert!(invalid.validate().is_err());
+    original.http_mount.as_mut().unwrap().path_prefix = path("/users");
+    original.http_mount.as_mut().unwrap().agent_id_binding =
+        Some(AgentIdBinding::Query(AgentIdBindingDetails {
             name: "instance".into(),
-            optional: false,
         }));
     original.validate().unwrap();
     original.methods[0].http_endpoint[0]
@@ -372,10 +380,39 @@ fn phantom_selector_metadata_validation() {
         });
     assert!(original.validate().is_err());
     original.methods[0].http_endpoint[0].query_vars.clear();
-    original.http_mount.as_mut().unwrap().phantom_id_binding =
-        Some(PhantomIdBinding::Query(PhantomIdBindingDetails {
+    original.methods[0].input_schema =
+        InputSchema::parameters([NamedField::user_supplied("instance", SchemaType::string())]);
+    original.methods[0].http_endpoint[0].http_method =
+        HttpMethod::Method(golem_schema::http::HttpMethod::Get(Default::default()));
+    assert!(original.validate().is_err());
+    let mut stream_slot = original.clone();
+    stream_slot.methods[0].input_schema = InputSchema::parameters([NamedField::user_supplied(
+        "instance",
+        SchemaType::stream(Some(SchemaType::string())),
+    )]);
+    stream_slot.validate().unwrap();
+    original.methods[0].http_endpoint[0]
+        .header_vars
+        .push(HeaderVariable {
+            header_name: "x-instance".into(),
+            variable_name: "instance".into(),
+        });
+    original.validate().unwrap();
+    original.methods[0].http_endpoint[0].header_vars.clear();
+    original.methods[0].http_endpoint[0]
+        .query_vars
+        .push(QueryVariable {
+            query_param_name: "other".into(),
+            variable_name: "instance".into(),
+        });
+    original.validate().unwrap();
+    original.methods[0].http_endpoint[0].query_vars.clear();
+    original.methods[0].http_endpoint[0].http_method =
+        HttpMethod::Method(golem_schema::http::HttpMethod::Post(Default::default()));
+    original.validate().unwrap();
+    original.http_mount.as_mut().unwrap().agent_id_binding =
+        Some(AgentIdBinding::Query(AgentIdBindingDetails {
             name: "".into(),
-            optional: false,
         }));
     assert!(original.validate().is_err());
 }
