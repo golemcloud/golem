@@ -291,18 +291,17 @@ fn build_operation(
     }
 
     if matches!(&route.behavior, RichRouteBehaviour::CallAgent(_)) {
-        let key = parameters.iter_mut().find(|parameter| {
+        let has_key_binding = parameters.iter().any(|parameter| {
             parameter["in"] == "header"
                 && parameter["name"]
                     .as_str()
                     .is_some_and(|name| name.eq_ignore_ascii_case("Idempotency-Key"))
         });
-        let description = "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations.";
-        if let Some(key) = key {
-            key["description"] = json!(description);
-        } else {
+        if !has_key_binding {
             let mut key = header_parameter("Idempotency-Key", false, string_schema());
-            key["description"] = json!(description);
+            key["description"] = json!(
+                "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations."
+            );
             parameters.push(key);
         }
     }

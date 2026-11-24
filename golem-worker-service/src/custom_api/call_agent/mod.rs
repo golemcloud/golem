@@ -83,7 +83,14 @@ impl CallAgentHandler {
                 &behaviour.constructor_parameters,
             )?)
         };
-        let supplied_key = request.idempotency_key()?;
+        let supplied_key = if behaviour.method_parameters.iter().any(|parameter| {
+            matches!(parameter, MethodParameter::Header { header_name, .. }
+                if header_name.eq_ignore_ascii_case("Idempotency-Key"))
+        }) {
+            None
+        } else {
+            request.idempotency_key()?
+        };
         let request_key = InvocationRequestKey::external(None, supplied_key.as_ref());
         let (target, component, freshness_disposition) = self
             .worker_service
@@ -1033,6 +1040,107 @@ mod tests {
         }
         let calls = harness.contexts.lock().unwrap();
         assert_ne!(calls[1].request_key, calls[2].request_key);
+    }
+
+    #[test]
+    async fn declared_idempotency_key_header_remains_a_business_argument() {
+        use crate::mcp::InvocationHarness;
+        use golem_common::model::{AgentInvocationOutput, AgentInvocationResult};
+        use golem_common::schema::{
+            AgentConstructorSchema, AgentMethodSchema, NamedField, OutputSchema,
+        };
+        use golem_service_base::custom_api::{QueryOrHeaderType, RouteBehaviour};
+
+        let input_schema =
+            InputSchema::parameters([NamedField::user_supplied("orderRef", SchemaType::string())]);
+        let harness = InvocationHarness::new(
+            AgentInvocationOutput {
+                result: AgentInvocationResult::AgentInitialization,
+                consumed_fuel: None,
+                invocation_status: None,
+                component_revision: None,
+                agent_id: None,
+                idempotency_key: None,
+                oplog_index: None,
+                agent_fingerprint: None,
+            },
+            AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![]),
+            },
+            vec![AgentMethodSchema {
+                name: "run".into(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: input_schema.clone(),
+                output_schema: OutputSchema::Unit,
+                http_endpoint: vec![],
+                read_only: None,
+            }],
+        );
+        let handler = CallAgentHandler::new(harness.worker_service.clone());
+        let mut compiled = test_route(1, "/", Some("POST"), "typed");
+        let RouteBehaviour::CallAgent(behaviour) = &mut compiled.behavior else {
+            unreachable!()
+        };
+        behaviour.component_id = harness.component_id;
+        behaviour.agent_type = harness.agent_type.type_name.clone();
+        behaviour.body = RequestBodySchema::Unused;
+        behaviour.method_input = CompiledInputSchema {
+            graph: SchemaGraph::anonymous(SchemaType::record(vec![
+                golem_common::schema::NamedFieldType {
+                    name: "orderRef".into(),
+                    body: SchemaType::string(),
+                    metadata: Default::default(),
+                },
+            ])),
+            input_schema,
+        };
+        behaviour.method_parameters = vec![MethodParameter::Header {
+            header_name: "iDeMpOtEnCy-KeY".into(),
+            parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::Str),
+        }];
+        let resolver = test_resolver(vec![compiled]);
+
+        for (index, value) in ["", "order-1"].into_iter().enumerate() {
+            let request = poem::Request::builder()
+                .method(Method::POST)
+                .uri("/".parse().unwrap())
+                .header("host", "example.com")
+                .header("Idempotency-Key", value)
+                .finish();
+            let route = resolver.resolve_matching_route(&request).await.unwrap();
+            let super::super::RichRouteBehaviour::CallAgent(behaviour) = &route.route.behavior
+            else {
+                unreachable!()
+            };
+            let response = handler
+                .handle_call_agent_behaviour(&mut RichRequest::new(request), &route, behaviour)
+                .await
+                .unwrap();
+            assert_eq!(response.status, StatusCode::NO_CONTENT);
+            let golem_common::model::agent::AgentMethodInput::Native(input) =
+                harness.recorded_method_inputs()[index].clone().unwrap()
+            else {
+                panic!("expected native method input")
+            };
+            assert_eq!(
+                input
+                    .decode(|_, _| Err("unexpected stream".into()))
+                    .unwrap(),
+                SchemaValue::Record {
+                    fields: vec![SchemaValue::String(value.into())],
+                }
+            );
+            let contexts = harness.contexts.lock().unwrap();
+            assert!(contexts[index].supplied_key.is_none());
+            assert!(matches!(
+                contexts[index].request_key,
+                InvocationRequestKey::Unkeyed(_)
+            ));
+        }
     }
 
     #[test]

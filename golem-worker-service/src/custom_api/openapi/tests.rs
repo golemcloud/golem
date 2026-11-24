@@ -1095,6 +1095,16 @@ fn typed_invocation_headers_preserve_declared_key_bindings() {
             .collect();
         assert_eq!(keys.len(), 1);
         assert_eq!(keys[0]["required"], binding.is_some());
+        if binding.is_some() {
+            assert_eq!(keys[0]["description"], "Header parameter: iDeMpOtEnCy-KeY");
+        } else {
+            assert!(
+                keys[0]["description"]
+                    .as_str()
+                    .unwrap()
+                    .contains("External invocation key")
+            );
+        }
         assert_eq!(
             keys[0]["schema"]["type"],
             if binding.is_some() {
