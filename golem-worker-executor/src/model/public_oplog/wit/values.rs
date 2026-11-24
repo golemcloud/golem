@@ -48,9 +48,9 @@ pub(super) fn decode_untyped_schema_value(
 /// and it returns the conversion error as a non-trapping `result::err` — so the
 /// instance and its resource table stay alive. Capability handles are not
 /// permitted in the value trees of agent config, divergence requests or tool
-/// attachment entries. Divergence requests and tool attachment entries also
-/// reject owned streams, disposing of them as a guest drop does. Drain all
-/// relevant trees before returning the first error, even across entries.
+/// attachment entries, and neither are owned streams, which are disposed of as
+/// a guest drop does. Drain all relevant trees before returning the first
+/// error, even across entries.
 pub(crate) fn reject_quota_handles_in_oplog_entries<
     D: QuotaTokenHandleDropper
         + SecretHandleDropper
@@ -65,24 +65,14 @@ pub(crate) fn reject_quota_handles_in_oplog_entries<
     for (index, entry) in entries {
         let entry = match entry {
             oplog::OplogEntry::Create(mut params) => {
-                let configs = std::mem::take(&mut params.local_agent_config);
-                let mut new_configs = Vec::with_capacity(configs.len());
-                for mut cfg in configs {
-                    match reject_quota_handles_in_value_tree(cfg.value, dropper) {
-                        Ok(tree) => {
-                            cfg.value = tree;
-                            new_configs.push(cfg);
-                        }
-                        Err(e) => {
-                            first_error.get_or_insert_with(|| {
-                                format!("agent config value must not contain a quota token: {e}")
-                            });
-                            // The owned handle(s) were already dropped; this
-                            // entry is discarded once the error is returned.
-                        }
-                    }
+                for cfg in &mut params.local_agent_config {
+                    drain_owned_handles(
+                        &mut cfg.value,
+                        dropper,
+                        "agent config value",
+                        &mut first_error,
+                    );
                 }
-                params.local_agent_config = new_configs;
                 oplog::OplogEntry::Create(params)
             }
             oplog::OplogEntry::FailedUpdate(mut params) => {
