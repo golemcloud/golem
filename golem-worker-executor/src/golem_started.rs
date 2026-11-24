@@ -150,8 +150,8 @@ mod tests {
     const ANONYMOUS_CALLERS: &[(&str, &str)] = &[
         (
             "grpc/invocation.rs",
-            "a card transfer request carries no caller, so a recipient that the transfer creates \
-             runs its constructor as anonymous instead of as the sending agent",
+            "a card transfer request carries no caller, and the transfer reaches only an existing \
+             recipient, so no constructor or invocation runs with this caller",
         ),
         (
             "services/worker_proxy.rs",
