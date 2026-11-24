@@ -602,6 +602,22 @@ pub struct AgentInvocationOutput {
     /// result. `None` for synthetic outputs (e.g. lookup-only status responses)
     /// or for legacy executors that did not report it.
     pub agent_fingerprint: Option<AgentFingerprint>,
+    /// The failure that made the agent give up during the background work of this invocation,
+    /// after its result was recorded. Only a result lookup sets it.
+    pub background_failure: Option<BackgroundFailure>,
+}
+
+/// How the agent gave up during the background work of an invocation whose result it had
+/// recorded.
+#[derive(Clone, Debug, PartialEq)]
+pub enum BackgroundFailure {
+    /// The background work trapped and the retry policy gave up.
+    Trapped {
+        error: crate::model::oplog::AgentError,
+        stderr: String,
+    },
+    /// The background work exited the agent.
+    Exited,
 }
 
 /// Compares two schema-native values for replay equivalence. This is the same

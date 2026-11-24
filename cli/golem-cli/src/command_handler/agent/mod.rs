@@ -810,18 +810,15 @@ impl AgentCommandHandler {
                 .log_handler()
                 .log_output(InvokeResultView::new_trigger(accepted_key))?;
         } else {
+            let background_failure = result.background_failure.map(|failure| failure.error);
             let result = result
                 .result
                 .map(golem_common::schema::TypedSchemaValue::from);
             logln("");
-            self.ctx
-                .log_handler()
-                .log_output(InvokeResultView::new_agent_invoke(
-                    accepted_key,
-                    result,
-                    &agent_type,
-                    &method_name,
-                ))?;
+            self.ctx.log_handler().log_output(
+                InvokeResultView::new_agent_invoke(accepted_key, result, &agent_type, &method_name)
+                    .with_background_failure(background_failure),
+            )?;
         }
 
         Ok(())

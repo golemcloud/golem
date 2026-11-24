@@ -1,3 +1,4 @@
+mod background_work;
 mod capabilities;
 mod config;
 mod durable_streams;

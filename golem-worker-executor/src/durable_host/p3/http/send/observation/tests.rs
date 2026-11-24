@@ -29,6 +29,7 @@ fn opening() -> OplogEntry {
         function_name: P3HttpClientSend::HOST_FUNCTION_NAME,
         invocation_id: None,
         observational_owner: Some(OplogIndex::from_u64(7)),
+        driver: None,
         request: Some(OplogPayload::Inline(Box::new(HostRequestNoInput {}.into()))),
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: Some(Box::new(SpanStarted {
@@ -346,6 +347,7 @@ async fn send_observer_records_only_positive_guest_consumption() {
                     golem_common::model::oplog::host_functions::HostFunctionName::P3HttpClientSend,
                 invocation_id: None,
                 observational_owner: None,
+                driver: None,
                 request: Some(OplogPayload::Inline(Box::new(HostRequestNoInput {}.into()))),
                 durable_function_type: DurableFunctionType::WriteRemote,
                 span_started: None,

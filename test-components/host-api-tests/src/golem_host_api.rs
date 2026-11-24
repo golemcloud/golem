@@ -961,6 +961,7 @@ impl GolemHostApi for GolemHostApiImpl {
                 parent_start_index: None,
                 invocation_id: None,
                 observational_owner: None,
+                driver: None,
                 carries_request: true,
                 request: None,
             }),

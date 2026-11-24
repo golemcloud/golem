@@ -1336,6 +1336,7 @@ async fn reserved_start_forwarded_in_initiation_order_and_reaches_plugin() {
             function_name,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(request_payload),
             durable_function_type: DurableFunctionType::ReadRemote,
             span_started: None,

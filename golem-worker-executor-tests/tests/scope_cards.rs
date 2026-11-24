@@ -705,6 +705,347 @@ async fn scope_cards_are_delivered_by_both_await_variants_and_removed_at_end(
     Ok(())
 }
 
+/// The export's return cuts off the lent scope card: a call the callee makes before it returns
+/// lists the card, and background work that runs right after `task.return` no longer does. The
+/// recorded history replays after a real executor restart, and a new invocation on the
+/// reconstructed agent is cut off the same way.
+#[test]
+#[timeout("3m")]
+#[tracing::instrument]
+async fn lent_scope_card_is_cut_off_at_the_callee_export_return_live_and_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend(scope_card_initial_permissions());
+        })
+        .store()
+        .await?;
+    let caller = agent_key!("ScopeCardAgent", "return-cut-off-caller");
+    let target_name = "return-cut-off-target";
+    let target = agent_key!("ScopeCardAgent", target_name);
+    configure_scope_card_root(&authority, &component, &caller)?;
+    executor.start_agent(&component.id, caller.clone()).await?;
+    let target_worker = executor.start_agent(&component.id, target.clone()).await?;
+
+    let before_return = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "lend_scope_around_return",
+            data_value!(target_name),
+        )
+        .await?
+        .into_typed::<Option<SchemaCardId>>()?;
+    assert!(
+        before_return.is_some(),
+        "a call made before the export returned must list the lent scope card"
+    );
+    let after_return = executor
+        .invoke_and_await_agent(
+            &component,
+            &target,
+            "lent_scope_observations_after_return",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<Option<SchemaCardId>>>()?;
+    assert_eq!(
+        after_return,
+        vec![None],
+        "background work after the export returned must not list the lent scope card"
+    );
+
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+
+    let replayed = executor
+        .invoke_and_await_agent(
+            &component,
+            &target,
+            "lent_scope_observations_after_return",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<Option<SchemaCardId>>>()?;
+    assert_eq!(
+        replayed,
+        vec![None],
+        "replay reproduces the recorded cut-off"
+    );
+
+    let before_return = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "lend_scope_around_return",
+            data_value!(target_name),
+        )
+        .await?
+        .into_typed::<Option<SchemaCardId>>()?;
+    assert!(
+        before_return.is_some(),
+        "after the restart, a call made before the export returned must list the lent scope card"
+    );
+    let after_return = executor
+        .invoke_and_await_agent(
+            &component,
+            &target,
+            "lent_scope_observations_after_return",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<Option<SchemaCardId>>>()?;
+    assert_eq!(
+        after_return,
+        vec![None, None],
+        "after the restart, background work after the export returned must not list the lent \
+         scope card"
+    );
+
+    executor.check_oplog_is_queryable(&target_worker).await?;
+    Ok(())
+}
+
+/// After the export's return, background work can neither lend the lent scope card through a
+/// handle it obtained before the return, nor lend a card derived from it, nor derive from it. A
+/// scope card derived from the callee's own wallet stays usable. The checks replay after a real
+/// executor restart and hold again for a new invocation on the reconstructed agent.
+#[test]
+#[timeout("3m")]
+#[tracing::instrument]
+async fn lent_scope_card_handles_are_refused_after_the_callee_export_return_live_and_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend(scope_card_initial_permissions());
+        })
+        .store()
+        .await?;
+    let caller = agent_key!("ScopeCardAgent", "handle-cut-off-caller");
+    let target_name = "handle-cut-off-target";
+    let target = agent_key!("ScopeCardAgent", target_name);
+    let witness_name = "handle-cut-off-witness";
+    configure_scope_card_root(&authority, &component, &caller)?;
+    executor.start_agent(&component.id, caller.clone()).await?;
+    let target_worker = executor.start_agent(&component.id, target.clone()).await?;
+
+    let lend = async |executor: &TestWorkerExecutor| -> anyhow::Result<Vec<(String, bool)>> {
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &caller,
+                "lend_scope_for_handle_use",
+                data_value!(target_name, witness_name),
+            )
+            .await?
+            .into_typed::<Vec<(String, bool)>>()
+    };
+    let checks_after_return =
+        async |executor: &TestWorkerExecutor| -> anyhow::Result<Vec<Vec<(String, bool)>>> {
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &target,
+                    "lent_scope_handle_checks_after_return",
+                    data_value!(),
+                )
+                .await?
+                .into_typed::<Vec<Vec<(String, bool)>>>()
+        };
+    let assert_all_hold = |checks: &[(String, bool)], when: &str| {
+        let failed = checks
+            .iter()
+            .filter(|(_, holds)| !holds)
+            .map(|(check, _)| check.as_str())
+            .collect::<Vec<_>>();
+        assert!(!checks.is_empty(), "{when}: no checks were made");
+        assert!(failed.is_empty(), "{when}: failed checks: {failed:?}");
+    };
+
+    assert_all_hold(&lend(&executor).await?, "before the return");
+    let after_return = checks_after_return(&executor).await?;
+    assert_eq!(after_return.len(), 1);
+    assert_all_hold(&after_return[0], "after the return");
+
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+
+    let replayed = checks_after_return(&executor).await?;
+    assert_eq!(
+        replayed, after_return,
+        "replay reproduces the recorded checks"
+    );
+
+    assert_all_hold(
+        &lend(&executor).await?,
+        "before the return, after the restart",
+    );
+    let after_return = checks_after_return(&executor).await?;
+    assert_eq!(after_return.len(), 2);
+    assert_all_hold(&after_return[1], "after the return, after the restart");
+
+    executor.check_oplog_is_queryable(&target_worker).await?;
+    Ok(())
+}
+
+/// A crash during the drain, while the export's return hides the lent scope card, must not drop
+/// the roots of the still-installed card. The lent card has a root that expires. After a real
+/// executor restart, replay reaches its tail in background work that runs after the cut-off,
+/// before the root expires. The background work then stays resident in a synchronous call until
+/// the root expired, and makes a card call. Only the roots that the replay finish kept let that
+/// card call's boundary revoke the expired root.
+#[test]
+#[timeout("3m")]
+#[tracing::instrument]
+async fn hidden_scope_card_roots_survive_replay_finished_during_the_drain(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend(scope_card_initial_permissions());
+        })
+        .store()
+        .await?;
+    let caller = agent_key!("ScopeCardAgent", "drain-roots-caller");
+    let target_name = "drain-roots-target";
+    let target = agent_key!("ScopeCardAgent", target_name);
+    let witness_name = "drain-roots-witness";
+    let witness = agent_key!("ScopeCardAgent", witness_name);
+    let root_card = configure_scope_card_root(&authority, &component, &caller)?;
+    let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let target_worker = executor.start_agent(&component.id, target.clone()).await?;
+    let witness_worker = executor.start_agent(&component.id, witness.clone()).await?;
+
+    // Whole seconds, so the expiry survives any timestamp encoding unchanged.
+    let now = chrono::DateTime::from_timestamp(Utc::now().timestamp(), 0)
+        .expect("the current time is a valid timestamp");
+    let root_expiry = now + chrono::Duration::seconds(40);
+    let expiring_root = concrete_inspect_card(root_card, Some(root_expiry));
+    let expiring_root_id = expiring_root.card_id();
+    authority.add_card(expiring_root.clone());
+    executor
+        .queue_card_install(&caller_worker.agent_id, expiring_root)
+        .await?;
+
+    let witness_release = executor
+        .invoke_and_await_agent(
+            &component,
+            &witness,
+            "create_release_promise",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<PromiseId>()?;
+    let release = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "lend_scope_held_through_drain",
+            data_value!(
+                target_name,
+                witness_name,
+                witness_release.clone(),
+                (
+                    root_expiry.timestamp(),
+                    root_expiry.timestamp_subsec_nanos()
+                )
+            ),
+        )
+        .await?
+        .into_typed::<PromiseId>()?;
+    executor
+        .wait_for_status(
+            &target_worker,
+            AgentStatus::Suspended,
+            Duration::from_secs(10),
+        )
+        .await?;
+
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &release, vec![1])
+        .await?;
+    // The witness suspends only after the callee's replay finished and its
+    // background work called `await_release`.
+    executor
+        .wait_for_status(
+            &witness_worker,
+            AgentStatus::Suspended,
+            Duration::from_secs(15),
+        )
+        .await?;
+    let until_expiry = (root_expiry - Utc::now()).to_std().map_err(|_| {
+        anyhow::anyhow!("the root expired before the callee's replay finished; the test cannot run")
+    })?;
+    tokio::time::sleep(until_expiry + Duration::from_secs(1)).await;
+    executor
+        .complete_promise(
+            &executor.context.default_environment_id,
+            &witness_release,
+            vec![1],
+        )
+        .await?;
+    // Queued behind the drain, so it runs after the drain ended.
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &target,
+            "lent_scope_observations_after_return",
+            data_value!(),
+        )
+        .await?;
+
+    let target_oplog = executor
+        .get_oplog(&target_worker, OplogIndex::INITIAL)
+        .await?;
+    assert!(
+        target_oplog.iter().any(|entry| matches!(
+            &entry.entry,
+            PublicOplogEntry::CardRevokedCascade(params)
+                if params.revoked_card_ids.contains(&expiring_root_id)
+        )),
+        "the callee must revoke the expired root of the hidden scope card"
+    );
+    executor.check_oplog_is_queryable(&target_worker).await?;
+    Ok(())
+}
+
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]

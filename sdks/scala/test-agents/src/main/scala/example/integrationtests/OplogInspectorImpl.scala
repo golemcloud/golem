@@ -100,6 +100,9 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
         val resp = p.response.map(summarizeTyped).getOrElse("void")
         s"COMPLETED @ $ts response=$resp fuel=${p.consumedFuel}"
 
+      case OplogApi.OplogEntry.AgentInvocationSettled(p) =>
+        s"SETTLED @ $ts inv=${p.invocationId} fuel=${p.consumedFuel}"
+
       case OplogApi.OplogEntry.Suspend(t) => s"SUSPEND @ ${t.seconds}s"
       case OplogApi.OplogEntry.Error(p)   =>
         s"ERROR @ $ts kind=${p.kind} '${p.error}' retryFrom=${p.retryFrom}"

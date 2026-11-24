@@ -29,6 +29,7 @@ message OplogEntry {
     AgentInvocationStartedParameters AgentInvocationStarted = 3;
     AgentInvocationFinishedParameters AgentInvocationFinished = 4;
     AgentInvocationFailedParameters AgentInvocationFailed = 71;
+    AgentInvocationSettledParameters AgentInvocationSettled = 73;
     TimestampParameter Suspend = 5;
     ErrorParameters Error = 6;
     JumpParameters Jump = 8;
@@ -169,6 +170,7 @@ message ReplayHostCall {
   optional uint64 observational_owner = 5;
   bool carries_request = 6;
   optional golem.schema.TypedSchemaValue request = 7;
+  optional uint64 driver = 8;
 }
 
 // An identity field of a recorded `Start`.
@@ -179,6 +181,7 @@ enum StartIdentityField {
   START_IDENTITY_FIELD_OBSERVATIONAL_OWNER = 3;
   START_IDENTITY_FIELD_REQUEST_PRESENCE = 4;
   START_IDENTITY_FIELD_PARENT = 5;
+  START_IDENTITY_FIELD_DRIVER = 6;
 }
 
 // Why an update failed.
@@ -202,6 +205,7 @@ message StartParameters {
   optional uint64 observational_owner = 8;
   optional SpanStarted span_started = 9;
   optional string denial = 10;
+  optional uint64 driver = 11;
 }
 
 message EndParameters {
@@ -307,6 +311,12 @@ message AgentInvocationFailedParameters {
   golem.common.UUID invocation_id = 2;
   string error = 3;
   uint64 start_index = 4;
+}
+
+message AgentInvocationSettledParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.common.UUID invocation_id = 2;
+  int64 consumed_fuel = 3;
 }
 
 message PublicAgentInvocation {

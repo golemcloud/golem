@@ -181,11 +181,30 @@ impl Drop for LogOutputGuard {
 pub struct AgentResult {
     value: Option<SchemaValue>,
     agent_id: OwnedAgentId,
+    background_failure: Option<String>,
 }
 
 impl AgentResult {
     pub fn new(value: Option<SchemaValue>, agent_id: OwnedAgentId) -> Self {
-        Self { value, agent_id }
+        Self {
+            value,
+            agent_id,
+            background_failure: None,
+        }
+    }
+
+    /// The result with the background failure that the result lookup reported.
+    pub fn with_background_failure(self, background_failure: Option<String>) -> Self {
+        Self {
+            background_failure,
+            ..self
+        }
+    }
+
+    /// The failure of the agent during the background work of the invocation, after it
+    /// recorded this result. Only a later lookup of the result reports it.
+    pub fn background_failure(&self) -> Option<&str> {
+        self.background_failure.as_deref()
     }
 
     pub fn agent_id(&self) -> &OwnedAgentId {

@@ -258,6 +258,7 @@ fn replay_step_to_wit(step: ReplayStep) -> Result<oplog::ReplayStep, String> {
             parent_start_index: call.parent_start_index.map(Into::into),
             invocation_id: call.invocation_id.map(durable_invocation_id_to_wit),
             observational_owner: call.observational_owner.map(Into::into),
+            driver: call.driver.map(Into::into),
             carries_request: call.carries_request,
             request: call
                 .request
@@ -285,6 +286,7 @@ fn replay_step_from_wit(step: oplog::ReplayStep) -> Result<ReplayStep, String> {
             observational_owner: call
                 .observational_owner
                 .map(golem_common::model::OplogIndex::from_u64),
+            driver: call.driver.map(golem_common::model::OplogIndex::from_u64),
             carries_request: call.carries_request,
             request: call
                 .request
@@ -309,6 +311,7 @@ fn start_identity_field_to_wit(field: StartIdentityField) -> oplog::StartIdentit
         StartIdentityField::ObservationalOwner => oplog::StartIdentityField::ObservationalOwner,
         StartIdentityField::RequestPresence => oplog::StartIdentityField::RequestPresence,
         StartIdentityField::Parent => oplog::StartIdentityField::Parent,
+        StartIdentityField::Driver => oplog::StartIdentityField::Driver,
     }
 }
 
@@ -320,6 +323,7 @@ fn start_identity_field_from_wit(field: oplog::StartIdentityField) -> StartIdent
         oplog::StartIdentityField::ObservationalOwner => StartIdentityField::ObservationalOwner,
         oplog::StartIdentityField::RequestPresence => StartIdentityField::RequestPresence,
         oplog::StartIdentityField::Parent => StartIdentityField::Parent,
+        oplog::StartIdentityField::Driver => StartIdentityField::Driver,
     }
 }
 
