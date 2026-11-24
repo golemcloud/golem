@@ -966,7 +966,7 @@ You've seen the whole picture. Here is how to run it.
 ### Where it runs
 
 - **On your laptop.** The `golem` binary includes a complete local Golem: `golem server run` starts the executor, registry, shard manager, and gateway in one process, with the API on port 9881, HTTP endpoints on 9006, and MCP on 9007. Stop and restart it, and your agents are still there.
-- **Golem Cloud.** The hosted service is in Developer Preview today: free, for building and trying things out, not yet for production. Paid plans with usage-based pricing launch in the coming weeks. Deploy with `golem deploy --cloud`, and your apps appear at `<name>.apps.golem.cloud`.
+- **Golem Cloud.** The hosted service has two plans: Free, and Pro with larger monthly amounts and optional paid overage. See [the plans and prices](/cloud). Deploy with `golem deploy --cloud`, and your apps appear at `<name>.apps.golem.cloud`.
 - **Self-hosted.** Run the published Docker images with Docker Compose, or on Kubernetes with your own manifests. Storage backends include PostgreSQL, Redis, SQLite, S3, and etcd.
 
 Golem is open source (BUSL-1.1 → Apache-2.0). Production use is allowed, including commercial applications built on Golem; the one exclusion is offering Golem itself to third parties as a hosted developer platform. Each version converts to Apache-2.0 four years after release.

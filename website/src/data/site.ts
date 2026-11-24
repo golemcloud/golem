@@ -16,4 +16,5 @@ export const urls = {
   quickstart: "https://learn.golem.cloud/quickstart",
   docs: "https://learn.golem.cloud",
   releases: "https://github.com/golemcloud/golem/releases",
+  billing: "https://billing.golem.cloud",
 } as const;

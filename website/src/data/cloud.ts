@@ -6,70 +6,112 @@ export const contact = {
   label: "Discuss your workload",
   href: `mailto:sales@golem.cloud?subject=Planning%20a%20Golem%20Cloud%20workload&body=${encodeURIComponent(workloadBody)}`,
 };
+const upgrade = { label: "Upgrade to Pro", href: urls.billing };
 export const meta = {
   title: "Golem Cloud pricing",
   description:
-    "Try managed Golem Cloud free during Developer Preview. Explore the planned resource pricing model and discuss your production workload.",
+    "Golem Cloud has two plans. Free includes small monthly amounts of compute, memory and filesystem. Pro costs $20 a month plus tax, with larger amounts and optional paid overage.",
 };
 export const hero = {
   eyebrow: "Pricing",
   heading: "Golem Cloud pricing",
-  lead: "Run your agents and tools on infrastructure we manage. Start with the free Developer Preview.",
+  lead: "Run your agents and tools on infrastructure we manage. Start on Free, and move to Pro when your workload needs more.",
 };
 export const offers = [
   {
-    id: "preview",
-    badge: "Available now",
-    name: "Developer Preview",
-    price: "Free",
-    priceNote: "during Developer Preview",
-    description: "For evaluating Golem, trying integrations, and building prototypes.",
-    features: [
-      "Managed execution for your agents and tools",
-      "Deploy with the Golem CLI",
-      "Community help on Discord",
+    id: "free",
+    name: "Free",
+    price: "$0",
+    period: "a month",
+    priceNote: "Every new account starts on Free. It replaces the Developer Preview.",
+    description: "Try Golem Cloud with a small monthly amount of each resource.",
+    included: [
+      { amount: "1 million GCU", label: "of compute" },
+      { amount: "About 1.9 GiB-hours", label: "of active memory" },
+      { amount: "1 GiB-month", label: "of active durable filesystem" },
+      { amount: "1 GiB-month", label: "of active ephemeral filesystem" },
     ],
-    note: "Resource limits apply. Contact us to check capacity for your workload.",
+    runOut:
+      "Durable agents pause until the 1st of the next month (UTC). They keep their state and queued calls. Calls to ephemeral agents fail. Nothing is deleted.",
     cta: { label: "Start building", href: urls.quickstart },
-    emphasized: true,
-  },
-  {
-    id: "paid",
-    badge: "Planned",
-    name: "Usage-based Cloud",
-    price: "Rates to come",
-    priceNote: "paid service is not available yet",
-    description:
-      "Planning a production deployment? Talk with us about your workload and requirements.",
-    features: [
-      "Planned pricing for compute, memory, and filesystem usage",
-      "Launch date and commercial terms to be announced",
-      "Discuss capacity, deployment, and support needs",
-    ],
-    note: "A dollar estimate needs the rates and terms for paid Cloud.",
-    cta: contact,
+    ctaNote: "",
     emphasized: false,
   },
+  {
+    id: "pro",
+    name: "Pro",
+    price: "$20",
+    period: "a month",
+    priceNote: "Tax added at checkout. €24 in the EU and £19 in the UK, VAT included.",
+    description:
+      "Run your agents and tools on Golem Cloud, with a monthly allowance of each resource.",
+    included: [
+      { amount: "100 million GCU", label: "of compute" },
+      { amount: "912.5 GiB-hours", label: "of active memory" },
+      { amount: "5 GiB-months", label: "of active durable filesystem" },
+      { amount: "5 GiB-months", label: "of active ephemeral filesystem" },
+    ],
+    runOut:
+      "Your agents stop until the allowance resets on the 1st of the month (UTC), unless the account owner turns on paid overage.",
+    cta: upgrade,
+    ctaNote:
+      "Sign in with GitHub at billing.golem.cloud and upgrade. Cancel at any time. Pro runs until the end of the billing period.",
+    emphasized: true,
+  },
 ];
-export const previewNotice = {
-  heading: "For prototypes, not production",
-  body: "No SLA or data-retention guarantee. Workload data may be deleted.",
-  link: { label: "Preview terms", href: "/legal#preview" },
+export const planNotes = [
+  {
+    heading: "Custom plans",
+    body: "Need more than Pro includes? We set up custom plans by arrangement.",
+    link: { label: "sales@golem.cloud", href: contact.href },
+  },
+  {
+    heading: "Payment",
+    body: "Polar, our merchant of record, takes the payment and picks the currency from your location at checkout. You pay in EUR in the EU, in GBP in the UK, and in USD with tax added everywhere else.",
+    link: { label: "Terms of service", href: "/legal" },
+  },
+];
+export const overage = {
+  eyebrow: "Pro only",
+  heading: "Paid overage",
+  lead: "Paid overage is off until the account owner turns it on at billing.golem.cloud. With it on, your agents keep running after an included amount runs out. The extra usage goes on your next monthly invoice.",
+  caption: "Paid overage prices, per unit above the included amounts",
+  rowHeader: "Per unit above the included amounts",
+  currencies: [
+    { code: "USD", tax: "tax added" },
+    { code: "EUR", tax: "VAT included" },
+    { code: "GBP", tax: "VAT included" },
+  ],
+  rows: [
+    { name: "Compute", unit: "per million GCU", prices: ["$0.0112", "€0.0131", "£0.0103"] },
+    { name: "Active memory", unit: "per GiB-hour", prices: ["$0.045", "€0.053", "£0.042"] },
+    {
+      name: "Active durable filesystem",
+      unit: "per GiB-month",
+      prices: ["$0.27", "€0.32", "£0.25"],
+    },
+    {
+      name: "Active ephemeral filesystem",
+      unit: "per GiB-month",
+      prices: ["$0.24", "€0.28", "£0.23"],
+    },
+  ],
+  note: "The four resource names are also the line names on your invoice.",
 };
 export const resources = {
-  eyebrow: "The planned pricing model",
+  eyebrow: "How usage is measured",
   heading: "Four resources. Measured separately.",
-  lead: "Golem 1.6 measures execution work, active memory, and active filesystem space. These are the resource dimensions planned for paid Cloud; rates are not yet published.",
+  lead: "Each plan includes a monthly amount of four resources. Golem measures execution work, active memory, and active filesystem space, and counts each one against its own amount.",
   items: [
     {
       name: "Compute",
       unit: "GCU",
       description:
-        "WebAssembly execution work. One Golem Compute Unit is one million fuel units—not a request count or a model token.",
+        "WebAssembly execution work. One Golem Compute Unit is one million fuel units. It is not a request count or a model token.",
     },
     {
       name: "Active memory",
-      unit: "GiB-seconds",
+      unit: "GiB-hours",
       description: "Allocated agent memory multiplied by the time the agent is active.",
     },
     {
@@ -92,7 +134,7 @@ export const resources = {
     },
     {
       label: "While idle or suspended",
-      body: "These four resource meters stop accruing. An agent’s age is not its active time. This does not promise unlimited data retention.",
+      body: "These four resource meters stop accruing. An agent's age is not its active time. This does not promise unlimited data retention.",
     },
   ],
 };
@@ -113,14 +155,14 @@ export const budget = {
     },
     {
       number: "03",
-      title: "Discuss the production requirements",
-      body: "Share your measurements, launch timing, retention needs, and support or private-deployment requirements. Rates and paid availability remain unannounced.",
+      title: "Compare with a plan",
+      body: "Scale the quantities to a month and compare each one with the included amounts. Price what goes above Pro with the overage table, or ask us about a custom plan.",
     },
   ],
   example: {
     heading: "Memory usage example",
-    calculation: "256 MiB × 10,000 active seconds = 2,500 GiB-seconds",
-    body: "For an agent holding 256 MiB throughout that active time. Measure compute separately in GCU; there is no fixed conversion from request count or elapsed time.",
+    calculation: "256 MiB × 100 active hours = 25 GiB-hours",
+    body: "That is one agent holding 256 MiB for 100 hours of active time. Pro's 912.5 GiB-hours cover 36 such agents a month. Measure compute separately in GCU. Request count and elapsed time do not convert to GCU at a fixed rate.",
   },
   externalCosts:
     "Golem Cloud runs your agent code and tools. Budget separately for model APIs and other services billed through your provider accounts.",
@@ -149,35 +191,30 @@ export const faq = {
   heading: "Pricing questions",
   items: [
     {
-      question: "Is the Preview a permanent free tier?",
+      question: "What happens when an included amount runs out?",
       answer:
-        "No. The managed service is free during Developer Preview for evaluation and prototyping. A permanent free production allowance has not been announced. Paid availability, rates, and included quantities will be published when defined.",
+        "On Free, durable agents pause until the 1st of the next month (UTC). They keep their state and queued calls, and calls to ephemeral agents fail. Nothing is deleted. On Pro, your agents stop until the allowance resets on the 1st, unless the account owner has turned on paid overage. Per-agent memory and filesystem limits are separate from the monthly amounts. Reaching one can reject an allocation or a write.",
     },
     {
-      question: "What happens when I reach a resource limit?",
+      question: "How do I control what I pay?",
       answer:
-        "The consequence depends on the limit. In Golem 1.6, configured monthly compute or call limits can suspend durable agents and fail ephemeral execution. Per-agent memory or managed-filesystem limits can reject allocations or writes. Account limits can reject creation of additional resources. Contact us to confirm the limits that apply to your Cloud workload.",
+        "Free costs nothing. With paid overage off, Pro costs its monthly price and nothing more, because your agents stop when an amount runs out. With paid overage on, each unit above the included amounts costs the price in the overage table. The account owner can turn paid overage off at billing.golem.cloud. The change takes up to 5 minutes to reach running agents, and usage in that time is still billed.",
     },
     {
-      question: "Can resource limits set a maximum monthly bill?",
+      question: "How do I upgrade to Pro?",
       answer:
-        "No. Resource limits and application quotas are not a whole-bill spending cap. In the 1.6 metering model, monthly memory and filesystem usage are measured without a corresponding monthly runtime cap. Application quotas govern operations your code explicitly reserves; they do not automatically cap model-provider invoices.",
+        "Sign in with GitHub at billing.golem.cloud and upgrade. Polar runs the checkout. You can cancel at any time, and Pro runs until the end of the billing period.",
     },
     {
       question: "How do the memory and filesystem units work?",
       answer:
-        "A GiB is 1,073,741,824 bytes. Memory is allocated GiB multiplied by active seconds. Filesystem usage is allocated space multiplied by active time, normalized to a 730-hour month. The 1.6 usage API labels these binary-based quantities GB-seconds and GB-month. Usage is reported by UTC calendar month.",
-    },
-    {
-      question: "What do I need before planning a production launch?",
-      answer:
-        "Paid Golem Cloud is not available yet. Discuss your expected volume, measured resource usage, peak capacity, retention, and support requirements with us. A production budget will need published rates and commercial terms. Preview has no SLA or retention guarantee and must not be used for production workloads.",
+        "A GiB is 1,073,741,824 bytes. Memory usage is allocated GiB multiplied by active hours. Filesystem usage is allocated space multiplied by active time, normalized to a 730-hour month, so a GiB-month is 1 GiB for 730 hours. The included amounts reset on the 1st of each month (UTC). The usage API, the billing page and invoices write these binary units as GB, and the usage API reports memory in GB-seconds. Divide by 3,600 to get GiB-hours.",
     },
   ],
 };
 export const closing = {
   heading: "Try your agents on Golem Cloud.",
-  body: "Deploy a prototype, exercise its real workload, and see how it behaves.",
+  body: "Start on Free. Deploy a prototype, run its real workload, and see what it uses.",
   primary: { label: "Start building", href: urls.quickstart },
-  secondary: contact,
+  secondary: upgrade,
 };

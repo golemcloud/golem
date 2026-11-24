@@ -7,7 +7,8 @@ import {
   meta,
   hero,
   offers,
-  previewNotice,
+  planNotes,
+  overage,
   resources,
   budget,
   deployment,
@@ -29,34 +30,28 @@ import {
                 class:list={["offer-card", { "offer-card-featured": offer.emphasized }]}
                 aria-labelledby={`${offer.id}-title`}
               >
-                <div class="offer-topline">
-                  <>
-                    <h2 id={`${offer.id}-title`}>{offer.name}</h2>
-                    <span class:list={["status", { "status-live": offer.emphasized }]}>
-                      {offer.badge}
-                    </span>
-                  </>
-                </div>
-                <div class="offer-price">{offer.price}</div>
+                <h2 id={`${offer.id}-title`} class="offer-name">
+                  {offer.name}
+                </h2>
+                <p class="offer-price">
+                  {offer.price}
+                  <span class="offer-period">{offer.period}</span>
+                </p>
                 <p class="price-note">{offer.priceNote}</p>
                 <p class="offer-description">{offer.description}</p>
+                <h3 class="offer-label">Included each month</h3>
                 <ul class="offer-features">
-                  {offer.features.map((feature) => (
-                    <li>{feature}</li>
+                  {offer.included.map((item) => (
+                    <li>
+                      <span class="included-amount">{item.amount}</span> {item.label}
+                    </li>
                   ))}
                 </ul>
-                <p class="offer-note">{offer.note}</p>
-                {offer.id === "preview" && (
-                  <aside class="preview-notice" aria-label="Developer Preview conditions">
-                    <strong>{previewNotice.heading}.</strong>
-                    <p>
-                      {previewNotice.body}{" "}
-                      <a href={previewNotice.link.href}>
-                        {previewNotice.link.label} <span aria-hidden="true">→</span>
-                      </a>
-                    </p>
-                  </aside>
-                )}
+                <div class="offer-run-out">
+                  <h3 class="offer-label">When an amount runs out</h3>
+                  <p>{offer.runOut}</p>
+                </div>
+                {offer.ctaNote && <p class="offer-cta-note">{offer.ctaNote}</p>}
                 <a
                   href={offer.cta.href}
                   class:list={[
@@ -71,6 +66,61 @@ import {
             ))
           }
         </div>
+        <div class="plan-notes">
+          {
+            planNotes.map((note) => (
+              <div class="state-note">
+                <h2 class="note-heading">{note.heading}</h2>
+                <p>{note.body}</p>
+                <a href={note.link.href}>
+                  {note.link.label} <span aria-hidden="true">→</span>
+                </a>
+              </div>
+            ))
+          }
+        </div>
+      </div>
+    </section>
+    <section class="overage-section section" aria-labelledby="overage-title">
+      <div class="container">
+        <header class="section-header">
+          <span class="eyebrow">{overage.eyebrow}</span><h2 id="overage-title">
+            {overage.heading}
+          </h2><p>{overage.lead}</p>
+        </header>
+        <table class="price-table" role="table">
+          <caption class="sr-only">{overage.caption}</caption>
+          <thead role="rowgroup">
+            <tr role="row">
+              <th scope="col" role="columnheader" class="price-table-corner">{overage.rowHeader}</th
+              >
+              {
+                overage.currencies.map((currency) => (
+                  <th scope="col" role="columnheader">
+                    <span class="currency-code">{currency.code}</span>
+                    <span class="currency-tax">{currency.tax}</span>
+                  </th>
+                ))
+              }
+            </tr>
+          </thead>
+          <tbody role="rowgroup">
+            {
+              overage.rows.map((row) => (
+                <tr role="row">
+                  <th scope="row" role="rowheader">
+                    <span>{row.name}</span>
+                    <span class="resource-unit">{row.unit}</span>
+                  </th>
+                  {row.prices.map((price) => (
+                    <td role="cell">{price}</td>
+                  ))}
+                </tr>
+              ))
+            }
+          </tbody>
+        </table>
+        <p class="table-note">{overage.note}</p>
       </div>
     </section>
     <section class="resource-section section" aria-labelledby="resource-title">
@@ -236,51 +286,48 @@ import {
     background:
       linear-gradient(140deg, rgba(245, 176, 62, 0.045), transparent 60%), var(--bg-elevated);
   }
-  .offer-topline {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-    margin-bottom: 1.5rem;
-  }
-  .offer-topline h2 {
+  .offer-name {
     font-size: 1.15rem;
     font-weight: 600;
     letter-spacing: -0.015em;
-  }
-  .status {
-    border: 1px solid var(--border-strong);
-    border-radius: 999px;
-    color: var(--text-secondary);
-    padding: 0.2rem 0.6rem;
-    font-size: 0.7rem;
-    font-family: var(--font-mono);
-    white-space: nowrap;
-  }
-  .status-live {
-    border-color: var(--accent-border);
-    color: var(--accent);
-    background: var(--accent-dim);
+    margin-bottom: 1.1rem;
   }
   .offer-price {
+    color: var(--text);
     font-size: clamp(2rem, 3.5vw, 2.8rem);
     font-weight: 600;
     letter-spacing: -0.035em;
     line-height: 1.15;
   }
+  .offer-period {
+    margin-left: 0.45rem;
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    font-weight: 400;
+    letter-spacing: 0;
+  }
   .price-note {
     color: var(--text-secondary);
     font-size: 0.88rem;
-    margin: 0.35rem 0 1.2rem;
+    margin: 0.45rem 0 1.2rem;
+    max-width: 48ch;
   }
   .offer-description {
     color: var(--text-secondary);
     max-width: 48ch;
   }
+  .offer-label {
+    margin-top: 1.4rem;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 400;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
   .offer-features {
     list-style: none;
-    margin: 1.25rem 0;
+    margin: 0.75rem 0 0;
     display: grid;
     gap: 0.6rem;
     font-size: 0.92rem;
@@ -288,6 +335,11 @@ import {
   .offer-features li {
     position: relative;
     padding-left: 1.25rem;
+    color: var(--text-secondary);
+  }
+  .included-amount {
+    color: var(--text);
+    font-weight: 550;
   }
   .offer-features li::before {
     content: "";
@@ -299,35 +351,109 @@ import {
     background: var(--accent);
     border-radius: 50%;
   }
-  .offer-note {
+  .offer-run-out {
+    margin-bottom: 1.5rem;
+  }
+  .offer-run-out p {
+    margin-top: 0.5rem;
     color: var(--text-secondary);
-    font-size: 0.82rem;
-    margin-top: auto;
-    margin-bottom: 1.25rem;
+    font-size: 0.88rem;
+    line-height: 1.65;
+    max-width: 52ch;
   }
   .offer-cta {
     align-self: flex-start;
+    margin-top: auto;
   }
-  .preview-notice {
-    display: block;
-    border-top: 1px solid var(--border);
-    padding: 0.85rem 0 0;
-    margin: 0 0 1.25rem;
+  .offer-cta-note {
+    margin-bottom: 1.25rem;
     color: var(--text-secondary);
     font-size: 0.82rem;
-    line-height: 1.65;
+    line-height: 1.6;
   }
-  .preview-notice strong {
-    flex: 0 0 auto;
-    color: var(--text);
+  .plan-notes {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+    margin-top: 2rem;
+  }
+  .note-heading {
+    font-size: 1rem;
+    font-weight: 550;
+    letter-spacing: -0.012em;
+    line-height: 1.4;
+  }
+  .plan-notes a {
+    display: inline-block;
+    margin-top: 0.5rem;
+    font-size: 0.9rem;
+  }
+  .price-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--bg-elevated);
+    font-size: 0.92rem;
+  }
+  .price-table th,
+  .price-table td {
+    padding: 1.05rem 1.5rem;
+    text-align: left;
+    vertical-align: baseline;
+  }
+  .price-table thead th {
+    border-bottom: 1px solid var(--border);
     font-weight: 500;
   }
-  .preview-notice p {
-    max-width: 850px;
-    margin-top: 0.3rem;
+  .price-table tbody tr + tr > * {
+    border-top: 1px solid var(--border);
   }
-  .preview-notice a {
+  .price-table-corner {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+  }
+  .currency-code {
+    display: block;
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+  }
+  .currency-tax {
+    display: block;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    font-weight: 400;
+  }
+  .price-table tbody th {
+    font-weight: 500;
+  }
+  .price-table tbody th .resource-unit {
+    display: block;
+    margin-top: 0.15rem;
+  }
+  .price-table td {
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+  .table-note {
+    margin-top: 1rem;
+    color: var(--text-secondary);
+    font-size: 0.88rem;
+  }
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
     white-space: nowrap;
+    border: 0;
   }
   .section {
     padding: 3.75rem 0;
@@ -543,11 +669,9 @@ import {
       grid-template-columns: 1fr;
       gap: 1.5rem;
     }
-    .preview-notice {
-      display: block;
-    }
-    .preview-notice p {
-      margin-top: 0.3rem;
+    .price-table th,
+    .price-table td {
+      padding: 0.95rem 1rem;
     }
   }
   @media (max-width: 600px) {
@@ -555,6 +679,7 @@ import {
       padding-bottom: 2.5rem;
     }
     .offer-grid,
+    .plan-notes,
     .state-grid,
     .budget-steps,
     .deployment-grid {
@@ -563,17 +688,44 @@ import {
     .offer-card {
       padding: 1.35rem;
     }
-    .offer-topline {
-      margin-bottom: 1.1rem;
-    }
     .offer-description {
       font-size: 0.94rem;
     }
     .offer-features {
       font-size: 0.88rem;
     }
-    .offer-note {
-      font-size: 0.8rem;
+    .plan-notes {
+      gap: 1.5rem;
+    }
+    .price-table,
+    .price-table thead,
+    .price-table tbody {
+      display: block;
+    }
+    .price-table thead tr,
+    .price-table tbody tr {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+    .price-table thead .price-table-corner {
+      display: none;
+    }
+    .price-table th,
+    .price-table td {
+      padding: 0.8rem 1rem;
+    }
+    .price-table tbody th {
+      grid-column: 1 / -1;
+      padding-bottom: 0.2rem;
+    }
+    .price-table tbody td {
+      padding-top: 0.35rem;
+    }
+    .price-table tbody tr + tr > * {
+      border-top: 0;
+    }
+    .price-table tbody tr + tr {
+      border-top: 1px solid var(--border);
     }
     .section {
       padding: 2.75rem 0;

@@ -57,8 +57,8 @@ export const sections: AboutSection[] = [
     </p>
 
     <p>
-      Today, the Golem runtime is open source under BUSL‑1.1, transitioning to Apache 2.0. Golem Cloud
-      is in Developer Preview, with paid plans launching in the coming weeks.
+      Today, the Golem runtime is open source under BUSL‑1.1, transitioning to Apache 2.0. Golem Cloud,
+      the managed service, has a <a href="/cloud">Free plan and a paid Pro plan</a>.
     </p>`,
   },
   {
