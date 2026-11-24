@@ -59,7 +59,7 @@ golem agent invoke --trigger --schedule-at 2026-03-15T10:30:00Z \
 If an exported TypeScript binding and the `name` metadata differ, the metadata still controls the
 CLI agent type.
 
-Pass one native TypeScript literal per user-supplied `input` field in declaration order. Skip host-injected `Principal` fields; do not supply a principal value or placeholder. Do not pass the SDK client's named input objects,
+Pass one native TypeScript literal per user-supplied `input` field in declaration order. Do not pass the SDK client's named input objects,
 such as `{ name: "c1" }` or `{ amount: 5 }`, as wrappers around constructor or method argument
 lists.
 
