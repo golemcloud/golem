@@ -15,10 +15,11 @@
 use super::{BTreeSetDiff, HttpApiDeployment, McpDeployment};
 use crate::model::account::{AccountEmail, AccountId};
 use crate::model::agent::AgentTypeName;
-use crate::model::component::{ComponentId, ComponentName};
+use crate::model::component::{ComponentId, ComponentName, InitialAgentFile};
 use crate::model::diff::DiffError;
 use crate::model::diff::component::Component;
 use crate::model::diff::hash::{Hash, HashOf, Hashable, hash_from_serialized_value};
+use crate::model::diff::plugin::PluginInstallation;
 use crate::model::diff::ser::serialize_with_mode;
 use crate::model::diff::{BTreeMapDiff, Diffable};
 use crate::model::json::NormalizedJsonValue;
@@ -114,6 +115,38 @@ pub fn effective_tool_binding(
     ))
 }
 
+/// A tool's provision as a deployment diff sees it. Each plugin leaves out the account that
+/// installed it: that is whoever deploys, not part of what is deployed.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolProvision {
+    pub config: NormalizedJsonValue,
+    pub env: BTreeMap<String, String>,
+    pub plugins: Vec<PluginInstallation>,
+    pub files: Vec<InitialAgentFile>,
+}
+
+impl From<&ToolProvisionConfig> for ToolProvision {
+    fn from(provision: &ToolProvisionConfig) -> Self {
+        Self {
+            config: provision.config.clone(),
+            env: provision.env.clone(),
+            plugins: provision
+                .plugins
+                .iter()
+                .map(|plugin| PluginInstallation {
+                    priority: plugin.priority.0,
+                    name: plugin.plugin_name.clone(),
+                    version: plugin.plugin_version.clone(),
+                    grant_id: plugin.environment_plugin_grant_id.0,
+                    parameters: plugin.parameters.clone(),
+                })
+                .collect(),
+            files: provision.files.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteToolDeployment {
@@ -124,7 +157,7 @@ pub struct RemoteToolDeployment {
     pub owner_account_email: AccountEmail,
     pub metadata_version: String,
     pub metadata_digest: Hash,
-    pub provision: ToolProvisionConfig,
+    pub provision: ToolProvision,
     pub component_bindings: BTreeMap<String, EffectiveToolBinding>,
     pub bindings: BTreeMap<AgentTypeName, EffectiveToolBinding>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -266,7 +299,7 @@ pub fn remote_tool_deployments(
                     owner_account_email: tool.owner_account_email,
                     metadata_version: tool.metadata_version,
                     metadata_digest: tool.metadata_digest,
-                    provision: tool.provision,
+                    provision: (&tool.provision).into(),
                     component_bindings,
                     bindings,
                     environment_middleware_binding,
@@ -289,7 +322,7 @@ pub struct RemoteToolMiddlewareDeployment {
     pub owner_account_email: AccountEmail,
     pub metadata_version: String,
     pub metadata_digest: Hash,
-    pub provision: ToolProvisionConfig,
+    pub provision: ToolProvision,
 }
 
 impl RemoteToolMiddlewareDeployment {
@@ -307,7 +340,7 @@ impl RemoteToolMiddlewareDeployment {
             owner_account_email,
             metadata_version: metadata.metadata_version.clone(),
             metadata_digest: metadata.metadata_digest,
-            provision,
+            provision: (&provision).into(),
         }
     }
 }
@@ -352,7 +385,7 @@ pub fn remote_tool_middleware_deployments(
                     owner_account_email: middleware.owner_account_email,
                     metadata_version: middleware.metadata_version,
                     metadata_digest: middleware.metadata_digest,
-                    provision: middleware.provision,
+                    provision: (&middleware.provision).into(),
                 }
                 .into(),
             )))

@@ -630,6 +630,185 @@ mod tests {
     use test_r::test;
 
     #[test]
+    async fn creation_replay_and_existing_slot_put_retain_invocation_receipts() {
+        use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+        use golem_api_grpc::proto::golem::workerexecutor::v1::{
+            CreateStreamSessionSuccess, ReadStreamSlotSuccess, StreamSessionCreationIntent,
+        };
+        use golem_common::model::OwnedInvocationId;
+        use golem_service_base::custom_api::{
+            MethodParameter, PathSegmentType, QueryOrHeaderType, RouteBehaviour,
+        };
+
+        let harness = crate::mcp::InvocationHarness::with_run_method(AgentMode::Durable);
+        let handler = DurableStreamsHandler::new(
+            harness.worker_service.clone(),
+            Arc::new(CallAgentHandler::new(harness.worker_service.clone())),
+            &DurableStreamsConfig::default(),
+        );
+        let mut compiled = test_route(1, "/run", Some("PUT"), "typed");
+        let RouteBehaviour::CallAgent(call) = &mut compiled.behavior else {
+            unreachable!()
+        };
+        let slot = DurableStreamSlot {
+            canonical_name: "events".into(),
+            public_name: "events".into(),
+            direction: DurableStreamSlotDirection::Input,
+            content_type: "application/json".into(),
+            representation: DurableStreamRepresentation::Json,
+        };
+        call.durable_streams = Some(DurableStreamRoutePolicy {
+            family_id: 1,
+            slots: vec![slot],
+            allow_external_writes: true,
+            allow_stream_delete: true,
+            allow_invocation_delete: true,
+            load: None,
+        });
+        let resolver = test_resolver(vec![compiled]);
+        let request = || {
+            RichRequest::new(
+                poem::Request::builder()
+                    .method(Method::PUT)
+                    .uri("/run".parse().unwrap())
+                    .header("host", "example.com")
+                    .finish(),
+            )
+        };
+        let route = resolver
+            .resolve_matching_route(&request().underlying)
+            .await
+            .unwrap();
+        let super::super::RichRouteBehaviour::CallAgent(call) = &route.route.behavior else {
+            unreachable!()
+        };
+        let mut call = call.clone();
+        let owner = AgentId::random(harness.type_id);
+        let target = RoutedTarget::existing(owner, None);
+        let key = Uuid::new_v4();
+        let expected = OwnedInvocationId::new(owner, key.into());
+        for replayed in [false, true] {
+            harness.durable_stream_creations.lock().unwrap().push_back(
+                CreateStreamSessionSuccess {
+                    invocation_key: Some(key.into()),
+                    replayed,
+                    session: "session".into(),
+                    ..Default::default()
+                },
+            );
+            let mut request = request();
+            let created = handler
+                .create(
+                    &mut request,
+                    &route,
+                    &call,
+                    &target,
+                    "session",
+                    StreamSessionCreationIntent::ExplicitPut,
+                    None,
+                )
+                .await
+                .unwrap();
+            assert_eq!(created.replayed, replayed);
+            let receipt = request.accepted_invocation.unwrap();
+            assert_eq!(receipt.id, expected);
+            assert_eq!(receipt.environment_id, route.route.environment_id);
+        }
+        for replayed in [false, true] {
+            for accepted in [false, true] {
+                harness.durable_stream_reads.lock().unwrap().push_back(Some(
+                    ReadStreamSlotSuccess {
+                        invocation_key: Some(key.into()),
+                        content_type: "application/json".into(),
+                        writable: true,
+                        ..Default::default()
+                    },
+                ));
+                if accepted {
+                    harness.durable_stream_creations.lock().unwrap().push_back(
+                        CreateStreamSessionSuccess {
+                            invocation_key: Some(key.into()),
+                            replayed,
+                            session: "session".into(),
+                            ..Default::default()
+                        },
+                    );
+                }
+                let mut request = request();
+                assert!(
+                    handler
+                        .put(
+                            &mut request,
+                            &route,
+                            &call,
+                            &target,
+                            "session",
+                            Some("events"),
+                            None,
+                        )
+                        .await
+                        .is_err()
+                );
+                assert_eq!(
+                    request
+                        .accepted_invocation
+                        .as_ref()
+                        .map(|receipt| &receipt.id),
+                    accepted.then_some(&expected)
+                );
+                assert!(harness.durable_stream_reads.lock().unwrap().is_empty());
+                assert!(harness.durable_stream_creations.lock().unwrap().is_empty());
+            }
+        }
+        call.method_parameters.push(MethodParameter::Header {
+            header_name: "argument".into(),
+            parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::Str),
+        });
+        for rejected in [false, true] {
+            harness
+                .durable_stream_reads
+                .lock()
+                .unwrap()
+                .push_back(Some(ReadStreamSlotSuccess {
+                    invocation_key: Some(key.into()),
+                    content_type: "application/json".into(),
+                    writable: true,
+                    tombstoned: rejected,
+                    ..Default::default()
+                }));
+            let mut request = request();
+            let result = handler
+                .put(
+                    &mut request,
+                    &route,
+                    &call,
+                    &target,
+                    "session",
+                    Some("events"),
+                    None,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                result.status,
+                if rejected {
+                    StatusCode::CONFLICT
+                } else {
+                    StatusCode::OK
+                }
+            );
+            assert_eq!(
+                request
+                    .accepted_invocation
+                    .as_ref()
+                    .map(|receipt| &receipt.id),
+                (!rejected).then_some(&expected)
+            );
+        }
+        assert!(harness.durable_stream_creations.lock().unwrap().is_empty());
+    }
+
+    #[test]
     async fn query_keys_are_checked_before_session_and_resource_side_effects() {
         use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
         use golem_service_base::custom_api::{

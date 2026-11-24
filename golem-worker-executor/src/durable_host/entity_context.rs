@@ -199,7 +199,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .unwrap_or_else(|| Caller::entry(self.self_principal()))
     }
 
-    /// This agent as a principal. It is the only builder of an agent principal in the executor.
+    /// This agent as a principal.
     pub(crate) fn self_principal(&self) -> Principal {
         self.public_state
             .worker()

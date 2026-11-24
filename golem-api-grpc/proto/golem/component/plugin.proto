@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package golem.component;
 
+import "golem/common/account_id.proto";
 import "golem/common/uuid.proto";
 import "golem/component/component_id.proto";
 
@@ -24,4 +25,6 @@ message PluginInstallation {
 
   optional golem.component.ComponentId oplog_processor_component_id = 7;
   optional uint64 oplog_processor_component_revision = 8;
+
+  golem.common.AccountId installed_by = 9;
 }

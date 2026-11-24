@@ -3,6 +3,8 @@ use golem_rust::bindings::golem::api::oplog::{
     enrich_oplog_entries,
 };
 use golem_rust::oplog_processor::exports::golem::api::oplog_processor::Guest as OplogProcessorGuest;
+use golem_rust::oplog_processor::golem::agent::common::Principal;
+use golem_rust::oplog_processor::golem::agent::invocation_context;
 use golem_rust::schema::wit::wire::AgentId;
 use golem_rust::wasip3::http::{client, types};
 use golem_rust::wasip3::{wit_future, wit_stream};
@@ -29,6 +31,59 @@ struct BatchCallback {
     /// Enriched durable host-call entries (Start/End/Cancelled) observed in this
     /// batch, derived from the output of `enrich-oplog-entries`
     durable_entries: Vec<DurableEntryRecord>,
+    /// The caller that the processor runs this batch as
+    caller: CallerRecord,
+}
+
+#[derive(serde::Serialize)]
+struct CallerRecord {
+    original: PrincipalRecord,
+    immediate: PrincipalRecord,
+}
+
+/// A principal's kind, with the account ID of an account and the agent ID of an agent.
+#[derive(serde::Serialize)]
+struct PrincipalRecord {
+    kind: String,
+    account_id: Option<String>,
+    agent_id: Option<String>,
+}
+
+impl From<Principal> for PrincipalRecord {
+    fn from(principal: Principal) -> Self {
+        let (kind, account_id, agent_id) = match principal {
+            Principal::User(_) => ("user", None, None),
+            Principal::Account(account) => (
+                "account",
+                Some(
+                    Uuid::from_u64_pair(
+                        account.account_id.uuid.high_bits,
+                        account.account_id.uuid.low_bits,
+                    )
+                    .to_string(),
+                ),
+                None,
+            ),
+            Principal::Agent(agent) => (
+                "agent",
+                None,
+                Some(
+                    Uuid::from_u64_pair(
+                        agent.agent_id.uuid.high_bits,
+                        agent.agent_id.uuid.low_bits,
+                    )
+                    .to_string(),
+                ),
+            ),
+            Principal::Tool(_) => ("tool", None, None),
+            Principal::Anonymous => ("anonymous", None, None),
+        };
+        Self {
+            kind: kind.to_string(),
+            account_id,
+            agent_id,
+        }
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -244,6 +299,7 @@ impl OplogProcessorGuest for OplogProcessorComponent {
         }
 
         if let Some(url) = callback_url {
+            let caller = invocation_context::caller();
             let batch = BatchCallback {
                 source_worker_id: source_agent_id,
                 account_id: account_id.to_string(),
@@ -252,6 +308,10 @@ impl OplogProcessorGuest for OplogProcessorComponent {
                 entry_count,
                 invocations,
                 durable_entries,
+                caller: CallerRecord {
+                    original: caller.original.into(),
+                    immediate: caller.immediate.into(),
+                },
             };
             let json = serde_json::to_string(&batch).map_err(|err| err.to_string())?;
             send_http_post(&url, json.into_bytes()).await?;

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::InvocationId;
-use golem_common::model::caller::{Caller, Principal};
+use golem_common::model::caller::Principal;
 
 use super::invocation_loop::{EphemeralStart, ephemeral_start_decision};
 use super::{RetirementReason, Worker};
@@ -157,13 +157,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(super) async fn get_existing_suspended<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-        caller: Caller,
     ) -> Result<std::sync::Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         deps.active_agents()
-            .get_existing(deps, owned_agent_id, caller)
+            .get_existing(deps, owned_agent_id)
             .await
     }
 
@@ -171,19 +170,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         expected_fingerprint: AgentFingerprint,
-        caller: Caller,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let mut worker = Self::get_existing_suspended(deps, owned_agent_id, caller.clone()).await?;
+        let mut worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
         loop {
             if let Some(outcome) = worker.start_deletion(expected_fingerprint).await? {
                 return outcome.handle().wait().await;
             }
-            worker = match Self::get_existing_suspended(deps, owned_agent_id, caller.clone()).await
-            {
+            worker = match Self::get_existing_suspended(deps, owned_agent_id).await {
                 Ok(worker) if worker.get_initial_worker_metadata().fingerprint == fingerprint => {
                     worker
                 }
@@ -197,13 +194,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         recover_immediately: bool,
-        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = match Self::get_existing_suspended(deps, owned_agent_id, caller).await {
+        let worker = match Self::get_existing_suspended(deps, owned_agent_id).await {
             Ok(worker) => worker,
             Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(()),
             Err(error) => return Err(error),
@@ -273,13 +269,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         force: bool,
-        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, caller).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
         worker
             .ensure_management_fingerprint(expected_fingerprint)
             .await?;
@@ -357,8 +352,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     {
         // The caller of the request is the requester of the update: every `PendingUpdate` of the
         // attempt records it.
-        let requester = caller.clone();
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, caller).await?;
+        let requester = caller;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
         worker
             .ensure_management_fingerprint(expected_fingerprint)
             .await?;
@@ -500,13 +495,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: &OwnedAgentId,
         target: RevertWorkerTarget,
         resolved_revert: Option<ResolvedRevert>,
-        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, caller).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
         worker
             .ensure_management_fingerprint(expected_fingerprint)
             .await?;
@@ -561,7 +555,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         plugin_priority: PluginPriority,
-        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
@@ -571,7 +564,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             deps,
             owned_agent_id,
             plugin_priority,
-            caller,
             true,
             expected_fingerprint,
         )
@@ -582,7 +574,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         plugin_priority: PluginPriority,
-        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
@@ -592,7 +583,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             deps,
             owned_agent_id,
             plugin_priority,
-            caller,
             false,
             expected_fingerprint,
         )
@@ -603,14 +593,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         plugin_priority: PluginPriority,
-        caller: Caller,
         activate: bool,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, caller).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
         worker
             .ensure_management_fingerprint(expected_fingerprint)
             .await?;

@@ -2540,7 +2540,13 @@ Guests read their identity and caller through `golem:agent/invocation-context`
 (`durable_host/golem/agent_invocation_context.rs`). `invocation-id()` and `caller()` read what the
 invocation start recorded, so they are not durable calls. An entity Store answers for its
 enclosing invocation (`entity_context.rs::current_invocation_id`). Outside an invocation
-(component bootstrap, snapshot save and load) `invocation-id()` is none. Constructors run as invocations and expose their constructor invocation ID. The export functions take no
+(component bootstrap, snapshot save and load) `invocation-id()` is none. Constructors run as invocations and expose their constructor invocation ID. Work that Golem starts itself
+gets its caller from `golem_started::GolemStartedWork`: snapshot save and load run with the agent
+in both roles, and an oplog processor batch runs with the installing account as original and the
+source agent as immediate. A unit test (`only_entry_points_build_an_anonymous_caller`) allows
+`Caller::anonymous()` once each in `grpc/invocation.rs`, `services/worker_proxy.rs` and
+`worker/invocation.rs`. These callers serve an existing-only card transfer, an invocation status
+lookup and a validation placeholder, respectively; none starts a constructor or guest invocation. The export functions take no
 `caller` parameter; the guest reads the caller from the host. Agent events (`StdOut`, `StdErr`, `Log`) carry the invocation UUID of the
 writing Store, including the constructor invocation ID for constructor output; component bootstrap and snapshot save/load output remain outside an invocation. `InvocationStarted`/`InvocationFinished` carry the key's `to_uuid()`.
 
@@ -4301,6 +4307,9 @@ when the plugin is no longer attached. Both local and remote ambiguous failures 
 target: a missing response does not prove that admission failed. Confirmation clears the snapshot
 but retains `source_component_revision`; public rendering resolves the installation at that revision,
 even after an update removes it. Request equality still compares the full delivered request; it has no processor-specific exemption.
+The batch caller is part of that request: the installed plugin's `installed_by` account as original
+and the source agent as immediate, both pinned by the delivery snapshot. The first batch also
+creates the processor owner, so its caller is the owner's recorded creator.
 
 ## Permission-card handles
 

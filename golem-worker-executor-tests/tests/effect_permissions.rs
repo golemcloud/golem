@@ -451,6 +451,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
         first_entry_index: OplogIndex,
         entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
         auth_ctx: &AuthCtx,
+        caller: &golem_common::model::caller::Caller,
     ) -> Result<(), WorkerProxyError> {
         self.inner
             .process_oplog_entries(
@@ -465,6 +466,7 @@ impl WorkerProxy for LoopbackCardTransferProxy {
                 first_entry_index,
                 entries,
                 auth_ctx,
+                caller,
             )
             .await
     }

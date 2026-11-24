@@ -23,7 +23,7 @@ use super::{
 use crate::services::{HasAgentTypesService, HasComponentService};
 use crate::worker::{CancelInvocationOutcome, CreateIntent};
 use golem_common::model::agent::{InvocationFreshnessDisposition, ParsedAgentKey, ScheduleId};
-use golem_common::model::caller::{Caller, Principal};
+use golem_common::model::caller::Principal;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{CreateRequest, CreateRequestKind};
 use std::sync::Arc;
@@ -150,7 +150,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 CreateIntent::Invocation {
                     owner,
                     idempotency_key: request.idempotency_key.map(Into::into),
-                    invocation: request.invocation,
+                    invocation: request.invocation.map(Box::new),
                 }
             } else {
                 CreateIntent::Create {
@@ -217,7 +217,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
-        let caller = extract_caller(&request.caller)?;
+        extract_caller(&request.caller)?;
 
         let expected_fingerprint = AgentFingerprint(
             request
@@ -227,7 +227,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 })?
                 .into(),
         );
-        Worker::<Ctx>::delete(self, &owned_agent_id, expected_fingerprint, caller).await
+        Worker::<Ctx>::delete(self, &owned_agent_id, expected_fingerprint).await
     }
 
     pub(super) async fn fork_worker_internal(
@@ -314,7 +314,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
-        let caller = extract_caller(&request.caller)?;
+        extract_caller(&request.caller)?;
 
         let resolved_revert = request.resolved_revert.map(|resolved| ResolvedRevert {
             last_oplog_index: OplogIndex::from_u64(resolved.last_oplog_index),
@@ -333,7 +333,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &owned_agent_id,
             target,
             resolved_revert,
-            caller,
             request
                 .expected_fingerprint
                 .map(|fingerprint| AgentFingerprint(fingerprint.into())),
@@ -369,7 +368,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
-        let caller = extract_caller(&request.caller)?;
+        extract_caller(&request.caller)?;
 
         let idempotency_key: golem_common::model::InvocationId = request
             .idempotency_key
@@ -410,13 +409,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     "target environment mismatch",
                 ));
             }
-            let worker = match Worker::get_exact_existing_suspended(
-                self,
-                &owned_agent_id,
-                Caller::anonymous(),
-            )
-            .await
-            {
+            let worker = match Worker::get_exact_existing_suspended(self, &owned_agent_id).await {
                 Ok(worker) => worker,
                 Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(false),
                 Err(error) => return Err(error),
@@ -445,7 +438,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         // invocation that still runs (a retry marker) or is still queued (a fail-fast error after
         // an earlier invocation trapped), and neither is terminal.
         let worker = self
-            .get_existing_for_management(&owned_agent_id, caller, "cancel")
+            .get_existing_for_management(&owned_agent_id, "cancel")
             .await?;
         worker
             .ensure_management_fingerprint(expected_fingerprint)
@@ -504,13 +497,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
-        let caller = extract_caller(&request.caller)?;
+        extract_caller(&request.caller)?;
 
         Worker::<Ctx>::interrupt(
             self,
             &owned_agent_id,
             request.recover_immediately,
-            caller,
             request
                 .expected_fingerprint
                 .map(|fingerprint| AgentFingerprint(fingerprint.into())),
@@ -528,7 +520,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
-        let caller = extract_caller(&request.caller)?;
+        extract_caller(&request.caller)?;
 
         let force_resume = request.force.unwrap_or(false);
 
@@ -536,7 +528,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self,
             &owned_agent_id,
             force_resume,
-            caller,
             request
                 .expected_fingerprint
                 .map(|fingerprint| AgentFingerprint(fingerprint.into())),

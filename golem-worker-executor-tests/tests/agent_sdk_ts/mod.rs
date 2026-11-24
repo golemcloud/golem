@@ -27,6 +27,7 @@ pub mod custom_durability;
 pub mod manifest_status;
 pub mod permissions;
 pub mod sdk_policy;
+pub mod snapshot_divergence;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);

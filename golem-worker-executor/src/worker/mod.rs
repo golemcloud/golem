@@ -338,7 +338,7 @@ pub enum CreateIntent {
     Invocation {
         owner: NewOwner,
         idempotency_key: Option<IdempotencyKey>,
-        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
+        invocation: Option<Box<golem_api_grpc::proto::golem::worker::InvocationStart>>,
     },
     /// An explicit create request.
     Create {
@@ -935,33 +935,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.initial_worker_metadata.clone()
     }
 
-    /// This agent as a principal, under the Golem issuer. An owner that has no agent type gets
-    /// the fixed type name of its owner kind.
+    /// This agent as a principal, under the Golem issuer.
     pub(crate) fn self_principal(
         &self,
         issuer: &golem_common::model::golem_issuer::GolemIssuer,
     ) -> golem_common::model::caller::Principal {
-        use golem_common::model::agent::{AgentTypeName, OwnerKind};
-        use golem_common::model::caller::{AgentPrincipal, Principal};
-
-        let metadata = &self.initial_worker_metadata;
-        let agent_type = match (&metadata.agent_type_name, metadata.owner_kind) {
-            (Some(agent_type), _) => agent_type.clone(),
-            (None, OwnerKind::EphemeralExternalTool) => {
-                AgentTypeName("~golem-external-tool-owner".to_string())
-            }
-            (None, OwnerKind::OplogProcessor) => {
-                AgentTypeName("~golem-oplog-processor".to_string())
-            }
-            (None, OwnerKind::ComponentAgent) => AgentTypeName(String::new()),
-        };
-        Principal::Agent(AgentPrincipal::of_agent(
-            issuer.to_string(),
-            self.owned_agent_id.agent_id,
-            metadata.fingerprint,
-            agent_type,
-            self.owned_agent_id.environment_id,
-        ))
+        crate::golem_started::agent_principal(
+            issuer,
+            &self.owned_agent_id,
+            &self.initial_worker_metadata,
+        )
     }
 
     pub(crate) fn owned_agent_id(&self) -> &OwnedAgentId {
@@ -974,6 +957,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub fn agent_mode(&self) -> AgentMode {
         self.execution_status.read().unwrap().agent_mode()
+    }
+
+    /// Whether a stream-permitted invocation needs a stream session. An ephemeral agent executes the
+    /// component it was created with, so its method is classified before acceptance; its
+    /// runtime ends with the invocation and cannot retain a durable attachment for scalar work.
+    pub(crate) fn invocation_needs_stream_session(&self, invocation: &AgentInvocation) -> bool {
+        self.agent_mode() != AgentMode::Ephemeral
+            || crate::worker::invocation::invocation_uses_streams(
+                invocation,
+                &self.current_component.load().metadata,
+                self.parsed_agent_id.as_ref(),
+            )
     }
 
     /// Gets the timestamp of the last time the execution status changed

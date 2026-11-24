@@ -905,6 +905,9 @@ fn collect_allowed_request_headers(compiled_route: &UnboundCompiledRoute) -> BTr
     };
     let mut headers =
         golem_service_base::custom_api::cors_allowed_request_headers(body, parameters, session);
+    if matches!(&compiled_route.behaviour, RouteBehaviour::CallAgent(_)) {
+        headers.insert("idempotency-key".to_owned());
+    }
     if matches!(compiled_route.behaviour, RouteBehaviour::CreateAgent(_)) {
         headers.extend(["content-type".to_string(), "idempotency-key".to_string()]);
     }
@@ -1909,6 +1912,7 @@ mod tests {
                 golem_service_base::custom_api::DURABLE_STREAM_REQUEST_HEADERS
                     .iter()
                     .map(|h| (*h).to_owned())
+                    .chain(["idempotency-key".to_owned()])
                     .collect::<BTreeSet<_>>()
             );
             for header in [
@@ -2190,7 +2194,7 @@ mod tests {
         );
         assert_eq!(
             get_policy.allowed_headers,
-            BTreeSet::from(["x-list-token".to_string()])
+            BTreeSet::from(["idempotency-key".to_string(), "x-list-token".to_string()])
         );
 
         let post_policy = preflight
@@ -2209,7 +2213,11 @@ mod tests {
         );
         assert_eq!(
             post_policy.allowed_headers,
-            BTreeSet::from(["content-type".to_string(), "x-session".to_string(),])
+            BTreeSet::from([
+                "content-type".to_string(),
+                "idempotency-key".to_string(),
+                "x-session".to_string()
+            ])
         );
         compiled_routes
             .retain(|route| !matches!(route.behaviour, RouteBehaviour::CorsPreflight(_)));

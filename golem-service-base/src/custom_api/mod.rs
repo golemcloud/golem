@@ -446,11 +446,11 @@ impl RouteMatch {
             call.expected_agent_response.validate()?;
             call.agent_selection
                 .validate(path, &call.constructor_parameters)?;
-            if let AgentSelection::Query { name } = &call.agent_selection {
-                if call.method_parameters.iter().any(|parameter| matches!(parameter,
-                    MethodParameter::Query { query_parameter_name, .. } if query_parameter_name == name)) {
-                    return Err("Agent ID query cannot also bind a method parameter".into());
-                }
+            if let AgentSelection::Query { name } = &call.agent_selection
+                && call.method_parameters.iter().any(|parameter| matches!(parameter,
+                    MethodParameter::Query { query_parameter_name, .. } if query_parameter_name == name))
+            {
+                return Err("Agent ID query cannot also bind a method parameter".into());
             }
         }
         if let RouteBehaviour::CreateAgent(create) = behavior {

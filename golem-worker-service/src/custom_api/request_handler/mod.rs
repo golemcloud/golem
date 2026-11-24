@@ -326,6 +326,26 @@ fn finish_selected_response(
         );
         error = Some(cors_error);
     }
+    response.headers_mut().remove("golem-invocation-id");
+    response.headers_mut().remove("golem-environment-id");
+    if let Some(accepted) = &request.accepted_invocation {
+        response.headers_mut().insert(
+            "golem-invocation-id",
+            accepted
+                .id
+                .to_string()
+                .parse()
+                .expect("invocation IDs are ASCII"),
+        );
+        response.headers_mut().insert(
+            "golem-environment-id",
+            accepted
+                .environment_id
+                .to_string()
+                .parse()
+                .expect("environment IDs are ASCII"),
+        );
+    }
     let kind = if error.is_some()
         || response.status().is_client_error()
         || response.status().is_server_error()
@@ -938,6 +958,192 @@ mod mounted_tests {
                         (_, false) => "no-cache",
                     }
                 );
+            }
+        }
+    }
+
+    #[test]
+    async fn admission_rejection_before_lazy_stream_creation_has_no_invocation_headers() {
+        use crate::config::DurableStreamsConfig;
+        use golem_common::model::agent::AgentMode;
+        use golem_service_base::custom_api::{
+            AgentRouteMode, DurableStreamRepresentation, DurableStreamRoutePolicy,
+            DurableStreamSlot, DurableStreamSlotDirection, RouteBehaviour,
+        };
+
+        let harness = crate::mcp::InvocationHarness::with_run_method(AgentMode::Durable);
+        let mut config = DurableStreamsConfig::default();
+        config.load.max_append_requests_per_second_per_stream = 0;
+        let handler = DurableStreamsHandler::new(
+            harness.worker_service.clone(),
+            Arc::new(CallAgentHandler::new(harness.worker_service.clone())),
+            &config,
+        );
+        let mut route = test_route(
+            1,
+            "/run/invocations/{session}/streams/{slot}",
+            Some("POST"),
+            "typed",
+        );
+        let RouteBehaviour::CallAgent(call) = &mut route.behavior else {
+            unreachable!()
+        };
+        call.component_id = harness.component_id;
+        call.agent_type = harness.agent_type.type_name.clone();
+        call.method_parameters.clear();
+        call.route_mode = AgentRouteMode::DurableStreams;
+        call.durable_streams = Some(DurableStreamRoutePolicy {
+            family_id: 1,
+            slots: vec![DurableStreamSlot {
+                canonical_name: "events".into(),
+                public_name: "events".into(),
+                direction: DurableStreamSlotDirection::Input,
+                content_type: "application/json".into(),
+                representation: DurableStreamRepresentation::Json,
+            }],
+            allow_external_writes: true,
+            allow_stream_delete: false,
+            allow_invocation_delete: false,
+            load: None,
+        });
+        let resolver = test_resolver(vec![route]);
+        let mut request = RichRequest::new(
+            Request::builder()
+                .method(http::Method::POST)
+                .uri(
+                    "/run/invocations/new-session/streams/events"
+                        .parse()
+                        .unwrap(),
+                )
+                .header("host", "example.com")
+                .finish(),
+        );
+        let selected = resolver
+            .resolve_matching_route(&request.underlying)
+            .await
+            .unwrap();
+        let RichRouteBehaviour::CallAgent(call) = &selected.route.behavior else {
+            unreachable!()
+        };
+        let result = handler.handle(&mut request, &selected, call).await;
+        assert!(request.accepted_invocation.is_none());
+        assert!(harness.contexts.lock().unwrap().is_empty());
+        let response = finish_selected_response(
+            result.and_then(route_execution_result_to_response),
+            &request,
+            &selected,
+        )
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()[http::header::RETRY_AFTER], "1");
+        for name in ["Golem-Invocation-Id", "Golem-Environment-Id"] {
+            assert!(!response.headers().contains_key(name));
+        }
+    }
+
+    #[test]
+    async fn invocation_headers_require_acceptance_and_override_guest_values() {
+        use crate::service::worker::AcceptedInvocation;
+        use golem_common::model::environment::EnvironmentId;
+        use golem_common::model::{AgentId, InvocationId, OwnedInvocationId};
+        use golem_common::schema::{OutputSchema, SchemaGraph, SchemaType};
+        use golem_service_base::custom_api::{
+            CompiledOutputSchema, MountAgentMethod, MountTarget, RouteBehaviour, RouterMethod,
+        };
+
+        let receipt = AcceptedInvocation {
+            id: OwnedInvocationId::new(
+                AgentId::from_parts(7, 19),
+                InvocationId(uuid::Uuid::from_u128(91)),
+            ),
+            environment_id: EnvironmentId::new(),
+        };
+        for kind in ["typed", "router", "filesystem"] {
+            let mut route = test_route(1, "/", (kind == "typed").then_some("GET"), kind);
+            route.cors.allowed_patterns = vec![OriginPattern("https://client.example".into())];
+            if kind == "router" {
+                let RouteBehaviour::Mount(mount) = &mut route.behavior else {
+                    unreachable!()
+                };
+                mount.handler = Some(MountTarget::AgentMethod(MountAgentMethod {
+                    agent: mount.files.agent().clone(),
+                    method: RouterMethod {
+                        method_name: "handle".into(),
+                        input: mount.files.agent().constructor_input.clone(),
+                        output: CompiledOutputSchema {
+                            graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+                            output_schema: OutputSchema::Unit,
+                        },
+                    },
+                }));
+            }
+            let resolver = test_resolver(vec![route]);
+            for accepted in [false, true] {
+                if accepted && kind == "filesystem" {
+                    continue;
+                }
+                for outcome in 0..5 {
+                    let request = Request::builder()
+                        .uri("/".parse().unwrap())
+                        .header("host", "example.com")
+                        .header("origin", "https://client.example")
+                        .finish();
+                    let selected = resolver.resolve_matching_route(&request).await.unwrap();
+                    let mut request = RichRequest::new(request);
+                    request.accepted_invocation = accepted.then(|| receipt.clone());
+                    if outcome == 4 {
+                        request.underlying.headers_mut().insert(
+                            http::header::ORIGIN,
+                            http::HeaderValue::from_bytes(&[0xff]).unwrap(),
+                        );
+                    }
+                    let mut response = Response::builder()
+                        .status(match outcome {
+                            1 => StatusCode::BAD_REQUEST,
+                            2 => StatusCode::NOT_MODIFIED,
+                            _ => StatusCode::OK,
+                        })
+                        .finish();
+                    for name in ["golem-invocation-id", "golem-environment-id"] {
+                        response
+                            .headers_mut()
+                            .append(name, http::HeaderValue::from_static("spoofed"));
+                        response
+                            .headers_mut()
+                            .append(name, http::HeaderValue::from_static("also-spoofed"));
+                    }
+                    let result = if outcome == 3 {
+                        Err(RequestHandlerError::MissingValue { expected: "result" })
+                    } else {
+                        Ok(response)
+                    };
+                    let headers = match finish_selected_response(result, &request, &selected) {
+                        Ok(response) => response.headers().clone(),
+                        Err(failure) => failure.response_headers,
+                    };
+                    for (name, expected) in [
+                        ("golem-invocation-id", receipt.id.to_string()),
+                        ("golem-environment-id", receipt.environment_id.to_string()),
+                    ] {
+                        let values: Vec<_> = headers.get_all(name).iter().collect();
+                        if accepted {
+                            assert_eq!(
+                                values,
+                                vec![&http::HeaderValue::from_str(&expected).unwrap()]
+                            );
+                        } else {
+                            assert!(values.is_empty());
+                        }
+                    }
+                    if outcome != 4 && kind != "filesystem" {
+                        let exposed = headers[http::header::ACCESS_CONTROL_EXPOSE_HEADERS]
+                            .to_str()
+                            .unwrap();
+                        for name in ["Golem-Invocation-Id", "Golem-Environment-Id"] {
+                            assert!(exposed.split(", ").any(|value| value == name));
+                        }
+                    }
+                }
             }
         }
     }

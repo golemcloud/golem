@@ -295,6 +295,7 @@ message ProcessOplogEntriesRequest {
   golem.auth.AuthCtx auth_ctx = 10;
   // The component of the oplog processor. It creates the processor when it is missing.
   golem.component.ComponentId component_id = 11;
+  golem.component.Caller caller = 12;
 }
 
 message ProcessOplogEntriesResponse {
