@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{AuthCtx, Authorizer};
+use super::{AuthCtx, AuthorizationError, Authorizer};
 use async_trait::async_trait;
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::authority::{AuthorizationRequest, Decision, Grantors, Scope, Target};
+use golem_common::model::authority::{
+    AuthorizationRequest, Decision, Grantors, Operation, Scope, Target,
+};
 use golem_common::model::caller::{AccountAuthentication, AccountPrincipal, Caller, Principal};
 use golem_common::model::card::{
-    EffectiveSurface, PermissionTarget, checks_allow, decide_with_checks,
+    EffectiveSurface, PermissionTarget, check_belongs_to_part, checks_allow, decide_with_checks,
 };
 use std::collections::HashMap;
 
@@ -61,6 +63,24 @@ impl CompatibilityAuthorizer {
     ) -> Self {
         self.type_checks.extend(types);
         self
+    }
+
+    /// The error that today's code gives for a request that `decide` denies: the error of the
+    /// first check that the caller's card surface refuses, or a check that does not belong to its
+    /// part. Call sites return it, so that a denial keeps today's response.
+    pub fn todays_error(&self, request: &AuthorizationRequest) -> AuthorizationError {
+        for (part, checks) in request.operation.parts().iter().zip(&self.checks) {
+            for check in checks {
+                if !check_belongs_to_part(part.verb, check) {
+                    return AuthorizationError::PermissionNotAllowed(Box::new(check.clone()));
+                }
+                if let Err(error) = self.auth.authorize_permission(check) {
+                    return error;
+                }
+            }
+        }
+        // Reached only when the checks do not match the parts, which no call site does.
+        AuthorizationError::SystemOnlyActionNotAllowed(request.operation.name().to_string())
     }
 
     /// The caller's card surface, or `None` for the system context, which today's checks allow.
@@ -119,6 +139,27 @@ impl Authorizer for CompatibilityAuthorizer {
                 .collect(),
             ..Scope::default()
         }
+    }
+}
+
+/// Decides `operation` for `caller` from the card checks that the call site makes today, one list
+/// for each part. A denial is the error that today's checks give, so the response stays the same.
+/// `AuthCtx::System` skips the decision, as today. Every call site that has moved to `decide` in
+/// the worker service and the registry decides through this function.
+pub async fn decide_with_todays_checks(
+    auth: &AuthCtx,
+    caller: Caller,
+    operation: Operation,
+    checks: Vec<Vec<PermissionTarget>>,
+) -> Result<Grantors, AuthorizationError> {
+    if auth.is_system() {
+        return Ok(Grantors::default());
+    }
+    let request = AuthorizationRequest::new(caller, operation);
+    let authorizer = CompatibilityAuthorizer::new(auth.clone(), checks);
+    match authorizer.decide(&request).await {
+        Decision::Allow(grantors) => Ok(grantors),
+        Decision::Deny(_) => Err(authorizer.todays_error(&request)),
     }
 }
 

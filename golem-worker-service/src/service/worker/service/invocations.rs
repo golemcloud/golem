@@ -15,7 +15,7 @@
 //! The environment-scoped invocation reads and cancel.
 
 use super::{
-    AgentPermission, ManagedAgent, WorkerResult, WorkerService, WorkerServiceError,
+    AgentAccess, AgentPermission, ManagedAgent, WorkerResult, WorkerService, WorkerServiceError,
     native_tool_result,
 };
 use crate::api::invocation::{
@@ -27,6 +27,7 @@ use chrono::{DateTime, Utc};
 use golem_api_grpc::proto::golem::worker::{Cursor, InvocationStart};
 use golem_api_grpc::proto::golem::workerexecutor::v1 as executor;
 use golem_common::SafeDisplay;
+use golem_common::model::authority::{CatalogOperation, Resource};
 use golem_common::model::caller::Caller;
 use golem_common::model::card::{AgentInvocationIdPattern, AgentResourcePattern, AgentVerb};
 use golem_common::model::environment::EnvironmentId;
@@ -64,8 +65,11 @@ impl WorkerService {
                 environment_id,
                 agent_id,
                 &auth_ctx,
-                AgentVerb::View,
-                AgentResourcePattern::Any,
+                &AgentAccess::on_invocation(
+                    CatalogOperation::ReadInvocation,
+                    golem_common::model::InvocationId(invocation_id.uuid()),
+                    AgentPermission::Agent(AgentVerb::View, AgentResourcePattern::Any),
+                ),
             )
             .await?;
         let summary = self
@@ -94,8 +98,14 @@ impl WorkerService {
             environment_id,
             agent_id,
             &auth_ctx,
-            AgentVerb::View,
-            AgentResourcePattern::Any,
+            &AgentAccess::new(
+                CatalogOperation::ListInvocations,
+                Resource::None,
+                [AgentPermission::Agent(
+                    AgentVerb::View,
+                    AgentResourcePattern::Any,
+                )],
+            ),
         )
         .await?;
         let request = executor::ListInvocationsRequest {
@@ -142,8 +152,14 @@ impl WorkerService {
             environment_id,
             agent_id,
             &auth_ctx,
-            AgentVerb::View,
-            AgentResourcePattern::Any,
+            &AgentAccess::new(
+                CatalogOperation::ListInvocations,
+                Resource::None,
+                [AgentPermission::Agent(
+                    AgentVerb::View,
+                    AgentResourcePattern::Any,
+                )],
+            ),
         )
         .await?;
         let invocations = self
@@ -181,10 +197,16 @@ impl WorkerService {
                 environment_id,
                 agent_id,
                 &auth_ctx,
-                AgentVerb::CancelInvocation,
-                AgentResourcePattern::InvocationId(AgentInvocationIdPattern::Uuid(
-                    invocation_id.uuid(),
-                )),
+                &AgentAccess::on_invocation(
+                    CatalogOperation::CancelInvocation,
+                    golem_common::model::InvocationId(invocation_id.uuid()),
+                    AgentPermission::Agent(
+                        AgentVerb::CancelInvocation,
+                        AgentResourcePattern::InvocationId(AgentInvocationIdPattern::Uuid(
+                            invocation_id.uuid(),
+                        )),
+                    ),
+                ),
             )
             .await?;
         // The executor rejects an unknown ID as an invalid request, so the ID is resolved first.
@@ -209,15 +231,14 @@ impl WorkerService {
     }
 
     /// The agent named by an environment-scoped request, after the caller is authorized for
-    /// `verb` on `resource` of it. An agent of another environment, and the owner of a
+    /// `access`. An agent of another environment, and the owner of a
     /// standalone tool invocation, are not found.
     async fn agent_for_invocation_read(
         &self,
         environment_id: EnvironmentId,
         agent_id: &AgentId,
         auth_ctx: &AuthCtx,
-        verb: AgentVerb,
-        resource: AgentResourcePattern,
+        access: &AgentAccess,
     ) -> WorkerResult<ManagedAgent> {
         if agent_id.type_tag() == RESERVED_TYPE_TAG {
             return Err(WorkerServiceError::AgentNotFound(*agent_id));
@@ -226,7 +247,7 @@ impl WorkerService {
             &OwnedAgentId::new(environment_id, agent_id),
             None,
             auth_ctx,
-            &[AgentPermission::Agent(verb, resource)],
+            access,
         )
         .await
     }

@@ -18,7 +18,7 @@ mod compatibility_tests;
 #[cfg(test)]
 mod tests;
 
-pub use compatibility::CompatibilityAuthorizer;
+pub use compatibility::{CompatibilityAuthorizer, decide_with_todays_checks};
 
 use async_trait::async_trait;
 use axum::http::header;

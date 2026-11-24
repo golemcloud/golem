@@ -110,6 +110,9 @@ pub fn check_belongs_to_part(verb: Verb, check: &PermissionTarget) -> bool {
         (Verb::Invocation(decision::InvocationVerb::Cancel), Check::Agent(check)) => {
             check.verb == Some(AgentVerb::CancelInvocation)
         }
+        (Verb::Invocation(decision::InvocationVerb::Read), Check::Agent(check)) => {
+            check.verb == Some(AgentVerb::View)
+        }
         (Verb::Promise(decision::PromiseVerb::Send), Check::Agent(check)) => {
             check.verb == Some(AgentVerb::Invoke)
         }

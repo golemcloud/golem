@@ -392,3 +392,10 @@ fn an_allow_names_the_card_whose_grant_allowed() {
         })
     );
 }
+
+#[test]
+fn an_invocation_read_is_answered_by_todays_agent_view() {
+    let read = v2::Verb::Invocation(v2::InvocationVerb::Read);
+    assert!(check_belongs_to_part(read, &check("agent", "view", "*")));
+    assert!(!check_belongs_to_part(read, &check("agent", "invoke", "*")));
+}

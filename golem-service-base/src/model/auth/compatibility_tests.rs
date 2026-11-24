@@ -225,3 +225,30 @@ async fn scope_names_the_agent_types_whose_checks_allow() {
 fn the_entry_caller_is_the_account_in_both_roles() {
     assert_eq!(user(&[]).entry_caller("golem"), caller());
 }
+
+#[test]
+async fn todays_error_is_the_error_of_the_first_refused_check() {
+    let auth = user(&["agent(acme/shop/prod/cart/*) @ acme : invoke : increment"]);
+    let refused = check(1, AgentVerb::Invoke, method("decrement"));
+    let authorizer = CompatibilityAuthorizer::new(auth.clone(), vec![vec![refused.clone()]]);
+    let request = invoke(1);
+    assert!(matches!(
+        authorizer.decide(&request).await,
+        Decision::Deny(_)
+    ));
+    assert_eq!(
+        authorizer.todays_error(&request).to_string(),
+        auth.authorize_permission(&refused).unwrap_err().to_string()
+    );
+}
+
+#[test]
+async fn todays_error_names_a_check_that_does_not_belong_to_its_part() {
+    let auth = user(&["agent(acme/shop/prod/cart/*) @ acme : * : *"]);
+    let delete = check(1, AgentVerb::Delete, AgentResourcePattern::Empty);
+    let authorizer = CompatibilityAuthorizer::new(auth, vec![vec![delete.clone()]]);
+    assert_eq!(
+        authorizer.todays_error(&invoke(1)).to_string(),
+        AuthorizationError::PermissionNotAllowed(Box::new(delete)).to_string()
+    );
+}
