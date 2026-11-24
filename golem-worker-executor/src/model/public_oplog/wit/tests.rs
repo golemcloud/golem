@@ -20,7 +20,7 @@ use golem_common::base_model::oplog::{
 };
 use golem_common::model::InvocationRequestOperation;
 use golem_common::model::StoredAgentInvocationPayload;
-use golem_common::model::caller::Caller;
+use golem_common::model::caller::{Caller, ClaimVisibility, PublicCaller};
 use golem_common::model::card::{
     AccountCardHolder, ApplicationCardHolder, Card, CardHolder, CardId, InvocationWalletPin,
     PublicInvocationWalletPin, WalletVersionToken,
@@ -33,14 +33,14 @@ use golem_common::model::oplog::public_oplog_entry::{
     SnapshotParams, StartParams, SuccessfulUpdateParams,
 };
 use golem_common::model::oplog::{
-    AttributeMap, DurableFunctionType, OplogEntry, OplogPayload, PublicAgentInvocation,
-    PublicOplogEntry, PublicSnapshotData, RawSnapshotData, SpanAttributes, SpanFinished, SpanKind,
-    SpanLink, SpanOutcome, SpanStarted, UpdateDescription,
+    AgentMethodInvocationParameters, AttributeMap, DurableFunctionType, OplogEntry, OplogPayload,
+    PublicAgentInvocation, PublicOplogEntry, PublicSnapshotData, RawSnapshotData,
+    SaveSnapshotParameters, SpanAttributes, SpanFinished, SpanKind, SpanLink, SpanOutcome,
+    SpanStarted, UpdateDescription,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{OplogIndex, Timestamp};
-use golem_common::schema::SchemaValue;
-use golem_schema::Empty;
+use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
 use test_r::test;
 use uuid::Uuid;
 
@@ -88,7 +88,9 @@ fn pending_invocation_deadline_survives_raw_and_public_wit_conversion() {
 
         let public = PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
             timestamp: raw.timestamp(),
-            invocation: PublicAgentInvocation::SaveSnapshot(Empty {}),
+            invocation: PublicAgentInvocation::SaveSnapshot(SaveSnapshotParameters {
+                caller: PublicCaller::new(&Caller::anonymous(), ClaimVisibility::Hidden),
+            }),
             not_before,
         });
         let encoded = oplog::PublicOplogEntry::try_from(public).unwrap();
@@ -473,7 +475,7 @@ fn wit_projection_preserves_invocation_wallet_pins() {
                 .try_into()
                 .unwrap(),
             allow_streams: false,
-            caller: Caller::anonymous(),
+            caller: crate::test_callers::sample_caller(),
             scope_card: None,
         })),
         trace_id: TraceId::generate(),
@@ -489,7 +491,11 @@ fn wit_projection_preserves_invocation_wallet_pins() {
     let encoded = oplog::OplogEntry::try_from(raw_entry).unwrap();
     match golem_common::model::oplog::OplogEnrichmentEntry::try_from(encoded).unwrap() {
         golem_common::model::oplog::OplogEnrichmentEntry::Other(
-            OplogEntry::AgentInvocationStarted { wallet_pin, .. },
+            OplogEntry::AgentInvocationStarted {
+                wallet_pin,
+                payload,
+                ..
+            },
         ) => {
             assert_eq!(
                 wallet_pin,
@@ -499,13 +505,39 @@ fn wit_projection_preserves_invocation_wallet_pins() {
                     scope_card_id: Some(scope_card_id),
                 })
             );
+            // The raw payload keeps the whole recorded caller.
+            let payload: StoredAgentInvocationPayload = match payload {
+                OplogPayload::Inline(payload) => *payload,
+                OplogPayload::SerializedInline { bytes, .. } => {
+                    golem_common::serialization::deserialize(&bytes).unwrap()
+                }
+                other => panic!("expected an inline payload, got {other:?}"),
+            };
+            let StoredAgentInvocationPayload::AgentMethod { caller, .. } = payload else {
+                panic!("expected a method invocation payload");
+            };
+            assert_eq!(caller, crate::test_callers::sample_caller());
         }
         other => panic!("expected raw invocation-started entry, got {other:?}"),
     }
 
     let public_entry = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
         timestamp: Timestamp::now_utc().rounded(),
-        invocation: PublicAgentInvocation::SaveSnapshot(Empty {}),
+        invocation: PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
+            invocation_id: uuid::Uuid::from_u128(2).into(),
+            method_name: "test".to_string(),
+            function_input: TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::record(Vec::new())),
+                SchemaValue::Record { fields: Vec::new() },
+            ),
+            trace_id: TraceId::generate(),
+            trace_states: Vec::new(),
+            invocation_context: Vec::new(),
+            caller: PublicCaller::new(
+                &crate::test_callers::sample_caller(),
+                ClaimVisibility::Shown,
+            ),
+        }),
         wallet_pin: PublicInvocationWalletPin {
             wallet_token: wallet_token.clone(),
             scope_card_id: Some(scope_card_id),
@@ -513,6 +545,57 @@ fn wit_projection_preserves_invocation_wallet_pins() {
     });
     match oplog::PublicOplogEntry::try_from(public_entry).unwrap() {
         oplog::PublicOplogEntry::AgentInvocationStarted(params) => {
+            let oplog::AgentInvocation::AgentMethodInvocation(invocation) = params.invocation
+            else {
+                panic!("expected a method invocation");
+            };
+            // The WIT user record has a pair and an authentication time, and no claims.
+            let oplog::PublicPrincipal::User(oplog::PublicUserPrincipal {
+                pair,
+                authenticated_at,
+            }) = invocation.caller.original
+            else {
+                panic!("expected a user at the root");
+            };
+            assert_eq!(pair.issuer, "https://idp.example/");
+            assert_eq!(pair.subject, "user-1");
+            assert_eq!(
+                super::timestamp_from_datetime(authenticated_at),
+                "2026-01-02T03:04:05.678Z".parse::<Timestamp>().unwrap()
+            );
+            let oplog::PublicPrincipal::Agent(agent) = invocation.caller.immediate else {
+                panic!("expected an agent as the immediate caller");
+            };
+            assert_eq!(agent.agent_type, "TestAgent");
+            assert_eq!(
+                golem_common::model::AgentId::from(agent.agent_id),
+                golem_common::model::AgentId::from_parts(7, 0xc0)
+            );
+            assert_eq!(agent.pair.issuer, crate::test_callers::TEST_ISSUER);
+            assert_eq!(
+                invocation
+                    .caller
+                    .tokens
+                    .iter()
+                    .map(|token| (
+                        Uuid::from_u64_pair(token.id.high_bits, token.id.low_bits),
+                        token
+                            .maker
+                            .as_ref()
+                            .map(|maker| (maker.issuer.clone(), maker.subject.clone()))
+                    ))
+                    .collect::<Vec<_>>(),
+                vec![
+                    (
+                        Uuid::from_u128(0x70c1),
+                        Some((
+                            crate::test_callers::TEST_ISSUER.to_string(),
+                            "account:1".to_string()
+                        ))
+                    ),
+                    (Uuid::from_u128(0x70c2), None),
+                ]
+            );
             assert_eq!(
                 params.wallet_pin.wallet_token.wallet_id_hash,
                 wallet_token.wallet_id_hash

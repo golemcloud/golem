@@ -373,6 +373,13 @@ message UpdateWorkerResponse {
   }
 }
 
+// Whether the public oplog of a read holds the users' verified claims. The worker service asks
+// for SHOWN only for a reader that asked for the claims and passed the oplog read check.
+enum ClaimVisibility {
+  CLAIM_VISIBILITY_HIDDEN = 0;
+  CLAIM_VISIBILITY_SHOWN = 1;
+}
+
 message GetOplogRequest {
   golem.worker.AgentId agent_id = 1;
   uint64 from_oplog_index = 3;
@@ -386,6 +393,8 @@ message GetOplogRequest {
   // The scan allowance that a range read may still spend. Without it, the read gets the
   // configured allowance of the executor. The executor clamps it to its configured allowance.
   optional golem.worker.OplogScanAllowance scan_allowance = 9;
+  // Whether the callers in the entries hold the users' verified claims.
+  ClaimVisibility claims = 10;
 }
 
 message GetOplogResponse {
@@ -415,6 +424,8 @@ message GetOplogEntryRequest {
   // The component revision to decode the entry with. Without it, the executor scans the oplog
   // up to the entry to find it.
   optional uint64 component_revision = 5;
+  // Whether the callers in the entries hold the users' verified claims.
+  ClaimVisibility claims = 6;
 }
 
 message GetOplogEntryResponse {
@@ -431,6 +442,8 @@ message SearchOplogRequest {
   uint64 count = 4;
   golem.common.EnvironmentId environment_id = 5;
   golem.auth.AuthCtx auth_ctx = 6;
+  // Whether the callers in the entries hold the users' verified claims.
+  ClaimVisibility claims = 7;
 }
 
 message SearchOplogResponse {
