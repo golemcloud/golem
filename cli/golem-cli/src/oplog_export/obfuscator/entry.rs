@@ -317,8 +317,21 @@ fn failed_snapshot_assisted(details: &PublicFailedSnapshotAssistedUpdateDetails)
 }
 
 /// A schema-less value for raw public JSON method input: objects are records in key order,
-/// arrays are lists, and numbers keep their integer or float form.
+/// arrays are lists, and numbers keep their integer or float form. JSON has no byte type, so
+/// a non-empty array of integers that all fit a byte is a byte list, which is obfuscated as
+/// one token rather than element by element.
 fn json_schema_value(json: serde_json::Value) -> SchemaValue {
+    if let serde_json::Value::Array(elements) = &json
+        && let Some(bytes) = elements
+            .iter()
+            .map(|element| element.as_u64().and_then(|byte| u8::try_from(byte).ok()))
+            .collect::<Option<Vec<_>>>()
+        && !bytes.is_empty()
+    {
+        return SchemaValue::List {
+            elements: bytes.into_iter().map(SchemaValue::U8).collect(),
+        };
+    }
     match json {
         serde_json::Value::Null => SchemaValue::Option { inner: None },
         serde_json::Value::Bool(value) => SchemaValue::Bool(value),

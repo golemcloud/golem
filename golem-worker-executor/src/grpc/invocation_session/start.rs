@@ -219,10 +219,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .then_some(attached.attachment_id.0.into()),
                 attempt_id: (!accepted.joined_origin_observer)
                     .then_some(attached.attempt_id.0.into()),
+                // The session carries the current attachment epoch, which a revert or a
+                // takeover may have advanced past the retained record; readiness reports it too.
                 epoch: if accepted.joined_origin_observer {
                     0
                 } else {
-                    attached.epoch
+                    accepted
+                        .durable_streams
+                        .as_ref()
+                        .map_or(attached.epoch, StreamSession::attachment_epoch)
                 },
                 joined_origin_observer: accepted.joined_origin_observer,
                 environment_id: accepted

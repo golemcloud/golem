@@ -49,6 +49,12 @@ pub enum PublicMethodInput {
 }
 
 impl AgentMethodInput {
+    /// Whether the input came through external REST, which forbids host-managed result
+    /// capabilities.
+    pub fn is_external_rest(&self) -> bool {
+        matches!(self, Self::Native(input) if input.is_external_rest())
+    }
+
     /// Projects captured input without resolving a method or an execution revision.
     /// Raw JSON values include fields that execution can subsequently reject.
     pub fn to_public_value(&self) -> Result<TypedSchemaValue, String> {
