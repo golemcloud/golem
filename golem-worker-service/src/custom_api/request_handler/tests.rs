@@ -2382,6 +2382,7 @@ async fn valid_lazy_append_creates_once_and_preserves_body() {
         .unwrap()
         .public_session_creation = Some(CreateStreamSessionSuccess {
         session: session.clone(),
+        invocation_key: Some(uuid::Uuid::new_v4().into()),
         ..Default::default()
     });
     harness.script_durable_stream_reads(vec![

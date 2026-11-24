@@ -539,6 +539,14 @@ pub trait TestDsl {
         from: OplogIndex,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
 
+    /// Reads the oplog like [`TestDsl::get_oplog`], and asks for the verified claims of the users
+    /// among the callers.
+    async fn get_oplog_with_claims(
+        &self,
+        agent_id: &OwnedAgentId,
+        from: OplogIndex,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
+
     async fn get_oplog_last_index(&self, agent_id: &OwnedAgentId) -> anyhow::Result<u64>;
 
     async fn search_oplog(
@@ -766,6 +774,19 @@ pub trait TestDsl {
         target_revision: ComponentRevision,
         disable_wakeup: bool,
     ) -> anyhow::Result<()>;
+
+    /// Updates an agent as the given caller, which the agent records as the requester of the
+    /// update, and gives the index of the update attempt. Only the worker-executor gRPC DSL can
+    /// send a caller: the REST DSL refuses one, because REST takes the caller from the request's
+    /// credentials.
+    async fn update_worker_as_caller(
+        &self,
+        agent_id: &OwnedAgentId,
+        mode: golem_common::model::agent::AgentUpdateMode,
+        target_revision: ComponentRevision,
+        disable_wakeup: bool,
+        caller: golem_common::model::caller::Caller,
+    ) -> anyhow::Result<OplogIndex>;
 
     async fn delete_worker(&self, agent_id: &OwnedAgentId) -> anyhow::Result<()>;
 

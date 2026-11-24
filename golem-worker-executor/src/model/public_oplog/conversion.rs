@@ -40,6 +40,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
         owner_kind: OwnerKind,
         agent_type_name: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
+        claims: ClaimVisibility,
     ) -> Result<Self, String> {
         let value = match value {
             golem_common::model::oplog::OplogEnrichmentEntry::CreateProjection {
@@ -250,6 +251,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     agent_type_name,
                     component_revision,
                     invocation,
+                    claims,
                 )
                 .await?;
 
@@ -391,6 +393,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     agent_type_name,
                     component_revision,
                     invocation,
+                    claims,
                 )
                 .await?;
 
@@ -406,6 +409,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 description,
                 update_attempt_index,
+                requester,
             } => {
                 let target_revision = *description.target_revision();
                 let public_description = match description {
@@ -438,6 +442,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     target_revision,
                     description: public_description,
                     update_attempt_index: update_attempt_index.unwrap_or(oplog_index),
+                    requester: PublicCaller::new(&requester, claims),
                 }))
             }
             OplogEntry::SuccessfulUpdate {
@@ -1046,6 +1051,17 @@ async fn public_host_request(
     match host_request {
         HostRequest::EntityInvocation(request) => Ok(request.input),
         HostRequest::McpToolCall(request) => Ok(request.input),
+        // The enrich request of an oplog processor holds the raw entries of its batch, with the
+        // claims of their callers. The public form keeps only the entry indexes, so no reader of
+        // the processor's oplog gets the claims.
+        HostRequest::GolemApiOplogEnrich(mut inner) => {
+            for (_, entry) in &mut inner.entries {
+                entry.clear();
+            }
+            HostRequest::GolemApiOplogEnrich(inner)
+                .into_typed_schema_value()
+                .map_err(|error| error.to_string())
+        }
         other => other
             .into_typed_schema_value()
             .map_err(|error| error.to_string()),

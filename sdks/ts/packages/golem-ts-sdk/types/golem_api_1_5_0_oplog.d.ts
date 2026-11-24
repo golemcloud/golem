@@ -475,12 +475,95 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     record: TypedSchemaValue;
   };
+  /**
+   * The (issuer, subject) pair of a principal. golem:agent imports golem:api, so this
+   * interface cannot use golem:agent/common.principal-ref; this record has the same fields.
+   */
+  export type PublicPrincipalRef = {
+    issuer: string;
+    subject: string;
+  };
+  export type PublicAccountAuthentication = "api-token" | "bootstrap-token" | "sign-in";
+  /**
+   * A user, authenticated by a sign-in provider: the provider's pair. The oplog never gives
+   * a user's claims to a guest.
+   */
+  export type PublicUserPrincipal = {
+    pair: PublicPrincipalRef;
+    authenticatedAt: Datetime;
+  };
+  /**
+   * An account: (Golem issuer, "account:<account-id>").
+   */
+  export type PublicAccountPrincipal = {
+    pair: PublicPrincipalRef;
+    accountId: AccountId;
+    authentication: PublicAccountAuthentication;
+  };
+  /**
+   * An agent: (Golem issuer, "agent:<agent-id>/<fingerprint>").
+   */
+  export type PublicAgentPrincipal = {
+    pair: PublicPrincipalRef;
+    agentId: AgentId;
+    agentType: string;
+    environmentId: EnvironmentId;
+  };
+  /**
+   * A tool: (Golem issuer, "tool:<environment-id>/<tool-name>").
+   */
+  export type PublicToolPrincipal = {
+    pair: PublicPrincipalRef;
+    environmentId: EnvironmentId;
+    toolName: string;
+  };
+  /**
+   * One principal, as Golem verified it. Every kind except anonymous has a pair.
+   */
+  export type PublicPrincipal =
+  {
+    tag: 'user'
+    val: PublicUserPrincipal
+  } |
+  {
+    tag: 'account'
+    val: PublicAccountPrincipal
+  } |
+  {
+    tag: 'agent'
+    val: PublicAgentPrincipal
+  } |
+  {
+    tag: 'tool'
+    val: PublicToolPrincipal
+  } |
+  {
+    tag: 'anonymous'
+  };
+  /**
+   * A token that the request presented, and the pair of its maker. It never holds the
+   * token's value.
+   */
+  export type PublicTokenProvenance = {
+    id: Uuid;
+    maker?: PublicPrincipalRef;
+  };
+  /**
+   * Who started the chain, who made this call, and the tokens presented at the entry point.
+   * Both roles are always present, also when they are the same principal.
+   */
+  export type PublicCaller = {
+    original: PublicPrincipal;
+    immediate: PublicPrincipal;
+    tokens: PublicTokenProvenance[];
+  };
   export type AgentInitializationParameters = {
     invocationId: Uuid;
     constructorParameters: TypedSchemaValue;
     traceId: string;
     traceStates: string[];
     invocationContext: SpanData[][];
+    caller: PublicCaller;
   };
   export type AgentMethodInvocationParameters = {
     invocationId: Uuid;
@@ -494,12 +577,19 @@ declare module 'golem:api/oplog@1.5.0' {
     traceId: string;
     traceStates: string[];
     invocationContext: SpanData[][];
+    caller: PublicCaller;
+  };
+  export type SaveSnapshotParameters = {
+    caller: PublicCaller;
   };
   export type ProcessOplogEntriesParameters = {
     invocationId: Uuid;
+    caller: PublicCaller;
   };
   export type ManualUpdateParameters = {
     targetRevision: ComponentRevision;
+    /** Who requested the update. It is not the caller of the update's snapshot save. */
+    requester: PublicCaller;
   };
   export type ExternalToolInvocationParameters = {
     invocationId: Uuid;
@@ -509,6 +599,7 @@ declare module 'golem:api/oplog@1.5.0' {
     traceId: string;
     traceStates: string[];
     invocationContext: SpanData[][];
+    caller: PublicCaller;
   };
   export type ToolInvocationResult = {
     result?: TypedSchemaValue;
@@ -547,6 +638,8 @@ declare module 'golem:api/oplog@1.5.0' {
     targetRevision: ComponentRevision;
     description: UpdateDescription;
     updateAttemptIndex: OplogIndex;
+    /** Who requested the update. It is never the caller of the update's snapshot save or load. */
+    requester: PublicCaller;
   };
   export type SnapshotAssistedUpdateDetails = {
     pendingUpdateIndex: OplogIndex;
@@ -705,6 +798,7 @@ declare module 'golem:api/oplog@1.5.0' {
   };
   export type LoadSnapshotParameters = {
     snapshot: SnapshotData;
+    caller: PublicCaller;
   };
   export type AgentInvocation =
   {
@@ -721,6 +815,7 @@ declare module 'golem:api/oplog@1.5.0' {
   } |
   {
     tag: 'save-snapshot'
+    val: SaveSnapshotParameters
   } |
   {
     tag: 'load-snapshot'
@@ -1182,6 +1277,11 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     description: RawUpdateDescription;
     updateAttemptIndex?: OplogIndex;
+    /**
+     * Who requested the update, in the oplog's binary encoding, as an `oplog-payload` holds the
+     * caller of an invocation. `enrich-oplog-entries` gives it as a `public-caller`.
+     */
+    requester: Uint8Array;
   };
   export type RawSuccessfulUpdateParameters = {
     timestamp: Datetime;

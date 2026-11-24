@@ -14,6 +14,7 @@
 
 use super::spans::{decode_public_span_data, encode_public_span_data};
 use crate::base_model::OplogIndex;
+use crate::base_model::caller::PublicCaller;
 use crate::model::AgentInvocationResult;
 use crate::model::invocation_context::TraceId;
 use crate::model::oplog::payload::types::{
@@ -30,7 +31,7 @@ use crate::model::oplog::{
     PublicAgentEntity, PublicAgentEntityKind, PublicAgentInvocation, PublicAgentInvocationResult,
     PublicEntityCallMode, PublicEntityInvocation, PublicEntityInvocationContext,
     PublicEntityInvocationOperation, PublicExternalToolResult, PublicSnapshotData,
-    PublicToolInvocationOperation, RawSnapshotData, ReadOnlyViolationError,
+    PublicToolInvocationOperation, RawSnapshotData, ReadOnlyViolationError, SaveSnapshotParameters,
     SaveSnapshotResultParameters,
 };
 use crate::model::quota::ResourceName;
@@ -165,6 +166,13 @@ impl From<AgentError> for golem_api_grpc::proto::golem::worker::AgentError {
     }
 }
 
+/// Every recorded invocation has a caller, so a public invocation without one does not decode.
+fn caller_from_protobuf(
+    caller: Option<golem_api_grpc::proto::golem::component::PublicCaller>,
+) -> Result<PublicCaller, String> {
+    caller.ok_or("Missing caller field")?.try_into()
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
     for PublicAgentInvocation
 {
@@ -191,6 +199,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
                         trace_id: TraceId::from_string(init.trace_id)?,
                         trace_states: init.trace_states,
                         invocation_context,
+                        caller: caller_from_protobuf(init.caller)?,
                     },
                 ))
             }
@@ -211,6 +220,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
                         trace_id: TraceId::from_string(method.trace_id)?,
                         trace_states: method.trace_states,
                         invocation_context,
+                        caller: caller_from_protobuf(method.caller)?,
                     },
                 ))
             }
@@ -229,11 +239,17 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
                         trace_id: TraceId::from_string(tool.trace_id)?,
                         trace_states: tool.trace_states,
                         invocation_context,
+                        caller: caller_from_protobuf(tool.caller)?,
                     },
                 ))
             }
-            Invocation::SaveSnapshot(_) => Ok(PublicAgentInvocation::SaveSnapshot(Empty {})),
+            Invocation::SaveSnapshot(save) => Ok(PublicAgentInvocation::SaveSnapshot(
+                SaveSnapshotParameters {
+                    caller: caller_from_protobuf(save.caller)?,
+                },
+            )),
             Invocation::LoadSnapshot(load) => {
+                let caller = caller_from_protobuf(load.caller)?;
                 let snapshot = load.snapshot.ok_or("Missing snapshot field")?;
                 let data = match snapshot.data.ok_or("Missing data field")? {
                     golem_api_grpc::proto::golem::worker::snapshot_data::Data::Raw(raw) => {
@@ -278,7 +294,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
                     }),
                 };
                 Ok(PublicAgentInvocation::LoadSnapshot(
-                    LoadSnapshotParameters { snapshot: data },
+                    LoadSnapshotParameters {
+                        snapshot: data,
+                        caller,
+                    },
                 ))
             }
             Invocation::ProcessOplogEntries(process) => Ok(
@@ -287,11 +306,16 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
                         .invocation_id
                         .ok_or("Missing invocation_id field")?
                         .into(),
+                    caller: caller_from_protobuf(process.caller)?,
                 }),
             ),
             Invocation::ManualUpdate(manual) => Ok(PublicAgentInvocation::ManualUpdate(
                 ManualUpdateParameters {
                     target_revision: manual.target_revision.try_into()?,
+                    requester: manual
+                        .requester
+                        .ok_or("Missing requester field")?
+                        .try_into()?,
                 },
             )),
         }
@@ -315,6 +339,7 @@ impl TryFrom<PublicAgentInvocation>
                         trace_id: init.trace_id.to_string(),
                         trace_states: init.trace_states,
                         invocation_context,
+                        caller: Some(init.caller.into()),
                     },
                 )
             }
@@ -328,6 +353,7 @@ impl TryFrom<PublicAgentInvocation>
                         trace_id: method.trace_id.to_string(),
                         trace_states: method.trace_states,
                         invocation_context,
+                        caller: Some(method.caller.into()),
                     },
                 )
             }
@@ -342,12 +368,15 @@ impl TryFrom<PublicAgentInvocation>
                         trace_id: tool.trace_id.to_string(),
                         trace_states: tool.trace_states,
                         invocation_context,
+                        caller: Some(tool.caller.into()),
                     },
                 )
             }
-            PublicAgentInvocation::SaveSnapshot(_) => {
-                Invocation::SaveSnapshot(golem_schema::proto::golem::common::Empty {})
-            }
+            PublicAgentInvocation::SaveSnapshot(save) => Invocation::SaveSnapshot(
+                golem_api_grpc::proto::golem::worker::SaveSnapshotInvocationParameters {
+                    caller: Some(save.caller.into()),
+                },
+            ),
             PublicAgentInvocation::LoadSnapshot(load) => {
                 let snapshot_data = match load.snapshot {
                     PublicSnapshotData::Raw(raw) => {
@@ -416,17 +445,20 @@ impl TryFrom<PublicAgentInvocation>
                 Invocation::LoadSnapshot(
                     golem_api_grpc::proto::golem::worker::LoadSnapshotInvocationParameters {
                         snapshot: Some(snapshot_data),
+                        caller: Some(load.caller.into()),
                     },
                 )
             }
             PublicAgentInvocation::ProcessOplogEntries(process) => Invocation::ProcessOplogEntries(
                 golem_api_grpc::proto::golem::worker::ProcessOplogEntriesInvocationParameters {
                     invocation_id: Some(process.invocation_id.into()),
+                    caller: Some(process.caller.into()),
                 },
             ),
             PublicAgentInvocation::ManualUpdate(manual) => Invocation::ManualUpdate(
                 golem_api_grpc::proto::golem::worker::ManualUpdateInvocationParameters {
                     target_revision: manual.target_revision.into(),
+                    requester: Some(manual.requester.into()),
                 },
             ),
         };

@@ -32,6 +32,8 @@ A **wallet** is the set of cards currently held by an account, application, or a
 
 The **holder** identifies a wallet: supported holder kinds are accounts, applications, and agents. Wallet membership is separate from ownership of a guest handle; deriving a card returns a handle without installing the card in a wallet. The holder and the permission owner are also different concepts: an agent can hold a card granting access to a resource owned by another account.
 
+An agent owner names one agent, or every agent of a type with `Type(*)`, for example `agent(?env/payment-svc/PaymentAgent(*)) @ ?agent : invoke : charge`. `Type(*)` covers every agent of the type: the agents with constructor parameters, such as `PaymentAgent("a")`, and the phantom, ephemeral and forked agents, whose names also end with a phantom ID, such as `PaymentAgent("a")[<uuid>]`. Grants and denials use the same match, so a `Type(*)` denial denies all these agents too. `Type(*)` does not cover another type whose name starts with the same text, such as `PaymentAgentV2`. The same owner form works in every agent-owned class: `agent`, `env`, `filesystem`, `oplog` and `config`.
+
 Recipient patterns restrict where authority can flow. They can identify:
 
 - an account

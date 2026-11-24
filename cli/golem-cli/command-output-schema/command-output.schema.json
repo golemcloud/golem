@@ -4740,6 +4740,11 @@
         },
         "properties": {
           "$ref": "#/definitions/ComponentLayerProperties"
+        },
+        "agents": {
+          "type": "object",
+          "description": "The resolved layers of each agent type, keyed by agent type name. Absent when the component is not built.",
+          "additionalProperties": { "$ref": "#/definitions/AgentLayerProperties" }
         }
       },
       "additionalProperties": false
@@ -4783,6 +4788,760 @@
         "files": { "$ref": "#/definitions/ComponentLayerManifestFileVecProperty" },
         "initialCard": { "$ref": "#/definitions/ComponentLayerManifestInitialCardProperty" },
         "toolBindings": { "$ref": "#/definitions/ComponentLayerToolBindingsProperty" }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerProperties": {
+      "type": "object",
+      "required": [
+        "config",
+        "initialCard",
+        "env",
+        "plugins",
+        "files",
+        "toolBindings"
+      ],
+      "properties": {
+        "appliedLayers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "config": {
+          "$ref": "#/definitions/AgentLayerJsonProperty"
+        },
+        "initialCard": {
+          "$ref": "#/definitions/AgentLayerManifestInitialCardProperty"
+        },
+        "env": {
+          "$ref": "#/definitions/AgentLayerStringMapProperty"
+        },
+        "plugins": {
+          "$ref": "#/definitions/AgentLayerManifestPluginVecProperty"
+        },
+        "files": {
+          "$ref": "#/definitions/AgentLayerProvisionFileVecProperty"
+        },
+        "toolBindings": {
+          "$ref": "#/definitions/AgentLayerToolBindingsProperty"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerId": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "component"
+          ],
+          "properties": {
+            "component": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "agentTemplate"
+          ],
+          "properties": {
+            "agentTemplate": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "agentCommon"
+          ],
+          "properties": {
+            "agentCommon": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "agentEnvironmentPresets"
+          ],
+          "properties": {
+            "agentEnvironmentPresets": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "agentCustomPresets"
+          ],
+          "properties": {
+            "agentCustomPresets": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "AgentLayerJsonProperty": {
+      "type": "object",
+      "required": [
+        "value",
+        "trace"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/definitions/JsonValue"
+        },
+        "trace": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AgentLayerJsonTraceElem"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerJsonTraceElem": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/AgentLayerJsonObjectMergeTraceElem"
+        },
+        {
+          "$ref": "#/definitions/AgentLayerJsonReplaceTraceElem"
+        },
+        {
+          "$ref": "#/definitions/AgentLayerJsonSkipTraceElem"
+        }
+      ]
+    },
+    "AgentLayerJsonObjectMergeTraceElem": {
+      "type": "object",
+      "required": [
+        "type",
+        "id"
+      ],
+      "properties": {
+        "type": {
+          "const": "object-merge"
+        },
+        "id": {
+          "$ref": "#/definitions/AgentLayerId"
+        },
+        "selection": {
+          "type": "string"
+        },
+        "insertedEntries": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/JsonValue"
+          }
+        },
+        "updatedEntries": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/JsonValue"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerJsonReplaceTraceElem": {
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "mode",
+        "newValue"
+      ],
+      "properties": {
+        "type": {
+          "const": "replace"
+        },
+        "id": {
+          "$ref": "#/definitions/AgentLayerId"
+        },
+        "selection": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/definitions/JsonMergeMode"
+        },
+        "newValue": {
+          "$ref": "#/definitions/JsonValue"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerJsonSkipTraceElem": {
+      "type": "object",
+      "required": [
+        "type",
+        "id"
+      ],
+      "properties": {
+        "type": {
+          "const": "skip"
+        },
+        "id": {
+          "$ref": "#/definitions/AgentLayerId"
+        },
+        "selection": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerStringMapProperty": {
+      "type": "object",
+      "required": [
+        "value",
+        "trace"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/definitions/StringMap"
+        },
+        "trace": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AgentLayerStringMapTraceElem"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerStringMapTraceElem": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/AgentLayerStringMapUpsertTraceElem"
+        },
+        {
+          "$ref": "#/definitions/AgentLayerStringMapReplaceTraceElem"
+        },
+        {
+          "$ref": "#/definitions/AgentLayerStringMapRemoveTraceElem"
+        }
+      ]
+    },
+    "AgentLayerStringMapUpsertTraceElem": {
+      "type": "object",
+      "required": [
+        "type",
+        "id"
+      ],
+      "properties": {
+        "type": {
+          "const": "upsert"
+        },
+        "id": {
+          "$ref": "#/definitions/AgentLayerId"
+        },
+        "selection": {
+          "type": "string"
+        },
+        "insertedEntries": {
+          "$ref": "#/definitions/StringMap"
+        },
+        "updatedEntries": {
+          "$ref": "#/definitions/StringMap"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerStringMapReplaceTraceElem": {
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "newEntries"
+      ],
+      "properties": {
+        "type": {
+          "const": "replace"
+        },
+        "id": {
+          "$ref": "#/definitions/AgentLayerId"
+        },
+        "selection": {
+          "type": "string"
+        },
+        "newEntries": {
+          "$ref": "#/definitions/StringMap"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerStringMapRemoveTraceElem": {
+      "type": "object",
+      "required": [
+        "type",
+        "id"
+      ],
+      "properties": {
+        "type": {
+          "const": "remove"
+        },
+        "id": {
+          "$ref": "#/definitions/AgentLayerId"
+        },
+        "selection": {
+          "type": "string"
+        },
+        "removedEntries": {
+          "$ref": "#/definitions/StringMap"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerManifestPluginVecProperty": {
+      "type": "object",
+      "required": [
+        "value",
+        "trace"
+      ],
+      "properties": {
+        "value": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ManifestPluginInstallation"
+          }
+        },
+        "trace": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AgentLayerManifestPluginVecTraceElem"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerManifestPluginVecTraceElem": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/AgentLayerManifestPluginAppendTraceElem"
+        },
+        {
+          "$ref": "#/definitions/AgentLayerManifestPluginPrependTraceElem"
+        },
+        {
+          "$ref": "#/definitions/AgentLayerManifestPluginReplaceTraceElem"
+        }
+      ]
+    },
+    "AgentLayerManifestPluginAppendTraceElem": {
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "appendedElems"
+      ],
+      "properties": {
+        "type": {
+          "const": "append"
+        },
+        "id": {
+          "$ref": "#/definitions/AgentLayerId"
+        },
+        "selection": {
+          "type": "string"
+        },
+        "appendedElems": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ManifestPluginInstallation"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerManifestPluginPrependTraceElem": {
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "prependedElems"
+      ],
+      "properties": {
+        "type": {
+          "const": "prepend"
+        },
+        "id": {
+          "$ref": "#/definitions/AgentLayerId"
+        },
+        "selection": {
+          "type": "string"
+        },
+        "prependedElems": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ManifestPluginInstallation"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerManifestPluginReplaceTraceElem": {
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "newElems"
+      ],
+      "properties": {
+        "type": {
+          "const": "replace"
+        },
+        "id": {
+          "$ref": "#/definitions/AgentLayerId"
+        },
+        "selection": {
+          "type": "string"
+        },
+        "newElems": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ManifestPluginInstallation"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerProvisionFileVecProperty": {
+      "type": "object",
+      "required": [
+        "value",
+        "trace"
+      ],
+      "properties": {
+        "value": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ManifestProvisionFile"
+          }
+        },
+        "trace": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AgentLayerProvisionFileVecTraceElem"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerProvisionFileVecTraceElem": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/AgentLayerProvisionFileAppendTraceElem"
+        },
+        {
+          "$ref": "#/definitions/AgentLayerProvisionFilePrependTraceElem"
+        },
+        {
+          "$ref": "#/definitions/AgentLayerProvisionFileReplaceTraceElem"
+        }
+      ]
+    },
+    "AgentLayerProvisionFileAppendTraceElem": {
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "appendedElems"
+      ],
+      "properties": {
+        "type": {
+          "const": "append"
+        },
+        "id": {
+          "$ref": "#/definitions/AgentLayerId"
+        },
+        "selection": {
+          "type": "string"
+        },
+        "appendedElems": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ManifestProvisionFile"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerProvisionFilePrependTraceElem": {
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "prependedElems"
+      ],
+      "properties": {
+        "type": {
+          "const": "prepend"
+        },
+        "id": {
+          "$ref": "#/definitions/AgentLayerId"
+        },
+        "selection": {
+          "type": "string"
+        },
+        "prependedElems": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ManifestProvisionFile"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerProvisionFileReplaceTraceElem": {
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "newElems"
+      ],
+      "properties": {
+        "type": {
+          "const": "replace"
+        },
+        "id": {
+          "$ref": "#/definitions/AgentLayerId"
+        },
+        "selection": {
+          "type": "string"
+        },
+        "newElems": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ManifestProvisionFile"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ManifestProvisionFile": {
+      "type": "object",
+      "required": [
+        "source",
+        "file"
+      ],
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "file": {
+          "$ref": "#/definitions/ManifestInitialComponentFile"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerManifestInitialCardProperty": {
+      "type": "object",
+      "required": [
+        "value",
+        "trace"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/definitions/AgentLayerManifestInitialCardValue"
+        },
+        "trace": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AgentLayerManifestInitialCardTraceElem"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerManifestInitialCardValue": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/definitions/ManifestInitialCard"
+        }
+      ]
+    },
+    "AgentLayerManifestInitialCardTraceElem": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/AgentLayerManifestInitialCardOverrideTraceElem"
+        },
+        {
+          "$ref": "#/definitions/AgentLayerManifestInitialCardSkipTraceElem"
+        }
+      ]
+    },
+    "AgentLayerManifestInitialCardOverrideTraceElem": {
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "value"
+      ],
+      "properties": {
+        "type": {
+          "const": "override"
+        },
+        "id": {
+          "$ref": "#/definitions/AgentLayerId"
+        },
+        "selection": {
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/definitions/ManifestInitialCard"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerManifestInitialCardSkipTraceElem": {
+      "type": "object",
+      "required": [
+        "type",
+        "id"
+      ],
+      "properties": {
+        "type": {
+          "const": "skip"
+        },
+        "id": {
+          "$ref": "#/definitions/AgentLayerId"
+        },
+        "selection": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerToolBindingsProperty": {
+      "type": "object",
+      "required": [
+        "value",
+        "trace"
+      ],
+      "properties": {
+        "value": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/ToolBindingState"
+          }
+        },
+        "trace": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AgentLayerToolBindingsTraceElem"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerToolBindingsTraceElem": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/AgentLayerToolBindingsUpsertTraceElem"
+        },
+        {
+          "$ref": "#/definitions/AgentLayerToolBindingsReplaceTraceElem"
+        },
+        {
+          "$ref": "#/definitions/AgentLayerToolBindingsRemoveTraceElem"
+        }
+      ]
+    },
+    "AgentLayerToolBindingsUpsertTraceElem": {
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "bindings"
+      ],
+      "properties": {
+        "type": {
+          "const": "upsert"
+        },
+        "id": {
+          "$ref": "#/definitions/AgentLayerId"
+        },
+        "selection": {
+          "type": "string"
+        },
+        "bindings": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/ManifestToolBinding"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerToolBindingsReplaceTraceElem": {
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "bindings"
+      ],
+      "properties": {
+        "type": {
+          "const": "replace"
+        },
+        "id": {
+          "$ref": "#/definitions/AgentLayerId"
+        },
+        "selection": {
+          "type": "string"
+        },
+        "bindings": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/ManifestToolBinding"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentLayerToolBindingsRemoveTraceElem": {
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "removedNames"
+      ],
+      "properties": {
+        "type": {
+          "const": "remove"
+        },
+        "id": {
+          "$ref": "#/definitions/AgentLayerId"
+        },
+        "selection": {
+          "type": "string"
+        },
+        "removedNames": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       },
       "additionalProperties": false
     },
@@ -5286,8 +6045,8 @@
     },
     "ComponentLayerManifestInitialCardTraceElem": {
       "oneOf": [
-        { "$ref": "#/definitions/ComponentLayerOptionalStringOverrideTraceElem" },
-        { "$ref": "#/definitions/ComponentLayerOptionalStringSkipTraceElem" }
+        { "$ref": "#/definitions/ComponentLayerManifestInitialCardOverrideTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerManifestInitialCardSkipTraceElem" }
       ]
     },
     "ComponentLayerManifestInitialCardOverrideTraceElem": {
@@ -5776,16 +6535,14 @@
     },
     "ManifestInitialCard": {
       "type": "object",
-      "required": ["lower_bound", "upper_bound"],
       "properties": {
-        "lower_bound": { "$ref": "#/definitions/ManifestInitialCardBound" },
-        "upper_bound": { "$ref": "#/definitions/ManifestInitialCardBound" }
+        "lowerBound": { "$ref": "#/definitions/ManifestInitialCardBound" },
+        "upperBound": { "$ref": "#/definitions/ManifestInitialCardBound" }
       },
       "additionalProperties": false
     },
     "ManifestInitialCardBound": {
       "type": "object",
-      "required": ["positive", "negative"],
       "properties": {
         "positive": { "type": "array", "items": { "type": "string" } },
         "negative": { "type": "array", "items": { "type": "string" } }
@@ -6494,7 +7251,8 @@
         "parameters",
         "pluginRegistrationId",
         "pluginName",
-        "pluginVersion"
+        "pluginVersion",
+        "installedBy"
       ],
       "properties": {
         "environmentPluginGrantId": { "type": "string" },
@@ -6504,7 +7262,8 @@
         "pluginName": { "type": "string" },
         "pluginVersion": { "type": "string" },
         "oplogProcessorComponentId": { "type": ["string", "null"] },
-        "oplogProcessorComponentRevision": { "type": ["integer", "null"], "minimum": 0 }
+        "oplogProcessorComponentRevision": { "type": ["integer", "null"], "minimum": 0 },
+        "installedBy": { "type": "string" }
       },
       "additionalProperties": false
     },
@@ -7214,8 +7973,8 @@
     },
     "PublicOplogEntryPendingUpdate": {
       "type": "object",
-      "required": ["type", "timestamp", "targetRevision", "description", "updateAttemptIndex"],
-      "properties": { "type": { "const": "PendingUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "description": { "$ref": "#/definitions/PublicUpdateDescription" }, "updateAttemptIndex": { "type": "integer", "minimum": 0 } },
+      "required": ["type", "timestamp", "targetRevision", "description", "updateAttemptIndex", "requester"],
+      "properties": { "type": { "const": "PendingUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "description": { "$ref": "#/definitions/PublicUpdateDescription" }, "updateAttemptIndex": { "type": "integer", "minimum": 0 }, "requester": { "$ref": "#/definitions/PublicCaller" } },
       "additionalProperties": false
     },
     "PublicOplogEntrySuccessfulUpdate": {
@@ -7562,28 +8321,80 @@
         { "$ref": "#/definitions/PublicAgentInvocationAgentInitialization" },
         { "$ref": "#/definitions/PublicAgentInvocationAgentMethodInvocation" },
         { "$ref": "#/definitions/PublicAgentInvocationExternalTool" },
-        { "type": "object", "required": ["type"], "properties": { "type": { "const": "SaveSnapshot" } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "snapshot"], "properties": { "type": { "const": "LoadSnapshot" }, "snapshot": { "$ref": "#/definitions/PublicSnapshotData" } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "invocationId"], "properties": { "type": { "const": "ProcessOplogEntries" }, "invocationId": { "type": "string" } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "targetRevision"], "properties": { "type": { "const": "ManualUpdate" }, "targetRevision": { "type": "integer", "minimum": 0 } }, "additionalProperties": false }
+        { "type": "object", "required": ["type", "caller"], "properties": { "type": { "const": "SaveSnapshot" }, "caller": { "$ref": "#/definitions/PublicCaller" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "snapshot", "caller"], "properties": { "type": { "const": "LoadSnapshot" }, "snapshot": { "$ref": "#/definitions/PublicSnapshotData" }, "caller": { "$ref": "#/definitions/PublicCaller" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "invocationId", "caller"], "properties": { "type": { "const": "ProcessOplogEntries" }, "invocationId": { "type": "string" }, "caller": { "$ref": "#/definitions/PublicCaller" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "targetRevision", "requester"], "properties": { "type": { "const": "ManualUpdate" }, "targetRevision": { "type": "integer", "minimum": 0 }, "requester": { "$ref": "#/definitions/PublicCaller" } }, "additionalProperties": false }
       ]
     },
     "PublicAgentInvocationAgentInitialization": {
       "type": "object",
-      "required": ["type", "invocationId", "constructorParameters", "traceId", "traceStates", "invocationContext"],
-      "properties": { "type": { "const": "AgentInitialization" }, "invocationId": { "type": "string" }, "constructorParameters": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
+      "required": ["type", "invocationId", "constructorParameters", "traceId", "traceStates", "invocationContext", "caller"],
+      "properties": { "type": { "const": "AgentInitialization" }, "invocationId": { "type": "string" }, "constructorParameters": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" }, "caller": { "$ref": "#/definitions/PublicCaller" } },
       "additionalProperties": false
     },
     "PublicAgentInvocationAgentMethodInvocation": {
       "type": "object",
-      "required": ["type", "invocationId", "methodName", "functionInput", "traceId", "traceStates", "invocationContext"],
-      "properties": { "type": { "const": "AgentMethodInvocation" }, "invocationId": { "type": "string" }, "methodName": { "type": "string" }, "functionInput": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
+      "required": ["type", "invocationId", "methodName", "functionInput", "traceId", "traceStates", "invocationContext", "caller"],
+      "properties": { "type": { "const": "AgentMethodInvocation" }, "invocationId": { "type": "string" }, "methodName": { "type": "string" }, "functionInput": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" }, "caller": { "$ref": "#/definitions/PublicCaller" } },
       "additionalProperties": false
     },
     "PublicAgentInvocationExternalTool": {
       "type": "object",
-      "required": ["type", "invocationId", "toolName", "commandPath", "input", "traceId", "traceStates", "invocationContext"],
-      "properties": { "type": { "const": "ExternalTool" }, "invocationId": { "type": "string" }, "toolName": { "type": "string" }, "commandPath": { "type": "array", "items": { "type": "string" } }, "input": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
+      "required": ["type", "invocationId", "toolName", "commandPath", "input", "traceId", "traceStates", "invocationContext", "caller"],
+      "properties": { "type": { "const": "ExternalTool" }, "invocationId": { "type": "string" }, "toolName": { "type": "string" }, "commandPath": { "type": "array", "items": { "type": "string" } }, "input": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" }, "caller": { "$ref": "#/definitions/PublicCaller" } },
+      "additionalProperties": false
+    },
+    "PublicCaller": {
+      "type": "object",
+      "description": "The caller of a recorded invocation or update request: the principal that started the chain, the principal that made the call, and the tokens presented at the entry point. A user's claims show only with --show-claims.",
+      "required": ["original", "immediate", "tokens"],
+      "properties": {
+        "original": { "$ref": "#/definitions/PublicPrincipal" },
+        "immediate": { "$ref": "#/definitions/PublicPrincipal" },
+        "tokens": { "type": "array", "items": { "$ref": "#/definitions/PublicTokenProvenance" } }
+      },
+      "additionalProperties": false
+    },
+    "PublicPrincipal": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "pair", "authenticatedAt"],
+          "properties": { "kind": { "const": "user" }, "pair": { "$ref": "#/definitions/Pair" }, "authenticatedAt": { "type": "string" }, "claims": { "type": "object" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "pair", "accountId", "authentication"],
+          "properties": { "kind": { "const": "account" }, "pair": { "$ref": "#/definitions/Pair" }, "accountId": { "type": "string", "format": "uuid" }, "authentication": { "enum": ["apiToken", "bootstrapToken", "signIn"] } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "pair", "agentId", "agentType", "environmentId"],
+          "properties": { "kind": { "const": "agent" }, "pair": { "$ref": "#/definitions/Pair" }, "agentId": { "$ref": "#/definitions/AgentId" }, "agentType": { "type": "string" }, "environmentId": { "type": "string", "format": "uuid" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "pair", "environmentId", "toolName"],
+          "properties": { "kind": { "const": "tool" }, "pair": { "$ref": "#/definitions/Pair" }, "environmentId": { "type": "string", "format": "uuid" }, "toolName": { "type": "string" } },
+          "additionalProperties": false
+        },
+        { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "anonymous" } }, "additionalProperties": false }
+      ]
+    },
+    "Pair": {
+      "type": "object",
+      "required": ["issuer", "subject"],
+      "properties": { "issuer": { "type": "string" }, "subject": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "PublicTokenProvenance": {
+      "type": "object",
+      "required": ["id", "maker"],
+      "properties": { "id": { "type": "string", "format": "uuid" }, "maker": { "anyOf": [{ "$ref": "#/definitions/Pair" }, { "type": "null" }] } },
       "additionalProperties": false
     },
     "PublicAgentInvocationResult": {

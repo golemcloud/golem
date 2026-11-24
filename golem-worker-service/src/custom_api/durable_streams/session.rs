@@ -23,7 +23,7 @@ use super::super::{ResponseBody, RichRequest, RouteExecutionResult};
 use super::encoding::{metadata_response, offset_text};
 use super::expiry::{add_expiry_headers, policies_match};
 use super::{DurableStreamsHandler, body_response, response, route_method};
-use crate::service::worker::RoutedTarget;
+use crate::service::worker::{AcceptedInvocation, RoutedTarget};
 use golem_api_grpc::proto::golem::worker::{
     AgentInvocationMode, InvocationContext, InvocationStart,
 };
@@ -135,7 +135,8 @@ impl DurableStreamsHandler {
             origin_invocation: None,
         };
         target.apply(&mut start);
-        self.worker_service
+        let created = self
+            .worker_service
             .create_stream_session(
                 &target.agent_id,
                 CreateStreamSessionRequest {
@@ -146,8 +147,20 @@ impl DurableStreamsHandler {
                     invocation: Some(start),
                 },
             )
-            .await
-            .map_err(Into::into)
+            .await?;
+        request.accepted_invocation = Some(AcceptedInvocation {
+            id: golem_common::model::OwnedInvocationId::new(
+                target.agent_id,
+                created
+                    .invocation_key
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("created stream session has no invocation identity")
+                    })?
+                    .into(),
+            ),
+            environment_id: route.route.environment_id,
+        });
+        Ok(created)
     }
 
     /// `PUT` on the session collection: creates a session under a freshly
@@ -263,6 +276,18 @@ impl DurableStreamsHandler {
                     };
                     return created_slot_response(&metadata, created.replayed, declared_slot);
                 }
+                request.accepted_invocation = Some(AcceptedInvocation {
+                    id: golem_common::model::OwnedInvocationId::new(
+                        *agent_id,
+                        metadata
+                            .invocation_key
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("stream slot has no invocation identity")
+                            })?
+                            .into(),
+                    ),
+                    environment_id: route.route.environment_id,
+                });
                 return metadata_response(&metadata, true, declared_slot);
             }
             if self
