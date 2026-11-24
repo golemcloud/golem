@@ -142,7 +142,11 @@ impl ComponentCommandHandler {
                 ComponentSubcommand::ManifestTrace {
                     component_name,
                     resolved,
-                } => self.cmd_manifest_trace(component_name, resolved).await,
+                    build,
+                } => {
+                    self.cmd_manifest_trace(component_name, resolved, build)
+                        .await
+                }
             }
         })
     }
@@ -341,9 +345,28 @@ impl ComponentCommandHandler {
 
     async fn cmd_manifest_trace(
         &self,
-        _component_names: OptionalComponentNames,
+        component_names: OptionalComponentNames,
         resolved: bool,
+        build: bool,
     ) -> anyhow::Result<()> {
+        if build {
+            self.ctx
+                .app_handler()
+                .build(
+                    &BuildConfig::new(),
+                    component_names.component_name.clone(),
+                    &ApplicationComponentSelectMode::All,
+                )
+                .await?;
+        }
+        self.ctx
+            .app_handler()
+            .must_select_components(
+                component_names.component_name,
+                &ApplicationComponentSelectMode::All,
+            )
+            .await?;
+
         let views = self.prepare_manifest_traces(resolved).await?;
 
         for view in views {
@@ -368,19 +391,32 @@ impl ComponentCommandHandler {
         let app_ctx = app_ctx.some_or_err_mut()?;
 
         let component_names = app_ctx
-            .application()
-            .component_names()
+            .selected_component_names()
+            .iter()
             .cloned()
             .collect::<Vec<_>>();
         let mut views = Vec::new();
         for component_name in component_names {
-            let resolved_config = if resolved {
-                let metadata = extract_and_store_component_metadata(
+            let metadata = if resolved
+                || app_ctx
+                    .application()
+                    .component(&component_name)
+                    .wasm()
+                    .exists()
+            {
+                Some(extract_and_store_component_metadata(
                     &BuildContext::new(app_ctx, &BuildConfig::new()),
                     &component_name,
                 )
                 .await
-                .context("Resolved manifest traces require built component Wasm; run `golem build` first")?;
+                .context("Manifest agent traces require built component Wasm; run `golem build` or pass --build")?)
+            } else {
+                None
+            };
+            let resolved_config = if resolved {
+                let metadata = metadata
+                    .as_ref()
+                    .expect("resolved mode extracts component metadata");
                 Some(prepare_static_config(
                     app_ctx.application(),
                     &component_name,
@@ -390,6 +426,34 @@ impl ComponentCommandHandler {
             } else {
                 None
             };
+            let agents = if let Some(metadata) = &metadata {
+                let mapping = metadata
+                    .agent_types
+                    .iter()
+                    .map(|agent_type| (agent_type.type_name.clone(), component_name.clone()))
+                    .collect::<BTreeMap<_, _>>();
+                let resolved_agents = app_ctx.application().resolve_agents(&mapping)?;
+                mapping
+                    .into_keys()
+                    .filter_map(|agent_type_name| {
+                        let properties = resolved_agents
+                            .agent(&agent_type_name)?
+                            .layer_properties()
+                            .with_compacted_traces();
+                        Some((agent_type_name, properties))
+                    })
+                    .collect()
+            } else {
+                log_warn_action(
+                    "Skipping",
+                    format!(
+                        "the agent traces of {}, because the component is not built; build it or pass --build to see them",
+                        component_name.as_str().log_color_highlight()
+                    ),
+                );
+                BTreeMap::new()
+            };
+
             views.push(ComponentManifestTraceView {
                 component_name: component_name.clone(),
                 properties: app_ctx
@@ -397,6 +461,7 @@ impl ComponentCommandHandler {
                     .component(&component_name)
                     .layer_properties()
                     .with_compacted_traces(),
+                agents,
                 resolved_config,
             });
         }

@@ -15,7 +15,9 @@
 use crate::agent_id_display::SourceLanguage;
 use crate::agent_id_display::render_type_for_language;
 use crate::log::LogColorize;
-use crate::model::app::{ComponentLayerId, ComponentLayerProperties, InitialComponentFile};
+use crate::model::app::{
+    AgentLayerProperties, ComponentLayerId, ComponentLayerProperties, InitialComponentFile,
+};
 use crate::model::app_raw;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::config::StaticConfigFieldView;
@@ -1541,6 +1543,10 @@ pub struct ComponentManifestTraceView {
     pub component_name: ComponentName,
     pub properties: ComponentLayerProperties,
     pub resolved_config: Option<Vec<StaticConfigFieldView>>,
+    /// The resolved layers of each agent type of the component. Empty when the component is not
+    /// built, because the agent types come from the built component.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub agents: BTreeMap<AgentTypeName, AgentLayerProperties>,
 }
 
 impl StructuredOutput for ComponentManifestTraceView {
@@ -1558,14 +1564,34 @@ impl StructuredOutput for ComponentManifestTraceView {
 
 impl TextOutput for ComponentManifestTraceView {
     fn log(&self) {
-        match self.to_masked_value(MaskingConfig::show_secrets()) {
-            Ok(value) => log_manifest_trace_value(&value),
-            Err(error) => logln(format!("<failed to render manifest trace: {error:#}>")),
+        log_manifest_trace_properties(&self.properties);
+        for (agent_type_name, properties) in &self.agents {
+            log_manifest_trace_agent_header(agent_type_name);
+            log_manifest_trace_properties(properties);
+        }
+        if let Some(resolved_config) = &self.resolved_config {
+            log_manifest_trace_properties(&serde_json::json!({"resolvedConfig": resolved_config}));
         }
     }
 
     fn log_masked(self, config: MaskingConfig) -> anyhow::Result<()> {
-        log_manifest_trace_value(&self.to_masked_value(config)?);
+        if config.show_secrets {
+            self.log();
+        } else {
+            let value = self.to_masked_value(config)?;
+            log_manifest_trace_value(&value["properties"]);
+            if let Some(agents) = value.get("agents").and_then(Value::as_object) {
+                for (agent_type_name, properties) in agents {
+                    log_manifest_trace_agent_header(&AgentTypeName(agent_type_name.clone()));
+                    log_manifest_trace_value(properties);
+                }
+            }
+            if self.resolved_config.is_some() {
+                log_manifest_trace_value(
+                    &serde_json::json!({"resolvedConfig": value["resolvedConfig"]}),
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -1576,6 +1602,11 @@ impl ComponentManifestTraceView {
         if !config.show_secrets {
             if let Some(properties) = value.get_mut("properties") {
                 mask_component_layer_properties(properties);
+            }
+            if let Some(agents) = value.get_mut("agents").and_then(Value::as_object_mut) {
+                for properties in agents.values_mut() {
+                    mask_component_layer_properties(properties);
+                }
             }
             if let Some(fields) = value
                 .get_mut("resolvedConfig")
@@ -1590,6 +1621,24 @@ impl ComponentManifestTraceView {
         }
         Ok(value)
     }
+}
+
+fn log_manifest_trace_agent_header(agent_type_name: &AgentTypeName) {
+    logln("");
+    logln(format!(
+        "Agent type {}:",
+        agent_type_name.0.log_color_highlight()
+    ));
+}
+
+fn log_manifest_trace_properties(properties: &impl Serialize) {
+    let rendered = if SHOULD_COLORIZE.should_colorize() {
+        to_colored_json(properties)
+    } else {
+        serde_json::to_string_pretty(properties).map_err(Into::into)
+    };
+
+    log_manifest_trace_rendered(rendered);
 }
 
 fn log_manifest_trace_value(properties: &Value) {
@@ -1618,6 +1667,9 @@ fn mask_component_layer_properties(properties: &mut Value) {
         return;
     };
 
+    if let Some(config) = properties.get_mut("config") {
+        mask_config_property_payloads(config);
+    }
     if let Some(inputs) = properties
         .get_mut("configInputs")
         .and_then(Value::as_array_mut)
@@ -1653,6 +1705,32 @@ fn mask_config_schema_defaults(value: &mut Value) {
         Value::Array(values) => {
             for value in values {
                 mask_config_schema_defaults(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn mask_config_property_payloads(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                match key.as_str() {
+                    "value" | "newValue" => mask_json_leaf_values(value),
+                    "insertedEntries" | "updatedEntries" => {
+                        if let Some(object) = value.as_object_mut() {
+                            for value in object.values_mut() {
+                                mask_json_leaf_values(value);
+                            }
+                        }
+                    }
+                    _ => mask_config_property_payloads(value),
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                mask_config_property_payloads(value);
             }
         }
         _ => {}
