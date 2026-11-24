@@ -4207,6 +4207,71 @@ async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
             .is_err()
     );
     assert!(read(None, to, from, 10, allowance(100)).await.is_err());
+
+    let cursor_at = |next: OplogIndex| OplogCursor {
+        next_oplog_index: next.as_u64(),
+        current_component_revision: updated_revision.into(),
+        query_hash: OplogCursor::query_hash(None),
+    };
+    // A cursor before `from` is refused too.
+    assert!(matches!(
+        read(Some(cursor_at(indices[4])), from, to, 10, allowance(100)).await,
+        Err(WorkerExecutorError::InvalidRequest { .. })
+    ));
+    // A cursor at `to` reads the last entry of the range, and the range ends.
+    let last = read(Some(cursor_at(to)), from, to, 10, allowance(100))
+        .await
+        .unwrap();
+    assert_eq!(page_indices(&last.entries), vec![(to, true)]);
+    assert_eq!(last.next, None);
+
+    // A range of one entry gives that entry, and the range ends.
+    let single = read(None, from, from, 10, allowance(100)).await.unwrap();
+    assert_eq!(page_indices(&single.entries), vec![(from, true)]);
+    assert_eq!(single.next, None);
+
+    // A range from index 0 starts at index 1.
+    let from_zero = read(None, OplogIndex::NONE, indices[1], 10, allowance(100))
+        .await
+        .unwrap();
+    assert_eq!(
+        page_indices(&from_zero.entries),
+        indices[..2]
+            .iter()
+            .map(|index| (*index, true))
+            .collect::<Vec<_>>()
+    );
+
+    // A range whose end is after the last entry ends at the last entry.
+    let past_end = OplogIndex::from_u64(indices[11].as_u64() + 5);
+    let tail = read(None, indices[9], past_end, 10, allowance(100))
+        .await
+        .unwrap();
+    assert_eq!(
+        page_indices(&tail.entries),
+        indices[9..]
+            .iter()
+            .map(|index| (*index, true))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(tail.next, None);
+
+    // The allowance runs out exactly at the end of the revision lookup: no entry, and a cursor at
+    // `from`, so the caller can continue with a new allowance.
+    let spent = read(None, from, to, 10, allowance(charged_before))
+        .await
+        .unwrap();
+    assert!(spent.entries.is_empty());
+    assert!(spent.scan.exhausted);
+    assert_eq!(
+        spent.next.map(|cursor| cursor.next_oplog_index),
+        Some(from.as_u64())
+    );
+
+    // A page of no entries reads no entry.
+    let none = read(None, from, to, 0, allowance(100)).await.unwrap();
+    assert!(none.entries.is_empty(), "{:?}", none.entries);
+    assert_eq!(none.scan.charged_entries, charged_before);
 }
 
 #[test]
@@ -4624,8 +4689,37 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         )
         .await
         .err(),
-        Some(range_expired),
+        Some(range_expired.clone()),
         "a cursor below the start is expired"
+    );
+    // A `from` below the start is expired before the revision lookup, also when the allowance
+    // runs out in the lookup.
+    assert_eq!(
+        get_public_oplog_range_page(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            retention,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            None,
+            OplogIndex::from_u64(3),
+            OplogIndex::from_u64(5),
+            PublicOplogPageLimits {
+                count: 10,
+                max_bytes: 1_000_000,
+                max_entry_bytes: 1_000_000,
+            },
+            OplogScanAllowance {
+                entries: 1,
+                millis: 600_000,
+            },
+        )
+        .await
+        .err(),
+        Some(range_expired)
     );
 }
 

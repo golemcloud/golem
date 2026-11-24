@@ -707,6 +707,88 @@ mod tests {
         ));
     }
 
+    /// The revert walk counts the invocations back from the last index. It stops at the retained
+    /// start, so an invocation below the start does not count.
+    #[test]
+    async fn a_revert_walk_counts_the_invocations_back_to_the_retained_start() {
+        use crate::services::golem_config::GolemConfig;
+        use crate::services::oplog::OplogService;
+        use crate::services::oplog::retention::test_oplog::{
+            RetainedOplog, invocation_started, jump,
+        };
+        use crate::services::shard::ShardServiceDefault;
+        use crate::services::worker::session_index_tests::UnusedComponentService;
+        use crate::services::worker::{DefaultWorkerService, WorkerService};
+        use futures::{StreamExt, TryStreamExt};
+        use golem_common::model::ShardEpoch;
+        use std::sync::Arc;
+
+        struct Deps {
+            worker_service: Arc<dyn WorkerService>,
+            oplog_service: Arc<dyn OplogService>,
+        }
+        impl HasWorkerService for Deps {
+            fn worker_service(&self) -> Arc<dyn WorkerService> {
+                self.worker_service.clone()
+            }
+        }
+        impl HasOplogService for Deps {
+            fn oplog_service(&self) -> Arc<dyn OplogService> {
+                self.oplog_service.clone()
+            }
+        }
+
+        let oplog = RetainedOplog::new().await;
+        let handle = oplog.create(oplog.create_entry(), ShardEpoch(1)).await;
+        futures::stream::iter([
+            invocation_started(),
+            jump(3),
+            jump(4),
+            invocation_started(),
+            jump(6),
+        ])
+        .then(|entry| handle.add(entry))
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+        handle.commit(CommitLevel::Always).await.unwrap();
+        let deps = Deps {
+            worker_service: Arc::new(DefaultWorkerService::new(
+                oplog.key_value_storage(),
+                Arc::new(ShardServiceDefault::new()),
+                oplog.service.clone(),
+                Arc::new(UnusedComponentService),
+                Arc::new(GolemConfig::default()),
+            )),
+            oplog_service: oplog.service.clone(),
+        };
+        let resolve = |number_of_invocations| {
+            Worker::<crate::workerctx::default::Context>::resolve_revert_last_invocations(
+                &deps,
+                &oplog.owned_agent_id,
+                number_of_invocations,
+            )
+        };
+
+        assert_eq!(
+            resolve(2).await.unwrap(),
+            ResolvedRevert {
+                last_oplog_index: OplogIndex::INITIAL,
+            }
+        );
+        oplog.advance(3).await;
+        assert_eq!(
+            resolve(1).await.unwrap(),
+            ResolvedRevert {
+                last_oplog_index: OplogIndex::from_u64(4),
+            }
+        );
+        assert_eq!(
+            resolve(2).await.unwrap_err(),
+            WorkerExecutorError::invalid_request("Could not find 2 invocations to revert")
+        );
+    }
+
     #[test]
     fn automatic_update_duplicates_are_kind_scoped() {
         let target_revision = ComponentRevision::new(3).unwrap();

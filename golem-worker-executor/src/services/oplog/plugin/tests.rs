@@ -1172,6 +1172,76 @@ async fn active_plugin_receives_buffered_entries() {
     assert_eq!(sends[0].entry_count, 2, "Batch should contain 2 entries");
 }
 
+/// A plugin that confirmed no entry gets its first batch from the retained start of the oplog,
+/// not from index 1, which the oplog no longer keeps.
+#[test]
+async fn a_first_batch_starts_at_the_retained_start() {
+    use crate::services::oplog::retention::RetentionOplog;
+    use crate::services::oplog::retention::test_oplog::at;
+    use futures::{StreamExt, TryStreamExt};
+
+    let grant_id = EnvironmentPluginGrantId::new();
+    let (metadata, status_lock) = test_worker_metadata(HashSet::from([grant_id]));
+    let recording_plugin = Arc::new(RecordingOplogProcessorPlugin::new());
+    let components: Arc<dyn ComponentService> = Arc::new(
+        FakeComponentService::with_one_oplog_processor_plugin(grant_id),
+    );
+    let stored: Arc<dyn Oplog> = Arc::new(InMemoryOplog::new());
+    futures::stream::iter(1..=5)
+        .then(|delta| {
+            stored.add(OplogEntry::GrowMemory {
+                timestamp: Timestamp::now_utc(),
+                delta,
+            })
+        })
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    let inner: Arc<dyn Oplog> = Arc::new(RetentionOplog::new(stored, metadata.agent_id, at(3)));
+
+    let mut state = ForwardingOplogState {
+        forwarding_retired: CancellationToken::new(),
+        forwarding_activity: ActivityGate::new(),
+        pending_checkpoint_activity: None,
+        buffer: None,
+        buffer_start_idx: OplogIndex::from_u64(6),
+        commit_count: 0,
+        last_send: Instant::now(),
+        oplog_plugins: recording_plugin.clone(),
+        initial_worker_metadata: metadata,
+        last_known_status: status_lock,
+        last_oplog_idx: OplogIndex::from_u64(5),
+        last_committed_idx: OplogIndex::from_u64(5),
+        components,
+        inner,
+        plugin_state: HashMap::from([(
+            grant_id,
+            LivePluginState {
+                target_agent_id: None,
+                confirmed_up_to: OplogIndex::NONE,
+                sending_up_to: OplogIndex::NONE,
+                send_in_progress: false,
+                last_batch_start: OplogIndex::NONE,
+                delivery: None,
+            },
+        )]),
+        pending_direct_commits: BTreeMap::new(),
+        worker_event_service: None,
+        monitor_tasks: Vec::new(),
+    };
+
+    state.try_flush().await;
+
+    let sends = recording_plugin.sends().await;
+    assert_eq!(
+        sends
+            .iter()
+            .map(|send| (send.initial_oplog_index, send.entry_count))
+            .collect::<Vec<_>>(),
+        vec![(OplogIndex::from_u64(3), 3)]
+    );
+}
+
 #[test]
 async fn plugin_monitor_looks_up_status_as_original_worker_owner() {
     let grant_id = EnvironmentPluginGrantId::new();

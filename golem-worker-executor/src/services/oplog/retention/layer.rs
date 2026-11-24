@@ -862,4 +862,248 @@ mod tests {
         assert_eq!(keys(service(4).await.unwrap()), vec![4]);
         assert_eq!(keys(service(3).await.unwrap()), Vec::<u64>::new());
     }
+
+    /// Every call of an open oplog that the layer does not check reaches the inner oplog with the
+    /// same arguments, and its answer comes back unchanged.
+    #[test]
+    async fn the_retained_oplog_forwards_every_other_call_to_the_inner_oplog() {
+        use crate::services::oplog::retention::test_oplog::{RecordingOplog, at};
+
+        let inner = Arc::new(RecordingOplog::default());
+        let handle = RetentionOplog::new(inner.clone(), AgentId::from_parts(7, 1), at(4));
+        let payload_id = PayloadId(uuid::Uuid::from_u128(9));
+
+        assert!(!handle.is_retired());
+        handle.retire();
+        assert!(inner.is_retired());
+        assert!(handle.is_retired());
+        assert!(std::ptr::eq(handle.task_owner().unwrap(), &inner.tasks));
+        assert_eq!(
+            handle
+                .add_durable_stream_batch(Box::new(|_| Vec::new()))
+                .await
+                .unwrap(),
+            vec![(idx(21), jump(21))]
+        );
+        assert_eq!(handle.try_drop_prefix(idx(6)).await, Ok(6));
+        assert_eq!(
+            handle.commit(CommitLevel::Always).await.unwrap(),
+            BTreeMap::from([(idx(8), jump(8))])
+        );
+        assert_eq!(handle.try_current_oplog_index().await, Ok(idx(12)));
+        assert_eq!(handle.last_added_non_hint_entry().await, Some(idx(11)));
+        assert!(
+            handle
+                .wait_for_replicas(2, Duration::from_secs(3))
+                .await
+                .unwrap()
+        );
+        assert!(
+            !handle
+                .wait_for_replicas(1, Duration::from_secs(3))
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            handle
+                .download_raw_payload(payload_id.clone(), vec![7, 8])
+                .await,
+            Ok(vec![7, 8])
+        );
+        assert_eq!(
+            handle
+                .download_raw_payload_classified(payload_id.clone(), vec![8, 7])
+                .await
+                .unwrap(),
+            vec![8, 7]
+        );
+        assert!(Arc::ptr_eq(
+            &handle.inner().unwrap(),
+            &(inner.clone() as Arc<dyn Oplog>)
+        ));
+
+        assert_eq!(
+            inner.take_calls(),
+            vec![
+                "retire".to_string(),
+                "add_durable_stream_batch(0)".to_string(),
+                "try_drop_prefix(6)".to_string(),
+                "commit(Always)".to_string(),
+                "try_current_oplog_index".to_string(),
+                "last_added_non_hint_entry".to_string(),
+                "wait_for_replicas(2, 3s)".to_string(),
+                "wait_for_replicas(1, 3s)".to_string(),
+                format!("download_raw_payload({payload_id:?}, [7, 8])"),
+                format!("download_raw_payload_classified({payload_id:?}, [8, 7])"),
+            ]
+        );
+    }
+
+    /// Every call of the service that the layer does not check reaches the inner service with
+    /// the same arguments, and its answer comes back unchanged. A read through the layer reads
+    /// the inner service after the check of the retained start, and a read below the start does
+    /// not reach the inner service.
+    #[test]
+    async fn the_retention_service_forwards_every_other_call_to_the_inner_service() {
+        use crate::services::oplog::StagePublication;
+        use crate::services::oplog::retention::advance_oplog_retention;
+        use crate::services::oplog::retention::test_oplog::RecordingOplogService;
+        use crate::services::stream_session_index::StreamSessionIndexService;
+        use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+
+        let owner = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 1));
+        let other = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 2));
+        let inner = Arc::new(RecordingOplogService::new(owner.clone()));
+        let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
+            Arc::new(InMemoryKeyValueStorage::new());
+        let service = RetentionOplogService::new(inner.clone(), key_value_storage.clone());
+        advance_oplog_retention(
+            key_value_storage.as_ref(),
+            &owner,
+            AgentMode::Durable,
+            idx(4),
+        )
+        .await
+        .unwrap();
+        let odd_stage = uuid::Uuid::from_u128(3);
+        let even_stage = uuid::Uuid::from_u128(4);
+        let payload_id = PayloadId(uuid::Uuid::from_u128(9));
+        let type_id = TypeId::try_from(3u32).unwrap();
+        let durable = AgentMode::Durable;
+        let ephemeral = AgentMode::Ephemeral;
+
+        let index = Arc::new(StreamSessionIndexService::new(
+            key_value_storage.clone(),
+            Arc::downgrade(&(inner.clone() as Arc<dyn OplogService>)),
+        ));
+        service.set_stream_session_index(index.clone());
+        assert!(Arc::ptr_eq(&inner.stream_session_index().unwrap(), &index));
+        assert!(Arc::ptr_eq(
+            &service.stream_session_index().unwrap(),
+            &index
+        ));
+        assert_eq!(
+            service.staged_exists(&owner, durable, odd_stage).await,
+            Ok(true)
+        );
+        assert_eq!(
+            service.staged_exists(&owner, durable, even_stage).await,
+            Ok(false)
+        );
+        assert_eq!(
+            service
+                .publish_staged(
+                    &owner,
+                    durable,
+                    StagePublication::for_tests(odd_stage),
+                    idx(6)
+                )
+                .await,
+            Ok(true)
+        );
+        assert_eq!(
+            service
+                .publish_staged(
+                    &owner,
+                    ephemeral,
+                    StagePublication::for_tests(even_stage),
+                    idx(3)
+                )
+                .await,
+            Ok(false)
+        );
+        assert_eq!(
+            service.discard_staged(&owner, durable, odd_stage).await,
+            Err(format!("no stage {odd_stage}"))
+        );
+        assert_eq!(
+            service.try_get_last_index(&owner, durable).await,
+            Ok(idx(13))
+        );
+        service
+            .assert_owning_epoch(&owner, durable, ShardEpoch(5))
+            .await
+            .unwrap();
+        let fenced = service
+            .assert_owning_epoch(&owner, durable, ShardEpoch(4))
+            .await;
+        assert!(
+            matches!(&fenced, Err(OplogError::Fenced(fence)) if fence.expected_epoch == ShardEpoch(4)),
+            "{fenced:?}"
+        );
+        assert_eq!(
+            service
+                .read_source(&owner, durable, idx(5), 2)
+                .await
+                .unwrap(),
+            BTreeMap::from([(idx(5), jump(5)), (idx(6), jump(6))])
+        );
+        assert_eq!(
+            service
+                .read_source(&owner, durable, idx(2), 3)
+                .await
+                .unwrap_err()
+                .error,
+            expired(4)
+        );
+        assert_eq!(service.try_exists(&owner, durable).await, Ok(true));
+        assert_eq!(service.try_exists(&owner, ephemeral).await, Ok(false));
+        assert_eq!(
+            service
+                .scan_for_type(
+                    &other.environment_id,
+                    type_id,
+                    Some(durable),
+                    ScanCursor::new("from".to_string()),
+                    17
+                )
+                .await
+                .unwrap(),
+            ScanPage {
+                cursor: ScanCursor::new("after 3".to_string()),
+                agent_ids: vec![owner.clone()],
+                examined_keys: 17,
+            }
+        );
+        assert_eq!(
+            service
+                .download_raw_payload(&owner, durable, payload_id.clone(), vec![7, 8])
+                .await,
+            Ok(vec![7, 8])
+        );
+        assert_eq!(
+            service
+                .download_raw_payload_classified(&other, ephemeral, payload_id.clone(), vec![8, 7])
+                .await
+                .unwrap(),
+            vec![8, 7]
+        );
+
+        assert_eq!(
+            inner.take_calls(),
+            vec![
+                "set_stream_session_index".to_string(),
+                format!("staged_exists({owner}, Durable, {odd_stage})"),
+                format!("staged_exists({owner}, Durable, {even_stage})"),
+                format!("publish_staged({owner}, Durable, {odd_stage}, 6)"),
+                format!("publish_staged({owner}, Ephemeral, {even_stage}, 3)"),
+                format!("discard_staged({owner}, Durable, {odd_stage})"),
+                format!("try_get_last_index({owner}, Durable)"),
+                format!("assert_owning_epoch({owner}, Durable, {:?})", ShardEpoch(5)),
+                format!("assert_owning_epoch({owner}, Durable, {:?})", ShardEpoch(4)),
+                format!("read_source({owner}, Durable, 5, 2)"),
+                format!("try_exists({owner}, Durable)"),
+                format!("try_exists({owner}, Ephemeral)"),
+                format!(
+                    "scan_for_type({:?}, 3, Some(Durable), {:?}, 17)",
+                    other.environment_id,
+                    ScanCursor::new("from".to_string())
+                ),
+                format!("download_raw_payload({owner}, Durable, {payload_id:?}, [7, 8])"),
+                format!(
+                    "download_raw_payload_classified({other}, Ephemeral, {payload_id:?}, [8, 7])"
+                ),
+            ]
+        );
+    }
 }
