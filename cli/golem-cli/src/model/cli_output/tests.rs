@@ -989,6 +989,7 @@ fn agent_get_renders_the_failure_class_and_divergence_of_a_failed_update() {
                 }),
                 actual: ReplayStep::end_of_history(),
                 mismatched: vec![StartIdentityField::FunctionName],
+                replay_start: None,
             })),
         },
     )];
@@ -3459,6 +3460,10 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                     golem_common::model::oplog::StartIdentityField::RequestPresence,
                     golem_common::model::oplog::StartIdentityField::Parent,
                 ],
+                replay_start: Some(golem_common::model::oplog::ReplayStart::snapshot(
+                    OplogIndex::from_u64(19),
+                    vec![OplogIndex::from_u64(23)],
+                )),
             })),
         }),
         PublicOplogEntry::FailedUpdate(FailedUpdateParams {
@@ -3473,6 +3478,10 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                 expected: golem_common::model::oplog::ReplayStep::invocation_end(),
                 actual: golem_common::model::oplog::ReplayStep::described("a pending invocation"),
                 mismatched: vec![],
+                replay_start: Some(golem_common::model::oplog::ReplayStart::full_replay(vec![
+                    OplogIndex::from_u64(17),
+                    OplogIndex::from_u64(19),
+                ])),
             })),
         }),
         PublicOplogEntry::GrowMemory(GrowMemoryParams {

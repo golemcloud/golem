@@ -4355,6 +4355,9 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
                 ),
                 actual: golem_common::model::oplog::ReplayStep::described("MARKER"),
                 mismatched: vec![],
+                replay_start: Some(golem_common::model::oplog::ReplayStart::full_replay(vec![
+                    OplogIndex::from_u64(19),
+                ])),
             })),
         }),
         PublicOplogEntry::GrowMemory(GrowMemoryParams {

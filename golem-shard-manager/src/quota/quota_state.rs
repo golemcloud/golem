@@ -84,6 +84,11 @@ pub(super) struct QuotaState {
     pub definition: ResourceDefinition,
     pub last_refreshed: DateTime<Utc>,
     pub remaining: u64,
+    /// Budget that a Capacity or Concurrency resource still owes because its limit shrank below
+    /// what the leases already used or hold. Lease returns pay it before they add to
+    /// `remaining`, so a shrink and a later growth give back no spent budget, and returned leases
+    /// never lift the pool above the limit. It is 0 for Rate.
+    pub deficit: u64,
     pub last_refilled: DateTime<Utc>,
     pub leases: HashMap<Pod, PodLease>,
 }
@@ -96,6 +101,7 @@ impl QuotaState {
             definition,
             last_refreshed: now,
             remaining,
+            deficit: 0,
             last_refilled: now,
             leases: HashMap::new(),
         }
@@ -104,6 +110,7 @@ impl QuotaState {
     pub fn from_persisted(
         definition: ResourceDefinition,
         remaining: u64,
+        deficit: u64,
         last_refilled: DateTime<Utc>,
         last_refreshed: DateTime<Utc>,
         leases: HashMap<Pod, PodLease>,
@@ -112,6 +119,7 @@ impl QuotaState {
             definition,
             last_refreshed,
             remaining,
+            deficit,
             last_refilled,
             leases,
         }
@@ -128,9 +136,25 @@ impl QuotaState {
     pub fn update_definition(&mut self, definition: ResourceDefinition) {
         debug_assert_eq!(self.definition.id, definition.id);
         debug_assert_eq!(self.definition.environment_id, definition.environment_id);
-        let new_pool = Self::initial_pool(&definition.limit);
         let total_allocated: u64 = self.leases.values().map(|l| l.allocated).sum();
-        self.remaining = new_pool.saturating_sub(total_allocated);
+        // Spent budget stays spent: a refresh, of a changed or an unchanged definition, never
+        // refills what the leases already used.
+        (self.remaining, self.deficit) = match (&self.definition.limit, &definition.limit) {
+            (ResourceLimit::Rate(_), ResourceLimit::Rate(new)) => (
+                self.remaining.min(new.max.saturating_sub(total_allocated)),
+                0,
+            ),
+            // A shrink below the used budget turns the rest into a deficit instead of losing it.
+            (ResourceLimit::Capacity(old), ResourceLimit::Capacity(new)) => Self::split_pool(
+                i128::from(self.remaining) - i128::from(self.deficit) + i128::from(new.value)
+                    - i128::from(old.value),
+            ),
+            // The leases return every slot they hold, so a shrink below them is owed until they do.
+            (ResourceLimit::Concurrency(_), ResourceLimit::Concurrency(new)) => {
+                Self::split_pool(i128::from(new.value) - i128::from(total_allocated))
+            }
+            (_, new) => (Self::initial_pool(new).saturating_sub(total_allocated), 0),
+        };
         self.definition = definition;
         self.last_refreshed = Utc::now();
     }
@@ -159,7 +183,7 @@ impl QuotaState {
                     ResourceLimit::Concurrency(_) => lease.allocated,
                     ResourceLimit::Rate(_) => 0,
                 };
-                self.remaining += returned;
+                self.return_to_pool(returned);
                 debug!(
                     pod = %pod,
                     allocated = lease.allocated,
@@ -181,11 +205,14 @@ impl QuotaState {
         let elapsed = elapsed_since(self.last_refilled);
         let full_periods = elapsed.as_nanos() / period.as_nanos();
 
+        // The cap also applies without a refill: unused budget that a lease granted under a
+        // larger `max` returns must not lift the pool above the current `max`.
+        let total_allocated: u64 = self.leases.values().map(|l| l.allocated).sum();
+        let cap = rate.max.saturating_sub(total_allocated);
+        let refill = (rate.value as u128 * full_periods).min(rate.max as u128) as u64;
+        self.remaining = (self.remaining + refill).min(cap);
+
         if full_periods > 0 {
-            let refill = (rate.value as u128 * full_periods).min(rate.max as u128) as u64;
-            let total_allocated: u64 = self.leases.values().map(|l| l.allocated).sum();
-            let cap = rate.max.saturating_sub(total_allocated);
-            self.remaining = (self.remaining + refill).min(cap);
             let advance_nanos = period.as_nanos() * full_periods;
             self.last_refilled += chrono::Duration::nanoseconds(advance_nanos as i64);
         }
@@ -277,7 +304,23 @@ impl QuotaState {
     /// lease allocations.
     pub fn total_available_amount(&self) -> u64 {
         let total_allocated: u64 = self.leases.values().map(|l| l.allocated).sum();
-        self.remaining + total_allocated
+        (self.remaining + total_allocated).saturating_sub(self.deficit)
+    }
+
+    /// Splits a pool that may be negative into `remaining` and `deficit`.
+    fn split_pool(pool: i128) -> (u64, u64) {
+        if pool >= 0 {
+            (u64::try_from(pool).unwrap_or(u64::MAX), 0)
+        } else {
+            (0, u64::try_from(-pool).unwrap_or(u64::MAX))
+        }
+    }
+
+    /// Adds budget that a lease returns to the pool, after it pays the deficit.
+    fn return_to_pool(&mut self, returned: u64) {
+        let paid = returned.min(self.deficit);
+        self.deficit -= paid;
+        self.remaining = self.remaining.saturating_add(returned - paid);
     }
 
     pub fn acquire_lease(
@@ -288,13 +331,14 @@ impl QuotaState {
     ) -> Result<AcquireLeaseResult, QuotaError> {
         let expired = self.housekeep();
 
-        if let Some(existing) = self.leases.get(&pod) {
+        if let Some(existing) = self.leases.get_mut(&pod) {
             let returned = match &self.definition.limit {
                 ResourceLimit::Capacity(_) => 0,
                 ResourceLimit::Concurrency(_) => existing.allocated,
                 ResourceLimit::Rate(_) => 0,
             };
-            self.remaining += returned;
+            existing.allocated = 0;
+            self.return_to_pool(returned);
         }
 
         let now = Utc::now();
@@ -356,12 +400,11 @@ impl QuotaState {
         let expires_at = now + lease_duration;
 
         let returned = unused.min(pod_lease.allocated);
-        self.remaining = self.remaining.saturating_add(returned);
-
         pod_lease.allocated = 0;
         pod_lease.granted_at = now;
         pod_lease.expires_at = expires_at;
         pod_lease.pending_reservations = pending_reservations;
+        self.return_to_pool(returned);
 
         let expired = self.housekeep();
 
@@ -417,7 +460,7 @@ impl QuotaState {
             ResourceLimit::Concurrency(_) => pod_lease.allocated,
             ResourceLimit::Rate(_) => unused.min(pod_lease.allocated),
         };
-        self.remaining += returned;
+        self.return_to_pool(returned);
         self.leases.remove(pod);
         Ok(())
     }
@@ -427,6 +470,7 @@ impl QuotaState {
             resource_definition_id: self.definition.id.0,
             definition: Blob::new(self.definition.clone()),
             remaining: self.remaining.into(),
+            deficit: self.deficit.into(),
             last_refilled_at: self.last_refilled.into(),
             last_refreshed_at: self.last_refreshed.into(),
         }

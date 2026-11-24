@@ -83,6 +83,7 @@ impl CursorTx<'_> {
                     expected: crate::durable_host::replay_state::claims::recorded_step(entry),
                     actual: ReplayStep::described(divergence),
                     mismatched: Vec::new(),
+                    replay_start: None,
                 })
             })
     }

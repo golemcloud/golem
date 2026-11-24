@@ -14,8 +14,8 @@
 
 use crate::base_model::OplogIndex;
 use crate::base_model::oplog::{
-    ReplayDivergence, ReplayHostCall, ReplayStep, ReplayStepDescription, StartIdentityField,
-    UpdateFailureClass,
+    ReplayDivergence, ReplayFullStart, ReplayHostCall, ReplaySnapshotStart, ReplayStart,
+    ReplayStep, ReplayStepDescription, StartIdentityField, UpdateFailureClass,
 };
 use golem_api_grpc::proto::golem::worker as proto;
 use golem_schema::Empty;
@@ -33,6 +33,7 @@ impl TryFrom<ReplayDivergence> for proto::ReplayDivergence {
                 .into_iter()
                 .map(|field| proto::StartIdentityField::from(field) as i32)
                 .collect(),
+            replay_start: value.replay_start.map(Into::into),
         })
     }
 }
@@ -70,6 +71,7 @@ impl ReplayDivergence {
                 .into_iter()
                 .map(|field| proto::StartIdentityField::from(field) as i32)
                 .collect(),
+            replay_start: self.replay_start.map(Into::into),
         }
     }
 }
@@ -91,6 +93,56 @@ impl TryFrom<proto::ReplayDivergence> for ReplayDivergence {
                         .map_err(|error| error.to_string())
                 })
                 .collect::<Result<_, _>>()?,
+            replay_start: value.replay_start.map(TryInto::try_into).transpose()?,
+        })
+    }
+}
+
+impl From<ReplayStart> for proto::ReplayStart {
+    fn from(value: ReplayStart) -> Self {
+        use proto::replay_start::Start;
+        let start = match value {
+            ReplayStart::Snapshot(start) => Start::Snapshot(proto::ReplaySnapshotStart {
+                snapshot_index: start.snapshot_index.into(),
+                rejected_snapshots: start
+                    .rejected_snapshots
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            }),
+            ReplayStart::FullReplay(start) => Start::FullReplay(proto::ReplayFullStart {
+                rejected_snapshots: start
+                    .rejected_snapshots
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            }),
+        };
+        Self { start: Some(start) }
+    }
+}
+
+impl TryFrom<proto::ReplayStart> for ReplayStart {
+    type Error = String;
+
+    fn try_from(value: proto::ReplayStart) -> Result<Self, Self::Error> {
+        use proto::replay_start::Start;
+        Ok(match value.start.ok_or("Missing field: start")? {
+            Start::Snapshot(start) => ReplayStart::Snapshot(ReplaySnapshotStart {
+                snapshot_index: OplogIndex::from_u64(start.snapshot_index),
+                rejected_snapshots: start
+                    .rejected_snapshots
+                    .into_iter()
+                    .map(OplogIndex::from_u64)
+                    .collect(),
+            }),
+            Start::FullReplay(start) => ReplayStart::FullReplay(ReplayFullStart {
+                rejected_snapshots: start
+                    .rejected_snapshots
+                    .into_iter()
+                    .map(OplogIndex::from_u64)
+                    .collect(),
+            }),
         })
     }
 }
