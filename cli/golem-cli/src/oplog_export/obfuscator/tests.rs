@@ -4164,6 +4164,7 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
         }),
         PublicAgentInvocation::ManualUpdate(ManualUpdateParameters {
             target_revision: revision(5),
+            requester: marker_account_caller(),
         }),
     ];
     let results = vec![
@@ -4582,6 +4583,7 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
             target_revision: revision(2),
             update_attempt_index: OplogIndex::from_u64(17 + n as u64),
             description,
+            requester: marker_user_caller(),
         }));
     }
     for event in card_events {
@@ -4850,6 +4852,53 @@ fn every_entry_kind_keeps_metadata() {
         serde_json::to_value(golem_common::model::oplog::PublicEntityCallMode::Synchronous)
             .unwrap();
     assert!(json(&attribution).contains(&call_mode.to_string()));
+}
+
+/// The requester of an update is exported as a caller: kinds kept, pairs as tokens, no claims.
+#[test]
+fn update_requester_keeps_kinds_and_turns_pairs_into_tokens() {
+    let entries = every_entry_kind();
+    let pending_update = entries
+        .iter()
+        .find(|e| e.entry.entry_type() == "PendingUpdate")
+        .expect("a pending update");
+    let manual_update = entries
+        .iter()
+        .find(|e| {
+            matches!(
+                &e.entry,
+                PublicOplogEntry::PendingAgentInvocation(params)
+                    if matches!(
+                        params.invocation,
+                        golem_common::model::oplog::PublicAgentInvocation::ManualUpdate(_)
+                    )
+            )
+        })
+        .expect("a queued manual update");
+
+    let out = rendered(KeepFlags::default(), pending_update, None);
+    let report = json(&out.entry);
+    assert!(!report.contains("claims"), "{report}");
+    let requester = field(&out.entry, "requester");
+    let original = as_case(record_field(requester, "original"));
+    let immediate = as_case(record_field(requester, "immediate"));
+    assert_eq!(original.case.as_deref(), Some("user"));
+    assert_eq!(immediate.case.as_deref(), Some("agent"));
+    let pair = record_field(original.payload.as_deref().unwrap(), "pair");
+    assert!(
+        json(record_field(pair, "subject")).contains("str:"),
+        "{report}"
+    );
+
+    let out = rendered(KeepFlags::default(), manual_update, None);
+    let invocation = as_case(field(&out.entry, "invocation"));
+    let requester = record_field(invocation.payload.as_deref().unwrap(), "requester");
+    let original = as_case(record_field(requester, "original"));
+    assert_eq!(original.case.as_deref(), Some("account"));
+    assert_eq!(
+        record_field(original.payload.as_deref().unwrap(), "authentication"),
+        &text("apiToken".to_string())
+    );
 }
 
 #[test]

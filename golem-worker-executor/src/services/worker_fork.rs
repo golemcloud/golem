@@ -1701,6 +1701,7 @@ mod tests {
                 target_revision: revision(target),
             },
             None,
+            Box::new(golem_common::model::caller::Caller::anonymous()),
         )
     }
 
@@ -1721,6 +1722,7 @@ mod tests {
                 snapshot_bootstrap: None,
             },
             Some(index(admission)),
+            Box::new(golem_common::model::caller::Caller::anonymous()),
         )
     }
 
@@ -1733,6 +1735,7 @@ mod tests {
                 filesystem_snapshot: name,
             },
             None,
+            Box::new(golem_common::model::caller::Caller::anonymous()),
         )
     }
 
@@ -1744,7 +1747,9 @@ mod tests {
             operation: Box::new(InvocationRequestOperation::ManualUpdate {
                 target_revision: revision(target),
             }),
-            payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate)),
+            payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate {
+                requester: golem_common::model::caller::Caller::anonymous(),
+            })),
             trace_id: TraceId::generate(),
             trace_states: Vec::new(),
             invocation_context: Vec::new(),
@@ -1941,6 +1946,7 @@ mod tests {
                     filesystem_snapshot: None,
                 },
                 Some(index(4)),
+                Box::new(golem_common::model::caller::Caller::anonymous()),
             ),
             invocation,
             succeeded(3),
@@ -2008,7 +2014,9 @@ mod tests {
             }),
             payload: OplogPayload::SerializedInline {
                 bytes: golem_common::serialization::serialize(
-                    &StoredAgentInvocationPayload::ManualUpdate,
+                    &StoredAgentInvocationPayload::ManualUpdate {
+                        requester: golem_common::model::caller::Caller::anonymous(),
+                    },
                 )
                 .unwrap(),
                 cached: None,
@@ -2057,6 +2065,7 @@ mod tests {
                         filesystem_snapshot: None,
                     },
                     Some(index(2)),
+                    Box::new(golem_common::model::caller::Caller::anonymous()),
                 ),
             ],
             &[],

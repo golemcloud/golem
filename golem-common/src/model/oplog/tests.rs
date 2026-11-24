@@ -1992,6 +1992,7 @@ fn pending_update_serialization_poem_serde_equivalence_1() {
             mime_type: "application/octet-stream".to_string(),
             filesystem_snapshot: None,
         }),
+        requester: public_sample_caller(),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -2007,6 +2008,7 @@ fn pending_update_serialization_poem_serde_equivalence_2() {
         target_revision: ComponentRevision::new(1).unwrap(),
         update_attempt_index: OplogIndex::from_u64(7),
         description: PublicUpdateDescription::Automatic(Empty {}),
+        requester: public_sample_caller(),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -2264,6 +2266,7 @@ fn request_entries_keep_their_operation_outside_the_payload() {
     let payloads = vec![
         AgentInvocationPayload::ManualUpdate {
             target_revision: ComponentRevision::new(7).unwrap(),
+            requester: caller.clone(),
         },
         AgentInvocationPayload::AgentInitialization {
             input: SchemaValue::Record { fields: vec![] },
@@ -2837,6 +2840,7 @@ fn raw_bootstrap_ranges_roundtrip_through_binary_and_protobuf() {
                 snapshot_bootstrap: bootstrap,
             },
             update_attempt_index: Some(OplogIndex::from_u64(10)),
+            requester: Box::new(sample_caller()),
         },
     ];
 
@@ -2865,6 +2869,7 @@ fn raw_snapshot_based_update_with_filesystem_snapshot_roundtrips() {
             filesystem_snapshot: Some(name.clone()),
         },
         update_attempt_index: None,
+        requester: Box::new(Caller::anonymous()),
     };
 
     fn update_snapshot_name(entry: &OplogEntry) -> Option<FilesystemSnapshotName> {
@@ -3039,6 +3044,7 @@ fn public_snapshot_based_update_with_filesystem_snapshot_roundtrips() {
             mime_type: "application/octet-stream".to_string(),
             filesystem_snapshot: Some(FilesystemSnapshotName::update().into()),
         }),
+        requester: public_sample_caller(),
     });
 
     let serialized = entry.to_json_string();
@@ -3942,6 +3948,7 @@ fn a_filesystem_snapshot_name_keeps_its_serialized_bytes() {
             filesystem_snapshot: Some(name.clone()),
         },
         update_attempt_index: None,
+        requester: Box::new(Caller::anonymous()),
     };
     let written = [
         hex(&crate::serialization::serialize(&name).unwrap()),
@@ -4386,4 +4393,204 @@ fn oplog_include_claims_reads_and_writes_as_claims() {
         serde_json::from_str::<OplogInclude>("\"claims\"").unwrap(),
         OplogInclude::Claims
     );
+}
+
+fn requester_of(entry: &OplogEntry) -> &Caller {
+    match entry {
+        OplogEntry::PendingUpdate { requester, .. } => requester.as_ref(),
+        other => panic!("expected a pending update, got {other:?}"),
+    }
+}
+
+/// The requester of a raw `PendingUpdate` keeps both roles, the tokens and the exact claims
+/// through the binary codec and the raw protobuf. Its public form keeps both roles through JSON,
+/// poem and the public protobuf, with claims only when they are shown.
+#[test]
+fn pending_update_round_trips_the_requester() {
+    use golem_api_grpc::proto::golem::worker::{
+        OplogEntry as PublicProtoEntry, RawOplogEntry, oplog_entry, raw_oplog_entry,
+    };
+
+    let requester = sample_caller();
+    let entry = OplogEntry::PendingUpdate {
+        timestamp: Timestamp::now_utc().rounded(),
+        description: UpdateDescription::Automatic {
+            target_revision: ComponentRevision::new(2).unwrap(),
+        },
+        update_attempt_index: Some(OplogIndex::from_u64(4)),
+        requester: Box::new(requester.clone()),
+    };
+
+    let bytes = crate::serialization::serialize(&entry).unwrap();
+    let binary = crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap();
+    assert_eq!(requester_of(&binary), &requester);
+    assert_eq!(
+        original_claims_json(requester_of(&binary)),
+        original_claims_json(&requester)
+    );
+
+    let proto: RawOplogEntry = entry.clone().try_into().unwrap();
+    let decoded = OplogEntry::try_from(proto.clone()).unwrap();
+    assert_eq!(requester_of(&decoded), &requester);
+    assert_eq!(
+        original_claims_json(requester_of(&decoded)),
+        original_claims_json(&requester)
+    );
+    assert_eq!(decoded, entry);
+
+    // A raw protobuf entry without a requester does not decode.
+    let mut without = proto;
+    match without.entry.as_mut() {
+        Some(raw_oplog_entry::Entry::PendingUpdate(params)) => params.requester = None,
+        other => panic!("expected a raw pending update, got {other:?}"),
+    }
+    assert!(OplogEntry::try_from(without).is_err());
+
+    for claims in [ClaimVisibility::Hidden, ClaimVisibility::Shown] {
+        let public_requester = PublicCaller::new(&requester, claims);
+        assert_eq!(
+            public_requester.original.claims().is_some(),
+            claims.is_shown()
+        );
+        let public = PublicOplogEntry::PendingUpdate(PendingUpdateParams {
+            timestamp: Timestamp::now_utc().rounded(),
+            target_revision: ComponentRevision::new(2).unwrap(),
+            description: PublicUpdateDescription::Automatic(Empty {}),
+            update_attempt_index: OplogIndex::from_u64(4),
+            requester: public_requester.clone(),
+        });
+
+        // The poem JSON form writes the claims through a `serde_json::Value`, which does not keep
+        // their text. The oplog endpoints write with serde, so the poem form reads back only
+        // without claims.
+        if !claims.is_shown() {
+            assert_eq!(
+                serde_json::from_str::<PublicOplogEntry>(&public.to_json_string()).unwrap(),
+                public
+            );
+        }
+        assert_eq!(
+            serde_json::from_str::<PublicOplogEntry>(&serde_json::to_string(&public).unwrap())
+                .unwrap(),
+            public
+        );
+
+        let proto: PublicProtoEntry = public.clone().try_into().unwrap();
+        assert_eq!(PublicOplogEntry::try_from(proto.clone()).unwrap(), public);
+
+        let mut without = proto;
+        match without.entry.as_mut() {
+            Some(oplog_entry::Entry::PendingUpdate(params)) => params.requester = None,
+            other => panic!("expected a public pending update, got {other:?}"),
+        }
+        assert!(PublicOplogEntry::try_from(without).is_err());
+    }
+}
+
+/// The public form of a queued manual update keeps its requester through JSON and the public
+/// protobuf. The requester is not the invocation's caller.
+#[test]
+fn public_manual_update_round_trips_the_requester() {
+    use golem_api_grpc::proto::golem::worker::public_agent_invocation::Invocation;
+
+    for requester in public_callers_of_every_kind() {
+        let invocation =
+            PublicAgentInvocation::ManualUpdate(crate::model::oplog::ManualUpdateParameters {
+                target_revision: ComponentRevision::new(3).unwrap(),
+                requester: requester.clone(),
+            });
+        assert_eq!(invocation.caller(), None);
+
+        let entry = PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
+            timestamp: Timestamp::now_utc().rounded(),
+            not_before: None,
+            invocation: invocation.clone(),
+        });
+        assert_eq!(
+            serde_json::from_str::<PublicOplogEntry>(&serde_json::to_string(&entry).unwrap())
+                .unwrap(),
+            entry
+        );
+
+        let proto: golem_api_grpc::proto::golem::worker::PublicAgentInvocation =
+            invocation.clone().try_into().unwrap();
+        assert_eq!(
+            PublicAgentInvocation::try_from(proto.clone()).unwrap(),
+            invocation
+        );
+
+        let mut without = proto;
+        match without.invocation.as_mut() {
+            Some(Invocation::ManualUpdate(params)) => params.requester = None,
+            other => panic!("expected a manual update, got {other:?}"),
+        }
+        assert!(PublicAgentInvocation::try_from(without).is_err());
+    }
+}
+
+/// An oplog search finds an update by the kind and the pair of either role of its requester,
+/// under `requester`, `original` and `immediate`, never by its claims and never as a caller.
+#[test]
+fn oplog_search_matches_the_requester_pair_but_never_claims() {
+    let bob = Principal::User(UserPrincipal {
+        pair: Pair::new("http://test-idp.com", "bob"),
+        claims: Claims::from_json(
+            r#"{"sub":"bob","email":"secretmarker@mail.example","groups":["auditors"]}"#
+                .to_string(),
+        )
+        .unwrap(),
+        authenticated_at: Timestamp::from(1_000),
+    });
+    for claims in [ClaimVisibility::Hidden, ClaimVisibility::Shown] {
+        let requester = PublicCaller::new(&Caller::entry(bob.clone()), claims);
+        let pending_update = PublicOplogEntry::PendingUpdate(PendingUpdateParams {
+            timestamp: Timestamp::from(2_000),
+            target_revision: ComponentRevision::new(3).unwrap(),
+            description: PublicUpdateDescription::Automatic(Empty {}),
+            update_attempt_index: OplogIndex::from_u64(4),
+            requester: requester.clone(),
+        });
+        let queued_manual_update =
+            PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
+                timestamp: Timestamp::from(2_000),
+                not_before: None,
+                invocation: PublicAgentInvocation::ManualUpdate(
+                    crate::model::oplog::ManualUpdateParameters {
+                        target_revision: ComponentRevision::new(3).unwrap(),
+                        requester,
+                    },
+                ),
+            });
+        for entry in [&pending_update, &queued_manual_update] {
+            for query in [
+                "bob",
+                "idp",
+                "user",
+                "requester:bob",
+                "original:bob",
+                "immediate:user",
+                "requester.original:bob",
+                "requester.immediate:idp",
+            ] {
+                assert!(
+                    entry.matches(&Query::parse(query).unwrap()),
+                    "{query} must match {entry:?}"
+                );
+            }
+            for query in [
+                "secretmarker",
+                "auditors",
+                "requester:secretmarker",
+                "claims:auditors",
+                "requester:alice",
+                "requester:account",
+                "caller:bob",
+            ] {
+                assert!(
+                    !entry.matches(&Query::parse(query).unwrap()),
+                    "{query} must not match {entry:?}"
+                );
+            }
+        }
+    }
 }

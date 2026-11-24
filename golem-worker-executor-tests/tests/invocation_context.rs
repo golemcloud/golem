@@ -18,6 +18,8 @@
 use crate::Tracing;
 use crate::durability::assert_snapshot_recovery_loaded;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::AgentUpdateMode;
+use golem_common::model::caller::{ClaimVisibility, PublicCaller};
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
@@ -395,6 +397,94 @@ async fn snapshot_save_and_load_see_no_invocation_and_the_agent_itself(
     assert_eq!(
         report.method,
         observation(reports.last().cloned(), &user_text)
+    );
+
+    drop(executor);
+    Ok(())
+}
+
+/// A manual update runs its snapshot save and load as the agent itself, with no invocation. The
+/// account that requested the update is recorded in the update's entries, never as the caller of
+/// either snapshot call.
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn manual_update_snapshots_run_as_the_agent_and_record_the_requester(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let (user, _) = golem_user();
+    let (requester, requester_text) = golem_user();
+    let probe = agent_key!(PROBE, format!("update-{}", context.redis_prefix()));
+    let probe_id = executor
+        .invoke_and_await_agent_as_caller(&component, &probe, user.clone(), "report", data_value!())
+        .await?
+        .agent_id()
+        .clone();
+    // The next revision is the same probe, so its load hook reads what the save hook wrote.
+    let target = executor
+        .update_component(&component.id, "golem_it_agent_sdk_rust_release")
+        .await?;
+    let attempt = executor
+        .update_worker_as_caller(
+            &probe_id,
+            AgentUpdateMode::Manual,
+            target.revision,
+            false,
+            requester.clone(),
+        )
+        .await?;
+    executor
+        .wait_for_component_revision(&probe_id, target.revision, Duration::from_secs(30))
+        .await?;
+
+    let report: Report = serde_json::from_str(
+        &executor
+            .invoke_and_await_agent_as_caller(&component, &probe, user, "report", data_value!())
+            .await?
+            .into_typed::<String>()?,
+    )?;
+    let itself = agent_text_prefix(&probe_id.agent_id);
+    for observed in [&report.saved, &report.loaded] {
+        let observed = observed
+            .as_ref()
+            .expect("the update runs the snapshot callbacks");
+        assert_eq!(observed.invocation_id, None);
+        for role in [&observed.original, &observed.immediate] {
+            assert!(role.starts_with(&itself), "{role}");
+            assert_ne!(role, &requester_text);
+        }
+    }
+
+    let expected = PublicCaller::new(&requester, ClaimVisibility::Hidden);
+    let requesters = executor
+        .get_oplog(&probe_id, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter_map(|entry| match entry.entry {
+            PublicOplogEntry::PendingUpdate(params) => {
+                Some((params.update_attempt_index, params.requester))
+            }
+            PublicOplogEntry::PendingAgentInvocation(params) => match params.invocation {
+                PublicAgentInvocation::ManualUpdate(manual) => {
+                    Some((entry.oplog_index, manual.requester))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requesters,
+        vec![(attempt, expected.clone()), (attempt, expected)]
     );
 
     drop(executor);

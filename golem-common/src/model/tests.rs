@@ -2207,6 +2207,46 @@ fn agent_invocation_payload_round_trip_preserves_scope_card() {
     );
 }
 
+/// A queued manual update keeps its requester, both roles and the exact claims, from the
+/// invocation to its payload, through the binary codec and back. The requester is not the
+/// invocation's caller.
+#[test]
+fn manual_update_payload_round_trips_the_requester() {
+    use crate::base_model::caller::test_support::{original_claims_json, sample_caller};
+    use crate::model::{AgentInvocation, AgentInvocationPayload};
+    use crate::serialization::{deserialize, serialize};
+
+    let target_revision = ComponentRevision::new(3).unwrap();
+    let invocation = AgentInvocation::ManualUpdate {
+        target_revision,
+        requester: sample_caller(),
+    };
+    assert_eq!(invocation.caller(), None);
+
+    let (idempotency_key, payload, invocation_context) = invocation.clone().into_parts();
+    assert_eq!(
+        payload,
+        AgentInvocationPayload::ManualUpdate {
+            target_revision,
+            requester: sample_caller(),
+        }
+    );
+    let decoded: AgentInvocationPayload = deserialize(&serialize(&payload).unwrap()).unwrap();
+    assert_eq!(decoded, payload);
+    let AgentInvocationPayload::ManualUpdate { requester, .. } = &decoded else {
+        panic!("expected a manual update payload, got {decoded:?}");
+    };
+    assert_eq!(
+        original_claims_json(requester),
+        original_claims_json(&sample_caller())
+    );
+
+    let rebuilt = AgentInvocation::from_parts(idempotency_key, decoded, invocation_context);
+    assert_eq!(rebuilt, invocation);
+    let decoded: AgentInvocation = deserialize(&serialize(&invocation).unwrap()).unwrap();
+    assert_eq!(decoded, invocation);
+}
+
 #[test]
 fn external_tool_results_round_trip_and_treat_nan_as_replay_equivalent() {
     use crate::model::AgentInvocationResult;

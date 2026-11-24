@@ -23,11 +23,12 @@ use futures_concurrency::future::Join;
 use golem_api_grpc::proto::golem::worker::{LogEvent, log_event};
 use golem_client::api::{AgentClient, AgentError, RegistryServiceClient};
 use golem_client::model::WorkersMetadataRequest;
-use golem_common::model::account::{AccountRevision, AccountSetPlan};
+use golem_common::model::account::{AccountId, AccountRevision, AccountSetPlan};
 use golem_common::model::agent::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind, AgentMode, AgentTypeName,
     OwnedAgentId,
 };
+use golem_common::model::caller::{PublicCaller, PublicPrincipal};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
@@ -1473,7 +1474,7 @@ async fn auto_update_on_idle_via_host_function(
         .store()
         .await?;
     let host_api_agent_id = agent_key!("GolemHostApi", "updater-1");
-    let _host_api_agent_id = user
+    let updater = user
         .start_agent(&host_api_component.id, host_api_agent_id.clone())
         .await?;
 
@@ -1513,6 +1514,153 @@ async fn auto_update_on_idle_via_host_function(
     assert_eq!(result.into_return_value(), Some(SchemaValue::U64(0)));
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));
+
+    // The update has the caller of every call that an agent makes. The account that called the
+    // updating agent is the original requester, and the updating agent is the immediate one.
+    let requesters = update_requesters(&user, &agent_id).await?;
+    assert_eq!(requesters.len(), 2, "{requesters:?}");
+    for requester in requesters {
+        let PublicPrincipal::Account(account) = &requester.original else {
+            panic!("expected the account that called the updating agent, got {requester:?}");
+        };
+        assert_eq!(account.account_id, user.account_id);
+        let PublicPrincipal::Agent(agent) = &requester.immediate else {
+            panic!("expected the updating agent as the immediate requester, got {requester:?}");
+        };
+        assert_eq!(agent.agent_id, updater.agent_id);
+        assert_eq!(agent.agent_type, "GolemHostApi");
+        assert!(requester.tokens.is_empty());
+    }
+    Ok(())
+}
+
+/// The requester of every `PendingUpdate` and every queued manual update in the agent's public
+/// oplog, in oplog order.
+async fn update_requesters(
+    user: &impl TestDsl,
+    agent_id: &OwnedAgentId,
+) -> anyhow::Result<Vec<PublicCaller>> {
+    Ok(user
+        .get_oplog(agent_id, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter_map(|entry| match entry.entry {
+            PublicOplogEntry::PendingUpdate(params) => Some(params.requester),
+            PublicOplogEntry::PendingAgentInvocation(params) => match params.invocation {
+                golem_common::model::oplog::PublicAgentInvocation::ManualUpdate(manual) => {
+                    Some(manual.requester)
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect())
+}
+
+/// The requester is the account of the REST request's token, in both roles, without tokens or
+/// claims: its pair is the Golem issuer and `account:<id>`.
+fn assert_requested_by_the_account(requester: &PublicCaller, account_id: &AccountId) {
+    let PublicPrincipal::Account(account) = &requester.original else {
+        panic!("expected the account as the requester, got {requester:?}");
+    };
+    assert_eq!(&account.account_id, account_id);
+    assert_eq!(
+        account.pair,
+        golem_common::model::caller::Pair::new(
+            golem_test_framework::components::TEST_GOLEM_ISSUER,
+            format!("account:{}", account_id.0.hyphenated()),
+        )
+    );
+    assert_eq!(
+        account.authentication,
+        golem_common::model::caller::AccountAuthentication::ApiToken
+    );
+    assert_eq!(requester.immediate, requester.original);
+    assert!(requester.tokens.is_empty());
+    let json = serde_json::to_value(requester).unwrap();
+    assert!(json["original"].get("claims").is_none(), "{json}");
+}
+
+/// An automatic update through REST records the account of the request as its requester, in the
+/// admission and in the strategy entry that the executor writes later.
+#[test]
+#[tracing::instrument]
+#[timeout(300000)]
+async fn rest_update_records_the_requester(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "it_agent_update_v1_release")
+        .name("it:agent-update")
+        .unique()
+        .store()
+        .await?;
+    let parsed_agent_id = agent_key!("UpdateTest");
+    let agent_id = user
+        .start_agent(&component.id, parsed_agent_id.clone())
+        .await?;
+    let updated_component = user
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+
+    user.auto_update_worker(&agent_id, updated_component.revision, false)
+        .await?;
+    user.invoke_and_await_agent(&component, &parsed_agent_id, "f2", data_value!())
+        .await?;
+    assert_eq!(
+        user.get_worker_metadata(&agent_id)
+            .await?
+            .component_revision,
+        updated_component.revision
+    );
+
+    let requesters = update_requesters(&user, &agent_id).await?;
+    assert_eq!(requesters.len(), 2, "{requesters:?}");
+    for requester in &requesters {
+        assert_requested_by_the_account(requester, &user.account_id);
+    }
+    Ok(())
+}
+
+/// A manual update through REST records the account of the request in the queued manual update
+/// and in the `PendingUpdate` written after the snapshot save.
+#[test]
+#[tracing::instrument]
+#[timeout(300000)]
+async fn rest_manual_update_records_the_requester(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    // Revision 2 saves a snapshot and revision 3 loads it, so the manual update succeeds.
+    let component = user
+        .component(&env.id, "it_agent_update_v2_release")
+        .name("it:agent-update")
+        .unique()
+        .store()
+        .await?;
+    let parsed_agent_id = agent_key!("UpdateTest");
+    let agent_id = user
+        .start_agent(&component.id, parsed_agent_id.clone())
+        .await?;
+    let target = user
+        .update_component(&component.id, "it_agent_update_v3_release")
+        .await?;
+
+    user.manual_update_worker(&agent_id, target.revision, false)
+        .await?;
+    user.wait_for_component_revision(&agent_id, target.revision, Duration::from_secs(60))
+        .await?;
+
+    let requesters = update_requesters(&user, &agent_id).await?;
+    assert_eq!(requesters.len(), 2, "{requesters:?}");
+    for requester in &requesters {
+        assert_requested_by_the_account(requester, &user.account_id);
+    }
     Ok(())
 }
 

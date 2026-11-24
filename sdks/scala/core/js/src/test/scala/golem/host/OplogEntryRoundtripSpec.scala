@@ -825,13 +825,15 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         js.Dynamic.literal(
           timestamp = ts(),
           targetRevision = js.BigInt("5"),
-          description = js.Dynamic.literal(tag = "auto-update")
+          description = js.Dynamic.literal(tag = "auto-update"),
+          requester = callerJs
         )
       )
       val parsed = OplogEntry.fromJs(raw)
       assertTrue(
         parsed.isInstanceOf[OplogEntry.PendingUpdate],
-        parsed.asInstanceOf[OplogEntry.PendingUpdate].params.updateDescription == UpdateDescription.AutoUpdate
+        parsed.asInstanceOf[OplogEntry.PendingUpdate].params.updateDescription == UpdateDescription.AutoUpdate,
+        parsed.asInstanceOf[OplogEntry.PendingUpdate].params.requester == expectedCaller
       )
     },
     test("PendingUpdate snapshot-based from dynamic") {
@@ -848,7 +850,8 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
               mimeType = "application/octet-stream",
               filesystemSnapshot = "u-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"
             )
-          )
+          ),
+          requester = callerJs
         )
       )
       val parsed = OplogEntry.fromJs(raw)
@@ -1140,7 +1143,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
           timestamp = ts(),
           invocation = js.Dynamic.literal(
             tag = "manual-update",
-            `val` = js.Dynamic.literal(targetRevision = js.BigInt("7"))
+            `val` = js.Dynamic.literal(targetRevision = js.BigInt("7"), requester = callerJs)
           )
         )
       )
@@ -1148,7 +1151,8 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       val inv    = parsed.asInstanceOf[OplogEntry.PendingAgentInvocation].params.invocation
       assertTrue(
         inv.isInstanceOf[AgentInvocation.ManualUpdate],
-        inv.asInstanceOf[AgentInvocation.ManualUpdate].componentRevision == BigInt(7)
+        inv.asInstanceOf[AgentInvocation.ManualUpdate].componentRevision == BigInt(7),
+        inv.asInstanceOf[AgentInvocation.ManualUpdate].requester == expectedCaller
       )
     },
     test("CompletionDiscarded from dynamic") {

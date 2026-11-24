@@ -178,9 +178,15 @@ pub(super) async fn agent_invocation_to_public(
                 },
             ))
         }
-        AgentInvocation::ManualUpdate { target_revision } => Ok(
-            PublicAgentInvocation::ManualUpdate(ManualUpdateParameters { target_revision }),
-        ),
+        AgentInvocation::ManualUpdate {
+            target_revision,
+            requester,
+        } => Ok(PublicAgentInvocation::ManualUpdate(
+            ManualUpdateParameters {
+                target_revision,
+                requester: PublicCaller::new(&requester, claims),
+            },
+        )),
         AgentInvocation::SaveSnapshot { caller, .. } => Ok(PublicAgentInvocation::SaveSnapshot(
             SaveSnapshotParameters {
                 caller: PublicCaller::new(&caller, claims),

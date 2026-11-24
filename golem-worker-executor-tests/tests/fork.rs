@@ -888,10 +888,11 @@ impl WorkerProxy for LocalResumeProxy {
         revision: ComponentRevision,
         mode: UpdateMode,
         disable_wakeup: bool,
+        requester: golem_common::model::caller::Caller,
         auth: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         self.inner
-            .update(agent, revision, mode, disable_wakeup, auth)
+            .update(agent, revision, mode, disable_wakeup, requester, auth)
             .await
     }
 
