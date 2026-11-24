@@ -110,9 +110,11 @@ describe("Bridge", () => {
       if (rejected._tag === "Failure" && rejected.failure._tag === "RpcCallError")
         expect(rejected.failure.cause).toBe(conflict)
 
-      const invalid = yield* Bridge.getRemoteAgentById("Example", {
-        uuid: "bad",
-      } as AgentId).pipe(Effect.scoped, Effect.provide(services), Effect.result)
+      const invalid = yield* Bridge.getRemoteAgentById("Example", "bad" as AgentId).pipe(
+        Effect.scoped,
+        Effect.provide(services),
+        Effect.result,
+      )
       expect(invalid).toMatchObject({ _tag: "Failure", failure: { _tag: "InvalidUuidError" } })
       expect(opens).toHaveLength(5)
       expect(drop).toHaveBeenCalledTimes(5)

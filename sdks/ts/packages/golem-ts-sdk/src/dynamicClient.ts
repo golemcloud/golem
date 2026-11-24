@@ -6,7 +6,7 @@ import { getAgentTypeByAgentId, type Datetime } from 'golem:agent/host@2.0.0';
 import type { CancelableScheduledInvocationReceipt, InvocationMetadata } from './invocationId';
 import { getRemoteAgentById, RemoteCallError, type RemoteAgentHandle } from './bridge/agent';
 import { type SchemaValue } from './internal/schema-model';
-import type { AgentId } from './agentId';
+import { AgentId } from './agentId';
 import type { ScopeCard } from './host/permissions';
 
 export interface DynamicInvocation<T> {
@@ -44,7 +44,7 @@ export class DynamicAgentClient implements DynamicAgentClientSurface {
    * a `not-found` {@link RemoteCallError}.
    */
   static getById(agentId: AgentId): DynamicAgentClient {
-    const registered = getAgentTypeByAgentId(agentId);
+    const registered = getAgentTypeByAgentId(AgentId.toWit(agentId));
     if (registered === undefined) {
       throw new RemoteCallError(`Failed to connect to remote agent ${agentId.toString()}`, {
         tag: 'not-found',

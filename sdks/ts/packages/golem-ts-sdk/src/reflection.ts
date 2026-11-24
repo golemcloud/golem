@@ -56,7 +56,7 @@ import {
   type SchemaValue,
 } from './internal/schema-model';
 import { SchemaRef, type JsonValue } from './schema/ref';
-import type { AgentId } from './agentId';
+import { AgentId } from './agentId';
 import type { ScopeCard } from './host/permissions';
 import type { RemoteClientOptions } from './client';
 export {
@@ -436,7 +436,7 @@ export function getAgentType(name: string): AgentType | undefined {
  * that the agent exists.
  */
 export function getAgentTypeByAgentId(agentId: AgentId): AgentType | undefined {
-  const registered = hostGetAgentTypeByAgentId(agentId);
+  const registered = hostGetAgentTypeByAgentId(AgentId.toWit(agentId));
   return registered?.agentType.kind === 'regular' ? new AgentType(registered) : undefined;
 }
 

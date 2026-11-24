@@ -72,7 +72,7 @@ const sameAgent = Counter.client.getById(firstId);
 const restored = Counter.client.getById(AgentId.parse(savedIdString));
 ```
 
-Persist the agent ID yourself (as a string via `agentId.toString()`, reparsed with `AgentId.parse(...)`) whenever you need to reach an agent without a key again later.
+An `AgentId` is a branded string, so persist the agent ID yourself as text (reparsed with `AgentId.parse(...)`) whenever you need to reach an agent without a key again later.
 
 ### Agents in Another Component
 
@@ -106,8 +106,8 @@ MyAgent.implement({
             const agentId = this.getId(); // AgentId
             const key = process.env.GOLEM_AGENT_KEY;
             return key
-                ? `I am the keyed agent ${key} with ID ${agentId.toString()}`
-                : `I am an agent without a key, with ID ${agentId.toString()}`;
+                ? `I am the keyed agent ${key} with ID ${agentId}`
+                : `I am an agent without a key, with ID ${agentId}`;
         },
     },
 });

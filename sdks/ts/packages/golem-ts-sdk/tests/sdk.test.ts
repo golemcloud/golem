@@ -91,7 +91,7 @@ async function remoteClientTypeChecks(): Promise<void> {
   // @ts-expect-error the phantom factories are removed
   factory.newPhantom({ name: 'counter' });
   // @ts-expect-error the phantom factories are removed
-  factory.getPhantom({ name: 'counter' }, agentId.uuid);
+  factory.getPhantom({ name: 'counter' }, agentId);
   // @ts-expect-error get is renamed to upsert
   factory.get({ name: 'counter' });
   // @ts-expect-error definitions derive no agent ID offline
@@ -687,8 +687,7 @@ describe('RPC client', () => {
     };
     const agentId = await client.agentId();
     expect(rpc.agentId).toHaveBeenCalledTimes(1);
-    expect(agentId).toBeInstanceOf(AgentId);
-    expect(agentId.toString()).toBe('00000007-0000-8000-8000-000000000004');
+    expect(agentId).toBe('00000007-0000-8000-8000-000000000004');
 
     rpc.agentId.mockRejectedValueOnce({ tag: 'denied', val: 'no view' });
     await expect(client.agentId()).rejects.toMatchObject({
@@ -706,7 +705,7 @@ describe('RPC client', () => {
     );
     expect(client.ping).toBeTypeOf('function');
     const rpc = (await createdRpc()).client;
-    await expect(client.agentId()).resolves.toBeInstanceOf(AgentId);
+    await expect(client.agentId()).resolves.toBe('00000007-0000-8000-8000-000000000004');
     expect(rpc.agentId).toHaveBeenCalledTimes(1);
   });
 
@@ -762,7 +761,10 @@ describe('RPC client', () => {
 
   it('maps getById to the host get-by-id with the agent type and the typed ID', async () => {
     const client = clientDef.client.getById(remoteAgentId);
-    expect(WasmRpc.getById).toHaveBeenLastCalledWith('ClientTestAgent', remoteAgentId);
+    expect(WasmRpc.getById).toHaveBeenLastCalledWith(
+      'ClientTestAgent',
+      AgentId.toWit(remoteAgentId),
+    );
     expect(client.ping).toBeTypeOf('function');
   });
 
@@ -882,8 +884,8 @@ describe('RPC client', () => {
       agentType: { typeName: 'FirstAgent', mode: 'durable' },
     } as never);
     const client = definition.getById(remoteAgentId);
-    expect(getAgentTypeByAgentId).toHaveBeenLastCalledWith(remoteAgentId);
-    expect(WasmRpc.getById).toHaveBeenLastCalledWith('FirstAgent', remoteAgentId);
+    expect(getAgentTypeByAgentId).toHaveBeenLastCalledWith(AgentId.toWit(remoteAgentId));
+    expect(WasmRpc.getById).toHaveBeenLastCalledWith('FirstAgent', AgentId.toWit(remoteAgentId));
     expect(client.ping).toBeTypeOf('function');
   });
 

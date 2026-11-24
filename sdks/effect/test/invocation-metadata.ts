@@ -13,9 +13,8 @@ export const hostAgentIdFor = (label: string): CoreTypes.AgentId => {
 }
 
 /** The SDK form of {@link hostAgentIdFor}. */
-export const agentIdFor = (label: string): AgentId => ({
-  uuid: uuidToString(hostAgentIdFor(label).uuid) as Uuid,
-})
+export const agentIdFor = (label: string): AgentId =>
+  uuidToString(hostAgentIdFor(label).uuid) as AgentId
 
 /** Host invocation metadata for the agent of `label`, with the invocation UUID `uuid`. */
 export const hostInvocationMetadata = (

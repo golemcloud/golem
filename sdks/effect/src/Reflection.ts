@@ -379,7 +379,7 @@ const wrap = (registration: AgentHost.RegisteredAgentType): AgentType => {
         try: () => agentIdToWit(id),
         catch: (cause): RemoteCallError => ({
           _tag: "InvalidUuidError",
-          value: String(id?.uuid),
+          value: String(id),
           reason: String(cause),
         }),
       })
@@ -429,7 +429,7 @@ const wrap = (registration: AgentHost.RegisteredAgentType): AgentType => {
       raw.mode === "ephemeral"
         ? Effect.fail(
             new ClientBindingError(
-              `Cannot bind agent ID '${id.uuid}' to ephemeral agent type '${raw.typeName}'; use upsert(...)`,
+              `Cannot bind agent ID '${id}' to ephemeral agent type '${raw.typeName}'; use upsert(...)`,
             ),
           )
         : getById(id),

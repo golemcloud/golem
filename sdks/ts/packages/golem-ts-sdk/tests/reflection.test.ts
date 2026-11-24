@@ -271,7 +271,7 @@ describe('agent reflection', () => {
     vi.mocked(hostGetAgentTypeByAgentId).mockReturnValueOnce(registeredType());
 
     expect(getAgentTypeByAgentId(ECHO_AGENT_ID)?.name).toBe('ReflectedEcho');
-    expect(hostGetAgentTypeByAgentId).toHaveBeenLastCalledWith(ECHO_AGENT_ID);
+    expect(hostGetAgentTypeByAgentId).toHaveBeenLastCalledWith(AgentId.toWit(ECHO_AGENT_ID));
   });
 
   it('uses discovery-packed values dynamically without inheriting reflected validation', async () => {
@@ -284,7 +284,10 @@ describe('agent reflection', () => {
     vi.mocked(hostGetAgentTypeByAgentId).mockReturnValueOnce(registeredType());
     const before = vi.mocked(hostGetAgentType).mock.calls.length;
     const client = DynamicAgentClient.getById(ECHO_AGENT_ID);
-    expect(vi.mocked(WasmRpc.getById).mock.calls.at(-1)).toEqual(['ReflectedEcho', ECHO_AGENT_ID]);
+    expect(vi.mocked(WasmRpc.getById).mock.calls.at(-1)).toEqual([
+      'ReflectedEcho',
+      AgentId.toWit(ECHO_AGENT_ID),
+    ]);
     const rpc = vi.mocked(WasmRpc.getById).mock.results.at(-1)!.value;
     rpc.asyncInvokeAndAwait.mockReturnValue({
       metadata: hostInvocationMetadata(),
@@ -311,7 +314,10 @@ describe('agent reflection', () => {
 
     const client = reflected.client.getById(ECHO_AGENT_ID);
 
-    expect(vi.mocked(WasmRpc.getById).mock.calls.at(-1)).toEqual(['ReflectedEcho', ECHO_AGENT_ID]);
+    expect(vi.mocked(WasmRpc.getById).mock.calls.at(-1)).toEqual([
+      'ReflectedEcho',
+      AgentId.toWit(ECHO_AGENT_ID),
+    ]);
     expect(client.method('echo').definition.name).toBe('echo');
   });
 
@@ -339,7 +345,7 @@ describe('agent reflection', () => {
     const client = getAgentType('ReflectedEcho')!.client.upsert({ id: 'one' });
     const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value;
 
-    await expect(client.agentId()).resolves.toEqual(AgentId.from(MOCK_REMOTE_AGENT_ID));
+    await expect(client.agentId()).resolves.toEqual(AgentId.fromWit(MOCK_REMOTE_AGENT_ID));
     expect(rpc.agentId).toHaveBeenCalledTimes(1);
   });
 

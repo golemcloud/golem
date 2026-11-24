@@ -397,7 +397,8 @@ A full or discovered client checks the type name and constructor of the agents i
 import { AgentId, getAgentTypeByAgentId } from "@golemcloud/golem-ts-sdk"
 
 const id = await counterType.client.upsert({ name: "main" }).agentId()
-const parsed = AgentId.parse(id.toString())
+const saved: string = id
+const parsed = AgentId.parse(saved)
 const currentType = getAgentTypeByAgentId(parsed)
 if (!currentType || currentType.mode !== "durable") {
   throw new Error("Agent type unavailable or not durable")
@@ -414,7 +415,8 @@ Inside `Effect.gen` and an open scope, with `AgentId` imported from the SDK:
 ```typescript
 const client = yield* counterType.client.upsert({ name: "main" })
 const id = yield* client.agentId
-const parsed = yield* AgentId.parse(AgentId.format(id))
+const saved: string = id
+const parsed = yield* AgentId.parse(saved)
 const currentType = yield* Reflection.getAgentTypeByAgentId(parsed)
 if (!currentType || currentType.mode !== "durable") {
   return yield* Effect.fail("Agent type unavailable or not durable")

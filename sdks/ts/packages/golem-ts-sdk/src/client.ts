@@ -33,7 +33,7 @@ import {
 } from './internal/schema-model';
 import type { SchemaGraph, SchemaType, SchemaValue } from './internal/schema-model';
 import { compileConfig, ConfigDeclaration } from './config';
-import type { AgentId } from './agentId';
+import { AgentId } from './agentId';
 import { compileSchema } from './schema/adapter';
 import { SchemaCodec, SchemaValueWriter, SchemaValueReader } from './schema/codec';
 import type { SchemaValueTree } from 'golem:core/types@2.0.0';
@@ -343,7 +343,7 @@ function defineAgentClientImpl(spec: {
   return Object.freeze({
     methods: spec.methods,
     getById: (agentId: AgentId, options?: RemoteClientOptions) => {
-      const registered = getAgentTypeByAgentId(agentId);
+      const registered = getAgentTypeByAgentId(AgentId.toWit(agentId));
       if (registered === undefined) {
         throw new RemoteCallError(`Failed to connect to remote agent ${agentId.toString()}`, {
           tag: 'not-found',

@@ -10,7 +10,7 @@ defineAgent({
   init: () => ({ count: 7 }),
   methods: {
     add({ amount }) {
-      if (!(this.getId() instanceof AgentId)) throw new Error('untyped agent identity');
+      if (this.getId() !== AgentId.parse(this.getId())) throw new Error('untyped agent identity');
       this.count += amount;
       return this.count;
     },

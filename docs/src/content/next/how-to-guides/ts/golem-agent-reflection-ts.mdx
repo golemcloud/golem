@@ -202,7 +202,7 @@ if (!requestType || requestType.mode !== 'ephemeral') {
 const request = requestType.client.upsert({ route: 'summarize' });
 
 const result = await request.method('run').invoke({ text: 'hello' });
-console.log(result.metadata.agentId.toString(), result.metadata.invocationId.toString());
+console.log(result.metadata.agentId, result.metadata.invocationId.toString());
 ```
 
 Do not treat an ephemeral client as having a reusable agent ID. A one-shot

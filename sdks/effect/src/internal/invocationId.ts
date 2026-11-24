@@ -6,7 +6,7 @@ const prototype = Object.freeze(
   Object.create(Object.prototype, {
     toString: {
       value(this: InvocationId): string {
-        return `${this.agentId.uuid}.${this.uuid}`
+        return `${this.agentId}.${this.uuid}`
       },
     },
   }),

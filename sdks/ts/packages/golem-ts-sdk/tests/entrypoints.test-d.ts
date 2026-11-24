@@ -62,9 +62,10 @@ agentHost.readDurableStreamBatch;
 agentHost.appendDurableStreamBatch;
 
 const agentId = AgentId.parse('00000007-0000-8000-8000-000000000011');
-agentId.uuid satisfies Uuid;
-agentId.toString() satisfies string;
-agentId.equals(new AgentId(new Uuid(1n, 2n))) satisfies boolean;
+agentId satisfies string;
+(agentId === AgentId.parse('00000007-0000-8000-8000-000000000012')) satisfies boolean;
+// @ts-expect-error a plain string is not an agent ID
+'00000007-0000-8000-8000-000000000011' satisfies AgentId;
 // @ts-expect-error agent IDs do not derive clients
 agentId.client;
 // @ts-expect-error agent IDs do not expose their constructor parameters
