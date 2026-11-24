@@ -98,9 +98,7 @@ pub(crate) async fn open_file_for_inspection<Adapter: SandboxFilesystemAdapter>(
                     selection: selection.resolve(attrs.size)?,
                     modified_at: attrs
                         .modified
-                        .map(jiff::Timestamp::try_from)
-                        .transpose()
-                        .map_err(|_| FileReadError::Storage)?,
+                        .and_then(|modified| jiff::Timestamp::try_from(modified).ok()),
                 },
             });
         }

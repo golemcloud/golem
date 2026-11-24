@@ -23,7 +23,9 @@ use serde_json::Value;
 
 /// The OpenAPI representation of a Jiff timestamp. Domain fields remain Jiff
 /// values; this type is used only by the schema and JSON boundary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Serde preserves the native range for internal response conversion. OpenAPI
+/// request parsing separately enforces the canonical datetime format and range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct OpenApiTimestamp(pub jiff::Timestamp);
 
@@ -33,13 +35,6 @@ impl OpenApiTimestamp {
         // UTC normalization must not move the instant outside the API's year range.
         crate::schema::canonical::datetime::to_text(&timestamp)?;
         Ok(Self(timestamp))
-    }
-}
-
-impl<'de> Deserialize<'de> for OpenApiTimestamp {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = String::deserialize(deserializer)?;
-        Self::parse(&value).map_err(serde::de::Error::custom)
     }
 }
 
@@ -67,7 +62,8 @@ impl Type for OpenApiTimestamp {
 
 impl ParseFromJSON for OpenApiTimestamp {
     fn parse_from_json(value: Option<Value>) -> ParseResult<Self> {
-        serde_json::from_value(value.unwrap_or(Value::Null)).map_err(ParseError::custom)
+        let value = String::parse_from_json(value).map_err(ParseError::propagate)?;
+        Self::parse(&value).map_err(ParseError::custom)
     }
 }
 
@@ -176,12 +172,42 @@ mod tests {
     }
 
     #[test]
+    fn datetime_object_serializes_native_timestamp_bounds() {
+        for (timestamp, expected) in [
+            (jiff::Timestamp::MIN, "-009999-01-02T01:59:59Z"),
+            (jiff::Timestamp::MAX, "9999-12-30T22:00:00.999999999Z"),
+        ] {
+            let token = TokenCreation {
+                expires_at: timestamp,
+            };
+            assert_eq!(
+                token.to_json(),
+                Some(serde_json::json!({"expiresAt": expected}))
+            );
+            assert_eq!(
+                serde_json::from_value::<OpenApiTimestamp>(serde_json::json!(expected))
+                    .unwrap()
+                    .0,
+                timestamp
+            );
+        }
+        assert!(
+            TokenCreation::parse_from_json(Some(serde_json::json!({
+                "expiresAt": "-009999-01-02T01:59:59Z"
+            })))
+            .is_err()
+        );
+    }
+
+    #[test]
     fn datetime_object_rejects_missing_or_invalid_timestamp() {
         for value in [
             serde_json::json!({}),
             serde_json::json!({"expiresAt": null}),
             serde_json::json!({"expiresAt": "not-a-timestamp"}),
             serde_json::json!({"expiresAt": "2026-01-01T12:30Z"}),
+            serde_json::json!({"expiresAt": "2026-01-01T12:30:00Z[UTC]"}),
+            serde_json::json!({"expiresAt": "2016-12-31T23:59:60Z"}),
             serde_json::json!({"expiresAt": "-000001-01-01T00:00:00Z"}),
             serde_json::json!({"expiresAt": "0000-01-01T00:00:00+01:00"}),
         ] {
@@ -204,13 +230,13 @@ mod tests {
         for invalid in [
             "not-a-timestamp",
             "2026-01-01T12:30Z",
+            "2026-01-01T12:30:00Z[UTC]",
+            "2016-12-31T23:59:60Z",
             "-000001-01-01T00:00:00Z",
             "0000-01-01T00:00:00+01:00",
         ] {
             assert!(OpenApiTimestamp::parse_from_parameter(invalid).is_err());
-            assert!(
-                serde_json::from_value::<OpenApiTimestamp>(serde_json::json!(invalid)).is_err()
-            );
+            assert!(OpenApiTimestamp::parse_from_json(Some(serde_json::json!(invalid))).is_err());
         }
     }
 }
