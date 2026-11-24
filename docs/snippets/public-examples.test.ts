@@ -88,3 +88,25 @@ for (const version of ["next", "v1.6"]) {
     expect(values).toContainEqual(["get", "put"])
   })
 }
+
+// The pages that teach how a handler reads its caller show one complete TypeScript and one
+// complete Effect agent each. Both must build against the in-tree SDKs, so a sample that
+// uses a removed principal API, or reads `ctx.caller` the wrong way, fails here.
+for (const page of ["invoke/making-custom-apis/authentication.mdx", "develop/read-only-methods.mdx"]) {
+  test(
+    `next/${page}: the TypeScript and Effect caller examples typecheck against the in-tree SDKs`,
+    async () => {
+      const blocks = (await fences("next", page, "typescript")).filter(code =>
+        /caller/i.test(code)
+      )
+      expect(blocks.map(code => code.includes('from "@golemcloud/effect-golem"'))).toEqual([
+        false,
+        true,
+      ])
+      for (const code of blocks) {
+        expect(typecheckPublicExample(code)).toEqual([])
+      }
+    },
+    60_000
+  )
+}
