@@ -88,9 +88,9 @@ pub fn MostlySecureAgent::get_data(self : Self) -> String {
 }
 ```
 
-## Accessing the Authenticated Principal
+## Reading the Caller
 
-When auth is enabled, add a `Principal` parameter to the `new` constructor or endpoint methods to receive the authenticated identity. The SDK automatically injects the principal value:
+When auth is enabled, add an `@agents.InvocationContext` parameter to the `new` constructor or to an endpoint method. The SDK supplies it; it is not part of the input schema and is never mapped to path, query, header or body. `ctx.caller().original` is the principal that started the call chain (the signed-in user); `ctx.caller().immediate` is the principal that made this call.
 
 ```moonbit
 #derive.agent
@@ -98,13 +98,30 @@ When auth is enabled, add a `Principal` parameter to the `new` constructor or en
 #derive.mount_auth(true)
 pub(all) struct AuthedAgent {
   name : String
-  principal : Principal
+  // Who created the agent. A PrincipalRef is data: it grants nothing by itself.
+  owner : @agents.PrincipalRef?
 }
 
-fn AuthedAgent::new(name : String, principal : Principal) -> AuthedAgent {
-  { name, principal }
+fn AuthedAgent::new(name : String, ctx : @agents.InvocationContext) -> AuthedAgent {
+  { name, owner: ctx.caller().original.principal_ref() }
+}
+
+#derive.endpoint(get="/whoami")
+pub fn AuthedAgent::who_am_i(self : Self, ctx : @agents.InvocationContext) -> String {
+  // A signed-in user prints as `user ("<issuer>","<subject>")`, never with its claims.
+  ctx.caller().original.to_string()
+}
+
+#derive.endpoint(get="/data")
+pub fn AuthedAgent::get_data(self : Self, ctx : @agents.InvocationContext) -> String {
+  match self.owner {
+    Some(owner) if ctx.caller().original.equals_ref(owner) => "secret data"
+    _ => abort("only the creator can read this data")
+  }
 }
 ```
+
+The principal is one of `User` (a signed-in user; its `claims` field holds the claim set as JSON text), `Account` (a Golem account, for example the CLI), `Agent`, `Tool` and `Anonymous`. A `Principal` or `Caller` cannot appear in a method, constructor or tool signature or inside a value type: the build fails with a message that points to `ctx.caller()`. Store `principal_ref()` (a `PrincipalRef`) instead.
 
 ## Deployment Configuration
 

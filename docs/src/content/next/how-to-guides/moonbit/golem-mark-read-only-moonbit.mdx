@@ -4,7 +4,7 @@
 
 A **read-only** agent method is one you promise is a **pure read** of the agent's already-loaded state: it must not mutate anything and its result must depend only on its inputs and the current state. Golem enforces the most important part of this contract — **writes to persistent state, outgoing HTTP, and RPC calls trap** at runtime with a `ReadOnlyViolation` agent error before they run — but it does **not** detect every source of impurity (in-memory mutation, clocks, randomness, env reads), so keeping the method pure is partly your responsibility (see [What Works in a Read-Only Method](#what-works-in-a-read-only-method)). In exchange Golem:
 
-- **Caches the result** per `(method, normalized input, optional principal)` on the worker.
+- **Caches the result** per `(method, normalized input, caller)` on the worker.
 - **Bypasses the invocation queue** on a cache hit — a read-only call returns immediately even while a slow write is being processed.
 - **Bypasses agent loading** on a cache hit — a cached value is served even if the agent is currently evicted.
 - **Emits HTTP cache headers** (`Cache-Control` / `ETag` / `Vary`) for read-only methods mapped to `GET`/`HEAD`.
@@ -63,19 +63,22 @@ pub fn CounterAgent::pure_compute(self: Self, x: UInt, y: UInt) -> UInt {
 }
 ```
 
-## Per-Principal Caching (automatic)
+## Caching per Caller (automatic)
 
-There is **no `uses_principal` argument** on the attribute. Whether the cache is per-principal is **derived automatically by the SDK** from the method signature: if the method takes a `Principal` parameter, the result is cached per principal and HTTP responses switch to `Cache-Control: private` with `Vary: Authorization`.
+The cache is always keyed per caller: the full caller of the invocation is part of the key, so each signed-in user gets their own entry, and all anonymous calls share one. There is no argument for this on the attribute. A read-only method that needs to know who is calling takes an `@agents.InvocationContext` parameter, like any other method:
 
 ```moonbit
-// Principal-aware: cached per principal (uses_principal auto-derived = true)
 #derive.read_only
-pub fn CounterAgent::my_visible_items(self: Self, principal: Principal) -> Array[Item] {
+pub fn CounterAgent::my_visible_items(
+  self : Self,
+  ctx : @agents.InvocationContext,
+) -> Array[Item] {
+  // ctx.caller().original is the principal that started the call chain
   // ...
 }
 ```
 
-When the method has no `Principal` parameter, the result is shared across all callers and HTTP responses are `Cache-Control: public` (CDN-friendly). The `Principal` parameter is auto-injected by the runtime — it is not part of the method's input schema and is not passed by callers (see [`golem-add-http-auth-moonbit`](/next/how-to-guides/moonbit/golem-add-http-auth-moonbit)).
+The SDK supplies the `@agents.InvocationContext`; it is not part of the method's input schema and is not passed by callers (see [`golem-add-http-auth-moonbit`](/next/how-to-guides/moonbit/golem-add-http-auth-moonbit)). HTTP cache headers depend on the request: an authenticated request gets `Cache-Control: private`, an anonymous one can get `Cache-Control: public`.
 
 ## What Works in a Read-Only Method
 
