@@ -984,13 +984,39 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         request: &AgentInvocationPayload,
     ) -> Result<(), WorkerExecutorError> {
         if let Some(accepted) = self.accepted_invocation_payload(key).await?
-            && !accepted.same_caller_request(request)
+            && !accepted.same_caller_request_decoding(request, |input| {
+                self.decode_scalar_method_input(request, input)
+            })
         {
             return Err(WorkerExecutorError::invalid_request(
                 "IdempotencyConflict: invocation identity was already accepted with a different request",
             ));
         }
         Ok(())
+    }
+
+    /// Decodes a stream-free method input of `request` with the executing component's schema,
+    /// so inputs captured in different representations compare by value.
+    fn decode_scalar_method_input(
+        &self,
+        request: &AgentInvocationPayload,
+        input: &golem_common::model::agent::AgentMethodInput,
+    ) -> Option<golem_common::schema::SchemaValue> {
+        let AgentInvocationPayload::AgentMethod { method_name, .. } = request else {
+            return None;
+        };
+        if matches!(input, golem_common::model::agent::AgentMethodInput::Native(native) if !native.streams().is_empty())
+        {
+            return None;
+        }
+        let agent_type = &self.parsed_agent_id.as_ref()?.agent_type;
+        let component = self.current_component.load();
+        let agent_type = component.metadata.find_agent_type_by_name_ref(agent_type)?;
+        let method = agent_type
+            .methods
+            .iter()
+            .find(|method| method.name == *method_name)?;
+        crate::worker::invocation::decode_method_input(input, agent_type, method, None).ok()
     }
 
     pub(crate) fn ensure_component_agent_ingress(

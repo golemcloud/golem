@@ -254,6 +254,8 @@ object StreamSession {
     val tokenChannels = new ConcurrentHashMap[String, java.lang.Long]()
     @volatile var socket: WebSocket = null
     @volatile var accepted = false
+    // A queued acceptance installs its stream mappings only when the execution is ready.
+    @volatile var executionReady = false
     @volatile var sessionToken: String = null
     @volatile var pendingDescriptor: String = null
     @volatile var pendingAttempt: String = null
@@ -564,6 +566,7 @@ object StreamSession {
         "outputCursors" -> cursors, "sessionToken" -> Json.string(sessionToken)))
       pendingResume = true
       accepted = false
+      executionReady = false
     }
 
     def scheduleLivenessPing(ws: WebSocket): Unit =
@@ -603,17 +606,22 @@ object StreamSession {
       }
       private def handle(json: Json): Unit = {
         val kind = StreamSessionProtocol.validateServerMessage(json)
-        if (!accepted && kind != "invocationAccepted" && kind != "invocationRejected")
+        if (!accepted && kind != "invocationAccepted" && kind != "invocationReady" && kind != "invocationRejected")
           throw BridgeException("message received before invocation acceptance")
         kind match {
-          case "invocationAccepted" =>
-            if (accepted) throw BridgeException("duplicate invocation acceptance")
+          case "invocationAccepted" | "invocationReady" =>
+            val ready = kind == "invocationReady"
+            if (accepted && !ready) throw BridgeException("duplicate invocation acceptance")
+            if (ready && (!accepted || executionReady)) throw BridgeException("unexpected invocation readiness")
             val token = Json.requireField(json, "sessionToken").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
             StreamSessionProtocol.validateOpaqueToken(token, "session token")
             acceptedIdentity = Some(StreamSessionProtocol.acceptanceIdentity(json, pendingAttempt, acceptedIdentity))
-            install(json, complete = true)
+            val hasMappings = Json.field(json, "mappings").exists(value =>
+              Json.asArray(value).fold(e => throw BridgeException(e), identity).nonEmpty)
+            install(json, complete = ready || hasMappings)
             sessionToken = token
             accepted = true
+            executionReady = ready || hasMappings
             stopAnswerDeadline()
             everAccepted = true
             acceptedAt = Some(System.nanoTime())
