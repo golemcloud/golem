@@ -210,8 +210,29 @@ mod observational_start_proto_tests {
             function_name: HostFunctionName::Custom("wasi:http/outgoing-handler::handle".into()),
             invocation_id: None,
             observational_owner: Some(OplogIndex::from_u64(7)),
+            driver: None,
             request: None,
             durable_function_type: DurableFunctionType::WriteRemote,
+            span_started: None,
+            denial: None,
+        };
+
+        let proto: RawOplogEntry = original.clone().try_into().unwrap();
+        let roundtrip = OplogEntry::try_from(proto).unwrap();
+        assert_eq!(roundtrip, original);
+    }
+
+    #[test]
+    fn driven_start_raw_protobuf_roundtrips() {
+        let original = OplogEntry::Start {
+            timestamp: Timestamp::now_utc().rounded(),
+            parent_start_index: Some(OplogIndex::from_u64(12)),
+            function_name: HostFunctionName::Custom("wasi:http/types::incoming-body::read".into()),
+            invocation_id: None,
+            observational_owner: None,
+            driver: Some(OplogIndex::from_u64(21)),
+            request: None,
+            durable_function_type: DurableFunctionType::ReadRemote,
             span_started: None,
             denial: None,
         };
@@ -229,6 +250,7 @@ mod observational_start_proto_tests {
             function_name: HostFunctionName::KeyvalueEventualSet,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: None,
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,
@@ -275,6 +297,7 @@ mod observational_start_proto_tests {
             function_name: HostFunctionName::Custom("test".into()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: None,
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: Some(Box::new(started)),
@@ -592,6 +615,7 @@ mod successful_update_proto_tests {
                     snapshot_bootstrap,
                 },
                 update_attempt_index: Some(OplogIndex::from_u64(2)),
+                requester: Box::new(crate::model::caller::Caller::anonymous()),
             };
 
             let proto: RawOplogEntry = original.clone().try_into().unwrap();
@@ -902,7 +926,7 @@ pub(crate) mod replay_divergence_tests {
     use crate::base_model::OplogIndex;
     use crate::base_model::oplog::{
         DurableInvocationId, PublicDurableFunctionType, ReplayDivergence, ReplayHostCall,
-        ReplayStep, StartIdentityField, UpdateFailureClass,
+        ReplayStart, ReplayStep, StartIdentityField, UpdateFailureClass,
     };
     use crate::schema::{
         IntoTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
@@ -918,6 +942,7 @@ pub(crate) mod replay_divergence_tests {
             parent_start_index: Some(OplogIndex::from_u64(4)),
             invocation_id: Some(DurableInvocationId::new(OplogIndex::from_u64(2), 3)),
             observational_owner: Some(OplogIndex::from_u64(5)),
+            driver: None,
             carries_request: true,
             request: request
                 .map(|request| Box::new(request.to_string().into_typed_schema_value().unwrap())),
@@ -934,6 +959,7 @@ pub(crate) mod replay_divergence_tests {
                     parent_start_index: None,
                     invocation_id: None,
                     observational_owner: None,
+                    driver: None,
                     carries_request: false,
                     ..host_call("rpc::invoke", Some("replayed"))
                 }),
@@ -945,18 +971,27 @@ pub(crate) mod replay_divergence_tests {
                     StartIdentityField::RequestPresence,
                     StartIdentityField::Parent,
                 ],
+                replay_start: Some(ReplayStart::full_replay(vec![
+                    OplogIndex::from_u64(40),
+                    OplogIndex::from_u64(47),
+                ])),
             },
             ReplayDivergence {
                 oplog_index: OplogIndex::from_u64(3),
                 expected: ReplayStep::HostCall(host_call("clocks::now", None)),
                 actual: ReplayStep::invocation_end(),
                 mismatched: vec![],
+                replay_start: Some(ReplayStart::full_replay(vec![])),
             },
             ReplayDivergence {
                 oplog_index: OplogIndex::from_u64(9),
                 expected: ReplayStep::end_of_history(),
                 actual: ReplayStep::HostCall(host_call("random::bytes", Some("replayed"))),
                 mismatched: vec![],
+                replay_start: Some(ReplayStart::snapshot(
+                    OplogIndex::from_u64(6),
+                    vec![OplogIndex::from_u64(8), OplogIndex::from_u64(11)],
+                )),
             },
             ReplayDivergence::described(
                 OplogIndex::from_u64(12),
@@ -980,6 +1015,45 @@ pub(crate) mod replay_divergence_tests {
             let json = serde_json::to_value(&original).unwrap();
             let from_json: ReplayDivergence = serde_json::from_value(json).unwrap();
             assert_eq!(from_json, original);
+        }
+    }
+
+    #[test]
+    fn the_text_of_a_divergence_names_where_its_replay_started() {
+        const HINT: &str = "a snapshot load that differs from the live state is a common cause";
+        let at = |replay_start| ReplayDivergence {
+            replay_start,
+            ..ReplayDivergence::described(OplogIndex::from_u64(36), "recorded", "replayed")
+        };
+        let plain = "Unexpected oplog entry at 36: expected recorded, got replayed";
+        let index = OplogIndex::from_u64;
+        for (replay_start, text) in [
+            (None, plain.to_string()),
+            (Some(ReplayStart::full_replay(vec![])), plain.to_string()),
+            (
+                Some(ReplayStart::snapshot(index(30), vec![])),
+                format!("{plain}; replay started from the snapshot at oplog index 30; {HINT}"),
+            ),
+            (
+                Some(ReplayStart::snapshot(index(30), vec![index(40), index(47)])),
+                format!(
+                    "{plain}; replay started from the snapshot at oplog index 30 after the snapshots at oplog indexes 40, 47 were rejected; {HINT}"
+                ),
+            ),
+            (
+                Some(ReplayStart::full_replay(vec![index(40)])),
+                format!(
+                    "{plain}; replay started without a snapshot after the snapshot at oplog index 40 was rejected; {HINT}"
+                ),
+            ),
+            (
+                Some(ReplayStart::full_replay(vec![index(40), index(47)])),
+                format!(
+                    "{plain}; replay started without a snapshot after the snapshots at oplog indexes 40, 47 were rejected; {HINT}"
+                ),
+            ),
+        ] {
+            assert_eq!(at(replay_start).to_string(), text);
         }
     }
 
@@ -1017,6 +1091,7 @@ pub(crate) mod replay_divergence_tests {
                     ..host_call("rpc::invoke", None)
                 }),
                 mismatched: vec![StartIdentityField::FunctionName],
+                replay_start: Some(ReplayStart::snapshot(OplogIndex::from_u64(5), vec![])),
             };
 
             let decoded: ReplayDivergence = divergence
@@ -1056,6 +1131,7 @@ pub(crate) mod replay_divergence_tests {
             expected: ReplayStep::HostCall(call.clone()),
             actual: ReplayStep::HostCall(call),
             mismatched: vec![],
+            replay_start: None,
         };
         assert_eq!(divergence, divergence.clone());
 

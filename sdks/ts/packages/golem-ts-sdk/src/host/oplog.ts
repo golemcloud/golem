@@ -61,6 +61,16 @@ export type AgentInitializationParameters = OplogTypes.AgentInitializationParame
 export type AgentMethodInvocationParameters = OplogTypes.AgentMethodInvocationParameters;
 export type LoadSnapshotParameters = OplogTypes.LoadSnapshotParameters;
 export type ProcessOplogEntriesParameters = OplogTypes.ProcessOplogEntriesParameters;
+export type SaveSnapshotParameters = OplogTypes.SaveSnapshotParameters;
+export type PublicCaller = OplogTypes.PublicCaller;
+export type PublicPrincipal = OplogTypes.PublicPrincipal;
+export type PublicPrincipalRef = OplogTypes.PublicPrincipalRef;
+export type PublicUserPrincipal = OplogTypes.PublicUserPrincipal;
+export type PublicAccountPrincipal = OplogTypes.PublicAccountPrincipal;
+export type PublicAccountAuthentication = OplogTypes.PublicAccountAuthentication;
+export type PublicAgentPrincipal = OplogTypes.PublicAgentPrincipal;
+export type PublicToolPrincipal = OplogTypes.PublicToolPrincipal;
+export type PublicTokenProvenance = OplogTypes.PublicTokenProvenance;
 export type ManualUpdateParameters = OplogTypes.ManualUpdateParameters;
 export type AgentInvocation = OplogTypes.AgentInvocation;
 export type AgentInvocationStartedParameters = OplogTypes.AgentInvocationStartedParameters;
@@ -69,6 +79,7 @@ export type FallibleResultParameters = OplogTypes.FallibleResultParameters;
 export type SaveSnapshotResultParameters = OplogTypes.SaveSnapshotResultParameters;
 export type AgentInvocationResult = OplogTypes.AgentInvocationResult;
 export type AgentInvocationFinishedParameters = OplogTypes.AgentInvocationFinishedParameters;
+export type AgentInvocationSettledParameters = OplogTypes.AgentInvocationSettledParameters;
 export type PendingAgentInvocationParameters = OplogTypes.PendingAgentInvocationParameters;
 export type UpdateDescription = OplogTypes.UpdateDescription;
 export type PendingUpdateParameters = OplogTypes.PendingUpdateParameters;
@@ -173,6 +184,7 @@ export type PublicOplogEntry =
   | { tag: 'cancelled'; val: CancelledParameters }
   | { tag: 'agent-invocation-started'; val: AgentInvocationStartedParameters }
   | { tag: 'agent-invocation-finished'; val: AgentInvocationFinishedParameters }
+  | { tag: 'agent-invocation-settled'; val: AgentInvocationSettledParameters }
   | { tag: 'suspend'; val: Timestamp }
   | { tag: 'error'; val: ErrorParameters }
   | { tag: 'recovery-succeeded'; val: Timestamp }

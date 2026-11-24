@@ -73,6 +73,7 @@ fn cache_observations_expire_when_execution_selects_another_revision() {
                 idempotency_key: None,
                 oplog_index: None,
                 agent_fingerprint: None,
+                background_failure: None,
             },
         );
         assert_eq!(
@@ -421,6 +422,7 @@ fn method_name_changes_the_key() {
 fn classify_non_method_variants_are_mutating() {
     let m = AgentInvocation::ManualUpdate {
         target_revision: ComponentRevision::new(2).unwrap(),
+        requester: golem_common::model::caller::Caller::anonymous(),
     };
     assert_eq!(
         classify_invocation(None, None, &m),

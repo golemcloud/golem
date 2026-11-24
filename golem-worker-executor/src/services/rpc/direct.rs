@@ -299,7 +299,6 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
                 let worker = Worker::get_exact_existing_suspended_for_response(
                     self,
                     owned_agent_id,
-                    caller.clone(),
                     Some(expected_fingerprint),
                 )
                 .await?
@@ -399,12 +398,11 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
                 .await;
         }
-        let worker =
-            match Worker::get_exact_existing_suspended(self, target, Caller::anonymous()).await {
-                Ok(worker) => worker,
-                Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(false),
-                Err(error) => return Err(error.into()),
-            };
+        let worker = match Worker::get_exact_existing_suspended(self, target).await {
+            Ok(worker) => worker,
+            Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(false),
+            Err(error) => return Err(error.into()),
+        };
         worker
             .cancel_scheduled_invocation(key, receipt, canceller)
             .await
@@ -442,7 +440,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         let AgentInvocation::AgentMethod {
             idempotency_key,
             method_name,
-            caller,
             ..
         } = &invocation
         else {
@@ -460,12 +457,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         .await?;
         let worker = self
             .active_agents()
-            .get_existing_with_fingerprint(
-                self,
-                owned_agent_id,
-                caller.clone(),
-                Some(expected_fingerprint),
-            )
+            .get_existing_with_fingerprint(self, owned_agent_id, Some(expected_fingerprint))
             .await?;
         let final_id = request_key.finalize(
             worker.get_initial_worker_metadata().agent_id,
@@ -478,6 +470,14 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     .to_string(),
             });
         }
+        // This caller holds no task-scope bind, so a deletion may already have stopped the
+        // cached generation's state actor.
+        worker
+            .deleted_incarnation_as_not_found(
+                Some(expected_fingerprint),
+                worker.try_get_last_known_status().await,
+            )
+            .await?;
         let scheduled = worker.schedule_invocation(invocation, scheduled_at).await;
         worker
             .deleted_incarnation_as_not_found(Some(expected_fingerprint), scheduled)
@@ -847,7 +847,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         let (worker, _response_lease) = Worker::get_exact_existing_suspended_for_response(
             self,
             owned_agent_id,
-            caller.clone(),
             Some(expected_callee_fingerprint),
         )
         .await?;

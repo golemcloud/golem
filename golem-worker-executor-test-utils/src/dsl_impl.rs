@@ -43,11 +43,11 @@ use golem_common::model::PromiseId;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::agent::{
-    AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget,
+    AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, AgentUpdateMode, RevertWorkerTarget,
 };
 use golem_common::model::agent::{AgentFileContentHash, AgentMode, AgentTypeName};
 use golem_common::model::agent::{AgentKey, OwnedAgentId};
-use golem_common::model::caller::Caller;
+use golem_common::model::caller::{Caller, ClaimVisibility};
 use golem_common::model::component::{
     AgentFilePath, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
     ArchiveFilePath, ComponentDto, ComponentId, ComponentName, ComponentRevision, InitialAgentFile,
@@ -141,6 +141,7 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
         environment_id: EnvironmentId,
         page_entries: Vec<golem_api_grpc::proto::golem::worker::OplogPageEntry>,
+        claims: ClaimVisibility,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
         let mut result = Vec::with_capacity(page_entries.len());
         for page_entry in page_entries {
@@ -149,11 +150,12 @@ impl TestWorkerExecutor {
             match page_entry {
                 PublicOplogPageEntry::Included(entry) => result.push(entry),
                 PublicOplogPageEntry::Omitted(omitted) => result.push(
-                    self.get_oplog_entry(
+                    self.read_oplog_entry(
                         agent_id,
                         environment_id,
                         omitted.oplog_index,
                         Some(omitted.component_revision),
+                        claims,
                     )
                     .await?,
                 ),
@@ -274,6 +276,24 @@ impl TestWorkerExecutor {
         oplog_index: OplogIndex,
         component_revision: Option<ComponentRevision>,
     ) -> anyhow::Result<PublicOplogEntryWithIndex> {
+        self.read_oplog_entry(
+            agent_id,
+            environment_id,
+            oplog_index,
+            component_revision,
+            ClaimVisibility::Hidden,
+        )
+        .await
+    }
+
+    async fn read_oplog_entry(
+        &self,
+        agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        oplog_index: OplogIndex,
+        component_revision: Option<ComponentRevision>,
+        claims: ClaimVisibility,
+    ) -> anyhow::Result<PublicOplogEntryWithIndex> {
         let mut stream = self
             .client
             .clone()
@@ -283,6 +303,7 @@ impl TestWorkerExecutor {
                 auth_ctx: Some(self.auth_ctx().into()),
                 oplog_index: oplog_index.into(),
                 component_revision: component_revision.map(Into::into),
+                claims: claims.to_protobuf(),
             })
             .await?
             .into_inner();
@@ -482,7 +503,15 @@ impl TestWorkerExecutor {
                 return Err(anyhow!("agent invocation returned an external-tool result"));
             }
         };
-        Ok(AgentResult::new(value, worker_agent_id))
+        let background_failure = result
+            .background_failure
+            .map(|failure| {
+                WorkerExecutorError::try_from(failure)
+                    .map(|error| error.to_string())
+                    .map_err(|error| anyhow!("invalid background failure: {error}"))
+            })
+            .transpose()?;
+        Ok(AgentResult::new(value, worker_agent_id).with_background_failure(background_failure))
     }
 }
 
@@ -985,52 +1014,18 @@ impl TestDsl for TestWorkerExecutor {
         agent_id: &OwnedAgentId,
         from: OplogIndex,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
-        let mut result = Vec::new();
-        let mut cursor = None;
+        self.read_full_oplog(agent_id, from, ClaimVisibility::Hidden)
+            .await
+    }
 
-        loop {
-            let chunk = self
-                .client
-                .clone()
-                .get_oplog(workerexecutor::v1::GetOplogRequest {
-                    agent_id: Some(agent_id.agent_id.into()),
-                    environment_id: Some(agent_id.environment_id.into()),
-                    from_oplog_index: from.into(),
-                    cursor,
-                    count: 100,
-                    auth_ctx: Some(self.auth_ctx().into()),
-                    to_oplog_index: None,
-                    scan_allowance: None,
-                })
-                .await?
-                .into_inner();
-
-            if let Some(chunk) = chunk.result {
-                match chunk {
-                    get_oplog_response::Result::Success(chunk) => {
-                        result.extend(
-                            self.full_oplog_entries(
-                                &agent_id.agent_id,
-                                agent_id.environment_id,
-                                chunk.entries,
-                            )
-                            .await?,
-                        );
-                        match chunk.next {
-                            Some(next) => cursor = Some(next),
-                            None => break,
-                        }
-                    }
-                    get_oplog_response::Result::Failure(error) => {
-                        return Err(anyhow!("Failed to get oplog: {error:?}"));
-                    }
-                }
-            } else {
-                break;
-            }
-        }
-
-        Ok(result)
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
+    async fn get_oplog_with_claims(
+        &self,
+        agent_id: &OwnedAgentId,
+        from: OplogIndex,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        self.read_full_oplog(agent_id, from, ClaimVisibility::Shown)
+            .await
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id, query))]
@@ -1047,6 +1042,7 @@ impl TestDsl for TestWorkerExecutor {
                 auth_ctx: Some(self.auth_ctx().into()),
                 to_oplog_index: None,
                 scan_allowance: None,
+                claims: ClaimVisibility::Hidden.to_protobuf(),
             })
             .await?
             .into_inner();
@@ -1079,6 +1075,7 @@ impl TestDsl for TestWorkerExecutor {
                     count: 100,
                     query: query.to_string(),
                     auth_ctx: Some(self.auth_ctx().into()),
+                    claims: ClaimVisibility::Hidden.to_protobuf(),
                 })
                 .await?
                 .into_inner();
@@ -1091,6 +1088,7 @@ impl TestDsl for TestWorkerExecutor {
                                 &agent_id.agent_id,
                                 agent_id.environment_id,
                                 chunk.entries,
+                                ClaimVisibility::Hidden,
                             )
                             .await?,
                         );
@@ -1221,29 +1219,15 @@ impl TestDsl for TestWorkerExecutor {
         target_revision: ComponentRevision,
         disable_wakeup: bool,
     ) -> anyhow::Result<()> {
-        let response = self
-            .client
-            .clone()
-            .update_worker(UpdateWorkerRequest {
-                agent_id: Some(agent_id.agent_id.into()),
-                environment_id: Some(agent_id.environment_id.into()),
-                target_revision: target_revision.into(),
-                mode: UpdateMode::Automatic.into(),
-                auth_ctx: Some(self.auth_ctx().into()),
-                disable_wakeup,
-                caller: Some(Caller::anonymous().into()),
-                expected_fingerprint: None,
-            })
-            .await?
-            .into_inner();
-
-        match response.result {
-            Some(update_worker_response::Result::Success(_)) => Ok(()),
-            Some(update_worker_response::Result::Failure(error)) => {
-                Err(anyhow!("Failed to update worker: {error:?}"))
-            }
-            _ => Err(anyhow!("Failed to update worker: unknown error")),
-        }
+        self.update_worker_as_caller(
+            agent_id,
+            AgentUpdateMode::Automatic,
+            target_revision,
+            disable_wakeup,
+            Caller::anonymous(),
+        )
+        .await
+        .map(|_| ())
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id, target_revision, disable_wakeup))]
@@ -1253,29 +1237,15 @@ impl TestDsl for TestWorkerExecutor {
         target_revision: ComponentRevision,
         disable_wakeup: bool,
     ) -> anyhow::Result<()> {
-        let response = self
-            .client
-            .clone()
-            .update_worker(UpdateWorkerRequest {
-                agent_id: Some(agent_id.agent_id.into()),
-                environment_id: Some(agent_id.environment_id.into()),
-                target_revision: target_revision.into(),
-                mode: UpdateMode::Automatic.into(),
-                auth_ctx: Some(self.auth_ctx().into()),
-                disable_wakeup,
-                caller: Some(Caller::anonymous().into()),
-                expected_fingerprint: None,
-            })
-            .await?
-            .into_inner();
-
-        match response.result {
-            Some(update_worker_response::Result::Success(_)) => Ok(()),
-            Some(update_worker_response::Result::Failure(error)) => {
-                Err(anyhow!("Failed to update worker: {error:?}"))
-            }
-            _ => Err(anyhow!("Failed to update worker: unknown error")),
-        }
+        self.update_worker_as_caller(
+            agent_id,
+            AgentUpdateMode::Automatic,
+            target_revision,
+            disable_wakeup,
+            Caller::anonymous(),
+        )
+        .await
+        .map(|_| ())
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id, target_revision, disable_wakeup))]
@@ -1285,6 +1255,26 @@ impl TestDsl for TestWorkerExecutor {
         target_revision: ComponentRevision,
         disable_wakeup: bool,
     ) -> anyhow::Result<()> {
+        self.update_worker_as_caller(
+            agent_id,
+            AgentUpdateMode::Manual,
+            target_revision,
+            disable_wakeup,
+            Caller::anonymous(),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id, ?mode, target_revision, disable_wakeup))]
+    async fn update_worker_as_caller(
+        &self,
+        agent_id: &OwnedAgentId,
+        mode: AgentUpdateMode,
+        target_revision: ComponentRevision,
+        disable_wakeup: bool,
+        caller: Caller,
+    ) -> anyhow::Result<OplogIndex> {
         let response = self
             .client
             .clone()
@@ -1292,17 +1282,17 @@ impl TestDsl for TestWorkerExecutor {
                 agent_id: Some(agent_id.agent_id.into()),
                 environment_id: Some(agent_id.environment_id.into()),
                 target_revision: target_revision.into(),
-                mode: UpdateMode::Manual.into(),
+                mode: UpdateMode::from(mode).into(),
                 auth_ctx: Some(self.auth_ctx().into()),
                 disable_wakeup,
-                caller: Some(Caller::anonymous().into()),
+                caller: Some(caller.into()),
                 expected_fingerprint: None,
             })
             .await?
             .into_inner();
 
         match response.result {
-            Some(update_worker_response::Result::Success(_)) => Ok(()),
+            Some(update_worker_response::Result::Success(index)) => Ok(OplogIndex::from_u64(index)),
             Some(update_worker_response::Result::Failure(error)) => {
                 Err(anyhow!("Failed to update worker: {error:?}"))
             }
@@ -1811,4 +1801,63 @@ fn parse_provision_config_from_agent_type_schema(
             })
         })
         .collect()
+}
+
+impl TestWorkerExecutor {
+    /// Reads the whole oplog from `from` page by page, with each omitted entry read in full.
+    async fn read_full_oplog(
+        &self,
+        agent_id: &OwnedAgentId,
+        from: OplogIndex,
+        claims: ClaimVisibility,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        let mut result = Vec::new();
+        let mut cursor = None;
+
+        loop {
+            let chunk = self
+                .client
+                .clone()
+                .get_oplog(workerexecutor::v1::GetOplogRequest {
+                    agent_id: Some(agent_id.agent_id.into()),
+                    environment_id: Some(agent_id.environment_id.into()),
+                    from_oplog_index: from.into(),
+                    cursor,
+                    count: 100,
+                    auth_ctx: Some(self.auth_ctx().into()),
+                    to_oplog_index: None,
+                    scan_allowance: None,
+                    claims: claims.to_protobuf(),
+                })
+                .await?
+                .into_inner();
+
+            if let Some(chunk) = chunk.result {
+                match chunk {
+                    get_oplog_response::Result::Success(chunk) => {
+                        result.extend(
+                            self.full_oplog_entries(
+                                &agent_id.agent_id,
+                                agent_id.environment_id,
+                                chunk.entries,
+                                claims,
+                            )
+                            .await?,
+                        );
+                        match chunk.next {
+                            Some(next) => cursor = Some(next),
+                            None => break,
+                        }
+                    }
+                    get_oplog_response::Result::Failure(error) => {
+                        return Err(anyhow!("Failed to get oplog: {error:?}"));
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        Ok(result)
+    }
 }

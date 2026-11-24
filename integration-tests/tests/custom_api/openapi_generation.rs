@@ -134,6 +134,21 @@ async fn test_open_api_yaml_generation(
     let yaml_as_json = serde_json::to_value(&yaml_value)?;
 
     assert_eq!(json_value, yaml_as_json);
+    let operation = &json_value["paths"]["/http-agents/{agent-name}/json-body/{id}"]["post"];
+    let key = operation["parameters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|parameter| parameter["name"] == "Idempotency-Key")
+        .unwrap();
+    assert_eq!(key["in"], "header");
+    assert_eq!(key["required"], false);
+    assert_eq!(key["schema"]["type"], "string");
+    for response in operation["responses"].as_object().unwrap().values() {
+        for name in ["Golem-Invocation-Id", "Golem-Environment-Id"] {
+            assert_eq!(response["headers"][name]["schema"]["type"], "string");
+        }
+    }
 
     Ok(())
 }

@@ -223,12 +223,15 @@ pub trait WorkerProxy: Send + Sync {
         card: &StoredCard,
     ) -> Result<(), WorkerProxyError>;
 
+    /// Asks the worker service to update an agent. `requester` is who asked for the update; the
+    /// target records it in the update's `PendingUpdate` entries.
     async fn update(
         &self,
         owned_agent_id: &OwnedAgentId,
         target_revision: ComponentRevision,
         mode: UpdateMode,
         disable_wakeup: bool,
+        requester: Caller,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError>;
 
@@ -303,6 +306,7 @@ pub trait WorkerProxy: Send + Sync {
         first_entry_index: OplogIndex,
         entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
         auth_ctx: &AuthCtx,
+        caller: &Caller,
     ) -> Result<(), WorkerProxyError>;
 }
 
@@ -692,6 +696,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                         idempotency_key,
                         oplog_index,
                         agent_fingerprint,
+                        background_failure: None,
                     },
                     None => AgentInvocationOutput {
                         result: AgentInvocationResult::AgentInitialization,
@@ -702,6 +707,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                         idempotency_key,
                         oplog_index,
                         agent_fingerprint,
+                        background_failure: None,
                     },
                 };
                 Ok(output)
@@ -907,6 +913,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         target_revision: ComponentRevision,
         mode: UpdateMode,
         disable_wakeup: bool,
+        requester: Caller,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         debug!("Updating remote worker to revision {target_revision} in {mode:?} mode");
@@ -921,6 +928,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     auth_ctx: Some(auth_ctx.clone().into()),
                     disable_wakeup,
                     environment_id: Some(owned_agent_id.environment_id.into()),
+                    caller: Some(requester.clone().into()),
                 }))
             })
             .await?
@@ -1019,7 +1027,6 @@ impl WorkerProxy for RemoteWorkerProxy {
                     resolved_revert: resolved_revert.clone().map(|resolved| {
                         golem_api_grpc::proto::golem::common::ResolvedRevert {
                             last_oplog_index: resolved.last_oplog_index.as_u64(),
-                            observed_oplog_index: resolved.observed_oplog_index.as_u64(),
                         }
                     }),
                 }))
@@ -1209,6 +1216,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         first_entry_index: OplogIndex,
         entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
         auth_ctx: &AuthCtx,
+        caller: &Caller,
     ) -> Result<(), WorkerProxyError> {
         debug!(target_agent_id=%target_agent_id, "Processing oplog entries on remote agent");
 
@@ -1227,6 +1235,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     entries: entries.clone(),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     component_id: Some(component_id.into()),
+                    caller: Some(caller.clone().into()),
                 }))
             })
             .await?

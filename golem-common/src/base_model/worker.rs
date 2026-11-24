@@ -201,7 +201,6 @@ declare_structs! {
     #[cfg_attr(feature = "full", desert(evolution()))]
     pub struct ResolvedRevert {
         pub last_oplog_index: OplogIndex,
-        pub observed_oplog_index: OplogIndex,
     }
 
     pub struct AgentFileSystemNode {

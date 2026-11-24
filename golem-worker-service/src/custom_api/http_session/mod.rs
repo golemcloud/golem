@@ -74,6 +74,7 @@ impl HttpSessionError {
 
 #[derive(Clone)]
 pub enum HttpSessionEvent {
+    QueuedAccepted(InvocationAccepted),
     Accepted(InvocationAccepted),
     Result(Box<golem_api_grpc::proto::golem::worker::InvocationSessionResult>),
     OutputItem(golem_api_grpc::proto::golem::worker::OutputStreamItem),
@@ -85,6 +86,7 @@ pub enum HttpSessionEvent {
 impl std::fmt::Debug for HttpSessionEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
+            Self::QueuedAccepted(_) => "QueuedAccepted",
             Self::Accepted(_) => "Accepted",
             Self::Result(_) => "Result",
             Self::OutputItem(_) => "OutputItem",

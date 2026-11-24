@@ -55,10 +55,26 @@ type (
 	AgentInvocationStartedParameters  = oplogwit.AgentInvocationStartedParameters
 	AgentInvocationFinishedParameters = oplogwit.AgentInvocationFinishedParameters
 	AgentInvocationFailedParameters   = oplogwit.AgentInvocationFailedParameters
+	AgentInvocationSettledParameters  = oplogwit.AgentInvocationSettledParameters
 	ErrorParameters                   = oplogwit.ErrorParameters
 	LogParameters                     = oplogwit.LogParameters
 	// Timestamp is the time of an entry: seconds and nanoseconds since the epoch.
 	Timestamp = oplogwit.Datetime
+)
+
+// The caller of a recorded invocation: the principal that started the chain, the principal
+// that made the call, and the tokens presented at the entry point. The oplog never gives a
+// user's claims to a guest.
+type (
+	PublicCaller                = oplogwit.PublicCaller
+	PublicPrincipal             = oplogwit.PublicPrincipal
+	PublicPrincipalRef          = oplogwit.PublicPrincipalRef
+	PublicUserPrincipal         = oplogwit.PublicUserPrincipal
+	PublicAccountPrincipal      = oplogwit.PublicAccountPrincipal
+	PublicAccountAuthentication = oplogwit.PublicAccountAuthentication
+	PublicAgentPrincipal        = oplogwit.PublicAgentPrincipal
+	PublicToolPrincipal         = oplogwit.PublicToolPrincipal
+	PublicTokenProvenance       = oplogwit.PublicTokenProvenance
 )
 
 // SearchHit is an entry [Search] found, with its index in the oplog.

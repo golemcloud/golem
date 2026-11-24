@@ -705,6 +705,347 @@ async fn scope_cards_are_delivered_by_both_await_variants_and_removed_at_end(
     Ok(())
 }
 
+/// The export's return cuts off the lent scope card: a call the callee makes before it returns
+/// lists the card, and background work that runs right after `task.return` no longer does. The
+/// recorded history replays after a real executor restart, and a new invocation on the
+/// reconstructed agent is cut off the same way.
+#[test]
+#[timeout("3m")]
+#[tracing::instrument]
+async fn lent_scope_card_is_cut_off_at_the_callee_export_return_live_and_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend(scope_card_initial_permissions());
+        })
+        .store()
+        .await?;
+    let caller = agent_key!("ScopeCardAgent", "return-cut-off-caller");
+    let target_name = "return-cut-off-target";
+    let target = agent_key!("ScopeCardAgent", target_name);
+    configure_scope_card_root(&authority, &component, &caller)?;
+    executor.start_agent(&component.id, caller.clone()).await?;
+    let target_worker = executor.start_agent(&component.id, target.clone()).await?;
+
+    let before_return = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "lend_scope_around_return",
+            data_value!(target_name),
+        )
+        .await?
+        .into_typed::<Option<SchemaCardId>>()?;
+    assert!(
+        before_return.is_some(),
+        "a call made before the export returned must list the lent scope card"
+    );
+    let after_return = executor
+        .invoke_and_await_agent(
+            &component,
+            &target,
+            "lent_scope_observations_after_return",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<Option<SchemaCardId>>>()?;
+    assert_eq!(
+        after_return,
+        vec![None],
+        "background work after the export returned must not list the lent scope card"
+    );
+
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+
+    let replayed = executor
+        .invoke_and_await_agent(
+            &component,
+            &target,
+            "lent_scope_observations_after_return",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<Option<SchemaCardId>>>()?;
+    assert_eq!(
+        replayed,
+        vec![None],
+        "replay reproduces the recorded cut-off"
+    );
+
+    let before_return = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "lend_scope_around_return",
+            data_value!(target_name),
+        )
+        .await?
+        .into_typed::<Option<SchemaCardId>>()?;
+    assert!(
+        before_return.is_some(),
+        "after the restart, a call made before the export returned must list the lent scope card"
+    );
+    let after_return = executor
+        .invoke_and_await_agent(
+            &component,
+            &target,
+            "lent_scope_observations_after_return",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<Option<SchemaCardId>>>()?;
+    assert_eq!(
+        after_return,
+        vec![None, None],
+        "after the restart, background work after the export returned must not list the lent \
+         scope card"
+    );
+
+    executor.check_oplog_is_queryable(&target_worker).await?;
+    Ok(())
+}
+
+/// After the export's return, background work can neither lend the lent scope card through a
+/// handle it obtained before the return, nor lend a card derived from it, nor derive from it. A
+/// scope card derived from the callee's own wallet stays usable. The checks replay after a real
+/// executor restart and hold again for a new invocation on the reconstructed agent.
+#[test]
+#[timeout("3m")]
+#[tracing::instrument]
+async fn lent_scope_card_handles_are_refused_after_the_callee_export_return_live_and_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend(scope_card_initial_permissions());
+        })
+        .store()
+        .await?;
+    let caller = agent_key!("ScopeCardAgent", "handle-cut-off-caller");
+    let target_name = "handle-cut-off-target";
+    let target = agent_key!("ScopeCardAgent", target_name);
+    let witness_name = "handle-cut-off-witness";
+    configure_scope_card_root(&authority, &component, &caller)?;
+    executor.start_agent(&component.id, caller.clone()).await?;
+    let target_worker = executor.start_agent(&component.id, target.clone()).await?;
+
+    let lend = async |executor: &TestWorkerExecutor| -> anyhow::Result<Vec<(String, bool)>> {
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &caller,
+                "lend_scope_for_handle_use",
+                data_value!(target_name, witness_name),
+            )
+            .await?
+            .into_typed::<Vec<(String, bool)>>()
+    };
+    let checks_after_return =
+        async |executor: &TestWorkerExecutor| -> anyhow::Result<Vec<Vec<(String, bool)>>> {
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &target,
+                    "lent_scope_handle_checks_after_return",
+                    data_value!(),
+                )
+                .await?
+                .into_typed::<Vec<Vec<(String, bool)>>>()
+        };
+    let assert_all_hold = |checks: &[(String, bool)], when: &str| {
+        let failed = checks
+            .iter()
+            .filter(|(_, holds)| !holds)
+            .map(|(check, _)| check.as_str())
+            .collect::<Vec<_>>();
+        assert!(!checks.is_empty(), "{when}: no checks were made");
+        assert!(failed.is_empty(), "{when}: failed checks: {failed:?}");
+    };
+
+    assert_all_hold(&lend(&executor).await?, "before the return");
+    let after_return = checks_after_return(&executor).await?;
+    assert_eq!(after_return.len(), 1);
+    assert_all_hold(&after_return[0], "after the return");
+
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+
+    let replayed = checks_after_return(&executor).await?;
+    assert_eq!(
+        replayed, after_return,
+        "replay reproduces the recorded checks"
+    );
+
+    assert_all_hold(
+        &lend(&executor).await?,
+        "before the return, after the restart",
+    );
+    let after_return = checks_after_return(&executor).await?;
+    assert_eq!(after_return.len(), 2);
+    assert_all_hold(&after_return[1], "after the return, after the restart");
+
+    executor.check_oplog_is_queryable(&target_worker).await?;
+    Ok(())
+}
+
+/// A crash during the drain, while the export's return hides the lent scope card, must not drop
+/// the roots of the still-installed card. The lent card has a root that expires. After a real
+/// executor restart, replay reaches its tail in background work that runs after the cut-off,
+/// before the root expires. The background work then stays resident in a synchronous call until
+/// the root expired, and makes a card call. Only the roots that the replay finish kept let that
+/// card call's boundary revoke the expired root.
+#[test]
+#[timeout("3m")]
+#[tracing::instrument]
+async fn hidden_scope_card_roots_survive_replay_finished_during_the_drain(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend(scope_card_initial_permissions());
+        })
+        .store()
+        .await?;
+    let caller = agent_key!("ScopeCardAgent", "drain-roots-caller");
+    let target_name = "drain-roots-target";
+    let target = agent_key!("ScopeCardAgent", target_name);
+    let witness_name = "drain-roots-witness";
+    let witness = agent_key!("ScopeCardAgent", witness_name);
+    let root_card = configure_scope_card_root(&authority, &component, &caller)?;
+    let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let target_worker = executor.start_agent(&component.id, target.clone()).await?;
+    let witness_worker = executor.start_agent(&component.id, witness.clone()).await?;
+
+    // Whole seconds, so the expiry survives any timestamp encoding unchanged.
+    let now = chrono::DateTime::from_timestamp(Utc::now().timestamp(), 0)
+        .expect("the current time is a valid timestamp");
+    let root_expiry = now + chrono::Duration::seconds(40);
+    let expiring_root = concrete_inspect_card(root_card, Some(root_expiry));
+    let expiring_root_id = expiring_root.card_id();
+    authority.add_card(expiring_root.clone());
+    executor
+        .queue_card_install(&caller_worker.agent_id, expiring_root)
+        .await?;
+
+    let witness_release = executor
+        .invoke_and_await_agent(
+            &component,
+            &witness,
+            "create_release_promise",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<PromiseId>()?;
+    let release = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "lend_scope_held_through_drain",
+            data_value!(
+                target_name,
+                witness_name,
+                witness_release.clone(),
+                (
+                    root_expiry.timestamp(),
+                    root_expiry.timestamp_subsec_nanos()
+                )
+            ),
+        )
+        .await?
+        .into_typed::<PromiseId>()?;
+    executor
+        .wait_for_status(
+            &target_worker,
+            AgentStatus::Suspended,
+            Duration::from_secs(10),
+        )
+        .await?;
+
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &release, vec![1])
+        .await?;
+    // The witness suspends only after the callee's replay finished and its
+    // background work called `await_release`.
+    executor
+        .wait_for_status(
+            &witness_worker,
+            AgentStatus::Suspended,
+            Duration::from_secs(15),
+        )
+        .await?;
+    let until_expiry = (root_expiry - Utc::now()).to_std().map_err(|_| {
+        anyhow::anyhow!("the root expired before the callee's replay finished; the test cannot run")
+    })?;
+    tokio::time::sleep(until_expiry + Duration::from_secs(1)).await;
+    executor
+        .complete_promise(
+            &executor.context.default_environment_id,
+            &witness_release,
+            vec![1],
+        )
+        .await?;
+    // Queued behind the drain, so it runs after the drain ended.
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &target,
+            "lent_scope_observations_after_return",
+            data_value!(),
+        )
+        .await?;
+
+    let target_oplog = executor
+        .get_oplog(&target_worker, OplogIndex::INITIAL)
+        .await?;
+    assert!(
+        target_oplog.iter().any(|entry| matches!(
+            &entry.entry,
+            PublicOplogEntry::CardRevokedCascade(params)
+                if params.revoked_card_ids.contains(&expiring_root_id)
+        )),
+        "the callee must revoke the expired root of the hidden scope card"
+    );
+    executor.check_oplog_is_queryable(&target_worker).await?;
+    Ok(())
+}
+
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
@@ -2303,6 +2644,119 @@ async fn outbound_rpc_create_requires_whole_agent_authority_for_the_concrete_chi
             }
         }
         executor.shutdown_and_wait_for_invocation_loops().await?;
+    }
+    Ok(())
+}
+
+/// Calls an unkeyed and a keyed `GolemHostApi` agent over RPC from a caller whose card grants
+/// agent invocation only through `type_grant`, and returns both results.
+async fn rpc_with_only_a_type_invoke_grant(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    host_api_tests: &PrecompiledComponent,
+    type_grant: Option<&str>,
+) -> anyhow::Result<(Result<(), String>, Result<(), String>)> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let type_grant = type_grant
+        .map(|grant| parse_polymorphic_permission(grant).expect("valid type invoke grant"));
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("GolemHostApi")
+        .update_agent_provision_config("GolemHostApi", |config| {
+            let positive = &mut config.initial_permissions.lower_bound.positive;
+            positive
+                .retain(|permission| !matches!(permission, PolymorphicPermissionPattern::Agent(_)));
+            positive.push(
+                parse_polymorphic_permission("agent(?agent) @ * : view : *")
+                    .expect("valid self-view permission"),
+            );
+            positive.extend(type_grant);
+        })
+        .store()
+        .await?;
+    let caller = agent_key!("GolemHostApi", "type-grant-rpc-caller");
+    configure_scope_card_root(&authority, &component, &caller)?;
+    executor.start_agent(&component.id, caller.clone()).await?;
+    let unkeyed_target = executor
+        .create_unkeyed_agent(
+            &component.id,
+            None,
+            agent_key!("GolemHostApi", "type-grant-rpc-target"),
+            HashMap::new(),
+        )
+        .await?;
+
+    let unkeyed = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "outbound_agent_rpc_invoke_by_id_and_await_result",
+            data_value!("GolemHostApi", unkeyed_target.agent_id.0, "get_self_uri"),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    let keyed = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "outbound_agent_rpc_invoke_and_await_result",
+            data_value!("GolemHostApi", "type-grant-rpc-target", "get_self_uri"),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    Ok((unkeyed, keyed))
+}
+
+/// Guards the type-name match of `Type(*)` owners: an unkeyed agent of the type is covered like
+/// a keyed one.
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn type_wildcard_invoke_grant_covers_unkeyed_and_keyed_rpc_targets(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let (unkeyed, keyed) = rpc_with_only_a_type_invoke_grant(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        Some("agent(?component/GolemHostApi(*)) @ * : invoke : *"),
+    )
+    .await?;
+    assert_eq!(
+        unkeyed,
+        Ok(()),
+        "a GolemHostApi(*) grant must reach an unkeyed agent"
+    );
+    assert_eq!(
+        keyed,
+        Ok(()),
+        "a GolemHostApi(*) grant must reach a keyed agent"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn unkeyed_rpc_target_is_denied_without_an_invoke_grant(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let (unkeyed, keyed) =
+        rpc_with_only_a_type_invoke_grant(last_unique_id, deps, host_api_tests, None).await?;
+    for (target, result) in [("unkeyed", unkeyed), ("keyed", keyed)] {
+        assert!(
+            result.as_ref().is_err_and(|error| error.contains("Denied")),
+            "RPC to a {target} agent without an invoke grant must be denied, got {result:?}"
+        );
     }
     Ok(())
 }
@@ -5694,6 +6148,179 @@ async fn start_oplog_enrichment_grant_agent(
     Ok((component, agent, worker))
 }
 
+#[test]
+#[timeout("2m")]
+async fn guest_oplog_search_stops_at_the_granted_window(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("GolemHostApi")
+        .try_update_agent_provision_config("GolemHostApi", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .push(parse_polymorphic_permission(
+                    "oplog(?env/*/*) @ * : read : start=1:end=100",
+                )?);
+            Ok::<_, golem_common::model::card::CardParseError>(())
+        })?
+        .store()
+        .await?;
+    let agent = agent_key!("GolemHostApi", "oplog-search-window");
+    configure_scope_card_root(&authority, &component, &agent)?;
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    let target_agent = agent_key!("GolemHostApi", "oplog-search-target");
+    configure_scope_card_root(&authority, &component, &target_agent)?;
+    let target = executor
+        .start_agent(&component.id, target_agent.clone())
+        .await?;
+
+    let tip = executor.get_oplog_last_index(&target).await?;
+    assert!(tip < 100);
+    for index in (tip + 1)..=101 {
+        let entry = OplogEntry::Log {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            parent_start_index: None,
+            level: golem_common::model::oplog::LogLevel::Stderr,
+            context: String::new(),
+            message: match index {
+                100 => "windowmarker",
+                101 => "windowmarker nextmarker",
+                _ => "filler",
+            }
+            .to_string(),
+            trace_context: None,
+        };
+        let added = executor
+            .add_and_commit_oplog_entry(&target.agent_id(), entry)
+            .await?;
+        assert_eq!(added.as_u64(), index);
+    }
+
+    // Seeded Log entries mark the target Running. Complete an invocation so restart leaves it
+    // idle; with no kept search, this method returns without reading the target's oplog.
+    let unopened = executor
+        .invoke_and_await_agent(
+            &component,
+            &target_agent,
+            "continue_kept_oplog_search",
+            data_value!(1u64),
+        )
+        .await?
+        .into_typed::<Result<Vec<u64>, String>>()?;
+    assert_eq!(
+        unopened,
+        Err("open_kept_oplog_search must be called first".to_string())
+    );
+    executor
+        .wait_for_status(&target, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+
+    // Use fresh read counters so the old executor's asynchronous status flush (which also
+    // reads the oplog to catch up its invocation-result index) cannot count as a search read.
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+
+    let reads = executor.oplog_service_call_count(&target.agent_id(), "service_read_exact");
+    let found = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "search_oplog_result",
+            data_value!(target.agent_id(), "windowmarker"),
+        )
+        .await?
+        .into_typed::<Result<Option<Vec<u64>>, String>>()?
+        .map_err(anyhow::Error::msg)?;
+    assert_eq!(found, Some(vec![100]));
+    assert_eq!(
+        executor.oplog_service_call_count(&target.agent_id(), "service_read_exact"),
+        reads + 1
+    );
+
+    // Lose the End after scanning an empty window, so the executor must scan again on repair.
+    let (entered, release) = executor.gate_next_oplog_function_end(
+        &worker.agent_id(),
+        HostFunctionName::GolemApiSearchOplogNext,
+        true,
+    );
+    let invocation = executor.invoke_and_await_agent(
+        &component,
+        &agent,
+        "search_oplog_result",
+        data_value!(target.agent_id(), "nextmarker"),
+    );
+    let lose_end = async {
+        entered.await.expect("the search must reach its End");
+        release.send(()).expect("the End must still be waiting");
+    };
+    let (empty, ()) = tokio::join!(invocation, lose_end);
+    assert_eq!(
+        empty?.into_typed::<Result<Option<Vec<u64>>, String>>()?,
+        Ok(Some(vec![]))
+    );
+    assert_eq!(
+        executor.oplog_service_call_count(&target.agent_id(), "service_read_exact"),
+        reads + 3
+    );
+
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let searches = oplog
+        .iter()
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "golem::api::search-oplog::get-next"))
+        .map(|entry| entry.oplog_index)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        searches.len(),
+        2,
+        "repair must reuse the second search's Start"
+    );
+    let repaired_ends = oplog.iter().filter(|entry| match &entry.entry {
+        PublicOplogEntry::End(end) => end.start_index == searches[1],
+        _ => false,
+    });
+    assert_eq!(repaired_ends.count(), 1);
+
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority).await?;
+    let denied = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "continue_kept_oplog_search",
+            data_value!(1u64),
+        )
+        .await?
+        .into_typed::<Result<Vec<u64>, String>>()?;
+    assert_eq!(denied, Err("OplogReadError::PermissionDenied".to_string()));
+    assert_eq!(
+        executor.oplog_service_call_count(&target.agent_id(), "service_read_exact"),
+        0
+    );
+
+    let new_search = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "search_oplog_result",
+            data_value!(target.agent_id(), "windowmarker"),
+        )
+        .await?
+        .into_typed::<Result<Option<Vec<u64>>, String>>()?;
+    assert_eq!(new_search, Ok(Some(vec![100])));
+    Ok(())
+}
+
 /// `enrich-oplog-entries` reads the recorded `Start` at the divergence index of a raw failed
 /// update, which the guest supplies, so the oplog grant must cover that index as well as the
 /// index of the entry. A grant for the entry's index alone refuses a forged divergence outside it.
@@ -5985,18 +6612,26 @@ async fn every_protected_rdbms_agent_rpc_tool_and_oplog_import_enforces_permissi
         assert!(denied.is_err(), "agent operation {method} must be denied");
     }
 
-    for method in ["read_oplog_result", "search_oplog_result"] {
-        let params = if method == "read_oplog_result" {
-            data_value!(target_id.clone())
-        } else {
-            data_value!(target_id.clone(), "payload")
-        };
-        let denied = executor
-            .invoke_and_await_agent(&component, &caller, method, params)
-            .await?
-            .into_typed::<Result<(), String>>()?;
-        assert!(denied.is_err(), "oplog operation {method} must be denied");
-    }
+    let denied_read = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "read_oplog_result",
+            data_value!(target_id.clone()),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert!(denied_read.is_err(), "oplog read must be denied");
+    let denied_search = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "search_oplog_result",
+            data_value!(target_id, "payload"),
+        )
+        .await?
+        .into_typed::<Result<Option<Vec<u64>>, String>>()?;
+    assert!(denied_search.is_err(), "oplog search must be denied");
     let denied_config = executor
         .invoke_and_await_agent(
             &component,

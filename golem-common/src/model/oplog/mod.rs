@@ -23,9 +23,9 @@ mod tests;
 
 pub use crate::base_model::OplogIndex;
 pub use crate::base_model::oplog::{
-    OplogEntry, PublicOplogEntry, PublicOplogEntryWithIndex, ReplayDivergence, ReplayHostCall,
-    ReplayStep, ReplayStepDescription, StartIdentityField, UpdateFailureClass, attachment,
-    public_oplog_entry,
+    OplogEntry, PublicOplogEntry, PublicOplogEntryWithIndex, ReplayDivergence, ReplayFullStart,
+    ReplayHostCall, ReplaySnapshotStart, ReplayStart, ReplayStep, ReplayStepDescription,
+    StartIdentityField, UpdateFailureClass, attachment, public_oplog_entry,
 };
 pub use payload::*;
 pub use public_types::*;
@@ -190,6 +190,7 @@ impl OplogEntry {
             | OplogEntry::CompletionDelivered { .. }
             | OplogEntry::AgentInvocationStarted { .. }
             | OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::AgentInvocationSettled { .. }
             | OplogEntry::Suspend { .. }
             | OplogEntry::RecoverySucceeded { .. }
             | OplogEntry::Interrupted { .. }
@@ -267,6 +268,7 @@ impl OplogEntry {
             | OplogEntry::CompletionDelivered { .. }
             | OplogEntry::AgentInvocationStarted { .. }
             | OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::AgentInvocationSettled { .. }
             | OplogEntry::AgentInvocationFailed { .. }
             | OplogEntry::Suspend { .. }
             | OplogEntry::Error { .. }
@@ -405,6 +407,7 @@ impl OplogScopeProjection {
             OplogEntry::Create { .. }
             | OplogEntry::AgentInvocationStarted { .. }
             | OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::AgentInvocationSettled { .. }
             | OplogEntry::Suspend { .. }
             | OplogEntry::RecoverySucceeded { .. }
             | OplogEntry::Interrupted { .. }

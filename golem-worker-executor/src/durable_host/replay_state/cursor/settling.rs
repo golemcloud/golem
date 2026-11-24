@@ -312,6 +312,7 @@ impl ReplayState {
                      the bootstrap block",
                 ),
                 mismatched: Vec::new(),
+                replay_start: None,
             }));
         }
         Ok(())
@@ -337,6 +338,7 @@ impl ReplayState {
                         "core initializer made a durable call after its recorded bootstrap block",
                     ),
                     mismatched: Vec::new(),
+                    replay_start: None,
                 }))
             }
             BootstrapTail::Live => {

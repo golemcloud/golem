@@ -305,6 +305,11 @@ pub enum InvocationEnd {
     /// A retry marker `Error` of the running invocation. It stays its result only when the
     /// retries are exhausted.
     Retrying,
+    /// `AgentInvocationFinished` with `awaits_settlement`, after which the agent gave up during
+    /// the background work of the invocation, before its `AgentInvocationSettled`. `failure` is
+    /// the give-up entry: an `Error` that names no invocation and has an exhausted retry state, or
+    /// `Exited`. The recorded result stays at `terminal`.
+    BackgroundFailed { failure: OplogIndex },
 }
 
 /// Where an invocation result lies in the oplog, and what lists the invocation without reading
@@ -312,7 +317,8 @@ pub enum InvocationEnd {
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
 pub struct InvocationResultPosition {
-    /// The entry that holds the result. It is the last change of the invocation.
+    /// The entry that holds the result. It is the last change of the invocation, except for a
+    /// background failure (see [`Self::last_change`]).
     pub terminal: OplogIndex,
     /// The `AgentInvocationStarted` or `PendingAgentInvocation` entry that holds the accepted
     /// request, so a duplicate request is compared with it without searching the oplog. `None`
@@ -324,8 +330,32 @@ pub struct InvocationResultPosition {
     pub operation: Option<InvocationOperation>,
     /// The timestamp of the acceptance entry, when the fold saw it.
     pub accepted_at: Option<Timestamp>,
-    /// The timestamp of `terminal`.
+    /// The timestamp of the last change: of `terminal`, or of the give-up entry of a background
+    /// failure.
     pub changed_at: Timestamp,
+}
+
+impl InvocationResultPosition {
+    /// The last entry that changed the invocation: the give-up entry of a background failure,
+    /// `terminal` otherwise.
+    pub fn last_change(&self) -> OplogIndex {
+        match self.end {
+            InvocationEnd::BackgroundFailed { failure } => failure,
+            _ => self.terminal,
+        }
+    }
+}
+
+/// The invocation whose result was recorded at the export's return and whose background work has
+/// not settled: its `AgentInvocationFinished` or `AgentInvocationFailed` awaits settlement and no
+/// `AgentInvocationSettled` followed it.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct SettlingInvocation {
+    pub key: InvocationId,
+    /// The position of the invocation's result: the recorded result, or
+    /// [`InvocationEnd::BackgroundFailed`] after the agent gave up during the background work.
+    pub result: InvocationResultPosition,
 }
 
 /// The accepted request of an invocation that has no result yet.
@@ -363,6 +393,8 @@ enum InvocationResultMembershipState {
     },
     Indexed {
         recent_by_key: OrdMap<InvocationId, InvocationResultPosition>,
+        /// The recent results by their last change, so the truncated ones are exactly those that
+        /// last changed before every retained one.
         recent_by_index: OrdMap<OplogIndex, InvocationId>,
         bloom: InvocationResultBloom,
     },
@@ -431,9 +463,9 @@ impl InvocationResultMembership {
             } => {
                 bloom.insert(&key);
                 if let Some(previous) = recent_by_key.remove(&key) {
-                    recent_by_index.remove(&previous.terminal);
+                    recent_by_index.remove(&previous.last_change());
                 }
-                recent_by_index.insert(position.terminal, key);
+                recent_by_index.insert(position.last_change(), key);
                 recent_by_key.insert(key, position);
                 Self::truncate_recent(self.capacity, recent_by_key, recent_by_index);
             }
@@ -451,10 +483,12 @@ impl InvocationResultMembership {
         matches!(self.state, InvocationResultMembershipState::Exact { .. })
     }
 
+    /// The oldest last change of a retained result. Every result that changed after it is
+    /// retained.
     pub fn oldest_retained_index(&self) -> Option<OplogIndex> {
         match &self.state {
             InvocationResultMembershipState::Exact { by_key, .. } => {
-                by_key.values().map(|position| position.terminal).min()
+                by_key.values().map(|position| position.last_change()).min()
             }
             InvocationResultMembershipState::Indexed {
                 recent_by_index, ..
@@ -517,7 +551,7 @@ impl InvocationResultMembership {
                 ..
             } => {
                 let position = recent_by_key.remove(key)?;
-                recent_by_index.remove(&position.terminal);
+                recent_by_index.remove(&position.last_change());
                 position
             }
         };
@@ -560,11 +594,11 @@ impl InvocationResultMembership {
                 (position.clone(), *key)
             })
             .collect();
-        by_index.sort_unstable_by_key(|(position, _)| position.terminal);
+        by_index.sort_unstable_by_key(|(position, _)| position.last_change());
         let mut recent_by_key = OrdMap::new();
         let mut recent_by_index = OrdMap::new();
         for (position, key) in by_index.into_iter().rev().take(self.capacity) {
-            recent_by_index.insert(position.terminal, key);
+            recent_by_index.insert(position.last_change(), key);
             recent_by_key.insert(key, position);
         }
         self.state = InvocationResultMembershipState::Indexed {
@@ -731,6 +765,13 @@ pub struct AgentStatusRecord {
     /// The last invocation cancelled again while it was neither pending nor running. A rejection
     /// `Error` that follows it in a later fold does not replace its earlier cancellation.
     pub withdrawn_again: Option<InvocationId>,
+    /// The invocation whose result was recorded at the export's return and whose background work
+    /// has not settled: its `AgentInvocationFinished` or `AgentInvocationFailed` awaits settlement
+    /// and no `AgentInvocationSettled` followed it. The agent runs while this is set.
+    pub settling_invocation: Option<InvocationId>,
+    /// The settling invocation as the invocation result fold sees it, with the position of its
+    /// recorded result, so a give-up in a later fold is attributed to it.
+    pub settling_result: Option<SettlingInvocation>,
     pub component_revision: ComponentRevision,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
@@ -805,6 +846,8 @@ impl Default for AgentStatusRecord {
             pending_durable_stream_cancellations: HashMap::new(),
             running: None,
             withdrawn_again: None,
+            settling_invocation: None,
+            settling_result: None,
             component_revision: ComponentRevision::INITIAL,
             component_size: 0,
             total_linear_memory_size: 0,

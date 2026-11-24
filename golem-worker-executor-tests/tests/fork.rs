@@ -888,10 +888,11 @@ impl WorkerProxy for LocalResumeProxy {
         revision: ComponentRevision,
         mode: UpdateMode,
         disable_wakeup: bool,
+        requester: golem_common::model::caller::Caller,
         auth: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         self.inner
-            .update(agent, revision, mode, disable_wakeup, auth)
+            .update(agent, revision, mode, disable_wakeup, requester, auth)
             .await
     }
 
@@ -1011,11 +1012,12 @@ impl WorkerProxy for LocalResumeProxy {
         first: OplogIndex,
         entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
         auth: &AuthCtx,
+        caller: &golem_common::model::caller::Caller,
     ) -> Result<(), WorkerProxyError> {
         self.inner
             .process_oplog_entries(
                 agent, env, component, revision, key, account, config, metadata, first, entries,
-                auth,
+                auth, caller,
             )
             .await
     }

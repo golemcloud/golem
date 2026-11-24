@@ -8799,6 +8799,7 @@ async fn fork_completed_stream_reconstructs_state_without_repeating_output(
                 finished = true;
             }
             Some(invocation_response::Response::Accepted(_))
+            | Some(invocation_response::Response::Ready(_))
             | Some(invocation_response::Response::Result(_)) => {}
             other => anyhow::bail!("unexpected output response: {other:?}"),
         }

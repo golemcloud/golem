@@ -86,7 +86,6 @@ impl Rpc for RemoteInvocationRpc {
                     if accepted.agent_id != Some(owned_agent_id.agent_id().into())
                         || accepted.idempotency_key != Some(idempotency_key.into())
                         || accepted.method_name != start.method_name
-                        || accepted.component_revision.is_none()
                     {
                         return Err(RpcError::ProtocolError {
                             details: "scheduled invocation acceptance does not match the target invocation".to_string(),

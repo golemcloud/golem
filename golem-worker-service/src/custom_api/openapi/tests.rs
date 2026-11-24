@@ -485,11 +485,12 @@ fn id_selector_openapi_documents_concrete_paths_and_required_query() {
         assert_eq!(
             params
                 .iter()
+                .filter(|p| p["in"] == "path")
                 .map(|p| p["name"].as_str().unwrap())
                 .collect::<Vec<_>>(),
             names
         );
-        for param in params {
+        for param in params.iter().filter(|p| p["in"] == "path") {
             assert_eq!(param["in"], "path");
             assert_eq!(param["required"], true);
             if param["name"] == "instance" {
@@ -524,7 +525,7 @@ fn id_selector_openapi_documents_concrete_paths_and_required_query() {
         let params = spec["paths"]["/query"]["get"]["parameters"]
             .as_array()
             .unwrap();
-        assert_eq!(params.len(), 1);
+        assert_eq!(params.len(), 2);
         assert_eq!(params[0]["name"], "instance");
         assert_eq!(params[0]["in"], "query");
         assert_eq!(params[0]["required"], true);
@@ -896,7 +897,15 @@ fn durable_stream_base_put_cors_exposes_only_base_response_headers() {
         .collect();
     assert_eq!(
         exposed,
-        ["Allow", "Location", "Retry-After",].into_iter().collect()
+        [
+            "Allow",
+            "Golem-Environment-Id",
+            "Golem-Invocation-Id",
+            "Location",
+            "Retry-After"
+        ]
+        .into_iter()
+        .collect()
     );
 }
 
@@ -1007,9 +1016,77 @@ fn durable_stream_schema_distinguishes_slots_and_scalar_results() {
 }
 
 #[test]
+fn typed_invocation_headers_preserve_declared_key_bindings() {
+    for binding in [
+        None,
+        Some(QueryOrHeaderType::Primitive(PathSegmentType::U32)),
+    ] {
+        let parameters = binding
+            .clone()
+            .into_iter()
+            .map(|parameter_type| MethodParameter::Header {
+                header_name: "iDeMpOtEnCy-KeY".into(),
+                parameter_type,
+            })
+            .collect();
+        let route = call_agent_route(
+            Method::POST,
+            vec![PathSegment::Literal {
+                value: "invoke".into(),
+            }],
+            RequestBodySchema::Unused,
+            parameters,
+            unit_response(),
+            None,
+        );
+        let spec = spec_for(vec![route]);
+        let operation = &spec["paths"]["/invoke"]["post"];
+        let keys: Vec<_> = operation["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|parameter| {
+                parameter["in"] == "header"
+                    && parameter["name"]
+                        .as_str()
+                        .unwrap()
+                        .eq_ignore_ascii_case("Idempotency-Key")
+            })
+            .collect();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0]["required"], binding.is_some());
+        if binding.is_some() {
+            assert_eq!(keys[0]["description"], "Header parameter: iDeMpOtEnCy-KeY");
+        } else {
+            assert!(
+                keys[0]["description"]
+                    .as_str()
+                    .unwrap()
+                    .contains("External invocation key")
+            );
+        }
+        assert_eq!(
+            keys[0]["schema"]["type"],
+            if binding.is_some() {
+                "integer"
+            } else {
+                "string"
+            }
+        );
+        for response in operation["responses"].as_object().unwrap().values() {
+            for name in ["Golem-Invocation-Id", "Golem-Environment-Id"] {
+                assert_eq!(response["headers"][name]["schema"]["type"], "string");
+                assert_eq!(response["headers"][name]["required"], false);
+            }
+        }
+        assert!(operation["responses"]["default"].is_object());
+    }
+}
+
+#[test]
 fn durable_stream_deployment_spec_snapshots() {
     use golem_common::schema::NamedField;
-    for with_input in [false, true] {
+    for (with_input, url_bound) in [(false, true), (true, true), (true, false)] {
         let mut route = call_agent_route(
             Method::PUT,
             vec![PathSegment::Literal {
@@ -1024,13 +1101,55 @@ fn durable_stream_deployment_spec_snapshots() {
             panic!()
         };
         call.route_mode = golem_service_base::custom_api::AgentRouteMode::DurableStreams;
+        let mut fields = vec![];
         if with_input {
-            call.method_input.input_schema = InputSchema::parameters([NamedField::user_supplied(
+            fields.push(NamedField::user_supplied(
                 "input",
                 SchemaType::stream(Some(str())),
-            )]);
+            ));
         }
+        if !url_bound {
+            fields.push(NamedField::user_supplied("argument", str()));
+            call.method_parameters.push(MethodParameter::Header {
+                header_name: "argument".into(),
+                parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::Str),
+            });
+        }
+        call.method_input.input_schema = InputSchema::parameters(fields);
         let spec = spec_for(vec![route]);
+        for (path, item) in spec["paths"].as_object().unwrap() {
+            for (method, operation) in item.as_object().unwrap() {
+                if !["put", "get", "head", "post", "delete"].contains(&method.as_str()) {
+                    continue;
+                }
+                assert!(
+                    !operation["parameters"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|parameter| parameter["name"]
+                            .as_str()
+                            .is_some_and(|name| name.eq_ignore_ascii_case("Idempotency-Key")))
+                );
+                let accepting = !path.contains("/forks/")
+                    && (method == "put" || (method == "post" && url_bound));
+                for response in operation["responses"].as_object().unwrap().values() {
+                    assert_eq!(
+                        response["headers"]["Golem-Invocation-Id"].is_object(),
+                        accepting,
+                        "{method} {path}"
+                    );
+                    assert_eq!(
+                        response["headers"]["Golem-Environment-Id"].is_object(),
+                        accepting,
+                        "{method} {path}"
+                    );
+                }
+            }
+        }
+        if !url_bound {
+            continue;
+        }
         let name = if with_input {
             "durable-stream-duplex.json"
         } else {
@@ -1225,7 +1344,22 @@ fn durable_stream_operations_have_concrete_typed_slots() {
         let fork = &paths[&format!("{fork_session}/streams/{slot}")];
         for method in ["get", "head", "post", "delete"] {
             assert_eq!(fork[method]["requestBody"], original[method]["requestBody"]);
-            assert_eq!(fork[method]["responses"], original[method]["responses"]);
+            let mut shared_responses = original[method]["responses"].clone();
+            if method == "post"
+                && let Some(responses) = shared_responses.as_object_mut()
+            {
+                responses.remove("default");
+                for response in responses.values_mut() {
+                    if let Some(headers) = response["headers"].as_object_mut() {
+                        headers.remove("Golem-Invocation-Id");
+                        headers.remove("Golem-Environment-Id");
+                        if headers.is_empty() {
+                            response.as_object_mut().unwrap().remove("headers");
+                        }
+                    }
+                }
+            }
+            assert_eq!(fork[method]["responses"], shared_responses);
             if let Some(parameters) = fork[method]["parameters"].as_array() {
                 let inherited: Vec<_> = parameters
                     .iter()

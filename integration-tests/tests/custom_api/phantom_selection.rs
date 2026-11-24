@@ -672,7 +672,7 @@ async fn selected_stream_roots_forks_receipts_and_links(
     .await??;
     let failed = agent
         .client
-        .put(agent.base_url.join(&selected(&base, Some(p)))?)
+        .put(agent.base_url.join(&selected(base, Some(p)))?)
         .send()
         .await?;
     assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -680,7 +680,7 @@ async fn selected_stream_roots_forks_receipts_and_links(
 
     let unknown = unknown_agent(&agent, "SelectedQueryAgent").await?;
     assert_eq!(
-        status(&agent, Method::PUT, &selected(&base, Some(unknown))).await?,
+        status(&agent, Method::PUT, &selected(base, Some(unknown))).await?,
         StatusCode::NOT_FOUND
     );
     assert_not_created(&agent, unknown).await?;
@@ -688,11 +688,7 @@ async fn selected_stream_roots_forks_receipts_and_links(
     let generated_root = existing_agent(&agent, "SelectedQueryAgent", &id).await?;
     let generated = agent
         .client
-        .put(
-            agent
-                .base_url
-                .join(&selected(&base, Some(generated_root)))?,
-        )
+        .put(agent.base_url.join(&selected(base, Some(generated_root)))?)
         .send()
         .await?;
     assert_eq!(generated.status(), StatusCode::CREATED);

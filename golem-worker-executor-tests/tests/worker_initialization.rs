@@ -2103,7 +2103,7 @@ impl Target {
         CreateIntent::Invocation {
             owner: self.owner.clone(),
             idempotency_key: None,
-            invocation: Some(increment_invocation()),
+            invocation: Some(Box::new(increment_invocation())),
         }
     }
 
@@ -2194,7 +2194,7 @@ async fn rejected_fresh_initializer_does_not_reject_its_valid_follower(
                     CreateIntent::Invocation {
                         owner: id.owner.clone(),
                         idempotency_key: None,
-                        invocation: Some(invocation),
+                        invocation: Some(Box::new(invocation)),
                     },
                 )
                 .await
@@ -2701,7 +2701,7 @@ async fn restart_initializes_a_partially_created_agent_as_its_recorded_creator(
     for loader in loaders {
         let id = target(&seed, &format!("restart-creator-{loader}"));
         if loader == "existing-only" {
-            Worker::interrupt(seed.all(), &id, false, callers::anonymous(), None).await?;
+            Worker::interrupt(seed.all(), &id, false, None).await?;
         }
         let worker = acquire(&seed, &id).await?;
         let entries = worker
@@ -2795,7 +2795,7 @@ async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
     let (executor, seed, _) = setup(last_unique_id, deps, component).await?;
     let id = target(&seed, "cancelled-creator");
     let all = seed.all().clone();
-    Worker::interrupt(&all, &id, false, callers::anonymous(), None).await?;
+    Worker::interrupt(&all, &id, false, None).await?;
     assert!(!executor.worker_is_cached(&id).await);
     assert!(
         !seed
@@ -2841,13 +2841,7 @@ async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
         .expect("creator must reach the initialization enqueue");
     creating.abort();
     assert!(creating.await.err().unwrap().is_cancelled());
-    let mut existing = Box::pin(Worker::interrupt(
-        &all,
-        &id,
-        false,
-        callers::anonymous(),
-        None,
-    ));
+    let mut existing = Box::pin(Worker::interrupt(&all, &id, false, None));
     let mut competing = Box::pin(acquire(&seed, &id));
     assert!(poll!(&mut existing).is_pending());
     assert!(poll!(&mut competing).is_pending());
@@ -3198,6 +3192,7 @@ async fn prepare_session(
                 method_name: Some("increment".into()),
                 consumed_fuel: 0,
                 component_revision: metadata.last_known_status.component_revision,
+                awaits_settlement: false,
             })
             .await
             .unwrap();
@@ -3271,6 +3266,7 @@ async fn completion_receipt_precedes_fifo_status_fold(
             method_name: Some("increment".into()),
             consumed_fuel: 0,
             component_revision: metadata.last_known_status.component_revision,
+            awaits_settlement: false,
         })
         .await
         .unwrap();
@@ -3430,6 +3426,7 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
                 .get_initial_worker_metadata()
                 .last_known_status
                 .component_revision,
+            awaits_settlement: false,
         })
         .await?;
     // Actor-owned reconstruction must reach the checkpoint before publishing the repaired status.
@@ -3461,6 +3458,7 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
                 idempotency_key: None,
                 oplog_index: Some(finished),
                 agent_fingerprint: None,
+                background_failure: None,
             },
         ),
     )

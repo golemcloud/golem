@@ -447,6 +447,7 @@ pub(crate) struct RecordedInvocationContext {
     pub caller: golem_api_grpc::proto::golem::component::Caller,
     pub context: Option<InvocationContext>,
     pub idempotency_key: IdempotencyKey,
+    pub supplied_key: Option<IdempotencyKey>,
     pub request_key: golem_common::model::InvocationRequestKey,
     pub freshness: golem_common::model::agent::InvocationFreshnessDisposition,
 }
@@ -501,6 +502,9 @@ struct RecordingWorkerClient {
     >>>,
     durable_stream_reads: Arc<Mutex<VecDeque<
         Option<golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotSuccess>,
+    >>>,
+    durable_stream_creations: Arc<Mutex<VecDeque<
+        golem_api_grpc::proto::golem::workerexecutor::v1::CreateStreamSessionSuccess,
     >>>,
     contexts: Arc<Mutex<Vec<RecordedInvocationContext>>>,
     invocation_output: AgentInvocationOutput,
@@ -667,6 +671,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: golem_common::model::agent::AgentUpdateMode,
         _: ComponentRevision,
         _: bool,
+        _: golem_common::model::caller::Caller,
         _: EnvironmentId,
         _: AgentFingerprint,
         _: AuthCtx,
@@ -681,6 +686,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: Option<OplogCursor>,
         _: u64,
         _: Option<crate::service::worker::OplogRangeRead>,
+        _: golem_common::model::caller::ClaimVisibility,
         _: EnvironmentId,
         _: AuthCtx,
     ) -> Result<GetOplogResponse, crate::service::worker::WorkerServiceError> {
@@ -693,6 +699,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: Option<OplogCursor>,
         _: u64,
         _: String,
+        _: golem_common::model::caller::ClaimVisibility,
         _: EnvironmentId,
         _: AuthCtx,
     ) -> Result<GetOplogResponse, crate::service::worker::WorkerServiceError> {
@@ -704,6 +711,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: &AgentId,
         _: OplogIndex,
         _: Option<golem_common::model::component::ComponentRevision>,
+        _: golem_common::model::caller::ClaimVisibility,
         _: EnvironmentId,
         _: AuthCtx,
     ) -> Result<
@@ -875,6 +883,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: i32,
         _: Option<::prost_types::Timestamp>,
         request_key: golem_common::model::InvocationRequestKey,
+        supplied_key: Option<IdempotencyKey>,
         context: Option<InvocationContext>,
         freshness: golem_common::model::agent::InvocationFreshnessDisposition,
         _: Vec<golem_common::model::agent::AgentConfigEntryDto>,
@@ -896,6 +905,7 @@ impl WorkerClient for RecordingWorkerClient {
                 caller,
                 context,
                 idempotency_key: request_key.owner_key(method_name.as_deref().unwrap_or_default()),
+                supplied_key,
                 request_key,
                 freshness,
             });
@@ -921,6 +931,9 @@ impl WorkerClient for RecordingWorkerClient {
         let mut log = self.native_sessions.lock().unwrap();
         log.keys.push(Arc::from(request.public_session_id));
         log.starts.push(start);
+        if let Some(success) = self.durable_stream_creations.lock().unwrap().pop_front() {
+            return Ok(success);
+        }
         if let Some(success) = &log.public_session_creation {
             return Ok(success.clone());
         }
@@ -1076,6 +1089,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: OplogIndex,
         _: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
         _: AuthCtx,
+        _: golem_api_grpc::proto::golem::component::Caller,
     ) -> WorkerResult<()> {
         unimplemented!()
     }
@@ -1103,8 +1117,11 @@ pub(crate) struct InvocationHarness {
     durable_stream_fork_result: Arc<Mutex<Option<
         golem_api_grpc::proto::golem::workerexecutor::v1::fork_stream_slot_response::Result,
     >>>,
-    durable_stream_reads: Arc<Mutex<VecDeque<
+    pub(crate) durable_stream_reads: Arc<Mutex<VecDeque<
         Option<golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotSuccess>,
+    >>>,
+    pub(crate) durable_stream_creations: Arc<Mutex<VecDeque<
+        golem_api_grpc::proto::golem::workerexecutor::v1::CreateStreamSessionSuccess,
     >>>,
     pub(crate) contexts: Arc<Mutex<Vec<RecordedInvocationContext>>>,
     pub(crate) native_sessions: Arc<Mutex<NativeSessionLog>>,
@@ -1173,6 +1190,7 @@ impl InvocationHarness {
                 idempotency_key: None,
                 oplog_index: None,
                 agent_fingerprint: None,
+                background_failure: None,
             },
             agent_mode,
             AgentConstructorSchema {
@@ -1264,6 +1282,7 @@ impl InvocationHarness {
         let durable_stream_forks = Arc::new(Mutex::new(Vec::new()));
         let durable_stream_fork_result = Arc::new(Mutex::new(None));
         let durable_stream_reads = Arc::new(Mutex::new(VecDeque::new()));
+        let durable_stream_creations = Arc::new(Mutex::new(VecDeque::new()));
         let file_reads = Arc::new(FileReadMock::default());
         let creates = Arc::new(CreateMock::default());
         let contexts = Arc::new(Mutex::new(Vec::new()));
@@ -1289,6 +1308,7 @@ impl InvocationHarness {
             durable_stream_forks: durable_stream_forks.clone(),
             durable_stream_fork_result: durable_stream_fork_result.clone(),
             durable_stream_reads: durable_stream_reads.clone(),
+            durable_stream_creations: durable_stream_creations.clone(),
             contexts: contexts.clone(),
             invocation_output,
             file_reads: file_reads.clone(),
@@ -1358,6 +1378,7 @@ impl InvocationHarness {
             durable_stream_forks,
             durable_stream_fork_result,
             durable_stream_reads,
+            durable_stream_creations,
             contexts,
             native_sessions,
             agent_type,

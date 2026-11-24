@@ -5298,6 +5298,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
             Some("f2".to_string()),
             42,
             ComponentRevision::INITIAL,
+            false,
         )
         .await
         .unwrap();
@@ -5316,6 +5317,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         timestamp: Timestamp::now_utc(),
         description: desc.clone(),
         update_attempt_index: None,
+        requester: Box::new(golem_common::model::caller::Caller::anonymous()),
     }
     .rounded();
     oplog.add(entry4.clone()).await.unwrap();
@@ -6353,6 +6355,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
             Some("f2".to_string()),
             42,
             ComponentRevision::INITIAL,
+            false,
         )
         .await
         .unwrap();
@@ -6371,6 +6374,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         timestamp: Timestamp::now_utc(),
         description: desc.clone(),
         update_attempt_index: None,
+        requester: Box::new(golem_common::model::caller::Caller::anonymous()),
     }
     .rounded();
     oplog.add(entry4.clone()).await.unwrap();
@@ -6634,6 +6638,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
             function_name: HostFunctionName::Custom("test-function".to_string()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(request),
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
@@ -12332,6 +12337,7 @@ async fn owned_snapshot_payloads_persist_and_replay_across_inline_threshold(_tra
             timestamp: Timestamp::now_utc(),
             description: inline_description,
             update_attempt_index: None,
+            requester: Box::new(golem_common::model::caller::Caller::anonymous()),
         })
         .await
         .unwrap();
@@ -12340,6 +12346,7 @@ async fn owned_snapshot_payloads_persist_and_replay_across_inline_threshold(_tra
             timestamp: Timestamp::now_utc(),
             description: external_description,
             update_attempt_index: None,
+            requester: Box::new(golem_common::model::caller::Caller::anonymous()),
         })
         .await
         .unwrap();
@@ -12438,6 +12445,7 @@ async fn reserved_large_request_is_durable_via_commit_barrier(_tracing: &Tracing
             function_name: HostFunctionName::Custom("f".to_string()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(request_payload),
             durable_function_type: DurableFunctionType::ReadRemote,
             span_started: None,
@@ -12526,6 +12534,7 @@ async fn reserved_small_request_stays_inline(_tracing: &Tracing) {
             function_name: HostFunctionName::Custom("f".to_string()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(request_payload),
             durable_function_type: DurableFunctionType::ReadRemote,
             span_started: None,
@@ -12580,6 +12589,7 @@ fn reserved_start_entry_builder(
         function_name,
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: Some(request_payload),
         durable_function_type: DurableFunctionType::ReadRemote,
         span_started: None,
