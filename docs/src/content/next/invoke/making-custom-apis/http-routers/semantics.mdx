@@ -319,7 +319,7 @@ The document describes routes; it does not install them in the handler. See
 
 Providers run lazily when the domain description is requested, not at deployment or
 on ordinary application requests. They receive internal system authorization and
-an anonymous agent principal, not the requester's headers, session, or identity.
+an anonymous caller, not the requester's headers, session, or identity.
 Normal router configuration, dependencies, and secrets remain available.
 
 <Callout type="warning">

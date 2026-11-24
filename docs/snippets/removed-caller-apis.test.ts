@@ -14,7 +14,7 @@ const removed: [string, RegExp][] = [
   ["principal field of a context", /\b(ctx|context|init|initContext|InitContext|ic)\.principal\b/],
   ["Go principal accessor", /\bPrincipal\(\)/],
   ["principal cache flag", /\buses[-_]?[Pp]rincipal\b/],
-  ["principal parameter", /\b\w+\s*:\s*&?(golem\.|@\w+\.)?Principal\b(?!Ref)/],
+  ["principal parameter", /\b\w+\s*:\s*&?(golem\.|@\w+\.)?Principal\b(?![.\w])/],
   ["Go principal field", /^\s*\w+\s+golem\.Principal\b/m],
   ["injected principal", /\binjected\s+`?(golem\.|@\w+\.)?Principal\b/i],
   ["skipped principal field", /\b(skip|exclude|excluding)\s+`?(golem\.|@\w+\.)?Principal`?\s+fields?\b/i],
@@ -82,6 +82,7 @@ test("the removed-API patterns match the 1.6 shapes and spare the 2.0 ones", () 
     "store `caller.original.ref` as an `InvocationContext.PrincipalRefSchema` value",
     "A `Principal` or a `Caller` cannot be a method input or result.",
     "`original caller:` is the principal that started the chain of calls",
+    "case user: Principal.User => user.subject",
   ]) {
     expect({ line, matches: matches(line) }).toEqual({ line, matches: false })
   }
