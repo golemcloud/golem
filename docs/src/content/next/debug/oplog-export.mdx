@@ -125,6 +125,8 @@ The allowlist also needs the type graph of a payload to equal the graph that the
 
 Each invocation shows its caller: the principal that started the chain (`original`), the principal that made the call (`immediate`) and the tokens presented at the entry point. The report keeps the kind of each principal (`user`, `account`, `agent`, `tool` or `anonymous`) and the way an account authenticated (`apiToken`, `bootstrapToken` or `signIn`). The issuer and the subject of each pair, the account and environment IDs, the agent type, the tool name, the authentication time of a user and the token IDs are tokens. The agent ID of an agent principal is an agent reference, with the same token as the same agent elsewhere in the report. The report never holds a user's claims: `--show-claims` and `--obfuscate` cannot be combined.
 
+An update shows its requester, the caller of the update request, in the same form: the `requester` of a pending update and of a queued manual update.
+
 ## Table B: documented exceptions
 
 | #   | Exception                                                                                                                                       | Mode                                               |

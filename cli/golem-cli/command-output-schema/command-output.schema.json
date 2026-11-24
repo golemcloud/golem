@@ -7214,8 +7214,8 @@
     },
     "PublicOplogEntryPendingUpdate": {
       "type": "object",
-      "required": ["type", "timestamp", "targetRevision", "description", "updateAttemptIndex"],
-      "properties": { "type": { "const": "PendingUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "description": { "$ref": "#/definitions/PublicUpdateDescription" }, "updateAttemptIndex": { "type": "integer", "minimum": 0 } },
+      "required": ["type", "timestamp", "targetRevision", "description", "updateAttemptIndex", "requester"],
+      "properties": { "type": { "const": "PendingUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "description": { "$ref": "#/definitions/PublicUpdateDescription" }, "updateAttemptIndex": { "type": "integer", "minimum": 0 }, "requester": { "$ref": "#/definitions/PublicCaller" } },
       "additionalProperties": false
     },
     "PublicOplogEntrySuccessfulUpdate": {
@@ -7572,7 +7572,7 @@
         { "type": "object", "required": ["type", "caller"], "properties": { "type": { "const": "SaveSnapshot" }, "caller": { "$ref": "#/definitions/PublicCaller" } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "snapshot", "caller"], "properties": { "type": { "const": "LoadSnapshot" }, "snapshot": { "$ref": "#/definitions/PublicSnapshotData" }, "caller": { "$ref": "#/definitions/PublicCaller" } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "invocationId", "caller"], "properties": { "type": { "const": "ProcessOplogEntries" }, "invocationId": { "type": "string" }, "caller": { "$ref": "#/definitions/PublicCaller" } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "targetRevision"], "properties": { "type": { "const": "ManualUpdate" }, "targetRevision": { "type": "integer", "minimum": 0 } }, "additionalProperties": false }
+        { "type": "object", "required": ["type", "targetRevision", "requester"], "properties": { "type": { "const": "ManualUpdate" }, "targetRevision": { "type": "integer", "minimum": 0 }, "requester": { "$ref": "#/definitions/PublicCaller" } }, "additionalProperties": false }
       ]
     },
     "PublicAgentInvocationAgentInitialization": {
@@ -7595,7 +7595,7 @@
     },
     "PublicCaller": {
       "type": "object",
-      "description": "The caller of a recorded invocation: the principal that started the chain, the principal that made the call, and the tokens presented at the entry point. A user's claims show only with --show-claims.",
+      "description": "The caller of a recorded invocation or update request: the principal that started the chain, the principal that made the call, and the tokens presented at the entry point. A user's claims show only with --show-claims.",
       "required": ["original", "immediate", "tokens"],
       "properties": {
         "original": { "$ref": "#/definitions/PublicPrincipal" },

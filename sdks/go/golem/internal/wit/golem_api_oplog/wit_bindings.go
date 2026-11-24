@@ -797,6 +797,8 @@ type ProcessOplogEntriesParameters struct {
 
 type ManualUpdateParameters struct {
 	TargetRevision uint64
+	// Who requested the update. It is not the caller of the update's snapshot save.
+	Requester PublicCaller
 }
 
 type ExternalToolInvocationParameters struct {
@@ -873,6 +875,8 @@ type PendingUpdateParameters struct {
 	TargetRevision     uint64
 	Description        UpdateDescription
 	UpdateAttemptIndex uint64
+	// Who requested the update. It is never the caller of the update's snapshot save or load.
+	Requester PublicCaller
 }
 
 type SnapshotAssistedUpdateDetails struct {
@@ -1981,6 +1985,9 @@ type RawPendingUpdateParameters struct {
 	Timestamp          wasi_clocks_0_3_0_system_clock.Instant
 	Description        RawUpdateDescription
 	UpdateAttemptIndex witTypes.Option[uint64]
+	// Who requested the update, in the oplog's binary encoding, as an `oplog-payload` holds the
+	// caller of an invocation. `enrich-oplog-entries` gives it as a `public-caller`.
+	Requester []uint8
 }
 
 type RawSuccessfulUpdateParameters struct {
@@ -4630,6 +4637,10 @@ func wasm_lower_1_t424(pinner *runtime.Pinner, value RawPendingUpdateParameters,
 	default:
 		panic("unreachable")
 	}
+	data := unsafe.Pointer(unsafe.SliceData((value).Requester))
+	pinner.Pin(data)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (112 + 3*4))) = uint32(uint32(len((value).Requester)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (112 + 2*4))) = uint32(uintptr(uintptr(data)))
 
 }
 
@@ -5507,8 +5518,9 @@ func wasm_lift_1_t379(src unsafe.Pointer) PendingAgentInvocationParameters {
 func wasm_lift_1_t338(src unsafe.Pointer) PendingUpdateParameters {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
 	result0 := wasm_lift_1_t337(unsafe.Add(unsafe.Pointer(src), 24))
+	result1 := wasm_lift_1_t322(unsafe.Add(unsafe.Pointer(src), (32 + 8*4)))
 
-	return PendingUpdateParameters{Timestamp: result, TargetRevision: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 16))), Description: result0, UpdateAttemptIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (24 + 8*4))))}
+	return PendingUpdateParameters{Timestamp: result, TargetRevision: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 16))), Description: result0, UpdateAttemptIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (24 + 8*4)))), Requester: result1}
 }
 
 //go:noinline
@@ -6847,6 +6859,21 @@ func wasm_lift_1_t337(src unsafe.Pointer) UpdateDescription {
 }
 
 //go:noinline
+func wasm_lift_1_t322(src unsafe.Pointer) PublicCaller {
+	result := wasm_lift_1_t318(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t318(unsafe.Add(unsafe.Pointer(src), (40 + 6*4)))
+	result2 := make([]PublicTokenProvenance, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (80 + 13*4))))
+	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (80 + 13*4)))); index++ {
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (80 + 12*4))))), index*(24+4*4))
+		result1 := wasm_lift_1_t320(unsafe.Add(unsafe.Pointer(base), 0))
+
+		result2 = append(result2, result1)
+	}
+
+	return PublicCaller{Original: result, Immediate: result0, Tokens: result2}
+}
+
+//go:noinline
 func wasm_lift_1_t339(src unsafe.Pointer) SnapshotAssistedUpdateDetails {
 
 	return SnapshotAssistedUpdateDetails{PendingUpdateIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 0))), SourceComponentRevision: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 8))), SourceRevisionStartIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 16))), SnapshotIndex: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 24)))}
@@ -7586,8 +7613,9 @@ func wasm_lift_1_t328(src unsafe.Pointer) ProcessOplogEntriesParameters {
 
 //go:noinline
 func wasm_lift_1_t329(src unsafe.Pointer) ManualUpdateParameters {
+	result := wasm_lift_1_t322(unsafe.Add(unsafe.Pointer(src), 8))
 
-	return ManualUpdateParameters{TargetRevision: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 0)))}
+	return ManualUpdateParameters{TargetRevision: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 0))), Requester: result}
 }
 
 //go:noinline
@@ -7704,6 +7732,60 @@ func wasm_lift_1_t336(src unsafe.Pointer) SnapshotBasedUpdateParameters {
 	}
 
 	return SnapshotBasedUpdateParameters{Payload: value0, MimeType: value1, FilesystemSnapshot: option}
+}
+
+//go:noinline
+func wasm_lift_1_t318(src unsafe.Pointer) PublicPrincipal {
+	var variant PublicPrincipal
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+		result := wasm_lift_1_t314(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakePublicPrincipalUser(result)
+
+	case 1:
+		result0 := wasm_lift_1_t315(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakePublicPrincipalAccount(result0)
+
+	case 2:
+		result1 := wasm_lift_1_t316(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakePublicPrincipalAgent(result1)
+
+	case 3:
+		result2 := wasm_lift_1_t317(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = MakePublicPrincipalTool(result2)
+
+	case 4:
+
+		variant = MakePublicPrincipalAnonymous()
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lift_1_t320(src unsafe.Pointer) PublicTokenProvenance {
+	result := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(src), 0))
+	var option witTypes.Option[PublicPrincipalRef]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
+	case 0:
+
+		option = witTypes.None[PublicPrincipalRef]()
+	case 1:
+		result0 := wasm_lift_1_t312(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))
+
+		option = witTypes.Some[PublicPrincipalRef](result0)
+	default:
+		panic("unreachable")
+	}
+
+	return PublicTokenProvenance{Id: result, Maker: option}
 }
 
 //go:noinline
@@ -8716,21 +8798,6 @@ func wasm_lift_1_t279(src unsafe.Pointer) SpanData {
 }
 
 //go:noinline
-func wasm_lift_1_t322(src unsafe.Pointer) PublicCaller {
-	result := wasm_lift_1_t318(unsafe.Add(unsafe.Pointer(src), 0))
-	result0 := wasm_lift_1_t318(unsafe.Add(unsafe.Pointer(src), (40 + 6*4)))
-	result2 := make([]PublicTokenProvenance, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (80 + 13*4))))
-	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (80 + 13*4)))); index++ {
-		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (80 + 12*4))))), index*(24+4*4))
-		result1 := wasm_lift_1_t320(unsafe.Add(unsafe.Pointer(base), 0))
-
-		result2 = append(result2, result1)
-	}
-
-	return PublicCaller{Original: result, Immediate: result0, Tokens: result2}
-}
-
-//go:noinline
 func wasm_lift_1_t331(src unsafe.Pointer) ToolInvocationResult {
 	var option witTypes.Option[golem_core_types.TypedSchemaValue]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
@@ -8809,6 +8876,49 @@ func wasm_lift_1_t240(src unsafe.Pointer) AndThenState {
 func wasm_lift_1_t241(src unsafe.Pointer) PairState {
 
 	return PairState{Left: *(*int32)(unsafe.Add(unsafe.Pointer(src), 0)), Right: *(*int32)(unsafe.Add(unsafe.Pointer(src), 4))}
+}
+
+//go:noinline
+func wasm_lift_1_t314(src unsafe.Pointer) PublicUserPrincipal {
+	result := wasm_lift_1_t312(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), (4 * 4)))
+
+	return PublicUserPrincipal{Pair: result, AuthenticatedAt: result0}
+}
+
+//go:noinline
+func wasm_lift_1_t315(src unsafe.Pointer) PublicAccountPrincipal {
+	result := wasm_lift_1_t312(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t11(unsafe.Add(unsafe.Pointer(src), (4 * 4)))
+
+	return PublicAccountPrincipal{Pair: result, AccountId: result0, Authentication: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 4*4)))))}
+}
+
+//go:noinline
+func wasm_lift_1_t316(src unsafe.Pointer) PublicAgentPrincipal {
+	result := wasm_lift_1_t312(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t8(unsafe.Add(unsafe.Pointer(src), (4 * 4)))
+	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 4*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 5*4))))
+	result2 := wasm_lift_1_t141(unsafe.Add(unsafe.Pointer(src), (16 + 6*4)))
+
+	return PublicAgentPrincipal{Pair: result, AgentId: result0, AgentType: value1, EnvironmentId: result2}
+}
+
+//go:noinline
+func wasm_lift_1_t317(src unsafe.Pointer) PublicToolPrincipal {
+	result := wasm_lift_1_t312(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t141(unsafe.Add(unsafe.Pointer(src), (4 * 4)))
+	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 4*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 5*4))))
+
+	return PublicToolPrincipal{Pair: result, EnvironmentId: result0, ToolName: value1}
+}
+
+//go:noinline
+func wasm_lift_1_t312(src unsafe.Pointer) PublicPrincipalRef {
+	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
+
+	return PublicPrincipalRef{Issuer: value0, Subject: value1}
 }
 
 //go:noinline
@@ -10358,60 +10468,6 @@ func wasm_lift_1_t278(src unsafe.Pointer) ExternalSpanData {
 }
 
 //go:noinline
-func wasm_lift_1_t318(src unsafe.Pointer) PublicPrincipal {
-	var variant PublicPrincipal
-	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
-	case 0:
-		result := wasm_lift_1_t314(unsafe.Add(unsafe.Pointer(src), 8))
-
-		variant = MakePublicPrincipalUser(result)
-
-	case 1:
-		result0 := wasm_lift_1_t315(unsafe.Add(unsafe.Pointer(src), 8))
-
-		variant = MakePublicPrincipalAccount(result0)
-
-	case 2:
-		result1 := wasm_lift_1_t316(unsafe.Add(unsafe.Pointer(src), 8))
-
-		variant = MakePublicPrincipalAgent(result1)
-
-	case 3:
-		result2 := wasm_lift_1_t317(unsafe.Add(unsafe.Pointer(src), 8))
-
-		variant = MakePublicPrincipalTool(result2)
-
-	case 4:
-
-		variant = MakePublicPrincipalAnonymous()
-
-	default:
-		panic("unreachable")
-	}
-
-	return variant
-}
-
-//go:noinline
-func wasm_lift_1_t320(src unsafe.Pointer) PublicTokenProvenance {
-	result := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(src), 0))
-	var option witTypes.Option[PublicPrincipalRef]
-	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
-	case 0:
-
-		option = witTypes.None[PublicPrincipalRef]()
-	case 1:
-		result0 := wasm_lift_1_t312(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))
-
-		option = witTypes.Some[PublicPrincipalRef](result0)
-	default:
-		panic("unreachable")
-	}
-
-	return PublicTokenProvenance{Id: result, Maker: option}
-}
-
-//go:noinline
 func wasm_lift_1_t85(src unsafe.Pointer) golem_core_types.ToolError {
 	var variant golem_core_types.ToolError
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
@@ -11510,49 +11566,6 @@ func wasm_lift_1_t21(src unsafe.Pointer) golem_core_types.Role {
 	}
 
 	return variant
-}
-
-//go:noinline
-func wasm_lift_1_t314(src unsafe.Pointer) PublicUserPrincipal {
-	result := wasm_lift_1_t312(unsafe.Add(unsafe.Pointer(src), 0))
-	result0 := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), (4 * 4)))
-
-	return PublicUserPrincipal{Pair: result, AuthenticatedAt: result0}
-}
-
-//go:noinline
-func wasm_lift_1_t315(src unsafe.Pointer) PublicAccountPrincipal {
-	result := wasm_lift_1_t312(unsafe.Add(unsafe.Pointer(src), 0))
-	result0 := wasm_lift_1_t11(unsafe.Add(unsafe.Pointer(src), (4 * 4)))
-
-	return PublicAccountPrincipal{Pair: result, AccountId: result0, Authentication: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 4*4)))))}
-}
-
-//go:noinline
-func wasm_lift_1_t316(src unsafe.Pointer) PublicAgentPrincipal {
-	result := wasm_lift_1_t312(unsafe.Add(unsafe.Pointer(src), 0))
-	result0 := wasm_lift_1_t8(unsafe.Add(unsafe.Pointer(src), (4 * 4)))
-	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 4*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 5*4))))
-	result2 := wasm_lift_1_t141(unsafe.Add(unsafe.Pointer(src), (16 + 6*4)))
-
-	return PublicAgentPrincipal{Pair: result, AgentId: result0, AgentType: value1, EnvironmentId: result2}
-}
-
-//go:noinline
-func wasm_lift_1_t317(src unsafe.Pointer) PublicToolPrincipal {
-	result := wasm_lift_1_t312(unsafe.Add(unsafe.Pointer(src), 0))
-	result0 := wasm_lift_1_t141(unsafe.Add(unsafe.Pointer(src), (4 * 4)))
-	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 4*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 5*4))))
-
-	return PublicToolPrincipal{Pair: result, EnvironmentId: result0, ToolName: value1}
-}
-
-//go:noinline
-func wasm_lift_1_t312(src unsafe.Pointer) PublicPrincipalRef {
-	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
-	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
-
-	return PublicPrincipalRef{Issuer: value0, Subject: value1}
 }
 
 //go:noinline

@@ -122,8 +122,8 @@ impl SnapshotExclusions {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum StartDecision {
     /// The head of the queue is an automatic update without a strategy. The start writes
-    /// `PendingUpdate { description, update_attempt_index: Some(admission_index) }`, reads the
-    /// status again and decides again.
+    /// `PendingUpdate { description, update_attempt_index: Some(admission_index), requester }`,
+    /// with the requester of the admission entry, reads the status again and decides again.
     PersistStrategy {
         description: UpdateDescription,
         admission_index: OplogIndex,

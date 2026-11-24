@@ -312,6 +312,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
             Invocation::ManualUpdate(manual) => Ok(PublicAgentInvocation::ManualUpdate(
                 ManualUpdateParameters {
                     target_revision: manual.target_revision.try_into()?,
+                    requester: manual
+                        .requester
+                        .ok_or("Missing requester field")?
+                        .try_into()?,
                 },
             )),
         }
@@ -454,6 +458,7 @@ impl TryFrom<PublicAgentInvocation>
             PublicAgentInvocation::ManualUpdate(manual) => Invocation::ManualUpdate(
                 golem_api_grpc::proto::golem::worker::ManualUpdateInvocationParameters {
                     target_revision: manual.target_revision.into(),
+                    requester: Some(manual.requester.into()),
                 },
             ),
         };

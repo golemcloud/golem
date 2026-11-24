@@ -667,6 +667,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: golem_common::model::agent::AgentUpdateMode,
         _: ComponentRevision,
         _: bool,
+        _: golem_common::model::caller::Caller,
         _: EnvironmentId,
         _: AgentFingerprint,
         _: AuthCtx,

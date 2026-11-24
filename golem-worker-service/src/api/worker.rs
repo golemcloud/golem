@@ -294,6 +294,8 @@ impl WorkerApi {
                     params.0.target_revision,
                     params.0.disable_wakeup,
                     expected_fingerprint.0,
+                    // A REST request records its own caller as the requester.
+                    None,
                     auth,
                 )
                 .await?;
