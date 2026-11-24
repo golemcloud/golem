@@ -21,8 +21,8 @@ or adapters that preserve the removed surface.
 | private class fields (`this.value = 0`) | state object returned by `init()`; read/write via `this` in handlers |
 | method signature types (`increment(): Promise<number>`) | `method({ input: {...}, returns: <schema> })` with Standard Schema |
 | `this.getId()` | `this.getId()` (same, on the handler `this`) |
-| `getPrincipal()` | `this.getPrincipal()` |
-| injected `Principal` constructor/method param | a bare `s.principal()` parameter (auto-injected with the per-call caller principal) |
+| `getPrincipal()` | `ctx.caller.original` in a handler (`ctx` is the second argument) or in `init` (`ctx`); store `ctx.caller.original.ref` (a `PrincipalRef`) to remember the creator |
+| injected `Principal` constructor/method param | `ctx.caller` from the invocation context; the `Principal` parameter goes (a `Principal` in a signature is a build error) |
 
 There are **no agent classes or decorators, and no decorator type-generation step during
 authoring**. Handlers are plain functions whose `this` is the state. The SDK build still generates
@@ -116,7 +116,7 @@ Register the agent by importing its module from `src/main.ts` (`import './counte
 
 - `@description('...')` → `method({ description: '...' })`; agent-level `@description` → `defineAgent({ description })`.
 - `@prompt('...')` → `method({ promptHint: '...' })`; agent-level → `defineAgent({ promptHint })`.
-- `@readonly()` → `method({ readOnly: true })`; `@readonly({ cache, usesPrincipal })` → `method({ readOnly: { cache: 'no-cache' | 'until-write' | { ttlNanos }, usesPrincipal } })`.
+- `@readonly()` → `method({ readOnly: true })`; `@readonly({ cache, usesPrincipal })` → `method({ readOnly: { cache: 'no-cache' | 'until-write' | { ttlNanos } } })`; drop `usesPrincipal`, because the cache is always kept per caller.
 - `@endpoint({ post: '/x' })` → `method({ http: http.post('/x') })`, with a mount declared via `defineAgent({ http: http.mount('/prefix/{idVar}', { cors, auth }) })`.
 - `@agent({ mount, cors })` → `defineAgent({ http: http.mount(mount, { cors }) })`.
 
@@ -193,7 +193,7 @@ Use the current forms below and verify them against the SDK source rather than r
 removed decorator surface.
 
 **Current forms:**
-- **`readOnly` cache policies.** `@readonly({ cache: 'no-cache' | 'until-write' | { ttl } })` → `method({ readOnly: { cache: 'no-cache' | 'until-write' | { ttlNanos: <bigint> }, usesPrincipal?: boolean } })`. Bare `readOnly: true` uses the `until-write` policy (the base default); principal-dependent caching → `usesPrincipal: true`.
+- **`readOnly` cache policies.** `@readonly({ cache: 'no-cache' | 'until-write' | { ttl } })` → `method({ readOnly: { cache: 'no-cache' | 'until-write' | { ttlNanos: <bigint> } } })`. Bare `readOnly: true` uses the `until-write` policy (the base default). The cache is always kept per caller, so there is no principal switch.
 - **Config-on-RPC (`getWithConfig`).** `Agent.getWithConfig(id, overrides)` →
   `Def.client.get(id, overrides)`. For an existing phantom agent, use
   `Def.client.getPhantom(id, phantomId, overrides)`; for a fresh phantom agent, use
@@ -203,7 +203,7 @@ removed decorator surface.
   `await client.run(input, { signal })`. `client.run.schedule(at, input)` returns a
   `CancellationToken` whose `.cancel()` cancels the scheduled invocation. Fire-and-forget remains
   `client.run.trigger(input)`. There are no `.abortable` or `.scheduleCancelable` client methods.
-- **`Principal` as data + auto-injected input.** `s.principal()` carries a `Principal` as a method return / nested value, and a bare `s.principal()` method (or constructor) parameter is auto-injected with the per-call caller principal — it consumes no wire field and is not bound from HTTP/RPC callers (the replacement for the decorator's injected `Principal` parameter). `this.getPrincipal()` still reads the init-time principal.
+- **The caller comes from the invocation context.** Every method handler receives the invocation context as its second argument, and `init` receives it as `ctx`: `ctx.caller.original` is the principal that started the call chain, and `ctx.caller.immediate` made this call. A `Principal` or `Caller` is a live value: it cannot be a method input, a result or part of a value type. To keep an identity as data, store `ctx.caller.original.ref`, a `PrincipalRef`, declared with `s.principalRef()`; compare with `equals`.
 
 **Known remaining deltas (verify against `src/` before assuming this list is exhaustive):**
 - **Custom snapshot is a bare `Uint8Array`.** No `{ data, mimeType }` return, no `application/json` vs `multipart/mixed` selection, and no automatic SQLite multipart part. `save` returns bytes, `load` takes bytes.
