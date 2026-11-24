@@ -4401,6 +4401,7 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
                 start: OplogIndex::from_u64(5),
                 end: OplogIndex::from_u64(10),
             },
+            restored_revision: golem_common::model::component::ComponentRevision::new(3).unwrap(),
         }),
         PublicOplogEntry::CancelPendingInvocation(CancelPendingInvocationParams {
             timestamp: ts(),

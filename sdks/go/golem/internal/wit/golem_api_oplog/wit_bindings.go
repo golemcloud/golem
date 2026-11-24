@@ -1136,6 +1136,9 @@ type DeactivatePluginParameters struct {
 type RevertParameters struct {
 	Timestamp     wasi_clocks_0_3_0_system_clock.Instant
 	DroppedRegion OplogRegion
+	// The component revision that the agent runs the entries after the revert with: the
+	// revision in effect at the end of the retained history.
+	RestoredRevision uint64
 }
 
 type CancelPendingInvocationParameters struct {
@@ -4828,6 +4831,7 @@ func wasm_lower_1_t430(pinner *runtime.Pinner, value RawDeactivatePluginParamete
 func wasm_lower_1_t368(pinner *runtime.Pinner, value RevertParameters, dst unsafe.Pointer) {
 	wasm_lower_1_t113(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	wasm_lower_1_t292(nil, (value).DroppedRegion, unsafe.Add(unsafe.Pointer(dst), 16))
+	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 32)) = int64((value).RestoredRevision)
 
 }
 
@@ -5690,7 +5694,7 @@ func wasm_lift_1_t368(src unsafe.Pointer) RevertParameters {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
 	result0 := wasm_lift_1_t292(unsafe.Add(unsafe.Pointer(src), 16))
 
-	return RevertParameters{Timestamp: result, DroppedRegion: result0}
+	return RevertParameters{Timestamp: result, DroppedRegion: result0, RestoredRevision: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 32)))}
 }
 
 //go:noinline

@@ -1642,9 +1642,10 @@ async fn independent_catch_up_cannot_publish_over_newer_generation() {
     let mut entries = invocation_entries(std::slice::from_ref(&reverted));
     entries.insert(
         OplogIndex::from_u64(4),
-        OplogEntry::revert(OplogRegion::from_index_range(
-            OplogIndex::from_u64(2)..=OplogIndex::from_u64(3),
-        )),
+        OplogEntry::revert(
+            OplogRegion::from_index_range(OplogIndex::from_u64(2)..=OplogIndex::from_u64(3)),
+            ComponentRevision::INITIAL,
+        ),
     );
     invocation_pair(&mut entries, 5, &current);
     let oplog = Arc::new(IndexTestOplogService::new(entries));
@@ -1834,9 +1835,10 @@ async fn concurrent_generation_catch_up_clears_reverted_results() {
     let mut entries = invocation_entries(std::slice::from_ref(&reverted));
     entries.insert(
         OplogIndex::from_u64(4),
-        OplogEntry::revert(OplogRegion::from_index_range(
-            OplogIndex::from_u64(2)..=OplogIndex::from_u64(3),
-        )),
+        OplogEntry::revert(
+            OplogRegion::from_index_range(OplogIndex::from_u64(2)..=OplogIndex::from_u64(3)),
+            ComponentRevision::INITIAL,
+        ),
     );
     invocation_pair(&mut entries, 5, &current);
     let (service, oplog, owned_agent_id) = index_test_service(entries);

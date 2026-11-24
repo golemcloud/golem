@@ -772,6 +772,10 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}to oplog index:    {}",
                     format_id(&params.dropped_region.start.previous()),
                 ));
+                logln(format!(
+                    "{pad}restored revision: {}",
+                    format_id(&params.restored_revision),
+                ));
             }
             PublicOplogEntry::CancelPendingInvocation(params) => {
                 logln(format_message_highlight("CANCEL INVOCATION"));

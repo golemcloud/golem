@@ -259,6 +259,11 @@ impl OplogEntry {
             OplogEntry::SuccessfulUpdate {
                 target_revision, ..
             } => Some(*target_revision),
+            // The entries before a revert stay in the oplog, so a read walks through the dropped
+            // region and the revert switches back to the revision of the retained history.
+            OplogEntry::Revert {
+                restored_revision, ..
+            } => Some(*restored_revision),
             // Keep this exhaustive so a new entry cannot silently fail to update the revision used
             // to interpret the entries that follow it.
             OplogEntry::Start { .. }
@@ -288,7 +293,6 @@ impl OplogEntry {
             | OplogEntry::Resumed { .. }
             | OplogEntry::ActivatePlugin { .. }
             | OplogEntry::DeactivatePlugin { .. }
-            | OplogEntry::Revert { .. }
             | OplogEntry::CancelPendingInvocation { .. }
             | OplogEntry::BeginRemoteTransaction { .. }
             | OplogEntry::PreCommitRemoteTransaction { .. }

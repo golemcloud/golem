@@ -31,6 +31,7 @@ use golem_common::base_model::{AgentFingerprint, AgentId, OplogIndex};
 use golem_common::model::InvocationRequestOperation;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::StoredAgentInvocationPayload;
+use golem_common::model::component::ComponentRevision;
 use test_r::test;
 use uuid::Uuid;
 
@@ -124,7 +125,10 @@ async fn complete_revert_fold_retains_jump_items_and_discards_suffix_streams() {
         DurableStreamOplogRecord::Session(None, Box::new(StreamSessionRecord::ForkCut(cut)))
             .into_inline_entry();
     let (_, marker_index) = oplog
-        .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
+        .add_pair(
+            OplogEntry::revert(region, ComponentRevision::INITIAL),
+            Box::new(move |_| marker),
+        )
         .await
         .unwrap();
     let rebuilt = DurableStreamStore::load(
@@ -279,7 +283,10 @@ async fn reverted_consumer_tail_does_not_advance_source_unavailable_overlay() {
         DurableStreamOplogRecord::Session(None, Box::new(StreamSessionRecord::ForkCut(cut)))
             .into_inline_entry();
     oplog
-        .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
+        .add_pair(
+            OplogEntry::revert(region, ComponentRevision::INITIAL),
+            Box::new(move |_| marker),
+        )
         .await
         .unwrap();
     let rebuilt = DurableStreamStore::load(
@@ -693,7 +700,10 @@ async fn fork_marker_preparation_uses_exact_prefix_and_owner_relative_ids() {
         )
         .into_inline_entry();
         let (_, marker_index) = copied
-            .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
+            .add_pair(
+                OplogEntry::revert(region, ComponentRevision::INITIAL),
+                Box::new(move |_| marker),
+            )
             .await
             .unwrap();
         let rebuilt = DurableStreamStore::load(
@@ -773,7 +783,10 @@ async fn fork_marker_preparation_uses_exact_prefix_and_owner_relative_ids() {
         DurableStreamOplogRecord::Session(None, Box::new(StreamSessionRecord::ForkCut(earlier)))
             .into_inline_entry();
     copied
-        .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
+        .add_pair(
+            OplogEntry::revert(region, ComponentRevision::INITIAL),
+            Box::new(move |_| marker),
+        )
         .await
         .unwrap();
     let historical = DurableStreamStore::prepare_fork_cut(
@@ -885,7 +898,10 @@ async fn revert_epoch_fences_a_deleted_session_prepared_again_under_the_same_key
     let region = cut.revert.clone().unwrap();
     let marker = entry(StreamSessionRecord::ForkCut(cut));
     oplog
-        .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
+        .add_pair(
+            OplogEntry::revert(region, ComponentRevision::INITIAL),
+            Box::new(move |_| marker),
+        )
         .await
         .unwrap();
     let second_cut = oplog
@@ -1046,7 +1062,10 @@ async fn streaming_acceptance_cuts_preserve_the_whole_batch() {
         )
         .into_inline_entry();
         oplog
-            .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
+            .add_pair(
+                OplogEntry::revert(region, ComponentRevision::INITIAL),
+                Box::new(move |_| marker),
+            )
             .await
             .unwrap();
     }
@@ -1066,7 +1085,10 @@ async fn fork_after_bare_revert_uses_the_fixed_horizon() {
         oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
     }
     let horizon = oplog
-        .add(OplogEntry::revert(OplogRegion::from_range(2..=3)))
+        .add(OplogEntry::revert(
+            OplogRegion::from_range(2..=3),
+            ComponentRevision::INITIAL,
+        ))
         .await
         .unwrap();
     let old_cut = OplogIndex::from_u64(2);

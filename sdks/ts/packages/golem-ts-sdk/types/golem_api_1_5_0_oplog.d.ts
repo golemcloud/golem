@@ -810,6 +810,11 @@ declare module 'golem:api/oplog@1.5.0' {
   export type RevertParameters = {
     timestamp: Datetime;
     droppedRegion: OplogRegion;
+    /**
+     * The component revision that the agent runs the entries after the revert with: the
+     * revision in effect at the end of the retained history.
+     */
+    restoredRevision: ComponentRevision;
   };
   export type CancelPendingInvocationParameters = {
     timestamp: Datetime;

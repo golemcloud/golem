@@ -8026,7 +8026,7 @@ async fn reverted_completion_marker_can_be_replaced_and_reconstructed() {
                 };
                 let suffix = [
                     old_marker.clone(),
-                    OplogEntry::revert(dropped_region.clone()),
+                    OplogEntry::revert(dropped_region.clone(), ComponentRevision::INITIAL),
                     if delivered {
                         delivered_for(2)
                     } else {

@@ -1203,18 +1203,17 @@ impl Walker<'_, '_> {
                     invocation_id.as_ref().map(|id| self.tok(id)),
                 )
                 .build(),
-            PublicOplogEntry::Jump(JumpParams { timestamp: _, jump })
-            | PublicOplogEntry::Revert(RevertParams {
-                timestamp: _,
-                dropped_region: jump,
-            }) => {
-                let field = if matches!(entry, PublicOplogEntry::Jump(_)) {
-                    "jump"
-                } else {
-                    "droppedRegion"
-                };
-                Fields::new().add(field, oplog_region(jump)).build()
+            PublicOplogEntry::Jump(JumpParams { timestamp: _, jump }) => {
+                Fields::new().add("jump", oplog_region(jump)).build()
             }
+            PublicOplogEntry::Revert(RevertParams {
+                timestamp: _,
+                dropped_region,
+                restored_revision,
+            }) => Fields::new()
+                .add("droppedRegion", oplog_region(dropped_region))
+                .add("restoredRevision", number(restored_revision.get()))
+                .build(),
             PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
                 timestamp: _,
                 invocation,

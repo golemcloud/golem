@@ -21,7 +21,6 @@ use crate::durable_host::concurrent::DurableCallSession;
 use crate::durable_host::concurrent::NotCancellable;
 use crate::durable_host::concurrent::ResolvedCall;
 use crate::model::public_oplog::PublicOplogEntryOps;
-use crate::model::public_oplog::component_revision_switch;
 use crate::model::public_oplog::get_guest_oplog_chunk;
 use crate::model::public_oplog::search_guest_oplog;
 use crate::preview2::golem_api_1_x;
@@ -38,7 +37,6 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use golem_common::base_model::caller::ClaimVisibility;
 use golem_common::model::AgentId;
-use golem_common::model::AgentStatusRecord;
 use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::component::ComponentRevision;
@@ -53,7 +51,6 @@ use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::oplog::host_functions::GolemApiEnrichOplogEntries;
 use golem_common::model::oplog::host_functions::GolemApiGetOplogNext;
 use golem_common::model::oplog::host_functions::GolemApiSearchOplogNext;
-use golem_common::model::regions::DeletedRegions;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::num::NonZeroU64;
 use uuid::Uuid;
@@ -217,14 +214,21 @@ fn prepare_oplog_enrichment_entries<Ctx: WorkerCtx>(
 /// claims in a chunk would reach every reader of that oplog without being asked for.
 const GUEST_CLAIM_VISIBILITY: ClaimVisibility = ClaimVisibility::Hidden;
 
-/// The latest status of the agent. A guest read takes from it the regions that the reverts of the
-/// agent deleted, and the component revision at its start, because the grant check of a batch
-/// covers only the indexes that the batch reads.
-async fn latest_agent_status<Ctx: WorkerCtx>(
+/// The component revision in effect at `start` in the oplog of the agent: the target of the last
+/// successful update before `start` in the latest status of the agent, or else the revision of its
+/// `Create` entry. A guest batch does not scan the entries before `start` for the revision, because
+/// the grant check of the batch covers only the indexes that the batch reads. The status leaves out
+/// the updates in the regions that a revert or a jump deleted.
+async fn component_revision_at<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     identity: &ResolvedAgentIdentity,
     owned_agent_id: &OwnedAgentId,
-) -> Result<AgentStatusRecord, String> {
+    start: OplogIndex,
+) -> Result<ComponentRevision, String> {
+    let create_revision = identity.create_parameters().component_revision;
+    if start <= OplogIndex::INITIAL {
+        return Ok(create_revision);
+    }
     let missing = || format!("agent {owned_agent_id} does not exist");
     let cached = ctx
         .state
@@ -233,7 +237,7 @@ async fn latest_agent_status<Ctx: WorkerCtx>(
         .await
         .map_err(|err| err.to_string())?
         .ok_or_else(missing)?;
-    calculate_last_known_status_with_checkpoint(
+    let status = calculate_last_known_status_with_checkpoint(
         &ctx.state,
         owned_agent_id,
         identity.fingerprint,
@@ -242,61 +246,14 @@ async fn latest_agent_status<Ctx: WorkerCtx>(
     )
     .await
     .map_err(|error| WorkerExecutorError::from(error).to_string())?
-    .ok_or_else(missing)
-}
-
-/// The component revision in effect at `start` in the oplog of the agent: the target of the last
-/// successful update before `start` in `status`, or else the revision of the `Create` entry. The
-/// status leaves out the updates in the regions that a revert deleted.
-fn component_revision_at(
-    identity: &ResolvedAgentIdentity,
-    status: &AgentStatusRecord,
-    start: OplogIndex,
-) -> ComponentRevision {
-    revision_before(&status.successful_updates, start)
-        .unwrap_or(identity.create_parameters().component_revision)
-}
-
-/// The deleted regions and the component revision with which a guest batch from
-/// `next_oplog_index` decodes its entries. The first batch of a resource reads them from the latest
-/// status of the agent, and the resource keeps them for its later batches, as it keeps the
-/// revision after its last entry. A resource that replay rebuilt has no deleted regions, so its
-/// next batch reads the status again.
-async fn guest_batch_decoding<Ctx: WorkerCtx>(
-    ctx: &DurableWorkerCtx<Ctx>,
-    identity: &ResolvedAgentIdentity,
-    owned_agent_id: &OwnedAgentId,
-    next_oplog_index: OplogIndex,
-    initialized: bool,
-    current_component_revision: ComponentRevision,
-    deleted_regions: Option<&DeletedRegions>,
-) -> Result<(DeletedRegions, ComponentRevision), String> {
-    match deleted_regions {
-        Some(deleted_regions) if initialized => {
-            Ok((deleted_regions.clone(), current_component_revision))
-        }
-        _ => {
-            let status = latest_agent_status(ctx, identity, owned_agent_id).await?;
-            let revision = if initialized {
-                current_component_revision
-            } else {
-                component_revision_at(identity, &status, next_oplog_index)
-            };
-            Ok((status.deleted_regions, revision))
-        }
-    }
+    .ok_or_else(missing)?;
+    Ok(revision_before(&status.successful_updates, start).unwrap_or(create_revision))
 }
 
 async fn get_oplog_chunk<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     entry: &GetOplogEntry,
-) -> Result<
-    (
-        crate::model::public_oplog::PublicOplogChunk<(OplogIndex, PublicOplogEntry)>,
-        DeletedRegions,
-    ),
-    String,
-> {
+) -> Result<crate::model::public_oplog::PublicOplogChunk<(OplogIndex, PublicOplogEntry)>, String> {
     let identity = ctx
         .state
         .worker_service
@@ -305,16 +262,17 @@ async fn get_oplog_chunk<Ctx: WorkerCtx>(
         .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
     let agent_mode = identity.agent_mode;
-    let (deleted_regions, current_component_revision) = guest_batch_decoding(
-        ctx,
-        &identity,
-        &entry.owned_agent_id,
-        entry.next_oplog_index,
-        entry.initialized,
-        entry.current_component_revision,
-        entry.deleted_regions.as_ref(),
-    )
-    .await?;
+    let current_component_revision = if entry.initialized {
+        entry.current_component_revision
+    } else {
+        component_revision_at(
+            ctx,
+            &identity,
+            &entry.owned_agent_id,
+            entry.next_oplog_index,
+        )
+        .await?
+    };
     let agent_type = &identity.create_parameters().agent_type_name;
     get_guest_oplog_chunk(
         ctx.state.component_service.clone(),
@@ -324,24 +282,19 @@ async fn get_oplog_chunk<Ctx: WorkerCtx>(
         identity.create_parameters().component_id,
         identity.create_parameters().owner_kind,
         agent_type.as_ref(),
-        &deleted_regions,
         current_component_revision,
         entry.next_oplog_index,
         entry.page_size,
         GUEST_CLAIM_VISIBILITY,
     )
     .await
-    .map(|chunk| (chunk, deleted_regions))
 }
 
 async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     entry: &SearchOplogEntry,
 ) -> Result<
-    (
-        crate::model::public_oplog::PublicOplogSearchResult<(OplogIndex, PublicOplogEntry)>,
-        DeletedRegions,
-    ),
+    crate::model::public_oplog::PublicOplogSearchResult<(OplogIndex, PublicOplogEntry)>,
     String,
 > {
     let identity = ctx
@@ -352,16 +305,17 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
     let agent_mode = identity.agent_mode;
-    let (deleted_regions, current_component_revision) = guest_batch_decoding(
-        ctx,
-        &identity,
-        &entry.owned_agent_id,
-        entry.next_oplog_index,
-        entry.initialized,
-        entry.current_component_revision,
-        entry.deleted_regions.as_ref(),
-    )
-    .await?;
+    let current_component_revision = if entry.initialized {
+        entry.current_component_revision
+    } else {
+        component_revision_at(
+            ctx,
+            &identity,
+            &entry.owned_agent_id,
+            entry.next_oplog_index,
+        )
+        .await?
+    };
     let agent_type = &identity.create_parameters().agent_type_name;
     // The grant covers page_size indexes, not page_size matches. The scanner caps each
     // storage read at the remaining entry budget, even when a chunk has no matches.
@@ -377,7 +331,6 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         identity.create_parameters().component_id,
         identity.create_parameters().owner_kind,
         agent_type.as_ref(),
-        &deleted_regions,
         current_component_revision,
         entry.next_oplog_index,
         entry.last_oplog_index,
@@ -387,7 +340,6 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         GUEST_CLAIM_VISIBILITY,
     )
     .await
-    .map(|chunk| (chunk, deleted_regions))
 }
 
 impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
@@ -426,7 +378,6 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
             DurableFunctionType::ReadRemote,
         )
         .await?;
-        let mut deleted_regions = None;
         let response = 'response: {
             let (handle, entry) = match begun.resolve(self).await? {
                 ResolvedCall::Live(begun) => {
@@ -465,10 +416,6 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
             };
 
             let result = get_oplog_chunk(self, &entry).await;
-            let result = result.map(|(chunk, regions)| {
-                deleted_regions = Some(regions);
-                chunk
-            });
             let response = match result {
                 Ok(chunk) if chunk.next_oplog_index != entry.next_oplog_index => {
                     let entries = chunk
@@ -511,9 +458,6 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
                     response.current_component_revision,
                 );
             }
-            if let Some(deleted_regions) = deleted_regions {
-                entry.deleted_regions = Some(deleted_regions);
-            }
         })?;
         match response.result {
             Ok(Some(entries)) => {
@@ -550,9 +494,6 @@ pub struct GetOplogEntry {
     pub current_component_revision: ComponentRevision,
     pub page_size: usize,
     pub initialized: bool,
-    /// The regions that the reverts of the agent deleted, as the first live batch of the
-    /// resource read them from the status of the agent.
-    pub deleted_regions: Option<DeletedRegions>,
 }
 
 impl GetOplogEntry {
@@ -568,7 +509,6 @@ impl GetOplogEntry {
             current_component_revision: initial_component_revision,
             page_size,
             initialized: false,
-            deleted_regions: None,
         }
     }
 
@@ -627,7 +567,6 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
             DurableFunctionType::ReadRemote,
         )
         .await?;
-        let mut deleted_regions = None;
         let response = 'response: {
             let (handle, entry) = match begun.resolve(self).await? {
                 ResolvedCall::Live(begun) => {
@@ -666,10 +605,6 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
             };
 
             let result = get_search_oplog_chunk(self, &entry).await;
-            let result = result.map(|(chunk, regions)| {
-                deleted_regions = Some(regions);
-                chunk
-            });
             let response = match result {
                 Ok(chunk) if chunk.next_oplog_index != entry.next_oplog_index => {
                     HostResponseGolemApiOplogChunk {
@@ -711,9 +646,6 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
                     response.current_component_revision,
                     response.last_oplog_index,
                 );
-            }
-            if let Some(deleted_regions) = deleted_regions {
-                entry.deleted_regions = Some(deleted_regions);
             }
         })?;
         match response.result {
@@ -762,9 +694,6 @@ pub struct SearchOplogEntry {
     pub page_size: usize,
     pub query: String,
     pub initialized: bool,
-    /// The regions that the reverts of the agent deleted, as the first live batch of the search
-    /// read them from the status of the agent.
-    pub deleted_regions: Option<DeletedRegions>,
 }
 
 impl SearchOplogEntry {
@@ -783,7 +712,6 @@ impl SearchOplogEntry {
             page_size,
             query,
             initialized: false,
-            deleted_regions: None,
         }
     }
 
@@ -927,7 +855,6 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
                     .ok_or_else(|| format!("agent {owned_agent_id} does not exist"))?;
                 let agent_mode = identity.agent_mode;
                 let agent_type = &identity.create_parameters().agent_type_name;
-                let status = latest_agent_status(self, &identity, &owned_agent_id).await?;
 
                 let mut result = Vec::with_capacity(entries.len());
                 for (index, entry) in entries {
@@ -935,11 +862,7 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
                         OplogEnrichmentEntry::CreateProjection { parameters, .. } => {
                             Some(parameters.component_revision)
                         }
-                        OplogEnrichmentEntry::Other(entry) => component_revision_switch(
-                            OplogIndex::from_u64(index),
-                            entry,
-                            &status.deleted_regions,
-                        ),
+                        OplogEnrichmentEntry::Other(entry) => entry.specifies_component_revision(),
                     } {
                         current_revision = revision;
                     }

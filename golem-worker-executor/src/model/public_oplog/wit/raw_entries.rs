@@ -344,6 +344,10 @@ before (value) {}
             start: golem_common::model::OplogIndex::from_u64(params.dropped_region.start),
             end: golem_common::model::OplogIndex::from_u64(params.dropped_region.end),
         },
+        restored_revision: params
+        .restored_revision
+        .try_into()
+        .map_err(|e: String| e)?,
     } }
     CancelPendingInvocation { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
@@ -786,6 +790,7 @@ before (value) {}
             start: dropped_region.start.into(),
             end: dropped_region.end.into(),
         },
+        restored_revision: restored_revision.get(),
     } }
     CancelPendingInvocation { record () => CancelPendingInvocationParameters {
         timestamp: timestamp.into(),

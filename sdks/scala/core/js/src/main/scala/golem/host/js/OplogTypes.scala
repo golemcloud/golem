@@ -652,6 +652,7 @@ sealed trait JsDeactivatePluginParameters extends js.Object {
 sealed trait JsRevertParameters extends js.Object {
   def timestamp: JsDatetime        = js.native
   def droppedRegion: JsOplogRegion = js.native
+  def restoredRevision: js.BigInt  = js.native
 }
 
 // --- CancelPendingInvocationParameters ---

@@ -6492,15 +6492,18 @@ async fn a_later_guest_oplog_batch_decodes_with_the_revision_at_its_start(
     Ok(())
 }
 
-/// A revert that drops a successful update makes the agent run the entries after it with the
-/// revision before the update. The target starts on the revision that has `set`, is updated to a
-/// revision without `set`, and is reverted to the entry before the update; then it runs `set`.
-/// Every public oplog read, guest and remote, from index 1 and from the first deleted entry,
-/// decodes the input of that `set`, which only the revision before the update can do.
+/// The agent runs the entries of a region that a revert later drops with the revision of the
+/// update in the region, and the entries after the revert with the revision that the revert
+/// restores. The target starts on the revision without `set`. It is updated to the revision with
+/// `set`, runs `set(7)`, and is reverted to the entry before the update. It is updated to the
+/// revision with `set` again, then to a revision without `set`, and is reverted to the entry
+/// before the second update; then it runs `set(9)`. Only the revision with `set` decodes the input
+/// of either call. Every public oplog read, guest and remote, from index 1 and from the first
+/// dropped entry of each revert, decodes both inputs.
 #[test]
-#[timeout("3m")]
+#[timeout("4m")]
 #[tracing::instrument]
-async fn oplog_reads_decode_the_entries_after_a_revert_with_the_revision_before_the_deleted_update(
+async fn oplog_reads_decode_the_entries_around_a_revert_with_the_revision_that_the_agent_ran_them_with(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -6511,100 +6514,110 @@ async fn oplog_reads_decode_the_entries_after_a_revert_with_the_revision_before_
     let authority = Arc::new(ScopeCardAuthority::default());
     let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
 
-    let updated = executor
+    let component = executor
         .component_dep(&context.default_environment_id, agent_update_v2)
         .store()
         .await?;
-    let with_set = executor
-        .update_component(&updated.id, "it_agent_update_v3_release")
-        .await?;
     let target_agent = agent_key!("UpdateTest");
-    configure_scope_card_root(&authority, &updated, &target_agent)?;
+    configure_scope_card_root(&authority, &component, &target_agent)?;
     let target = executor
-        .start_agent(&updated.id, target_agent.clone())
+        .start_agent(&component.id, target_agent.clone())
         .await?;
-    assert_eq!(
-        executor
-            .get_worker_metadata(&target)
-            .await?
-            .component_revision,
-        with_set.revision
-    );
-
-    let before_update = OplogIndex::from_u64(executor.get_oplog_last_index(&target).await?);
-    let without_set = executor
-        .update_component(&updated.id, "it_agent_update_v2_release")
-        .await?;
-    executor
-        .manual_update_worker(&target, without_set.revision, false)
-        .await?;
-    tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            let metadata = executor.get_worker_metadata(&target).await?;
-            if golem_test_framework::dsl::update_counts(&metadata) == (0, 1, 0) {
-                break anyhow::Ok(());
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await??;
-    executor
-        .revert(
-            &target,
-            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
-                last_oplog_index: before_update,
-            }),
-        )
-        .await?;
-    assert_eq!(
-        executor
-            .get_worker_metadata(&target)
-            .await?
-            .component_revision,
-        with_set.revision
-    );
-    let set = executor
-        .invoke_and_await_agent(&updated, &target_agent, "set", data_value!(9u64))
+    let without_set = component.revision;
+    let with_set = executor
+        .update_component(&component.id, "it_agent_update_v3_release")
         .await?
-        .into_typed::<u64>()?;
-    assert_eq!(set, 9);
+        .revision;
+    let without_set_again = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?
+        .revision;
 
-    let oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
-    let first_deleted = before_update.next();
-    let update = oplog
-        .iter()
-        .find(|entry| matches!(entry.entry, PublicOplogEntry::SuccessfulUpdate(_)))
-        .expect("the oplog keeps the deleted update")
-        .oplog_index;
-    let revert = oplog
-        .iter()
-        .find(|entry| matches!(entry.entry, PublicOplogEntry::Revert(_)))
-        .expect("the oplog holds the revert")
-        .oplog_index;
-    assert!(first_deleted <= update && update < revert);
-
-    let remote_set_inputs = async |from: OplogIndex| {
-        let entries = executor.get_oplog(&target, from).await?;
+    let update_to = async |revision| {
+        executor
+            .manual_update_worker(&target, revision, false)
+            .await?;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let metadata = executor.get_worker_metadata(&target).await?;
+                if metadata.component_revision == revision
+                    && golem_test_framework::dsl::update_counts(&metadata).0 == 0
+                {
+                    break anyhow::Ok(());
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await?
+    };
+    let revert_to = async |last_oplog_index: OplogIndex| {
+        executor
+            .revert(
+                &target,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex { last_oplog_index }),
+            )
+            .await?;
         anyhow::Ok(
-            entries
-                .into_iter()
-                .filter_map(|entry| match entry.entry {
-                    PublicOplogEntry::AgentInvocationStarted(started) => match started.invocation {
-                        PublicAgentInvocation::AgentMethodInvocation(method)
-                            if method.method_name == "set" =>
-                        {
-                            Some(method.function_input.into_parts().1)
-                        }
-                        _ => None,
-                    },
-                    _ => None,
-                })
-                .collect::<Vec<_>>(),
+            executor
+                .get_worker_metadata(&target)
+                .await?
+                .component_revision,
         )
     };
+    let set = async |value: u64| {
+        executor
+            .invoke_and_await_agent(&component, &target_agent, "set", data_value!(value))
+            .await?
+            .into_typed::<u64>()
+    };
+
+    let before_first_update = OplogIndex::from_u64(executor.get_oplog_last_index(&target).await?);
+    update_to(with_set).await?;
+    assert_eq!(set(7).await?, 7);
+    let after_first_revert = revert_to(before_first_update).await?;
+    update_to(with_set).await?;
+    let before_second_update = OplogIndex::from_u64(executor.get_oplog_last_index(&target).await?);
+    update_to(without_set_again).await?;
+    let after_second_revert = revert_to(before_second_update).await?;
+    assert_eq!(set(9).await?, 9);
+    assert_eq!(
+        (after_first_revert, after_second_revert),
+        (without_set, with_set)
+    );
+
+    let oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+    let restored_revisions = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Revert(revert) => Some(revert.restored_revision),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let starts = [
+        OplogIndex::INITIAL,
+        before_first_update.next(),
+        before_second_update.next(),
+    ];
+
     let mut remote = Vec::new();
-    for from in [OplogIndex::INITIAL, first_deleted] {
-        remote.push((from, remote_set_inputs(from).await?));
+    for from in starts {
+        let inputs = executor
+            .get_oplog(&target, from)
+            .await?
+            .into_iter()
+            .filter_map(|entry| match entry.entry {
+                PublicOplogEntry::AgentInvocationStarted(started) => match started.invocation {
+                    PublicAgentInvocation::AgentMethodInvocation(method)
+                        if method.method_name == "set" =>
+                    {
+                        Some(method.function_input.into_parts().1)
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        remote.push((from, inputs));
     }
 
     let reader = executor
@@ -6634,7 +6647,7 @@ async fn oplog_reads_decode_the_entries_after_a_revert_with_the_revision_before_
         .start_agent(&reader.id, reader_agent.clone())
         .await?;
     let mut guest = Vec::new();
-    for from in [OplogIndex::INITIAL, first_deleted] {
+    for from in starts {
         let inputs = executor
             .invoke_and_await_agent(
                 &reader,
@@ -6647,18 +6660,21 @@ async fn oplog_reads_decode_the_entries_after_a_revert_with_the_revision_before_
         guest.push((from, inputs));
     }
 
-    // The remote reads and the guest reads, from index 1 and from the first deleted entry.
-    let set = || data_value!(9u64).into_parts().1;
+    let input = |value: u64| data_value!(value).into_parts().1;
+    let call = |value: u64| ("set".to_string(), vec![value]);
     assert_eq!(
-        (remote, guest),
+        (restored_revisions, remote, guest),
         (
+            vec![without_set, with_set],
             vec![
-                (OplogIndex::INITIAL, vec![set()]),
-                (first_deleted, vec![set()]),
+                (starts[0], vec![input(7), input(9)]),
+                (starts[1], vec![input(7), input(9)]),
+                (starts[2], vec![input(9)]),
             ],
             vec![
-                (OplogIndex::INITIAL, Ok(vec![("set".to_string(), vec![9])])),
-                (first_deleted, Ok(vec![("set".to_string(), vec![9])])),
+                (starts[0], Ok(vec![call(7), call(9)])),
+                (starts[1], Ok(vec![call(7), call(9)])),
+                (starts[2], Ok(vec![call(9)])),
             ],
         )
     );

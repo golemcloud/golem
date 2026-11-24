@@ -242,7 +242,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       OplogEntry.Log(LogParameters(ts, LogLevel.Info, "main", "started", Some(LogTraceContext("trace-1", "span-1")))),
       OplogEntry.ActivatePlugin(ActivatePluginParameters(ts, pluginDesc)),
       OplogEntry.DeactivatePlugin(DeactivatePluginParameters(ts, pluginDesc)),
-      OplogEntry.Revert(RevertParameters(ts, BigInt(0), BigInt(10))),
+      OplogEntry.Revert(RevertParameters(ts, BigInt(0), BigInt(10), BigInt(3))),
       OplogEntry.Start(
         StartParameters(
           ts,

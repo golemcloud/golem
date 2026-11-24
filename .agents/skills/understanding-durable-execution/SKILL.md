@@ -4371,11 +4371,15 @@ none, so they read no owning `Start` outside the window. A `FailedUpdate` in a g
 expected request of its divergence only when the window covers the divergence index. A `get-oplog`
 resource that starts at index 0 starts at index 1, so its grant check covers the indexes it reads.
 A guest batch that starts after index 1 takes the component revision at its start from the latest
-status of the agent, not from a scan of the entries before its start. Every public oplog read, guest
-or remote, takes the regions that the reverts of the agent deleted from its latest status; a guest
-resource reads them at its first live batch and keeps them. A successful update inside these
-regions switches no revision, as in the status fold, so a read decodes the entries after a revert
-with the revision before the deleted update, from any start.
+status of the agent, not from a scan of the entries before its start. A `Revert` entry records the
+revision that the agent runs the entries after it with (`restored_revision`, the revision of the
+retained history in the status fold), and `OplogEntry::specifies_component_revision` returns it, as
+it returns the revision of `Create` and `SuccessfulUpdate`. Every public oplog read, guest or
+remote, walks the entries in order and switches the decoding revision at these entries: an entry in
+a dropped region decodes with the update before it, and the entries after the revert with the
+restored revision, also in a batch or page that continues after a later revert. The status leaves
+out the updates in dropped regions, so a guest batch that starts inside a dropped region takes the
+revision of the retained history at its start.
 
 Card events are hints. When replay commits a recorded entry, `skip_forward` publishes every card
 event up to the next recorded entry, and the next authority boundary applies them. A decision that

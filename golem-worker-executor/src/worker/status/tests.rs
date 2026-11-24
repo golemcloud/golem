@@ -181,10 +181,13 @@ async fn fork_regions_use_the_pinned_horizon_before_later_reverts() {
             |status| status,
         )
         .add(
-            OplogEntry::revert(OplogRegion {
-                start: OplogIndex::from_u64(3),
-                end: OplogIndex::from_u64(3),
-            }),
+            OplogEntry::revert(
+                OplogRegion {
+                    start: OplogIndex::from_u64(3),
+                    end: OplogIndex::from_u64(3),
+                },
+                ComponentRevision::INITIAL,
+            ),
             |status| status,
         )
         .build();
@@ -363,7 +366,7 @@ fn stream_status_discards_reverted_sessions_and_cancellation_receipts_but_keeps_
         entries.insert(
             OplogIndex::from_u64(7),
             if revert {
-                OplogEntry::revert(region)
+                OplogEntry::revert(region, ComponentRevision::INITIAL)
             } else {
                 OplogEntry::jump(None, region)
             },
@@ -652,7 +655,10 @@ fn the_never_live_mark_survives_folds_and_reports_sandboxed_over_the_folded_stat
             (1, create_with_mark(true)),
             (2, OplogEntry::resumed()),
             (3, OplogEntry::interrupted()),
-            (4, OplogEntry::revert(OplogRegion::from_range(3..=3))),
+            (
+                4,
+                OplogEntry::revert(OplogRegion::from_range(3..=3), ComponentRevision::INITIAL),
+            ),
         ],
     );
     assert!(reverted.never_live);
@@ -3761,10 +3767,13 @@ fn prospective_revert_keeps_deletions_from_revert_records_it_drops() {
     let mut prospective_entries = entries;
     prospective_entries.insert(
         OplogIndex::from_u64(7),
-        OplogEntry::revert(OplogRegion {
-            start: OplogIndex::from_u64(4),
-            end: OplogIndex::from_u64(6),
-        }),
+        OplogEntry::revert(
+            OplogRegion {
+                start: OplogIndex::from_u64(4),
+                end: OplogIndex::from_u64(6),
+            },
+            ComponentRevision::INITIAL,
+        ),
     );
     let prospective_status = update_status_with_new_entries(
         AgentMode::Durable,
@@ -5724,7 +5733,7 @@ async fn a_rebuild_with_regions_covering_the_empty_baseline_is_corrupt() {
     };
     for entry in [
         OplogEntry::jump(None, region.clone()),
-        OplogEntry::revert(region),
+        OplogEntry::revert(region, ComponentRevision::INITIAL),
     ] {
         let mut test_case = TestCase::builder(0).build();
         test_case.entries.push(TestEntry {
@@ -6154,39 +6163,42 @@ impl TestCaseBuilder {
         let old_status = self.entries[u64::from(target) as usize - 1]
             .expected_status
             .clone();
-        self.add(OplogEntry::revert(region.clone()), move |mut status| {
-            let revert_generation = status
-                .invocation_results
-                .revert_generation()
-                .wrapping_add(1);
-            status.active_plugins = old_status.active_plugins;
+        self.add(
+            OplogEntry::revert(region.clone(), ComponentRevision::INITIAL),
+            move |mut status| {
+                let revert_generation = status
+                    .invocation_results
+                    .revert_generation()
+                    .wrapping_add(1);
+                status.active_plugins = old_status.active_plugins;
 
-            status.skipped_regions = old_status.skipped_regions;
-            status.skipped_regions.add(region.clone());
-            status.deleted_regions.add(region);
+                status.skipped_regions = old_status.skipped_regions;
+                status.skipped_regions.add(region.clone());
+                status.deleted_regions.add(region);
 
-            status.status = old_status.status;
-            status.component_revision = old_status.component_revision;
-            status.running = old_status.running;
-            status.total_linear_memory_size = old_status.total_linear_memory_size;
-            status.component_size = old_status.component_size;
-            status.owned_resources = old_status.owned_resources;
-            status.successful_updates = old_status.successful_updates;
-            status.failed_updates = old_status.failed_updates;
-            status.pending_updates = old_status.pending_updates;
-            status.invocation_results = old_status.invocation_results;
-            status
-                .invocation_results
-                .set_revert_generation(revert_generation);
-            status.component_revision_for_replay = old_status.component_revision_for_replay;
-            status.component_revision_start_index = old_status.component_revision_start_index;
-            status.authoritative_snapshot = old_status.authoritative_snapshot;
-            status.last_automatic_snapshot = old_status.last_automatic_snapshot;
-            status.previous_usable_automatic_snapshot =
-                old_status.previous_usable_automatic_snapshot;
+                status.status = old_status.status;
+                status.component_revision = old_status.component_revision;
+                status.running = old_status.running;
+                status.total_linear_memory_size = old_status.total_linear_memory_size;
+                status.component_size = old_status.component_size;
+                status.owned_resources = old_status.owned_resources;
+                status.successful_updates = old_status.successful_updates;
+                status.failed_updates = old_status.failed_updates;
+                status.pending_updates = old_status.pending_updates;
+                status.invocation_results = old_status.invocation_results;
+                status
+                    .invocation_results
+                    .set_revert_generation(revert_generation);
+                status.component_revision_for_replay = old_status.component_revision_for_replay;
+                status.component_revision_start_index = old_status.component_revision_start_index;
+                status.authoritative_snapshot = old_status.authoritative_snapshot;
+                status.last_automatic_snapshot = old_status.last_automatic_snapshot;
+                status.previous_usable_automatic_snapshot =
+                    old_status.previous_usable_automatic_snapshot;
 
-            status
-        })
+                status
+            },
+        )
     }
 
     pub fn pending_invocation(self, invocation: AgentInvocation) -> Self {
@@ -7185,10 +7197,13 @@ async fn incremental_fold_does_not_download_payload_reverted_in_later_chunk() {
         expected_status: baseline.clone(),
     });
     test_case.entries.push(TestEntry {
-        oplog_entry: OplogEntry::revert(OplogRegion {
-            start: OplogIndex::from_u64(2),
-            end: OplogIndex::from_u64(3),
-        }),
+        oplog_entry: OplogEntry::revert(
+            OplogRegion {
+                start: OplogIndex::from_u64(2),
+                end: OplogIndex::from_u64(3),
+            },
+            ComponentRevision::INITIAL,
+        ),
         expected_status: baseline.clone(),
     });
 
@@ -7954,10 +7969,13 @@ fn reverted_card_revoked_cascade_still_records_revoked_cards() {
         ),
         (
             OplogIndex::from_u64(2),
-            OplogEntry::revert(OplogRegion {
-                start: OplogIndex::from_u64(1),
-                end: OplogIndex::from_u64(1),
-            }),
+            OplogEntry::revert(
+                OplogRegion {
+                    start: OplogIndex::from_u64(1),
+                    end: OplogIndex::from_u64(1),
+                },
+                ComponentRevision::INITIAL,
+            ),
         ),
     ]);
 
@@ -8387,10 +8405,13 @@ fn received_card_transfer_index_is_sticky_across_skipped_and_deleted_regions() {
         ),
         (
             OplogIndex::from_u64(4),
-            OplogEntry::revert(OplogRegion {
-                start: OplogIndex::from_u64(3),
-                end: OplogIndex::from_u64(3),
-            }),
+            OplogEntry::revert(
+                OplogRegion {
+                    start: OplogIndex::from_u64(3),
+                    end: OplogIndex::from_u64(3),
+                },
+                ComponentRevision::INITIAL,
+            ),
         ),
     ]);
 
@@ -8714,10 +8735,13 @@ fn reverted_card_transfer_confirmation_still_closes_pending_transfer() {
         ),
         (
             OplogIndex::from_u64(3),
-            OplogEntry::revert(OplogRegion {
-                start: OplogIndex::from_u64(2),
-                end: OplogIndex::from_u64(2),
-            }),
+            OplogEntry::revert(
+                OplogRegion {
+                    start: OplogIndex::from_u64(2),
+                    end: OplogIndex::from_u64(2),
+                },
+                ComponentRevision::INITIAL,
+            ),
         ),
     ]);
 
@@ -8869,10 +8893,13 @@ fn queued_card_event_survives_deleted_region_without_terminal() {
         ),
         (
             OplogIndex::from_u64(3),
-            OplogEntry::revert(OplogRegion {
-                start: OplogIndex::from_u64(2),
-                end: OplogIndex::from_u64(2),
-            }),
+            OplogEntry::revert(
+                OplogRegion {
+                    start: OplogIndex::from_u64(2),
+                    end: OplogIndex::from_u64(2),
+                },
+                ComponentRevision::INITIAL,
+            ),
         ),
     ]);
 
@@ -8907,10 +8934,13 @@ fn terminal_card_event_in_deleted_region_cleans_pending_event() {
         ),
         (
             OplogIndex::from_u64(3),
-            OplogEntry::revert(OplogRegion {
-                start: OplogIndex::from_u64(2),
-                end: OplogIndex::from_u64(2),
-            }),
+            OplogEntry::revert(
+                OplogRegion {
+                    start: OplogIndex::from_u64(2),
+                    end: OplogIndex::from_u64(2),
+                },
+                ComponentRevision::INITIAL,
+            ),
         ),
     ]);
 
@@ -8941,10 +8971,13 @@ fn card_revoked_entry_is_recorded_even_in_deleted_region() {
         ),
         (
             OplogIndex::from_u64(3),
-            OplogEntry::revert(OplogRegion {
-                start: OplogIndex::from_u64(2),
-                end: OplogIndex::from_u64(2),
-            }),
+            OplogEntry::revert(
+                OplogRegion {
+                    start: OplogIndex::from_u64(2),
+                    end: OplogIndex::from_u64(2),
+                },
+                ComponentRevision::INITIAL,
+            ),
         ),
     ]);
 
@@ -9392,7 +9425,10 @@ mod region_fold {
     }
 
     pub(super) fn revert(start: u64, end: u64) -> OplogEntry {
-        OplogEntry::revert(OplogRegion::from_index_range(idx(start)..=idx(end)))
+        OplogEntry::revert(
+            OplogRegion::from_index_range(idx(start)..=idx(end)),
+            ComponentRevision::INITIAL,
+        )
     }
 
     pub(super) fn entries(

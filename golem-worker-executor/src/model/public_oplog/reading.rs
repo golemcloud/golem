@@ -15,7 +15,6 @@
 use super::*;
 use crate::services::golem_config::ScanBudget;
 use golem_common::model::oplog::{OplogCursor, OplogScan, OplogScanAllowance};
-use golem_common::model::regions::DeletedRegions;
 use golem_service_base::error::worker_executor::StaleCursorReason;
 use std::time::{Duration, Instant};
 
@@ -216,7 +215,6 @@ pub async fn get_public_oplog_chunk(
     owner_component_id: ComponentId,
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
-    deleted_regions: &DeletedRegions,
     initial_component_revision: ComponentRevision,
     initial_oplog_index: OplogIndex,
     count: usize,
@@ -230,7 +228,6 @@ pub async fn get_public_oplog_chunk(
         owner_component_id,
         owner_kind,
         agent_type_name,
-        deleted_regions,
         initial_component_revision,
         initial_oplog_index,
         count,
@@ -254,7 +251,6 @@ pub async fn get_guest_oplog_chunk(
     owner_component_id: ComponentId,
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
-    deleted_regions: &DeletedRegions,
     initial_component_revision: ComponentRevision,
     initial_oplog_index: OplogIndex,
     count: usize,
@@ -268,7 +264,6 @@ pub async fn get_guest_oplog_chunk(
         owner_component_id,
         owner_kind,
         agent_type_name,
-        deleted_regions,
         initial_component_revision,
         initial_oplog_index,
         count,
@@ -292,7 +287,6 @@ pub async fn get_public_oplog_page(
     owner_component_id: ComponentId,
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
-    deleted_regions: &DeletedRegions,
     initial_component_revision: ComponentRevision,
     initial_oplog_index: OplogIndex,
     limits: PublicOplogPageLimits,
@@ -306,7 +300,6 @@ pub async fn get_public_oplog_page(
         owner_component_id,
         owner_kind,
         agent_type_name,
-        deleted_regions,
         initial_component_revision,
         initial_oplog_index,
         limits.count,
@@ -329,7 +322,6 @@ pub async fn get_public_oplog_entry(
     owner_component_id: ComponentId,
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
-    deleted_regions: &DeletedRegions,
     oplog_index: OplogIndex,
     component_revision: Option<ComponentRevision>,
     claims: ClaimVisibility,
@@ -349,7 +341,6 @@ pub async fn get_public_oplog_entry(
                 oplog_service.clone(),
                 owned_agent_id,
                 agent_mode,
-                deleted_regions,
                 oplog_index,
             )
             .await?
@@ -363,7 +354,6 @@ pub async fn get_public_oplog_entry(
         owner_component_id,
         owner_kind,
         agent_type_name,
-        deleted_regions,
         component_revision,
         oplog_index,
         1,
@@ -381,9 +371,7 @@ pub async fn get_public_oplog_entry(
 /// Reads up to `count` oplog entries from `initial_oplog_index` and adds the entries that match
 /// `filter` to the chunk, in the form that `builder` selects. The chunk ends early at the first
 /// matching entry that does not fit; the cursor of the chunk then points to that entry, and the
-/// returned flag is `true`. `deleted_regions` are the regions that the reverts of the agent
-/// deleted, as its latest status holds them: an update inside them switches no revision, because
-/// the agent runs the entries after the revert with the revision before the update.
+/// returned flag is `true`.
 #[allow(clippy::too_many_arguments)]
 async fn read_public_oplog_chunk<B: ChunkBuilder>(
     components: Arc<dyn ComponentService>,
@@ -393,7 +381,6 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
     owner_component_id: ComponentId,
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
-    deleted_regions: &DeletedRegions,
     initial_component_revision: ComponentRevision,
     initial_oplog_index: OplogIndex,
     count: usize,
@@ -435,9 +422,9 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
     }
 
     for (index, raw_entry) in raw_entries {
-        let entry_component_revision =
-            component_revision_switch(index, &raw_entry, deleted_regions)
-                .unwrap_or(current_component_revision);
+        let entry_component_revision = raw_entry
+            .specifies_component_revision()
+            .unwrap_or(current_component_revision);
 
         let attribution =
             B::Attribution::resolve(&mut attribution_resolver, index, &raw_entry).await?;
@@ -499,7 +486,6 @@ pub async fn search_guest_oplog(
     owner_component_id: ComponentId,
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
-    deleted_regions: &DeletedRegions,
     initial_component_revision: ComponentRevision,
     initial_oplog_index: OplogIndex,
     last_oplog_index: Option<OplogIndex>,
@@ -516,7 +502,6 @@ pub async fn search_guest_oplog(
         owner_component_id,
         owner_kind,
         agent_type_name,
-        deleted_regions,
         initial_component_revision,
         initial_oplog_index,
         last_oplog_index,
@@ -540,7 +525,6 @@ pub async fn search_public_oplog_page(
     owner_component_id: ComponentId,
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
-    deleted_regions: &DeletedRegions,
     initial_component_revision: ComponentRevision,
     initial_oplog_index: OplogIndex,
     limits: PublicOplogPageLimits,
@@ -556,7 +540,6 @@ pub async fn search_public_oplog_page(
         owner_component_id,
         owner_kind,
         agent_type_name,
-        deleted_regions,
         initial_component_revision,
         initial_oplog_index,
         None,
@@ -584,7 +567,6 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
     owner_component_id: ComponentId,
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
-    deleted_regions: &DeletedRegions,
     initial_component_revision: ComponentRevision,
     initial_oplog_index: OplogIndex,
     last_oplog_index: Option<OplogIndex>,
@@ -618,7 +600,6 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
             owner_component_id,
             owner_kind,
             agent_type_name,
-            deleted_regions,
             current_component_revision,
             current_index,
             chunk_size,
@@ -652,34 +633,16 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
     })
 }
 
-/// The component revision that the entry at `index` switches the decoding to, as the status fold
-/// switches the revision of the agent: a `Create` or a `SuccessfulUpdate` outside the regions
-/// that a revert deleted. The agent runs the entries after a revert with the revision before the
-/// deleted region, so an update inside the region switches no revision.
-pub(crate) fn component_revision_switch(
-    index: OplogIndex,
-    entry: &OplogEntry,
-    deleted_regions: &DeletedRegions,
-) -> Option<ComponentRevision> {
-    entry
-        .specifies_component_revision()
-        .filter(|_| !deleted_regions.is_in_deleted_region(index))
-}
-
-/// The component revision in effect at `start`. `deleted_regions` are the regions that the
-/// reverts of the agent deleted, as its latest status holds them.
 pub async fn find_component_revision_at(
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
-    deleted_regions: &DeletedRegions,
     start: OplogIndex,
 ) -> Result<ComponentRevision, WorkerExecutorError> {
     let revision = scan_component_revision(
         oplog_service,
         owned_agent_id,
         agent_mode,
-        deleted_regions,
         start,
         &mut RangeScan::unlimited(),
     )
@@ -694,7 +657,6 @@ async fn scan_component_revision(
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
-    deleted_regions: &DeletedRegions,
     start: OplogIndex,
     scan: &mut RangeScan,
 ) -> Result<Option<ComponentRevision>, WorkerExecutorError> {
@@ -715,8 +677,8 @@ async fn scan_component_revision(
         let entries = oplog_service
             .read_exact(owned_agent_id, agent_mode, current, count)
             .await?;
-        for (index, entry) in entries {
-            if let Some(revision) = component_revision_switch(index, &entry, deleted_regions) {
+        for entry in entries.into_values() {
+            if let Some(revision) = entry.specifies_component_revision() {
                 initial_component_revision = revision;
             }
         }
@@ -831,7 +793,6 @@ pub async fn get_public_oplog_range_page(
     owner_component_id: ComponentId,
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
-    deleted_regions: &DeletedRegions,
     cursor: Option<OplogCursor>,
     from: OplogIndex,
     to: OplogIndex,
@@ -859,7 +820,6 @@ pub async fn get_public_oplog_range_page(
                 oplog_service.clone(),
                 owned_agent_id,
                 agent_mode,
-                deleted_regions,
                 Some(cursor),
                 from,
             )
@@ -871,7 +831,6 @@ pub async fn get_public_oplog_range_page(
                 oplog_service.clone(),
                 owned_agent_id,
                 agent_mode,
-                deleted_regions,
                 from,
                 &mut scan,
             )
@@ -916,7 +875,6 @@ pub async fn get_public_oplog_range_page(
         owner_component_id,
         owner_kind,
         agent_type_name,
-        deleted_regions,
         revision,
         start,
         count,
@@ -991,7 +949,6 @@ pub async fn oplog_page_start(
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
-    deleted_regions: &DeletedRegions,
     cursor: Option<OplogCursor>,
     from: OplogIndex,
 ) -> Result<(OplogIndex, ComponentRevision), WorkerExecutorError> {
@@ -1017,14 +974,8 @@ pub async fn oplog_page_start(
             Ok((OplogIndex::from_u64(cursor.next_oplog_index), revision))
         }
         None => {
-            let revision = find_component_revision_at(
-                oplog_service,
-                owned_agent_id,
-                agent_mode,
-                deleted_regions,
-                from,
-            )
-            .await?;
+            let revision =
+                find_component_revision_at(oplog_service, owned_agent_id, agent_mode, from).await?;
             Ok((from, revision))
         }
     }

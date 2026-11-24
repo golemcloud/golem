@@ -833,11 +833,16 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             } => Entry::DeactivatePlugin(RawDeactivatePluginParameters {
                 plugin_grant_id: Some(plugin_grant_id.into()),
             }),
-            OplogEntry::Revert { dropped_region, .. } => Entry::Revert(RawRevertParameters {
+            OplogEntry::Revert {
+                dropped_region,
+                restored_revision,
+                ..
+            } => Entry::Revert(RawRevertParameters {
                 dropped_region: Some(RawOplogRegion {
                     start: dropped_region.start.into(),
                     end: dropped_region.end.into(),
                 }),
+                restored_revision: restored_revision.into(),
             }),
             OplogEntry::CancelPendingInvocation { invocation_id, .. } => {
                 Entry::CancelPendingInvocation(RawCancelPendingInvocationParameters {
@@ -1563,6 +1568,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                         start: OplogIndex::from_u64(region.start),
                         end: OplogIndex::from_u64(region.end),
                     },
+                    restored_revision: p.restored_revision.try_into()?,
                 })
             }
             Entry::CancelPendingInvocation(p) => {

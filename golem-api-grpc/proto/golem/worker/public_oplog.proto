@@ -818,6 +818,7 @@ message RevertParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 start = 2;
   uint64 end = 3;
+  uint64 restored_revision = 4;
 }
 
 message CancelInvocationParameters {

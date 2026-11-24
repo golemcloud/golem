@@ -3534,6 +3534,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                 start: OplogIndex::from_u64(5),
                 end: OplogIndex::from_u64(10),
             },
+            restored_revision: ComponentRevision::new(3).unwrap(),
         }),
         PublicOplogEntry::CancelPendingInvocation(CancelPendingInvocationParams {
             timestamp: timestamp(),

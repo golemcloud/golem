@@ -414,7 +414,8 @@ object OplogApi {
   final case class RevertParameters(
     timestamp: ContextApi.DateTime,
     start: OplogIndex,
-    end: OplogIndex
+    end: OplogIndex,
+    restoredRevision: BigInt
   )
 
   final case class CancelPendingInvocationParameters(
@@ -1247,7 +1248,8 @@ object OplogApi {
     RevertParameters(
       timestamp = parseDateTime(raw.timestamp),
       start = BigInt(raw.droppedRegion.start.toString),
-      end = BigInt(raw.droppedRegion.end.toString)
+      end = BigInt(raw.droppedRegion.end.toString),
+      restoredRevision = BigInt(raw.restoredRevision.toString)
     )
 
   private def parseCancelPendingInvocationParameters(
