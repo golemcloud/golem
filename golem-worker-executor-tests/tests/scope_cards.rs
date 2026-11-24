@@ -35,8 +35,8 @@ use golem_common::model::oplog::{
     HostRequest, HostRequestGolemRpcCreate, HostResponse, HostResponseFileSystemStat,
     HostResponseGolemRpcCreate, HostResponseKVUnit, HostResponseP3FileSystemStat,
     HostResponseP3FileSystemWriteAdmission, HostResponseP3SocketsTcpConnect,
-    HostResponsePermissionCheck, OplogEntry, OplogIndex, PublicOplogEntry,
-    PublicOplogEntryWithIndex, PublicQueuedCardEvent,
+    HostResponsePermissionCheck, OplogEntry, OplogIndex, PublicAgentInvocationResult,
+    PublicOplogEntry, PublicOplogEntryWithIndex, PublicQueuedCardEvent,
 };
 use golem_common::model::{
     AgentId, AgentStatus, IdempotencyKey, OwnedAgentId, PendingCardEventRef, PromiseId,
@@ -6489,6 +6489,197 @@ async fn a_later_guest_oplog_batch_decodes_with_the_revision_at_its_start(
         .await?
         .into_typed::<Result<Vec<(String, Vec<u64>)>, String>>()?;
     assert_eq!(outputs, Ok(vec![("set".to_string(), vec![7])]));
+    Ok(())
+}
+
+/// The agent runs the entries of a region that a revert later drops with the revision of the
+/// update in the region, and the entries after the revert with the revision that the revert
+/// restores. The target starts on the revision without `set`. It is updated to the revision with
+/// `set`, runs `set(7)`, and is reverted to the entry before the update. It is updated to the
+/// revision with `set` again, then to a revision without `set`, and is reverted to the entry
+/// before the second update; then it runs `set(9)`. Only the revision with `set` decodes the output
+/// of either call. Every public oplog read, guest and remote, from index 1 and from the first
+/// dropped entry of each revert, decodes both outputs.
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn oplog_reads_decode_the_entries_around_a_revert_with_the_revision_that_the_agent_ran_them_with(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[tagged_as("agent_update_v2")] agent_update_v2: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v2)
+        .store()
+        .await?;
+    let target_agent = agent_key!("UpdateTest");
+    configure_scope_card_root(&authority, &component, &target_agent)?;
+    let target = executor
+        .start_agent(&component.id, target_agent.clone())
+        .await?;
+    let without_set = component.revision;
+    let with_set = executor
+        .update_component(&component.id, "it_agent_update_v3_release")
+        .await?
+        .revision;
+    let without_set_again = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?
+        .revision;
+
+    let update_to = async |revision| {
+        executor
+            .manual_update_worker(&target, revision, false)
+            .await?;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let metadata = executor.get_worker_metadata(&target).await?;
+                if metadata.component_revision == revision
+                    && golem_test_framework::dsl::update_counts(&metadata).0 == 0
+                {
+                    break anyhow::Ok(());
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await?
+    };
+    let revert_to = async |last_oplog_index: OplogIndex| {
+        executor
+            .revert(
+                &target,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex { last_oplog_index }),
+            )
+            .await?;
+        anyhow::Ok(
+            executor
+                .get_worker_metadata(&target)
+                .await?
+                .component_revision,
+        )
+    };
+    let set = async |value: u64| {
+        executor
+            .invoke_and_await_agent(&component, &target_agent, "set", data_value!(value))
+            .await?
+            .into_typed::<u64>()
+    };
+
+    let before_first_update = OplogIndex::from_u64(executor.get_oplog_last_index(&target).await?);
+    update_to(with_set).await?;
+    assert_eq!(set(7).await?, 7);
+    let after_first_revert = revert_to(before_first_update).await?;
+    update_to(with_set).await?;
+    let before_second_update = OplogIndex::from_u64(executor.get_oplog_last_index(&target).await?);
+    update_to(without_set_again).await?;
+    let after_second_revert = revert_to(before_second_update).await?;
+    assert_eq!(set(9).await?, 9);
+    assert_eq!(
+        (after_first_revert, after_second_revert),
+        (without_set, with_set)
+    );
+
+    let oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+    let restored_revisions = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Revert(revert) => Some(revert.restored_revision),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let starts = [
+        OplogIndex::INITIAL,
+        before_first_update.next(),
+        before_second_update.next(),
+    ];
+
+    let mut remote = Vec::new();
+    for from in starts {
+        let outputs = executor
+            .get_oplog(&target, from)
+            .await?
+            .into_iter()
+            .filter_map(|entry| match entry.entry {
+                PublicOplogEntry::AgentInvocationFinished(finished)
+                    if finished.method_name.as_deref() == Some("set") =>
+                {
+                    match finished.result {
+                        PublicAgentInvocationResult::AgentMethod(output) => {
+                            Some(output.output.into_parts().1)
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        remote.push((from, outputs));
+    }
+
+    let reader = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("GolemHostApi")
+        .try_update_agent_provision_config("GolemHostApi", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .push(parse_polymorphic_permission(
+                    "oplog(?env/*/*) @ * : read : *",
+                )?);
+            Ok::<_, golem_common::model::card::CardParseError>(())
+        })?
+        .store()
+        .await?;
+    let reader_agent = agent_key!("GolemHostApi", "reverted-oplog-reader");
+    // The target keeps its card as the reader's card becomes the root card.
+    authority.add_card(
+        authority
+            .root_card()
+            .expect("the target card is the root card"),
+    );
+    configure_scope_card_root(&authority, &reader, &reader_agent)?;
+    executor
+        .start_agent(&reader.id, reader_agent.clone())
+        .await?;
+    let mut guest = Vec::new();
+    for from in starts {
+        let outputs = executor
+            .invoke_and_await_agent(
+                &reader,
+                &reader_agent,
+                "read_oplog_method_outputs",
+                data_value!(target.agent_id(), from.as_u64()),
+            )
+            .await?
+            .into_typed::<Result<Vec<(String, Vec<u64>)>, String>>()?;
+        guest.push((from, outputs));
+    }
+
+    let output = SchemaValue::U64;
+    let call = |value: u64| ("set".to_string(), vec![value]);
+    assert_eq!(
+        (restored_revisions, remote, guest),
+        (
+            vec![without_set, with_set],
+            vec![
+                (starts[0], vec![output(7), output(9)]),
+                (starts[1], vec![output(7), output(9)]),
+                (starts[2], vec![output(9)]),
+            ],
+            vec![
+                (starts[0], Ok(vec![call(7), call(9)])),
+                (starts[1], Ok(vec![call(7), call(9)])),
+                (starts[2], Ok(vec![call(9)])),
+            ],
+        )
+    );
     Ok(())
 }
 

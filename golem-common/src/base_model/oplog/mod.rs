@@ -576,9 +576,13 @@ oplog_entry! {
         wit_public_type: "revert-parameters"
         raw {
             dropped_region: OplogRegion,
+            /// The component revision that the agent runs the entries after the revert with: the
+            /// revision in effect at the end of the retained history.
+            restored_revision: ComponentRevision,
         }
         public {
             dropped_region: OplogRegion,
+            restored_revision: ComponentRevision,
         }
     },
     /// Removes a pending invocation from the invocation queue

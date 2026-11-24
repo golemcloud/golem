@@ -1511,6 +1511,7 @@ mod tests {
         OplogEntry::Revert(RevertParameters {
             timestamp: instant(19, 0),
             dropped_region: OplogRegion { start: 1, end: 1 },
+            restored_revision: 0,
         })
     }
 
@@ -1903,6 +1904,7 @@ mod tests {
                 OplogEntry::Revert(RevertParameters {
                     timestamp: instant(12, 0),
                     dropped_region: OplogRegion { start: 40, end: 40 },
+                    restored_revision: 0,
                 }),
             ],
         );

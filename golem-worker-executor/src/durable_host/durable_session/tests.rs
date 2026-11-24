@@ -9501,7 +9501,10 @@ async fn reverted_caller_reestablishes_foreign_reader_without_repeating_invocati
             DurableStreamOplogRecord::Session(None, Box::new(StreamSessionRecord::ForkCut(cut)))
                 .into_inline_entry();
         oplog
-            .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
+            .add_pair(
+                OplogEntry::revert(region, ComponentRevision::INITIAL),
+                Box::new(move |_| marker),
+            )
             .await
             .unwrap();
         drop(streams);
@@ -9729,7 +9732,10 @@ async fn detached_continuation_activates_prepared_and_new_foreign_inputs() {
                 .into_inline_entry();
         if let Some(region) = region {
             oplog
-                .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
+                .add_pair(
+                    OplogEntry::revert(region, ComponentRevision::INITIAL),
+                    Box::new(move |_| marker),
+                )
                 .await
                 .unwrap();
         } else {
@@ -14430,7 +14436,7 @@ async fn local_reader_forwarding_reuses_only_retained_destinations_after_fork_an
                 let recovered_oplog = if revert {
                     oplog
                         .add_pair(
-                            OplogEntry::revert(cut.revert.unwrap()),
+                            OplogEntry::revert(cut.revert.unwrap(), ComponentRevision::INITIAL),
                             Box::new(move |_| marker),
                         )
                         .await
@@ -14789,7 +14795,7 @@ async fn forwarded_output_intents_survive_result_and_nested_publication_cuts() {
                 let recovered_oplog = if revert {
                     oplog
                         .add_pair(
-                            OplogEntry::revert(cut.revert.unwrap()),
+                            OplogEntry::revert(cut.revert.unwrap(), ComponentRevision::INITIAL),
                             Box::new(move |_| marker),
                         )
                         .await
@@ -15203,7 +15209,7 @@ async fn nested_forwarding_respects_recovery_and_concurrent_terminal_fences() {
             .into_inline_entry();
             oplog
                 .add_pair(
-                    OplogEntry::revert(cut.revert.unwrap()),
+                    OplogEntry::revert(cut.revert.unwrap(), ComponentRevision::INITIAL),
                     Box::new(move |_| marker),
                 )
                 .await

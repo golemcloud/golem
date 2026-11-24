@@ -240,9 +240,10 @@ async fn revert_marker_requires_adjacent_matching_revert() {
         if let Some(matching) = matching {
             fixture
                 .oplog
-                .add(OplogEntry::revert(OplogRegion::from_range(
-                    2..=if matching { 3 } else { 2 },
-                )))
+                .add(OplogEntry::revert(
+                    OplogRegion::from_range(2..=if matching { 3 } else { 2 }),
+                    ComponentRevision::INITIAL,
+                ))
                 .await
                 .unwrap();
         } else {
@@ -276,7 +277,10 @@ async fn bare_revert_and_guest_jump_remain_valid_lineage_history() {
         .unwrap();
     fixture
         .oplog
-        .add(OplogEntry::revert(OplogRegion::from_range(2..=2)))
+        .add(OplogEntry::revert(
+            OplogRegion::from_range(2..=2),
+            ComponentRevision::INITIAL,
+        ))
         .await
         .unwrap();
     let lineage = StreamForkLineage::load(&*fixture.oplog, &identity, fingerprint)
@@ -405,7 +409,10 @@ async fn lineage_skips_deleted_stream_payloads_without_downloading_them() {
     let region = OplogRegion::from_range(7..=9);
     fixture
         .oplog
-        .add(OplogEntry::revert(region.clone()))
+        .add(OplogEntry::revert(
+            region.clone(),
+            ComponentRevision::INITIAL,
+        ))
         .await
         .unwrap();
     let mut marker = fork(None, OplogIndex::from_u64(6));

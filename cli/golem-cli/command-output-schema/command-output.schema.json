@@ -8091,8 +8091,8 @@
     },
     "PublicOplogEntryRevert": {
       "type": "object",
-      "required": ["type", "timestamp", "droppedRegion"],
-      "properties": { "type": { "const": "Revert" }, "timestamp": { "type": "string" }, "droppedRegion": { "$ref": "#/definitions/OplogRegion" } },
+      "required": ["type", "timestamp", "droppedRegion", "restoredRevision"],
+      "properties": { "type": { "const": "Revert" }, "timestamp": { "type": "string" }, "droppedRegion": { "$ref": "#/definitions/OplogRegion" }, "restoredRevision": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntryCancelPendingInvocation": {

@@ -12884,12 +12884,16 @@ components:
       required:
       - timestamp
       - droppedRegion
+      - restoredRevision
       properties:
         timestamp:
           type: string
           format: date-time
         droppedRegion:
           $ref: '#/components/schemas/OplogRegion'
+        restoredRevision:
+          type: integer
+          format: uint64
     r#RolledBackRemoteTransactionParams:
       type: object
       title: r#RolledBackRemoteTransactionParams

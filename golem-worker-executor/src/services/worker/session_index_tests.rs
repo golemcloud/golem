@@ -1113,7 +1113,10 @@ async fn recovery_cache_refolds_a_cut_committed_after_its_snapshot() {
     )
     .into_inline_entry();
     oplog
-        .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
+        .add_pair(
+            OplogEntry::revert(region, ComponentRevision::INITIAL),
+            Box::new(move |_| marker),
+        )
         .await
         .unwrap();
     // An uncommitted cut must fail closed, rather than repeatedly reloading an old index.
@@ -1217,7 +1220,10 @@ async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chun
         let marker_entry =
             DurableStreamOplogRecord::Session(None, Box::new(cut)).into_inline_entry();
         oplog
-            .add_pair(OplogEntry::revert(region), Box::new(move |_| marker_entry))
+            .add_pair(
+                OplogEntry::revert(region, ComponentRevision::INITIAL),
+                Box::new(move |_| marker_entry),
+            )
             .await
             .unwrap();
         oplog.commit(CommitLevel::Always).await.unwrap();
@@ -1391,7 +1397,10 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
     });
     let marker = DurableStreamOplogRecord::Session(None, Box::new(cut)).into_inline_entry();
     oplog
-        .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
+        .add_pair(
+            OplogEntry::revert(region, ComponentRevision::INITIAL),
+            Box::new(move |_| marker),
+        )
         .await
         .unwrap();
     oplog.commit(CommitLevel::Always).await.unwrap();
@@ -1599,7 +1608,10 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
     });
     let marker = DurableStreamOplogRecord::Session(None, Box::new(cut)).into_inline_entry();
     oplog
-        .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
+        .add_pair(
+            OplogEntry::revert(region, ComponentRevision::INITIAL),
+            Box::new(move |_| marker),
+        )
         .await
         .unwrap();
     oplog.commit(CommitLevel::Always).await.unwrap();
@@ -3185,7 +3197,10 @@ async fn self_revert_preserves_retained_public_binding_in_warm_and_cold_indexes(
     )
     .into_inline_entry();
     oplog
-        .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
+        .add_pair(
+            OplogEntry::revert(region, ComponentRevision::INITIAL),
+            Box::new(move |_| marker),
+        )
         .await
         .unwrap();
     oplog.commit(CommitLevel::Always).await.unwrap();

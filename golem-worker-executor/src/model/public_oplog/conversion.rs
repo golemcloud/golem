@@ -639,9 +639,11 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::Revert {
                 timestamp,
                 dropped_region,
+                restored_revision,
             } => Ok(PublicOplogEntry::Revert(RevertParams {
                 timestamp,
                 dropped_region,
+                restored_revision,
             })),
             OplogEntry::CancelPendingInvocation {
                 timestamp,

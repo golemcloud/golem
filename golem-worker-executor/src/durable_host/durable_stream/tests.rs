@@ -6890,7 +6890,7 @@ async fn reverted_result_replay_preserves_foreign_handles_without_live_authority
             .into_inline_entry();
             oplog
                 .add_pair(
-                    OplogEntry::revert(cut.revert.unwrap()),
+                    OplogEntry::revert(cut.revert.unwrap(), ComponentRevision::INITIAL),
                     Box::new(move |_| marker),
                 )
                 .await

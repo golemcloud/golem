@@ -270,6 +270,7 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
             start: dropped_region.start.into(),
             end: dropped_region.end.into(),
         },
+        restored_revision: restored_revision.get(),
     } }
     CancelPendingInvocation { record CancelPendingInvocationParams => CancelPendingInvocationParameters {
         timestamp: timestamp.into(),

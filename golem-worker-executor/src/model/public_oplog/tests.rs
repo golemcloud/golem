@@ -4379,3 +4379,397 @@ async fn a_guest_batch_holds_the_expected_request_of_a_divergence_only_inside_it
     .unwrap();
     assert!(has_expected_request(&remote.entries[0].entry));
 }
+
+/// Answers the metadata of any revision, which the public form of a `SuccessfulUpdate` reads for
+/// its target revision.
+struct AnyRevisionComponentService;
+
+#[async_trait]
+impl ComponentService for AnyRevisionComponentService {
+    async fn get(
+        &self,
+        _engine: &wasmtime::Engine,
+        _component_id: ComponentId,
+        _component_revision: ComponentRevision,
+    ) -> Result<(wasmtime::component::Component, Component), WorkerExecutorError> {
+        panic!("rendering must not load executable components")
+    }
+
+    async fn get_metadata(
+        &self,
+        component_id: ComponentId,
+        forced_revision: Option<ComponentRevision>,
+    ) -> Result<Component, WorkerExecutorError> {
+        Ok(Component {
+            id: component_id,
+            revision: forced_revision.unwrap(),
+            environment_id: EnvironmentId::new(),
+            component_name: ComponentName("reverted".to_string()),
+            hash: golem_common::model::diff::Hash::empty(),
+            application_id: golem_common::model::application::ApplicationId::new(),
+            account_id: AccountId::new(),
+            account_email: AccountEmail::new("test@golem"),
+            application_name: "test-app".parse().unwrap(),
+            environment_name: "test-env".parse().unwrap(),
+            component_size: 100,
+            metadata: golem_common::model::component_metadata::ComponentMetadata::from_parts(
+                Default::default(),
+                Vec::new(),
+                Vec::new(),
+                BTreeMap::new(),
+            ),
+            created_at: chrono::Utc::now(),
+            wasm_hash: golem_common::model::diff::Hash::empty(),
+            package_metadata: None,
+            object_store_key: String::new(),
+        })
+    }
+
+    async fn resolve_component(
+        &self,
+        _component_reference: String,
+        _resolving_environment: EnvironmentId,
+        _resolving_application: golem_common::model::application::ApplicationId,
+        _resolving_account: AccountId,
+    ) -> Result<Option<ComponentId>, WorkerExecutorError> {
+        panic!("rendering must use the supplied component identity")
+    }
+
+    async fn all_cached_metadata(&self) -> Vec<Component> {
+        Vec::new()
+    }
+
+    async fn invalidate_all_metadata_for_environment(&self, _environment_id: EnvironmentId) {}
+}
+
+fn successful_update_entry(target_revision: ComponentRevision) -> OplogEntry {
+    OplogEntry::SuccessfulUpdate {
+        timestamp: Timestamp::now_utc(),
+        target_revision,
+        new_component_size: 100,
+        new_total_linear_memory_size: None,
+        new_active_plugins: HashSet::new(),
+        snapshot_assisted_details: None,
+        bootstrap: None,
+    }
+}
+
+/// The oplog index and the decoding revision of each entry of a remote page whose entry limit
+/// omits every entry.
+fn omitted_revisions(
+    entries: &[golem_api_grpc::proto::golem::worker::OplogPageEntry],
+) -> Vec<(OplogIndex, ComponentRevision)> {
+    public_page_entries(entries)
+        .into_iter()
+        .map(|entry| match entry {
+            PublicOplogPageEntry::Omitted(omitted) => {
+                (omitted.oplog_index, omitted.component_revision)
+            }
+            PublicOplogPageEntry::Included(entry) => {
+                panic!("expected an omitted entry, got {entry:?}")
+            }
+        })
+        .collect()
+}
+
+/// The agent runs the entries of a region that a revert later drops with the revision of the
+/// update in the region, and the entries after the revert with the revision that the revert
+/// restores. Every read walks the oplog in order and decodes each entry with the revision that
+/// the agent ran it with: a remote page, a remote range page and a guest batch, from index 1 and
+/// from a later start.
+#[test]
+async fn a_read_decodes_each_entry_around_a_revert_with_the_revision_that_the_agent_ran_it_with() {
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("revert-deleted-update").await;
+    let initial = ComponentRevision::INITIAL;
+    let updated = ComponentRevision::new(5).unwrap();
+    let first = oplog.add(log_entry(0)).await.unwrap();
+    let update = oplog.add(successful_update_entry(updated)).await.unwrap();
+    let inside = oplog.add(log_entry(0)).await.unwrap();
+    let revert = oplog
+        .add(OplogEntry::revert(
+            OplogRegion {
+                start: update,
+                end: inside,
+            },
+            initial,
+        ))
+        .await
+        .unwrap();
+    let after = oplog.add(log_entry(0)).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(
+        [first, update, inside, revert, after],
+        [1, 2, 3, 4, 5].map(OplogIndex::from_u64)
+    );
+    // The update at 2 switches the entries at 2 and 3 to the updated revision, and the revert at
+    // 4 switches the entries from 4 back to the initial one.
+    let ran_with = [
+        (first, initial),
+        (update, updated),
+        (inside, updated),
+        (revert, initial),
+        (after, initial),
+    ];
+
+    let mut observed = Vec::new();
+    let mut expected = Vec::new();
+    for start in [first, update, inside, revert, after] {
+        let (page_start, page_revision) = oplog_page_start(
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            start,
+        )
+        .await
+        .unwrap();
+        let page = get_public_oplog_page(
+            Arc::new(AnyRevisionComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            page_revision,
+            page_start,
+            page_limits(1_000_000, 0),
+            ClaimVisibility::Hidden,
+        )
+        .await
+        .unwrap();
+        let mut page_revisions = omitted_revisions(&page.entries);
+        page_revisions.push((page.next_oplog_index, page.current_component_revision));
+        observed.push(("remote page", start, page_revisions));
+
+        let range = get_public_oplog_range_page(
+            Arc::new(AnyRevisionComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            None,
+            start,
+            after,
+            page_limits(1_000_000, 0),
+            OplogScanAllowance {
+                entries: 100,
+                millis: 600_000,
+            },
+            ClaimVisibility::Hidden,
+        )
+        .await
+        .unwrap();
+        observed.push(("remote range", start, omitted_revisions(&range.entries)));
+
+        // A guest batch holds the revision after its last entry for its next batch.
+        let guest = get_guest_oplog_chunk(
+            Arc::new(AnyRevisionComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            page_revision,
+            start,
+            10,
+            ClaimVisibility::Hidden,
+        )
+        .await
+        .unwrap();
+        observed.push((
+            "guest batch",
+            start,
+            vec![(guest.next_oplog_index, guest.current_component_revision)],
+        ));
+
+        let entries = ran_with
+            .iter()
+            .copied()
+            .filter(|(index, _)| *index >= start)
+            .collect::<Vec<_>>();
+        let next = (after.next(), initial);
+        expected.push((
+            "remote page",
+            start,
+            entries.iter().copied().chain([next]).collect(),
+        ));
+        expected.push(("remote range", start, entries));
+        expected.push(("guest batch", start, vec![next]));
+    }
+    assert_eq!(observed, expected);
+}
+
+/// A read that stops after an update holds the updated revision for its continuation: the cursor
+/// of a remote page or range page, and the next batch of a guest resource. A revert that drops
+/// the update arrives before the continuation, which then decodes the entry of the dropped region
+/// with the updated revision and the entries after the revert with the revision that the revert
+/// restores.
+#[test]
+async fn a_read_continued_after_a_later_revert_decodes_the_entries_after_it_with_the_restored_revision()
+ {
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("revert-after-cursor").await;
+    let initial = ComponentRevision::INITIAL;
+    let updated = ComponentRevision::new(5).unwrap();
+    oplog.add(log_entry(0)).await.unwrap();
+    let update = oplog.add(successful_update_entry(updated)).await.unwrap();
+    let inside = oplog.add(log_entry(0)).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+
+    let page = get_public_oplog_page(
+        Arc::new(AnyRevisionComponentService),
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        test_component_id(),
+        OwnerKind::ComponentAgent,
+        None,
+        initial,
+        OplogIndex::INITIAL,
+        PublicOplogPageLimits {
+            count: 2,
+            ..page_limits(1_000_000, 0)
+        },
+        ClaimVisibility::Hidden,
+    )
+    .await
+    .unwrap();
+    let cursor = OplogCursor {
+        next_oplog_index: page.next_oplog_index.as_u64(),
+        current_component_revision: page.current_component_revision.into(),
+        query_hash: OplogCursor::query_hash(None),
+    };
+    let guest = get_guest_oplog_chunk(
+        Arc::new(AnyRevisionComponentService),
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        test_component_id(),
+        OwnerKind::ComponentAgent,
+        None,
+        initial,
+        OplogIndex::INITIAL,
+        2,
+        ClaimVisibility::Hidden,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        [
+            (page.next_oplog_index, page.current_component_revision),
+            (guest.next_oplog_index, guest.current_component_revision),
+        ],
+        [(inside, updated); 2]
+    );
+
+    let revert = oplog
+        .add(OplogEntry::revert(
+            OplogRegion {
+                start: update,
+                end: inside,
+            },
+            initial,
+        ))
+        .await
+        .unwrap();
+    let after = oplog.add(log_entry(0)).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+
+    let (page_start, page_revision) = oplog_page_start(
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        Some(cursor.clone()),
+        OplogIndex::INITIAL,
+    )
+    .await
+    .unwrap();
+    let next_page = get_public_oplog_page(
+        Arc::new(AnyRevisionComponentService),
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        test_component_id(),
+        OwnerKind::ComponentAgent,
+        None,
+        page_revision,
+        page_start,
+        page_limits(1_000_000, 0),
+        ClaimVisibility::Hidden,
+    )
+    .await
+    .unwrap();
+    let mut page_revisions = omitted_revisions(&next_page.entries);
+    page_revisions.push((
+        next_page.next_oplog_index,
+        next_page.current_component_revision,
+    ));
+    let next_range = get_public_oplog_range_page(
+        Arc::new(AnyRevisionComponentService),
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        test_component_id(),
+        OwnerKind::ComponentAgent,
+        None,
+        Some(cursor),
+        OplogIndex::INITIAL,
+        after,
+        page_limits(1_000_000, 0),
+        OplogScanAllowance {
+            entries: 100,
+            millis: 600_000,
+        },
+        ClaimVisibility::Hidden,
+    )
+    .await
+    .unwrap();
+    let next_guest = get_guest_oplog_chunk(
+        Arc::new(AnyRevisionComponentService),
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        test_component_id(),
+        OwnerKind::ComponentAgent,
+        None,
+        guest.current_component_revision,
+        guest.next_oplog_index,
+        10,
+        ClaimVisibility::Hidden,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        [
+            ("remote page", page_revisions),
+            ("remote range", omitted_revisions(&next_range.entries)),
+            (
+                "guest batch",
+                vec![(
+                    next_guest.next_oplog_index,
+                    next_guest.current_component_revision
+                )],
+            ),
+        ],
+        [
+            (
+                "remote page",
+                vec![
+                    (inside, updated),
+                    (revert, initial),
+                    (after, initial),
+                    (after.next(), initial),
+                ],
+            ),
+            (
+                "remote range",
+                vec![(inside, updated), (revert, initial), (after, initial)],
+            ),
+            ("guest batch", vec![(after.next(), initial)]),
+        ]
+    );
+}

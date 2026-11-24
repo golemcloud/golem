@@ -2536,6 +2536,7 @@ fn revert_serialization_poem_serde_equivalence() {
             start: OplogIndex::from_u64(5),
             end: OplogIndex::from_u64(10),
         },
+        restored_revision: ComponentRevision::new(3).unwrap(),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();

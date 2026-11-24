@@ -457,6 +457,7 @@ message RawDeactivatePluginParameters {
 
 message RawRevertParameters {
   RawOplogRegion dropped_region = 1;
+  uint64 restored_revision = 2;
 }
 
 message RawCancelPendingInvocationParameters {

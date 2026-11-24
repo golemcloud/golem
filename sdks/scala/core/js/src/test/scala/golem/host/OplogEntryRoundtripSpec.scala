@@ -781,7 +781,8 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         "revert",
         js.Dynamic.literal(
           timestamp = ts(),
-          droppedRegion = js.Dynamic.literal(start = js.BigInt("0"), end = js.BigInt("10"))
+          droppedRegion = js.Dynamic.literal(start = js.BigInt("0"), end = js.BigInt("10")),
+          restoredRevision = js.BigInt("3")
         )
       )
       val parsed = OplogEntry.fromJs(raw)
@@ -789,7 +790,8 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       assertTrue(
         parsed.isInstanceOf[OplogEntry.Revert],
         r.params.start == BigInt(0),
-        r.params.end == BigInt(10)
+        r.params.end == BigInt(10),
+        r.params.restoredRevision == BigInt(3)
       )
     },
     test("FailedUpdate with details from dynamic") {

@@ -1457,6 +1457,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             start: region_start,
             end: region_end,
         };
+        // The revision that the agent runs the entries after the revert with, as the status fold
+        // gives it: the target of the last successful update that the retained history keeps, or
+        // else the revision of the Create entry. A read of the oplog walks through the dropped
+        // region and switches back to this revision at the revert.
+        let restored_revision = filesystem_snapshots::revision_before(
+            &last_known_status.successful_updates,
+            region_start,
+        )
+        .or_else(|| {
+            entries
+                .get(&OplogIndex::INITIAL)
+                .and_then(OplogEntry::specifies_component_revision)
+        })
+        .ok_or_else(|| WorkerExecutorError::runtime("The oplog has no Create entry"))?;
 
         {
             cut_point::validate_snapshot_update_boundaries(
@@ -1516,7 +1530,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let mut prospective_entries = entries;
             prospective_entries.insert(
                 region_end.next(),
-                OplogEntry::revert(dropped_region.clone()),
+                OplogEntry::revert(dropped_region.clone(), restored_revision),
             );
             let retained_status = AgentStatusRecord {
                 invocation_results: self.config().invocation_results.membership(),
@@ -1592,6 +1606,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let mut entries = vec![
                     DurableStreamOplogRecord::InlineEntry(OplogEntry::revert(
                         dropped_region.clone(),
+                        restored_revision,
                     )),
                     DurableStreamOplogRecord::Session(
                         None,
@@ -1630,8 +1645,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             } else {
                 // Through the fence-aware helper: a revert is a write like any other, and if the
                 // shard has a new owner this must surface rather than be discarded.
-                self.add_to_oplog(OplogEntry::revert(dropped_region.clone()))
-                    .await?;
+                self.add_to_oplog(OplogEntry::revert(
+                    dropped_region.clone(),
+                    restored_revision,
+                ))
+                .await?;
             }
             // Below the commit threshold the add only buffers, so this commit is where a new
             // owner of the shard is found. A refused commit gives the error, and the caller then

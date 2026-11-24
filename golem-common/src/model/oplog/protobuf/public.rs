@@ -474,6 +474,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     start: OplogIndex::from_u64(revert.start),
                     end: OplogIndex::from_u64(revert.end),
                 },
+                restored_revision: revert.restored_revision.try_into()?,
             })),
             oplog_entry::Entry::CancelInvocation(cancel) => Ok(
                 PublicOplogEntry::CancelPendingInvocation(CancelPendingInvocationParams {
@@ -1199,6 +1200,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         timestamp: Some(revert.timestamp.into()),
                         start: revert.dropped_region.start.0,
                         end: revert.dropped_region.end.0,
+                        restored_revision: revert.restored_revision.into(),
                     },
                 )),
             },
@@ -2193,6 +2195,7 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
             PublicOplogEntry::Revert(p) => Ok(OplogEntry::Revert {
                 timestamp: p.timestamp,
                 dropped_region: p.dropped_region,
+                restored_revision: p.restored_revision,
             }),
             PublicOplogEntry::CancelPendingInvocation(p) => {
                 Ok(OplogEntry::CancelPendingInvocation {

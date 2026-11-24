@@ -831,7 +831,10 @@ interface oplog {
 
     record revert-parameters {
         timestamp: datetime,
-        dropped-region: oplog-region
+        dropped-region: oplog-region,
+        /// The component revision that the agent runs the entries after the revert with: the
+        /// revision in effect at the end of the retained history.
+        restored-revision: component-revision
     }
 
     record cancel-pending-invocation-parameters {
