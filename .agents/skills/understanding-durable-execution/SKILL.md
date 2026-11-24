@@ -1393,7 +1393,8 @@ expired error when the start is above 1. A read below the start returns
 `Create` entry alone at index 1, because that entry is the identity of the agent. A read of more
 than the `Create` entry from index 1 is expired. This includes a page and a guest chunk, because a
 page has no fixed end. `range` and `chunk` do not refuse such a start: they move it to the retained
-start. The single entry read of the public oplog serves the `Create` entry. A `Gap` that ends below
+start. A range page (a request with a `to`) is a page too, and without a `from` it starts at the
+retained start. The single entry read of the public oplog serves the `Create` entry. A `Gap` that ends below
 the start becomes the same error, and a gap that ends at or after the start stays a read error.
 `length` counts the retained entries, and the last index does not change. The expired error becomes
 `WorkerExecutorError::OplogFailed` with the cause `OplogFailure::Expired`. It crosses gRPC as

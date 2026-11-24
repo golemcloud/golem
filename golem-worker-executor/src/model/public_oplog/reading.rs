@@ -790,12 +790,17 @@ pub fn oplog_range_allowance(
 /// When the allowance runs out before the end of the range, the page reports `exhausted`; a page
 /// that reaches the end of the range is complete, also when it spent the allowance. A cursor
 /// continues the range where the page stopped; it must be within the range.
+///
+/// `retention` is the retention of the oplog, which the caller reads once. A range read is a
+/// page: a `from` or a cursor below the retained start is expired, also at index 1, before the
+/// read charges any entry to the allowance.
 #[allow(clippy::too_many_arguments)]
 pub async fn get_public_oplog_range_page(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
+    retention: OplogRetention,
     owner_component_id: ComponentId,
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
@@ -826,17 +831,20 @@ pub async fn get_public_oplog_range_page(
                 oplog_service.clone(),
                 owned_agent_id,
                 agent_mode,
+                retention,
                 Some(cursor),
-                from,
+                Some(from),
             )
             .await?;
             (start, Some(revision))
         }
         None => {
+            retention.check_agent_from(&owned_agent_id.agent_id, from)?;
             let revision = scan_component_revision(
                 oplog_service.clone(),
                 owned_agent_id,
                 agent_mode,
+                retention,
                 from,
                 &mut scan,
             )
@@ -870,14 +878,20 @@ pub async fn get_public_oplog_range_page(
         return Ok(empty(Some(cursor_at(start, revision)), scan.report(true)));
     }
 
-    let count = (limits.count as u64)
-        .min(end.as_u64() - start.as_u64() + 1)
-        .min(scan.remaining_entries()) as usize;
+    let count = retention
+        .page(
+            &owned_agent_id.agent_id,
+            start,
+            end,
+            (limits.count as u64).min(scan.remaining_entries()),
+        )?
+        .map_or(0, |range| range.count) as usize;
     let (chunk, _) = read_public_oplog_chunk(
         components,
         oplog_service,
         owned_agent_id,
         agent_mode,
+        retention,
         owner_component_id,
         owner_kind,
         agent_type_name,
@@ -888,8 +902,7 @@ pub async fn get_public_oplog_range_page(
         claims,
         &mut RemotePage::new(limits),
     )
-    .await
-    .map_err(WorkerExecutorError::unknown)?;
+    .await?;
     // The read fetches `count` entries from storage, also when the byte limit of the page admits
     // fewer of them.
     scan.charge(count as u64);

@@ -4098,6 +4098,7 @@ async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
+            OplogRetention::FULL,
             test_component_id(),
             OwnerKind::ComponentAgent,
             None,
@@ -4165,6 +4166,7 @@ async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
         oplog_service.clone(),
         &owned_agent_id,
         AgentMode::Durable,
+        OplogRetention::FULL,
         test_component_id(),
         OwnerKind::ComponentAgent,
         None,
@@ -4566,6 +4568,64 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
             .all(|entry| entry.oplog_index >= retained_start),
         "{:?}",
         guest_search.entries
+    );
+
+    let range_page = |from: u64, cursor: Option<OplogCursor>| {
+        get_public_oplog_range_page(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            retention,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            cursor,
+            OplogIndex::from_u64(from),
+            OplogIndex::from_u64(5),
+            PublicOplogPageLimits {
+                count: 10,
+                max_bytes: 1_000_000,
+                max_entry_bytes: 1_000_000,
+            },
+            OplogScanAllowance {
+                entries: 100,
+                millis: 600_000,
+            },
+        )
+    };
+    let range = range_page(retained_start.as_u64(), None).await.unwrap();
+    assert_eq!(
+        page_indices(&range.entries),
+        vec![
+            (OplogIndex::from_u64(4), true),
+            (OplogIndex::from_u64(5), true)
+        ]
+    );
+    assert_eq!(
+        range.scan.charged_entries, 3,
+        "the read of the `Create` entry alone and the two entries of the page"
+    );
+    let range_expired = WorkerExecutorError::oplog_expired(agent_id, retained_start);
+    assert_eq!(
+        range_page(3, None).await.err(),
+        Some(range_expired.clone()),
+        "a range read from below the start is expired"
+    );
+    assert_eq!(range_page(1, None).await.err(), Some(range_expired.clone()));
+    assert_eq!(
+        range_page(
+            1,
+            Some(OplogCursor {
+                next_oplog_index: 2,
+                current_component_revision: ComponentRevision::INITIAL.into(),
+                query_hash: OplogCursor::query_hash(None),
+            }),
+        )
+        .await
+        .err(),
+        Some(range_expired),
+        "a cursor below the start is expired"
     );
 }
 

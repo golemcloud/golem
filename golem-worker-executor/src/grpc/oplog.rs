@@ -90,6 +90,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 self.oplog_service(),
                 &owned_agent_id,
                 agent_mode,
+                retention,
                 identity.create_parameters().component_id,
                 identity.create_parameters().owner_kind,
                 agent_type_name.as_ref(),
