@@ -320,14 +320,16 @@ message AgentInvocationSettledParameters {
 }
 
 message PublicAgentInvocation {
+  // 3 was a save snapshot invocation without parameters.
+  reserved 3;
   oneof invocation {
     PublicAgentInitializationInvocation agent_initialization = 1;
     PublicAgentMethodInvocation agent_method = 2;
-    golem.common.Empty save_snapshot = 3;
     LoadSnapshotInvocationParameters load_snapshot = 4;
     ProcessOplogEntriesInvocationParameters process_oplog_entries = 5;
     ManualUpdateInvocationParameters manual_update = 6;
     PublicExternalToolInvocation external_tool = 7;
+    SaveSnapshotInvocationParameters save_snapshot = 8;
   }
 }
 
@@ -339,6 +341,7 @@ message PublicExternalToolInvocation {
   string trace_id = 5;
   repeated string trace_states = 6;
   repeated golem.worker.InvocationSpan invocation_context = 7;
+  golem.component.PublicCaller caller = 8;
 }
 
 message PublicAgentInitializationInvocation {
@@ -347,6 +350,7 @@ message PublicAgentInitializationInvocation {
   string trace_id = 3;
   repeated string trace_states = 4;
   repeated golem.worker.InvocationSpan invocation_context = 5;
+  golem.component.PublicCaller caller = 6;
 }
 
 message PublicAgentMethodInvocation {
@@ -359,14 +363,21 @@ message PublicAgentMethodInvocation {
   string trace_id = 4;
   repeated string trace_states = 5;
   repeated golem.worker.InvocationSpan invocation_context = 6;
+  golem.component.PublicCaller caller = 7;
+}
+
+message SaveSnapshotInvocationParameters {
+  golem.component.PublicCaller caller = 1;
 }
 
 message LoadSnapshotInvocationParameters {
   SnapshotData snapshot = 1;
+  golem.component.PublicCaller caller = 2;
 }
 
 message ProcessOplogEntriesInvocationParameters {
   golem.common.UUID invocation_id = 1;
+  golem.component.PublicCaller caller = 2;
 }
 
 message ManualUpdateInvocationParameters {

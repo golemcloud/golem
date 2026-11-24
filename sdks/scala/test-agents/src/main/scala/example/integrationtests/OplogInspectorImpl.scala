@@ -116,13 +116,13 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
       case OplogApi.OplogEntry.EndRemoteWrite(p)         => s"END_REMOTE_WRITE @ $ts begin=${p.beginIndex}"
       case OplogApi.OplogEntry.PendingAgentInvocation(p) =>
         val invDesc = p.invocation match {
-          case OplogApi.AgentInvocation.ExportedFunction(params) => s"func(${params.functionName})"
-          case OplogApi.AgentInvocation.AgentInitialization(key) => s"agent-init(key=$key)"
-          case OplogApi.AgentInvocation.ExternalTool(id)         => s"external-tool(id=$id)"
-          case OplogApi.AgentInvocation.SaveSnapshot             => "save-snapshot"
-          case OplogApi.AgentInvocation.LoadSnapshot             => "load-snapshot"
-          case OplogApi.AgentInvocation.ProcessOplogEntries(key) => s"process-oplog(key=$key)"
-          case OplogApi.AgentInvocation.ManualUpdate(rev)        => s"manual-update(rev=$rev)"
+          case OplogApi.AgentInvocation.ExportedFunction(params)    => s"func(${params.functionName})"
+          case OplogApi.AgentInvocation.AgentInitialization(key, _) => s"agent-init(key=$key)"
+          case OplogApi.AgentInvocation.ExternalTool(id, _)         => s"external-tool(id=$id)"
+          case OplogApi.AgentInvocation.SaveSnapshot(_)             => "save-snapshot"
+          case OplogApi.AgentInvocation.LoadSnapshot(_)             => "load-snapshot"
+          case OplogApi.AgentInvocation.ProcessOplogEntries(key, _) => s"process-oplog(key=$key)"
+          case OplogApi.AgentInvocation.ManualUpdate(rev)           => s"manual-update(rev=$rev)"
         }
         s"PENDING_INVOCATION @ $ts $invDesc"
       case OplogApi.OplogEntry.PendingUpdate(p) =>

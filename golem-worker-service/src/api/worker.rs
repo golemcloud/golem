@@ -23,17 +23,19 @@ use futures::TryStreamExt;
 use golem_common::base_model::api;
 use golem_common::model::agent::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::auth::TokenSecret;
+use golem_common::model::caller::ClaimVisibility;
 use golem_common::model::card::StoredCard;
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::{OplogCursor, OplogScanAllowance};
-use golem_common::model::oplog::{PublicOplogEntryWithIndex, PublicOplogPageEntry};
+use golem_common::model::oplog::{OplogInclude, PublicOplogEntryWithIndex, PublicOplogPageEntry};
 use golem_common::model::{AgentFingerprint, AgentId, OwnedAgentId, PromiseId};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::{AuthCtx, GolemSecurityScheme, WrappedGolemSecuritySchema};
 use golem_service_base::model::*;
+use golem_service_base::poem::SerdeJson;
 use poem::Body;
 use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket};
 use poem_openapi::param::{Path, Query};
@@ -306,6 +308,10 @@ impl WorkerApi {
     }
 
     /// Get the oplog of an agent
+    ///
+    /// Each recorded invocation shows its caller: the principal that started the chain, the
+    /// principal that made the call, and the tokens presented at the entry point. With
+    /// `include=claims`, the users among the callers also show their verified claims.
     #[oai(
         path = "/:environment_id/agents/:agent_id/oplog",
         method = "get",
@@ -320,6 +326,7 @@ impl WorkerApi {
         count: Query<u64>,
         cursor: Query<Option<OplogCursor>>,
         query: Query<Option<String>>,
+        include: Query<Option<OplogInclude>>,
         #[oai(name = "expectedFingerprint")] expected_fingerprint: Query<Option<AgentFingerprint>>,
         /// The inclusive last index of a range read. Requires `from` and no `query`.
         to: Query<Option<u64>>,
@@ -330,7 +337,7 @@ impl WorkerApi {
         #[oai(name = "scanMillis")]
         scan_millis: Query<Option<u64>>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<GetOplogResponse>> {
+    ) -> Result<SerdeJson<GetOplogResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
         let agent_id = OwnedAgentId::new(environment_id.0, &agent_id.0);
         let record = recorded_http_api_request!("get_oplog", agent_id = agent_id.to_string());
@@ -351,6 +358,7 @@ impl WorkerApi {
                 query.0,
                 expected_fingerprint.0,
                 range,
+                ClaimVisibility::from_include(include.0),
                 auth,
             )
             .await
@@ -371,8 +379,9 @@ impl WorkerApi {
         query: Option<String>,
         expected_fingerprint: Option<AgentFingerprint>,
         range: Option<OplogRangeRead>,
+        claims: ClaimVisibility,
         auth: AuthCtx,
-    ) -> Result<Json<GetOplogResponse>> {
+    ) -> Result<SerdeJson<GetOplogResponse>> {
         let mut response = match (from, query) {
             (Some(_), Some(_)) => {
                 return Err(ApiEndpointError::bad_request(
@@ -384,7 +393,15 @@ impl WorkerApi {
             }
             (None, Some(query)) => {
                 self.worker_service
-                    .search_oplog(&agent_id, cursor, count, query, expected_fingerprint, auth)
+                    .search_oplog(
+                        &agent_id,
+                        cursor,
+                        count,
+                        query,
+                        expected_fingerprint,
+                        claims,
+                        auth,
+                    )
                     .await?
             }
             (from, None) => {
@@ -397,6 +414,7 @@ impl WorkerApi {
                         count,
                         expected_fingerprint,
                         range,
+                        claims,
                         auth,
                     )
                     .await?
@@ -409,7 +427,7 @@ impl WorkerApi {
             }
         }
 
-        Ok(Json(response))
+        Ok(SerdeJson(response))
     }
 
     /// Get one oplog entry of an agent
@@ -417,21 +435,24 @@ impl WorkerApi {
     /// Oplog pages omit entries whose encoded form is larger than a server limit, and describe
     /// them by their type, timestamp, size and component revision. This endpoint returns such an
     /// entry in full. Pass the component revision of the description to save the server from
-    /// scanning the oplog for it.
+    /// scanning the oplog for it. With `include=claims`, the users among the callers also show
+    /// their verified claims.
     #[oai(
         path = "/:environment_id/agents/:agent_id/oplog/:oplog_index",
         method = "get",
         operation_id = "get_oplog_entry"
     )]
+    #[allow(clippy::too_many_arguments)]
     async fn get_oplog_entry(
         &self,
         environment_id: Path<EnvironmentId>,
         agent_id: Path<AgentId>,
         oplog_index: Path<u64>,
         component_revision: Query<Option<ComponentRevision>>,
+        include: Query<Option<OplogInclude>>,
         #[oai(name = "expectedFingerprint")] expected_fingerprint: Query<Option<AgentFingerprint>>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<PublicOplogEntryWithIndex>> {
+    ) -> Result<SerdeJson<PublicOplogEntryWithIndex>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
         let agent_id = OwnedAgentId::new(environment_id.0, &agent_id.0);
         let record = recorded_http_api_request!(
@@ -448,11 +469,12 @@ impl WorkerApi {
                     OplogIndex::from_u64(oplog_index.0),
                     component_revision.0,
                     expected_fingerprint.0,
+                    ClaimVisibility::from_include(include.0),
                     auth,
                 )
                 .await?;
             entry.entry.redact_host_managed_values_for_external();
-            Ok(Json(entry))
+            Ok(SerdeJson(entry))
         }
         .instrument(record.span.clone())
         .await;

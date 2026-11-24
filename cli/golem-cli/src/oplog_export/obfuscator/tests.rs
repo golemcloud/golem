@@ -2530,6 +2530,7 @@ fn rpc_typed_and_generic_give_same_tokens() {
                     trace_id: golem_common::model::invocation_context::TraceId::generate(),
                     trace_states: vec![],
                     invocation_context: vec![],
+                    caller: marker_user_caller(),
                 },
             ),
             wallet_pin: golem_common::model::card::PublicInvocationWalletPin {
@@ -3752,6 +3753,7 @@ fn report_entry_json_shape() {
                     trace_id: golem_common::model::invocation_context::TraceId::generate(),
                     trace_states: vec!["MARKERTS".into()],
                     invocation_context: vec![],
+                    caller: marker_user_caller(),
                 },
             ),
             wallet_pin: golem_common::model::card::PublicInvocationWalletPin {
@@ -3925,6 +3927,65 @@ fn host_type_mismatch_is_listed() {
     );
 }
 
+/// A user at the root and an agent as the immediate caller, with `MARKER` in every pair, type
+/// and claim, secret UUIDs in every ID and token, and an authentication time on the secret day.
+fn marker_user_caller() -> golem_common::model::caller::PublicCaller {
+    use golem_common::model::caller::{
+        Pair, PublicAgentPrincipal, PublicCaller, PublicPrincipal, PublicTokenProvenance,
+        PublicUserPrincipal,
+    };
+    PublicCaller {
+        original: PublicPrincipal::User(PublicUserPrincipal {
+            pair: Pair::new("https://MARKER.example", "MARKER-user"),
+            authenticated_at: "2027-01-15T10:00:00Z".parse().unwrap(),
+            claims: Some(
+                golem_common::model::caller::PublicClaims::from_json(
+                    r#"{"email":"MARKER@mail.example","sub":"MARKER"}"#.to_string(),
+                )
+                .unwrap(),
+            ),
+        }),
+        immediate: PublicPrincipal::Agent(PublicAgentPrincipal {
+            pair: Pair::new("https://MARKER.example", "agent:MARKER"),
+            agent_id: agent_id("counter(\"MARKER\")"),
+            agent_type: "MARKER".into(),
+            environment_id: EnvironmentId(secret_uuid(110)),
+        }),
+        tokens: vec![
+            PublicTokenProvenance {
+                id: secret_uuid(111),
+                maker: Some(Pair::new("https://MARKER.example", "account:MARKER")),
+            },
+            PublicTokenProvenance {
+                id: secret_uuid(112),
+                maker: None,
+            },
+        ],
+    }
+}
+
+/// An account at the root and a tool as the immediate caller, with `MARKER` in every pair and
+/// name and secret UUIDs in every ID.
+fn marker_account_caller() -> golem_common::model::caller::PublicCaller {
+    use golem_common::model::caller::{
+        AccountAuthentication, Pair, PublicAccountPrincipal, PublicCaller, PublicPrincipal,
+        PublicToolPrincipal,
+    };
+    PublicCaller {
+        original: PublicPrincipal::Account(PublicAccountPrincipal {
+            pair: Pair::new("https://MARKER.example", "account:MARKER"),
+            account_id: golem_common::model::account::AccountId(secret_uuid(113)),
+            authentication: AccountAuthentication::ApiToken,
+        }),
+        immediate: PublicPrincipal::Tool(PublicToolPrincipal {
+            pair: Pair::new("https://MARKER.example", "tool:MARKER"),
+            environment_id: EnvironmentId(secret_uuid(114)),
+            tool_name: "MARKER".into(),
+        }),
+        tokens: Vec::new(),
+    }
+}
+
 /// IDs that must not appear in a report. Each ID field of `every_entry_kind` gets one.
 fn secret_uuid(n: u128) -> Uuid {
     Uuid::from_u128(0x5ec2_e700_0000_0000_0000_0000_0000_0000 + n)
@@ -4069,6 +4130,7 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
             trace_id: trace(),
             trace_states: vec!["MARKER".into()],
             invocation_context: marker_spans(),
+            caller: marker_user_caller(),
         }),
         PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
             invocation_id: invocation_id(),
@@ -4077,6 +4139,7 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
             trace_id: trace(),
             trace_states: vec!["MARKER".into()],
             invocation_context: marker_spans(),
+            caller: marker_user_caller(),
         }),
         PublicAgentInvocation::ExternalTool(ExternalToolInvocationParameters {
             invocation_id: invocation_id(),
@@ -4086,13 +4149,18 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
             trace_id: trace(),
             trace_states: vec!["MARKER".into()],
             invocation_context: marker_spans(),
+            caller: marker_account_caller(),
         }),
-        PublicAgentInvocation::SaveSnapshot(Empty {}),
+        PublicAgentInvocation::SaveSnapshot(SaveSnapshotParameters {
+            caller: marker_account_caller(),
+        }),
         PublicAgentInvocation::LoadSnapshot(LoadSnapshotParameters {
             snapshot: marker_snapshot(),
+            caller: marker_user_caller(),
         }),
         PublicAgentInvocation::ProcessOplogEntries(ProcessOplogEntriesParameters {
             invocation_id: invocation_id(),
+            caller: marker_account_caller(),
         }),
         PublicAgentInvocation::ManualUpdate(ManualUpdateParameters {
             target_revision: revision(5),
@@ -4782,4 +4850,74 @@ fn every_entry_kind_keeps_metadata() {
         serde_json::to_value(golem_common::model::oplog::PublicEntityCallMode::Synchronous)
             .unwrap();
     assert!(json(&attribution).contains(&call_mode.to_string()));
+}
+
+#[test]
+fn caller_keeps_kinds_and_turns_pairs_into_tokens() {
+    let key = key();
+    let ctx = ObfuscationContext::new(&key, KeepFlags::default(), own_agent());
+    for (caller, original_kind, immediate_kind) in [
+        (marker_user_caller(), "user", "agent"),
+        (marker_account_caller(), "account", "tool"),
+    ] {
+        let entry = with_entry(
+            2,
+            PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+                timestamp: Timestamp::from(TS),
+                invocation: golem_common::model::oplog::PublicAgentInvocation::SaveSnapshot(
+                    golem_common::model::oplog::SaveSnapshotParameters { caller },
+                ),
+                wallet_pin: golem_common::model::card::PublicInvocationWalletPin {
+                    wallet_token: golem_common::model::card::WalletVersionToken {
+                        wallet_id_hash: [0; 32],
+                        generation: 0,
+                    },
+                    scope_card_id: None,
+                },
+            }),
+        );
+        let out = render_entry(&ctx, &entry, None);
+        let report = json(&out.entry);
+        assert_no_marker(&report, "MARKER");
+        for n in 110..=114 {
+            assert!(!report.contains(&secret_uuid(n).to_string()), "{report}");
+        }
+        assert!(!report.contains("2027-01-15"), "{report}");
+        assert!(!report.contains("claims"), "{report}");
+
+        let invocation = as_case(field(&out.entry, "invocation"));
+        let caller = record_field(invocation.payload.as_deref().unwrap(), "caller");
+        let original = as_case(record_field(caller, "original"));
+        let immediate = as_case(record_field(caller, "immediate"));
+        assert_eq!(original.case.as_deref(), Some(original_kind));
+        assert_eq!(immediate.case.as_deref(), Some(immediate_kind));
+        assert!(original.token.is_none() && immediate.token.is_none());
+        let pair = record_field(original.payload.as_deref().unwrap(), "pair");
+        assert!(
+            json(record_field(pair, "issuer")).contains("str:"),
+            "{report}"
+        );
+
+        match original_kind {
+            "user" => {
+                let agent = immediate.payload.as_deref().unwrap();
+                assert_eq!(
+                    record_field(agent, "agentId"),
+                    &ReportNode::Agent(agent_reference(&agent_id("counter(\"MARKER\")")))
+                );
+                assert_eq!(
+                    json(record_field(caller, "tokens")).matches("str:").count(),
+                    4,
+                    "two token IDs and one maker pair: {report}"
+                );
+            }
+            _ => {
+                let account = original.payload.as_deref().unwrap();
+                assert_eq!(
+                    record_field(account, "authentication"),
+                    &text("apiToken".to_string())
+                );
+            }
+        }
+    }
 }

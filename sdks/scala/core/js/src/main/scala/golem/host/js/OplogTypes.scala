@@ -259,6 +259,65 @@ sealed trait JsEndRemoteWriteParameters extends js.Object {
   def beginIndex: js.BigInt = js.native
 }
 
+// --- PublicCaller ---
+
+@js.native
+sealed trait JsPublicPrincipalRef extends js.Object {
+  def issuer: String  = js.native
+  def subject: String = js.native
+}
+
+@js.native
+sealed trait JsPublicUserPrincipal extends js.Object {
+  def pair: JsPublicPrincipalRef  = js.native
+  def authenticatedAt: JsDatetime = js.native
+}
+
+@js.native
+sealed trait JsPublicAccountPrincipal extends js.Object {
+  def pair: JsPublicPrincipalRef = js.native
+  def accountId: JsAccountId     = js.native
+  def authentication: String     = js.native
+}
+
+@js.native
+sealed trait JsPublicAgentPrincipal extends js.Object {
+  def pair: JsPublicPrincipalRef     = js.native
+  def agentId: JsAgentId             = js.native
+  def agentType: String              = js.native
+  def environmentId: JsEnvironmentId = js.native
+}
+
+@js.native
+sealed trait JsPublicToolPrincipal extends js.Object {
+  def pair: JsPublicPrincipalRef     = js.native
+  def environmentId: JsEnvironmentId = js.native
+  def toolName: String               = js.native
+}
+
+@js.native
+sealed trait JsPublicPrincipal extends js.Object {
+  def tag: String = js.native
+}
+
+@js.native
+sealed trait JsPublicPrincipalWithValue extends JsPublicPrincipal {
+  @JSName("val") def value: js.Any = js.native
+}
+
+@js.native
+sealed trait JsPublicTokenProvenance extends js.Object {
+  def id: JsUuid                              = js.native
+  def maker: js.UndefOr[JsPublicPrincipalRef] = js.native
+}
+
+@js.native
+sealed trait JsPublicCaller extends js.Object {
+  def original: JsPublicPrincipal               = js.native
+  def immediate: JsPublicPrincipal              = js.native
+  def tokens: js.Array[JsPublicTokenProvenance] = js.native
+}
+
 // --- AgentInitializationParameters ---
 
 @js.native
@@ -268,6 +327,7 @@ sealed trait JsAgentInitializationParameters extends js.Object {
   def traceId: String                                   = js.native
   def traceStates: js.Array[String]                     = js.native
   def invocationContext: js.Array[js.Array[JsSpanData]] = js.native
+  def caller: JsPublicCaller                            = js.native
 }
 
 // --- AgentMethodInvocationParameters ---
@@ -280,6 +340,7 @@ sealed trait JsAgentMethodInvocationParameters extends js.Object {
   def traceId: String                                   = js.native
   def traceStates: js.Array[String]                     = js.native
   def invocationContext: js.Array[js.Array[JsSpanData]] = js.native
+  def caller: JsPublicCaller                            = js.native
 }
 
 @js.native
@@ -290,20 +351,30 @@ sealed trait JsExternalToolInvocationParameters extends js.Object {
   def traceId: String                                   = js.native
   def traceStates: js.Array[String]                     = js.native
   def invocationContext: js.Array[js.Array[JsSpanData]] = js.native
+  def caller: JsPublicCaller                            = js.native
+}
+
+// --- SaveSnapshotParameters ---
+
+@js.native
+sealed trait JsSaveSnapshotParameters extends js.Object {
+  def caller: JsPublicCaller = js.native
 }
 
 // --- LoadSnapshotParameters ---
 
 @js.native
 sealed trait JsLoadSnapshotParameters extends js.Object {
-  def snapshot: JsSnapshot = js.native
+  def snapshot: JsSnapshot   = js.native
+  def caller: JsPublicCaller = js.native
 }
 
 // --- ProcessOplogEntriesParameters ---
 
 @js.native
 sealed trait JsProcessOplogEntriesParameters extends js.Object {
-  def invocationId: JsUuid = js.native
+  def invocationId: JsUuid   = js.native
+  def caller: JsPublicCaller = js.native
 }
 
 // --- ManualUpdateParameters ---
@@ -332,8 +403,8 @@ object JsAgentInvocation {
   def agentMethodInvocation(params: JsAgentMethodInvocationParameters): JsAgentInvocation =
     JsShape.tagged[JsAgentInvocation]("agent-method-invocation", params)
 
-  def saveSnapshot: JsAgentInvocation =
-    JsShape.tagOnly[JsAgentInvocation]("save-snapshot")
+  def saveSnapshot(params: JsSaveSnapshotParameters): JsAgentInvocation =
+    JsShape.tagged[JsAgentInvocation]("save-snapshot", params)
 
   def loadSnapshot(params: JsLoadSnapshotParameters): JsAgentInvocation =
     JsShape.tagged[JsAgentInvocation]("load-snapshot", params)
