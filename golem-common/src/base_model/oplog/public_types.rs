@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::caller::PublicCaller;
 use crate::base_model::card::{CardHolder, CardId, PublicCardHolder, StoredCard};
 use crate::base_model::component::{ComponentRevision, PluginPriority};
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -152,6 +153,19 @@ fn redact_typed_value(value: &mut TypedSchemaValue) {
 }
 
 impl PublicAgentInvocation {
+    /// The caller of the invocation. A manual update has none.
+    pub fn caller(&self) -> Option<&PublicCaller> {
+        match self {
+            Self::AgentInitialization(params) => Some(&params.caller),
+            Self::AgentMethodInvocation(params) => Some(&params.caller),
+            Self::ExternalTool(params) => Some(&params.caller),
+            Self::SaveSnapshot(params) => Some(&params.caller),
+            Self::LoadSnapshot(params) => Some(&params.caller),
+            Self::ProcessOplogEntries(params) => Some(&params.caller),
+            Self::ManualUpdate(_) => None,
+        }
+    }
+
     fn redact_host_managed_values_for_external(&mut self) {
         match self {
             Self::AgentInitialization(params) => {
@@ -824,6 +838,7 @@ pub struct AgentInitializationParameters {
     pub trace_id: TraceId,
     pub trace_states: Vec<String>,
     pub invocation_context: Vec<Vec<PublicSpanData>>,
+    pub caller: PublicCaller,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
@@ -840,6 +855,7 @@ pub struct AgentMethodInvocationParameters {
     pub trace_id: TraceId,
     pub trace_states: Vec<String>,
     pub invocation_context: Vec<Vec<PublicSpanData>>,
+    pub caller: PublicCaller,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
@@ -848,6 +864,15 @@ pub struct AgentMethodInvocationParameters {
 #[serde(rename_all = "camelCase")]
 pub struct LoadSnapshotParameters {
     pub snapshot: PublicSnapshotData,
+    pub caller: PublicCaller,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct SaveSnapshotParameters {
+    pub caller: PublicCaller,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
@@ -856,6 +881,7 @@ pub struct LoadSnapshotParameters {
 #[serde(rename_all = "camelCase")]
 pub struct ProcessOplogEntriesParameters {
     pub invocation_id: InvocationId,
+    pub caller: PublicCaller,
     // TODO
 }
 
@@ -879,6 +905,19 @@ pub struct ExternalToolInvocationParameters {
     pub trace_id: TraceId,
     pub trace_states: Vec<String>,
     pub invocation_context: Vec<Vec<PublicSpanData>>,
+    pub caller: PublicCaller,
+}
+
+/// What a reader of an oplog asks to include beyond the default public form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, derive_more::Display)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+#[display(rename_all = "camelCase")]
+pub enum OplogInclude {
+    /// The verified claims of the users among the callers. Only a reader that may read the oplog
+    /// gets them.
+    Claims,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
@@ -889,7 +928,7 @@ pub enum PublicAgentInvocation {
     AgentInitialization(AgentInitializationParameters),
     AgentMethodInvocation(AgentMethodInvocationParameters),
     ExternalTool(ExternalToolInvocationParameters),
-    SaveSnapshot(Empty),
+    SaveSnapshot(SaveSnapshotParameters),
     LoadSnapshot(LoadSnapshotParameters),
     ProcessOplogEntries(ProcessOplogEntriesParameters),
     ManualUpdate(ManualUpdateParameters),

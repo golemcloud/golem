@@ -22,6 +22,10 @@ use crate::oplog_export::model::{
     CaseKind, HostTypeMismatchRef, OmittedReason, ReportEntry, ReportField, ReportNode,
     ReportOmission, SchemaLessRpcValueRef, TimestampNode, TupleNode,
 };
+use golem_common::model::caller::{
+    Pair, PublicAccountPrincipal, PublicAgentPrincipal, PublicCaller, PublicPrincipal,
+    PublicTokenProvenance, PublicToolPrincipal, PublicUserPrincipal,
+};
 use golem_common::model::card::{
     AccountCardHolder, AgentCardHolder, ApplicationCardHolder, PublicCardHolder,
 };
@@ -39,7 +43,7 @@ use golem_common::model::oplog::{
     PublicSnapshotAssistedUpdateDetails, PublicSnapshotData, PublicSpanAttributes,
     PublicSpanFinished, PublicSpanStarted, PublicToolInvocationOperation,
     PublicTypedAgentConfigEntry, PublicUpdateDescription, ReplayDivergence, ReplayStart,
-    ReplayStep, SaveSnapshotResultParameters,
+    ReplayStep, SaveSnapshotParameters, SaveSnapshotResultParameters,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{AgentId, OplogIndex, Timestamp};
@@ -631,6 +635,7 @@ impl Walker<'_, '_> {
                     trace_id,
                     trace_states,
                     invocation_context,
+                    caller,
                 } = params;
                 Some(
                     Fields::new()
@@ -642,6 +647,7 @@ impl Walker<'_, '_> {
                         .add("traceId", self.tok(trace_id))
                         .add("traceStates", self.tok(trace_states))
                         .add("invocationContext", self.tok(invocation_context))
+                        .add("caller", self.caller(caller))
                         .build(),
                 )
             }
@@ -653,6 +659,7 @@ impl Walker<'_, '_> {
                     trace_id,
                     trace_states,
                     invocation_context,
+                    caller,
                 } = params;
                 Some(
                     Fields::new()
@@ -662,6 +669,7 @@ impl Walker<'_, '_> {
                         .add("traceId", self.tok(trace_id))
                         .add("traceStates", self.tok(trace_states))
                         .add("invocationContext", self.tok(invocation_context))
+                        .add("caller", self.caller(caller))
                         .build(),
                 )
             }
@@ -674,6 +682,7 @@ impl Walker<'_, '_> {
                     trace_id,
                     trace_states,
                     invocation_context,
+                    caller,
                 } = params;
                 Some(
                     Fields::new()
@@ -684,20 +693,28 @@ impl Walker<'_, '_> {
                         .add("traceId", self.tok(trace_id))
                         .add("traceStates", self.tok(trace_states))
                         .add("invocationContext", self.tok(invocation_context))
+                        .add("caller", self.caller(caller))
                         .build(),
                 )
             }
-            PublicAgentInvocation::SaveSnapshot(golem_schema::Empty {}) => None,
-            PublicAgentInvocation::LoadSnapshot(LoadSnapshotParameters { snapshot }) => Some(
-                Fields::new()
-                    .add("snapshot", removed_snapshot(snapshot))
-                    .build(),
-            ),
+            PublicAgentInvocation::SaveSnapshot(SaveSnapshotParameters { caller }) => {
+                Some(Fields::new().add("caller", self.caller(caller)).build())
+            }
+            PublicAgentInvocation::LoadSnapshot(LoadSnapshotParameters { snapshot, caller }) => {
+                Some(
+                    Fields::new()
+                        .add("snapshot", removed_snapshot(snapshot))
+                        .add("caller", self.caller(caller))
+                        .build(),
+                )
+            }
             PublicAgentInvocation::ProcessOplogEntries(ProcessOplogEntriesParameters {
                 invocation_id,
+                caller,
             }) => Some(
                 Fields::new()
                     .add("invocationId", self.tok(invocation_id))
+                    .add("caller", self.caller(caller))
                     .build(),
             ),
             PublicAgentInvocation::ManualUpdate(ManualUpdateParameters { target_revision }) => {
@@ -715,6 +732,100 @@ impl Walker<'_, '_> {
             None,
             payload,
         )
+    }
+
+    /// A caller: the kind of each principal and the authentication of an account stay; pairs,
+    /// account and environment IDs, agent types, tool names, authentication times and token IDs
+    /// are tokens; an agent's ID is an agent reference. Claims never reach the report.
+    fn caller(&mut self, caller: &PublicCaller) -> ReportNode {
+        let PublicCaller {
+            original,
+            immediate,
+            tokens,
+        } = caller;
+        let tokens = tokens
+            .iter()
+            .map(|token| self.token_provenance(token))
+            .collect();
+        Fields::new()
+            .add("original", self.principal(original))
+            .add("immediate", self.principal(immediate))
+            .add("tokens", tuple(tokens))
+            .build()
+    }
+
+    fn principal(&mut self, principal: &PublicPrincipal) -> ReportNode {
+        let payload = match principal {
+            PublicPrincipal::User(PublicUserPrincipal {
+                pair,
+                authenticated_at,
+                claims: _,
+            }) => Some(
+                Fields::new()
+                    .add("pair", self.pair(pair))
+                    .add("authenticatedAt", self.tok(authenticated_at))
+                    .build(),
+            ),
+            PublicPrincipal::Account(PublicAccountPrincipal {
+                pair,
+                account_id,
+                authentication,
+            }) => Some(
+                Fields::new()
+                    .add("pair", self.pair(pair))
+                    .add("accountId", self.tok(account_id))
+                    .add("authentication", name(authentication))
+                    .build(),
+            ),
+            PublicPrincipal::Agent(PublicAgentPrincipal {
+                pair,
+                agent_id,
+                agent_type,
+                environment_id,
+            }) => Some(
+                Fields::new()
+                    .add("pair", self.pair(pair))
+                    .add("agentId", self.agent(agent_id))
+                    .add("agentType", self.tok(agent_type))
+                    .add("environmentId", self.tok(environment_id))
+                    .build(),
+            ),
+            PublicPrincipal::Tool(PublicToolPrincipal {
+                pair,
+                environment_id,
+                tool_name,
+            }) => Some(
+                Fields::new()
+                    .add("pair", self.pair(pair))
+                    .add("environmentId", self.tok(environment_id))
+                    .add("toolName", self.str_leaf(tool_name, Region::Customer))
+                    .build(),
+            ),
+            PublicPrincipal::Anonymous(golem_schema::Empty {}) => None,
+        };
+        kept_case(
+            CaseKind::Variant,
+            None,
+            principal.kind().as_str(),
+            None,
+            payload,
+        )
+    }
+
+    fn pair(&self, pair: &Pair) -> ReportNode {
+        let Pair { issuer, subject } = pair;
+        Fields::new()
+            .add("issuer", self.tok(issuer))
+            .add("subject", self.tok(subject))
+            .build()
+    }
+
+    fn token_provenance(&self, token: &PublicTokenProvenance) -> ReportNode {
+        let PublicTokenProvenance { id, maker } = token;
+        Fields::new()
+            .add("id", self.tok(id))
+            .opt("maker", maker.as_ref().map(|maker| self.pair(maker)))
+            .build()
     }
 
     fn invocation_result(&mut self, result: &PublicAgentInvocationResult) -> ReportNode {

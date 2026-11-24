@@ -650,6 +650,10 @@ paths:
       tags:
       - Worker
       summary: Get the oplog of an agent
+      description: |-
+        Each recorded invocation shows its caller: the principal that started the chain, the
+        principal that made the call, and the tokens presented at the entry point. With
+        `include=claims`, the users among the callers also show their verified claims.
       operationId: get_oplog
       parameters:
       - in: path
@@ -699,6 +703,13 @@ paths:
         deprecated: false
         schema:
           type: string
+        explode: true
+        style: form
+      - in: query
+        name: include
+        deprecated: false
+        schema:
+          $ref: '#/components/schemas/OplogInclude'
         explode: true
         style: form
       - in: query
@@ -809,7 +820,8 @@ paths:
         Oplog pages omit entries whose encoded form is larger than a server limit, and describe
         them by their type, timestamp, size and component revision. This endpoint returns such an
         entry in full. Pass the component revision of the description to save the server from
-        scanning the oplog for it.
+        scanning the oplog for it. With `include=claims`, the users among the callers also show
+        their verified claims.
       operationId: get_oplog_entry
       parameters:
       - in: path
@@ -845,6 +857,13 @@ paths:
         schema:
           type: integer
           format: uint64
+        explode: true
+        style: form
+      - in: query
+        name: include
+        deprecated: false
+        schema:
+          $ref: '#/components/schemas/OplogInclude'
         explode: true
         style: form
       - in: query
@@ -15390,6 +15409,13 @@ paths:
       - Token: []
 components:
   schemas:
+    AccountAuthentication:
+      description: How an account authenticated.
+      type: string
+      enum:
+      - apiToken
+      - bootstrapToken
+      - signIn
     AccountCardHolder:
       title: AccountCardHolder
       type: object
@@ -15701,12 +15727,15 @@ components:
             type: array
             items:
               $ref: '#/components/schemas/PublicSpanData'
+        caller:
+          $ref: '#/components/schemas/PublicCaller'
       required:
       - invocationId
       - constructorParameters
       - traceId
       - traceStates
       - invocationContext
+      - caller
     AgentInvocationMode:
       type: string
       enum:
@@ -15945,6 +15974,8 @@ components:
             type: array
             items:
               $ref: '#/components/schemas/PublicSpanData'
+        caller:
+          $ref: '#/components/schemas/PublicCaller'
       required:
       - invocationId
       - methodName
@@ -15952,6 +15983,7 @@ components:
       - traceId
       - traceStates
       - invocationContext
+      - caller
     AgentMode:
       type: string
       enum:
@@ -18159,6 +18191,8 @@ components:
             type: array
             items:
               $ref: '#/components/schemas/PublicSpanData'
+        caller:
+          $ref: '#/components/schemas/PublicCaller'
       required:
       - invocationId
       - toolName
@@ -18167,6 +18201,7 @@ components:
       - traceId
       - traceStates
       - invocationContext
+      - caller
     ExternalToolResultParameters:
       title: ExternalToolResultParameters
       type: object
@@ -18800,8 +18835,11 @@ components:
       properties:
         snapshot:
           $ref: '#/components/schemas/PublicSnapshotData'
+        caller:
+          $ref: '#/components/schemas/PublicCaller'
       required:
       - snapshot
+      - caller
     LogLevel:
       description: Worker log levels including the special stdout and stderr channels
       type: string
@@ -19186,6 +19224,11 @@ components:
       enum:
       - invocation
       - recovery
+    OplogInclude:
+      description: What a reader of an oplog asks to include beyond the default public form.
+      type: string
+      enum:
+      - claims
     OplogRegion:
       title: OplogRegion
       type: object
@@ -19334,6 +19377,27 @@ components:
       - component-agent
       - ephemeral-external-tool
       - oplog-processor
+    Pair:
+      title: Pair
+      description: |-
+        One identity: an issuer and a subject.
+
+        Two pairs are equal exactly when both strings are equal byte for byte. Nothing folds case or
+        normalizes a trailing slash or Unicode text: OpenID Connect compares both as exact strings,
+        so a normalization would merge two users or split one.
+
+        The text form is `("<issuer>","<subject>")` with no spaces.
+        Each string is escaped as RFC 8785 serializes JSON strings, and the parser refuses every other
+        spelling, so two texts are equal exactly when their pairs are equal.
+      type: object
+      properties:
+        issuer:
+          type: string
+        subject:
+          type: string
+      required:
+      - issuer
+      - subject
     PathDirection:
       type: string
       enum:
@@ -19577,14 +19641,32 @@ components:
         invocationId:
           type: string
           format: uuid
+        caller:
+          $ref: '#/components/schemas/PublicCaller'
       required:
       - invocationId
+      - caller
     ProcessOplogEntriesResultParameters:
       title: ProcessOplogEntriesResultParameters
       type: object
       properties:
         error:
           type: string
+    PublicAccountPrincipal:
+      title: PublicAccountPrincipal
+      type: object
+      properties:
+        pair:
+          $ref: '#/components/schemas/Pair'
+        accountId:
+          type: string
+          format: uuid
+        authentication:
+          $ref: '#/components/schemas/AccountAuthentication'
+      required:
+      - pair
+      - accountId
+      - authentication
     PublicAgentEntity:
       title: PublicAgentEntity
       type: object
@@ -19608,7 +19690,7 @@ components:
           AgentInitialization: '#/components/schemas/PublicAgentInvocation_AgentInitializationParameters'
           AgentMethodInvocation: '#/components/schemas/PublicAgentInvocation_AgentMethodInvocationParameters'
           ExternalTool: '#/components/schemas/PublicAgentInvocation_ExternalToolInvocationParameters'
-          SaveSnapshot: '#/components/schemas/PublicAgentInvocation_Empty'
+          SaveSnapshot: '#/components/schemas/PublicAgentInvocation_SaveSnapshotParameters'
           LoadSnapshot: '#/components/schemas/PublicAgentInvocation_LoadSnapshotParameters'
           ProcessOplogEntries: '#/components/schemas/PublicAgentInvocation_ProcessOplogEntriesParameters'
           ManualUpdate: '#/components/schemas/PublicAgentInvocation_ManualUpdateParameters'
@@ -19617,7 +19699,7 @@ components:
       - $ref: '#/components/schemas/PublicAgentInvocation_AgentInitializationParameters'
       - $ref: '#/components/schemas/PublicAgentInvocation_AgentMethodInvocationParameters'
       - $ref: '#/components/schemas/PublicAgentInvocation_ExternalToolInvocationParameters'
-      - $ref: '#/components/schemas/PublicAgentInvocation_Empty'
+      - $ref: '#/components/schemas/PublicAgentInvocation_SaveSnapshotParameters'
       - $ref: '#/components/schemas/PublicAgentInvocation_LoadSnapshotParameters'
       - $ref: '#/components/schemas/PublicAgentInvocation_ProcessOplogEntriesParameters'
       - $ref: '#/components/schemas/PublicAgentInvocation_ManualUpdateParameters'
@@ -19737,18 +19819,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/AgentMethodInvocationParameters'
-    PublicAgentInvocation_Empty:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: SaveSnapshot
-            type: string
-            enum:
-            - SaveSnapshot
-        required:
-        - type
-      - $ref: '#/components/schemas/Empty'
     PublicAgentInvocation_ExternalToolInvocationParameters:
       allOf:
       - type: object
@@ -19797,6 +19867,38 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/ProcessOplogEntriesParameters'
+    PublicAgentInvocation_SaveSnapshotParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: SaveSnapshot
+            type: string
+            enum:
+            - SaveSnapshot
+        required:
+        - type
+      - $ref: '#/components/schemas/SaveSnapshotParameters'
+    PublicAgentPrincipal:
+      title: PublicAgentPrincipal
+      type: object
+      properties:
+        pair:
+          $ref: '#/components/schemas/Pair'
+        agentId:
+          description: 'The agent''s ID today: its component and its name.'
+          type: string
+          format: uuid
+        agentType:
+          type: string
+        environmentId:
+          type: string
+          format: uuid
+      required:
+      - pair
+      - agentId
+      - agentType
+      - environmentId
     PublicAttribute:
       title: PublicAttribute
       type: object
@@ -19828,6 +19930,33 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/StringAttributeValue'
+    PublicCaller:
+      title: PublicCaller
+      description: |-
+        The public form of a caller. Both roles are always present, also when they are the same
+        principal. It holds no credential, and it holds claims only when the reader asks for them
+        (`include=claims`).
+      type: object
+      properties:
+        original:
+          description: The principal that started the chain.
+          allOf:
+          - $ref: '#/components/schemas/PublicPrincipal'
+          - description: The principal that started the chain.
+        immediate:
+          description: The principal that made this call.
+          allOf:
+          - $ref: '#/components/schemas/PublicPrincipal'
+          - description: The principal that made this call.
+        tokens:
+          description: The tokens that the request presented at the entry point, with their makers.
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicTokenProvenance'
+      required:
+      - original
+      - immediate
+      - tokens
     PublicDurableFunctionType:
       discriminator:
         propertyName: type
@@ -20964,6 +21093,88 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/PublicOplogEntryWithIndex'
+    PublicPrincipal:
+      description: The public form of one principal, with the details that Golem verified for it.
+      discriminator:
+        propertyName: kind
+        mapping:
+          user: '#/components/schemas/PublicPrincipal_PublicUserPrincipal'
+          account: '#/components/schemas/PublicPrincipal_PublicAccountPrincipal'
+          agent: '#/components/schemas/PublicPrincipal_PublicAgentPrincipal'
+          tool: '#/components/schemas/PublicPrincipal_PublicToolPrincipal'
+          anonymous: '#/components/schemas/PublicPrincipal_Empty'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicPrincipal_PublicUserPrincipal'
+      - $ref: '#/components/schemas/PublicPrincipal_PublicAccountPrincipal'
+      - $ref: '#/components/schemas/PublicPrincipal_PublicAgentPrincipal'
+      - $ref: '#/components/schemas/PublicPrincipal_PublicToolPrincipal'
+      - $ref: '#/components/schemas/PublicPrincipal_Empty'
+    PublicPrincipal_Empty:
+      description: The public form of one principal, with the details that Golem verified for it.
+      allOf:
+      - type: object
+        properties:
+          kind:
+            example: anonymous
+            type: string
+            enum:
+            - anonymous
+        required:
+        - kind
+      - $ref: '#/components/schemas/Empty'
+    PublicPrincipal_PublicAccountPrincipal:
+      description: The public form of one principal, with the details that Golem verified for it.
+      allOf:
+      - type: object
+        properties:
+          kind:
+            example: account
+            type: string
+            enum:
+            - account
+        required:
+        - kind
+      - $ref: '#/components/schemas/PublicAccountPrincipal'
+    PublicPrincipal_PublicAgentPrincipal:
+      description: The public form of one principal, with the details that Golem verified for it.
+      allOf:
+      - type: object
+        properties:
+          kind:
+            example: agent
+            type: string
+            enum:
+            - agent
+        required:
+        - kind
+      - $ref: '#/components/schemas/PublicAgentPrincipal'
+    PublicPrincipal_PublicToolPrincipal:
+      description: The public form of one principal, with the details that Golem verified for it.
+      allOf:
+      - type: object
+        properties:
+          kind:
+            example: tool
+            type: string
+            enum:
+            - tool
+        required:
+        - kind
+      - $ref: '#/components/schemas/PublicToolPrincipal'
+    PublicPrincipal_PublicUserPrincipal:
+      description: The public form of one principal, with the details that Golem verified for it.
+      allOf:
+      - type: object
+        properties:
+          kind:
+            example: user
+            type: string
+            enum:
+            - user
+        required:
+        - kind
+      - $ref: '#/components/schemas/PublicUserPrincipal'
     PublicQueuedCardEvent:
       discriminator:
         propertyName: type
@@ -21439,6 +21650,20 @@ components:
       - startedAt
       - attributes
       - kind
+    PublicTokenProvenance:
+      title: PublicTokenProvenance
+      description: |-
+        A token that the request presented, with the pair of its maker. It never holds the token's
+        value.
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        maker:
+          $ref: '#/components/schemas/Pair'
+      required:
+      - id
     PublicToolInvocationOperation:
       title: PublicToolInvocationOperation
       type: object
@@ -21473,6 +21698,21 @@ components:
       - declaresStdout
       - hasStderr
       - declaresStderr
+    PublicToolPrincipal:
+      title: PublicToolPrincipal
+      type: object
+      properties:
+        pair:
+          $ref: '#/components/schemas/Pair'
+        environmentId:
+          type: string
+          format: uuid
+        toolName:
+          type: string
+      required:
+      - pair
+      - environmentId
+      - toolName
     PublicTypedAgentConfigEntry:
       title: PublicTypedAgentConfigEntry
       description: |-
@@ -21538,6 +21778,23 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/SnapshotBasedUpdateParameters'
+    PublicUserPrincipal:
+      title: PublicUserPrincipal
+      type: object
+      properties:
+        pair:
+          $ref: '#/components/schemas/Pair'
+        authenticatedAt:
+          type: string
+          format: date-time
+        claims:
+          description: |-
+            The verified claims, only when the reader asks for them (`include=claims`). The key is
+            absent otherwise.
+          type: object
+      required:
+      - pair
+      - authenticatedAt
     Quantifier:
       type: string
       enum:
@@ -22091,6 +22348,14 @@ components:
         required:
         - tag
         - value
+    SaveSnapshotParameters:
+      title: SaveSnapshotParameters
+      type: object
+      properties:
+        caller:
+          $ref: '#/components/schemas/PublicCaller'
+      required:
+      - caller
     SaveSnapshotResultParameters:
       title: SaveSnapshotResultParameters
       type: object

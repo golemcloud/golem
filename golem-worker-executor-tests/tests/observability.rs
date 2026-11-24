@@ -15,8 +15,11 @@
 use crate::Tracing;
 use axum::routing::post;
 use axum::{Json, Router};
+use golem_common::model::caller::{ClaimVisibility, PublicCaller};
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
-use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
+use golem_common::model::oplog::{
+    OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
+};
 use golem_common::model::{AgentStatus, IdempotencyKey};
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
@@ -24,7 +27,7 @@ use golem_test_framework::dsl::debug_render::debug_render_oplog_entry;
 use pretty_assertions::assert_eq;
 
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, callers, start,
 };
 use http::HeaderMap;
 use log::info;
@@ -184,6 +187,161 @@ async fn ordinary_agent_is_not_never_live_after_restart(
     let metadata = executor.get_worker_metadata(&worker_id).await?;
     assert_eq!(metadata.status, AgentStatus::Idle);
     assert_eq!(metadata.underlying_status, None);
+    Ok(())
+}
+
+/// The byte strings in the JSON form of a typed value: lists of `u8` values and binary payloads.
+fn byte_strings(value: &serde_json::Value, out: &mut Vec<Vec<u8>>) {
+    match value {
+        serde_json::Value::Array(items) => {
+            let as_u8 = |item: &serde_json::Value| {
+                let number = match item {
+                    serde_json::Value::Object(map) if map.get("kind") == Some(&"u8".into()) => {
+                        map.get("value")
+                    }
+                    other => Some(other),
+                };
+                number
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|n| u8::try_from(n).ok())
+            };
+            match items.iter().map(as_u8).collect::<Option<Vec<u8>>>() {
+                Some(bytes) if !bytes.is_empty() => out.push(bytes),
+                _ => items.iter().for_each(|item| byte_strings(item, out)),
+            }
+        }
+        serde_json::Value::Object(map) => map.values().for_each(|item| byte_strings(item, out)),
+        _ => {}
+    }
+}
+
+/// The byte strings that the host-call responses of an oplog hold, such as the chunks that a
+/// guest's `get-oplog` calls recorded.
+fn recorded_response_bytes(oplog: &[PublicOplogEntryWithIndex]) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    for entry in oplog {
+        if let PublicOplogEntry::End(end) = &entry.entry
+            && let Some(response) = &end.response
+        {
+            byte_strings(&serde_json::to_value(response.value()).unwrap(), &mut out);
+        }
+    }
+    out
+}
+
+fn method_invocation_callers(
+    oplog: &[PublicOplogEntryWithIndex],
+    method_name: &str,
+) -> Vec<PublicCaller> {
+    oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+                invocation: PublicAgentInvocation::AgentMethodInvocation(params),
+                ..
+            }) if params.method_name == method_name => Some(params.caller.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+#[tracing::instrument]
+async fn public_oplog_shows_callers_and_keeps_claims_out_of_guest_reads(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    const MARKER: &str = "claimsmarker7f3a";
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_key!("GolemHostApi", "callers");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let caller = callers::user_with_claims(
+        "http://test-idp.com",
+        "bob",
+        &format!(r#"{{"sub":"bob","email":"{MARKER}@mail.example"}}"#),
+    );
+    executor
+        .invoke_and_await_agent_as_caller(
+            &component,
+            &agent_id,
+            caller.clone(),
+            "generate_idempotency_keys",
+            data_value!(),
+        )
+        .await?;
+
+    // Without the claims request, the oplog shows both roles and no claims.
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        method_invocation_callers(&oplog, "generate_idempotency_keys"),
+        vec![PublicCaller::new(&caller, ClaimVisibility::Hidden)]
+    );
+    assert!(!serde_json::to_string(&oplog)?.contains(MARKER));
+
+    // With the claims request, both roles show the claims.
+    let oplog = executor
+        .get_oplog_with_claims(&worker_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        method_invocation_callers(&oplog, "generate_idempotency_keys"),
+        vec![PublicCaller::new(&caller, ClaimVisibility::Shown)]
+    );
+    assert!(serde_json::to_string(&oplog)?.contains(MARKER));
+
+    // The guest reads its own oplog. Its oplog keeps the chunk that it read: the chunk shows the
+    // caller roles and never the claims, also for a reader that asks for the claims.
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "read_own_oplog_result",
+            data_value!(),
+        )
+        .await?;
+    for oplog in [
+        executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?,
+        executor
+            .get_oplog_with_claims(&worker_id, OplogIndex::INITIAL)
+            .await?,
+    ] {
+        let chunks = recorded_response_bytes(&oplog)
+            .into_iter()
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .filter(|text| text.contains("AgentInvocationStarted"))
+            .collect::<Vec<_>>();
+        assert!(
+            !chunks.is_empty(),
+            "the guest's oplog read was not recorded"
+        );
+        assert!(
+            chunks
+                .iter()
+                .any(|chunk| chunk.contains(r#""subject":"bob""#)),
+            "the recorded chunk shows no caller: {chunks:?}"
+        );
+        for chunk in &chunks {
+            assert!(
+                !chunk.contains(MARKER),
+                "claims in a recorded chunk: {chunk}"
+            );
+        }
+    }
+    assert!(
+        !serde_json::to_string(&executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?)?
+            .contains(MARKER)
+    );
+
     Ok(())
 }
 
