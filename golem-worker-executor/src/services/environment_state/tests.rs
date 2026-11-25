@@ -8,9 +8,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{
     AgentFileContentHash, AgentTypeName, RegisteredAgentType, ResolvedAgentType,
 };
-use golem_common::model::agent_secret::{
-    AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
-};
+use golem_common::model::agent_secret::{AgentSecretId, CanonicalAgentSecretPath};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{
@@ -1582,9 +1580,11 @@ impl RegistryService for MockRegistryService {
     async fn get_agent_secret_revision(
         &self,
         _: EnvironmentId,
+        _: golem_common::model::agent_secret::AgentSecretOwner,
         _: AgentSecretId,
         _: CanonicalAgentSecretPath,
-        _: AgentSecretRevision,
+        _: golem_common::model::agent_secret::AgentSecretRevisionSelector,
+        _: golem_common::model::agent_secret::AgentSecretReadMode,
     ) -> Result<Option<AgentSecret>, RegistryServiceError> {
         unimplemented!()
     }

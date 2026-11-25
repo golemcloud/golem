@@ -866,9 +866,11 @@ mod tests {
         async fn get_agent_secret_revision(
             &self,
             _environment_id: EnvironmentId,
+            _owner: golem_common::model::agent_secret::AgentSecretOwner,
             _agent_secret_id: golem_common::model::agent_secret::AgentSecretId,
             _path: golem_common::model::agent_secret::CanonicalAgentSecretPath,
-            _revision: golem_common::model::agent_secret::AgentSecretRevision,
+            _selector: golem_common::model::agent_secret::AgentSecretRevisionSelector,
+            _mode: golem_common::model::agent_secret::AgentSecretReadMode,
         ) -> Result<
             Option<golem_service_base::model::agent_secret::AgentSecret>,
             RegistryServiceError,

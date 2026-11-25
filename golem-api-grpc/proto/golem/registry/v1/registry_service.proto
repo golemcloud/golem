@@ -17,6 +17,8 @@ import "golem/customapi/core.proto";
 import "golem/mcp/core.proto";
 import "golem/registry/agent.proto";
 import "golem/registry/environment_state.proto";
+import "golem/registry/agent_secret.proto";
+import "google/protobuf/empty.proto";
 import "golem/common/quota.proto";
 import "golem/registry/resource_usage_update.proto";
 import "golem/registry/v1/registry_service_error.proto";
@@ -569,8 +571,13 @@ message GetCurrentEnvironmentStateSuccessResponse {
 message GetAgentSecretRevisionRequest {
   golem.common.EnvironmentId environment_id = 1;
   repeated string path = 2;
-  uint64 revision = 3;
+  oneof revision {
+    uint64 fixed = 3;
+    google.protobuf.Empty current = 6;
+  }
   golem.common.UUID agent_secret_id = 4;
+  AgentSecretOwner owner = 5;
+  AgentSecretReadMode mode = 7;
 }
 
 message GetAgentSecretRevisionResponse {
@@ -581,7 +588,7 @@ message GetAgentSecretRevisionResponse {
 }
 
 message GetAgentSecretRevisionSuccessResponse {
-  EnvironmentState environment_state = 1;
+  optional AgentSecret agent_secret = 1;
 }
 
 message GetResourceDefinitionByIdRequest {

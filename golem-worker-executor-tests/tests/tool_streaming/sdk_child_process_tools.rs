@@ -34,6 +34,8 @@ async fn sdk_templates_dispatch_child_processes_to_bound_tools(
     // The Effect caller declares this secret in its agent config.
     environment_state.set_agent_secret(AgentSecret {
         id: AgentSecretId::new(),
+        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+        destinations: vec![],
         environment_id: context.default_environment_id,
         path: CanonicalAgentSecretPath(vec!["secret".to_string()]),
         revision: AgentSecretRevision::INITIAL,

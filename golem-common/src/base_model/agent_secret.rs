@@ -45,6 +45,56 @@ pub enum AgentSecretOwner {
     },
 }
 
+impl From<AgentSecretOwner> for golem_api_grpc::proto::golem::registry::AgentSecretOwner {
+    fn from(value: AgentSecretOwner) -> Self {
+        use golem_api_grpc::proto::golem::registry::{
+            AgentSecretAgentOwner, agent_secret_owner::Owner,
+        };
+        Self {
+            owner: Some(match value {
+                AgentSecretOwner::Environment => Owner::Environment(()),
+                AgentSecretOwner::Agent {
+                    agent_id,
+                    fingerprint,
+                } => Owner::Agent(AgentSecretAgentOwner {
+                    agent_id: Some(agent_id.into()),
+                    fingerprint: Some(fingerprint.0.into()),
+                }),
+                AgentSecretOwner::Tool { tool_name } => Owner::ToolName(tool_name.to_string()),
+            }),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::registry::AgentSecretOwner> for AgentSecretOwner {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::registry::AgentSecretOwner,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::registry::agent_secret_owner::Owner;
+        match value.owner.ok_or("Missing secret owner")? {
+            Owner::Environment(()) => Ok(Self::Environment),
+            Owner::Agent(owner) => {
+                let agent_id: AgentId =
+                    owner.agent_id.ok_or("Missing owner agent ID")?.try_into()?;
+                if !agent_id.is_issued() || agent_id.type_id().is_none() {
+                    return Err("Invalid secret agent owner identity".to_string());
+                }
+                Ok(Self::Agent {
+                    agent_id,
+                    fingerprint: AgentFingerprint(
+                        owner.fingerprint.ok_or("Missing owner fingerprint")?.into(),
+                    ),
+                })
+            }
+            Owner::ToolName(name) => Ok(Self::Tool {
+                tool_name: ToolName::try_from(name.as_str())?,
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentSecretRevisionSelector {
     Current,

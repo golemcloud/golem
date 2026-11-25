@@ -654,6 +654,8 @@ mod tests {
     fn secret_with_inner(inner: SchemaType, value: SchemaValue) -> AgentSecret {
         AgentSecret {
             id: golem_common::model::agent_secret::AgentSecretId(uuid::Uuid::nil()),
+            owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+            destinations: vec![],
             environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
             path: golem_common::model::agent_secret::CanonicalAgentSecretPath(vec![
                 "apiKey".to_string(),

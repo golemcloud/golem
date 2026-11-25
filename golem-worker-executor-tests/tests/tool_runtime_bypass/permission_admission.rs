@@ -231,6 +231,8 @@ async fn permission_fixture_with_overrides(
     let (effect_port, effect_server, effects) = start_effect_server().await?;
     environment.set_agent_secret(AgentSecret {
         id: AgentSecretId::new(),
+        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+        destinations: vec![],
         environment_id: context.default_environment_id,
         path: CanonicalAgentSecretPath(vec!["contextSecret".to_string()]),
         revision: AgentSecretRevision::INITIAL,

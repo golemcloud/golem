@@ -833,7 +833,14 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
         revision: AgentSecretRevision,
     ) -> Result<Option<AgentSecret>, WorkerExecutorError> {
         self.client
-            .get_agent_secret_revision(environment_id, agent_secret_id, path, revision)
+            .get_agent_secret_revision(
+                environment_id,
+                golem_common::model::agent_secret::AgentSecretOwner::Environment,
+                agent_secret_id,
+                path,
+                golem_common::model::agent_secret::AgentSecretRevisionSelector::Fixed(revision),
+                golem_common::model::agent_secret::AgentSecretReadMode::Historical,
+            )
             .await
             .map_err(|e| {
                 WorkerExecutorError::runtime(format!("Failed to get agent secret revision: {e}"))

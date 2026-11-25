@@ -5707,6 +5707,8 @@ async fn every_protected_storage_config_and_secret_import_enforces_permissions(
     let environment_state_service = Arc::new(TestEnvironmentStateService::default());
     let secret_path = CanonicalAgentSecretPath(vec!["secretPath".to_string()]);
     environment_state_service.set_agent_secret(AgentSecret {
+        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+        destinations: vec![],
         environment_id: context.default_environment_id,
         revision: AgentSecretRevision::INITIAL,
         path: secret_path,
@@ -8299,6 +8301,8 @@ async fn secret_reveal_authorizes_before_secret_revision_lookup(
     let secret_path = CanonicalAgentSecretPath(vec!["secretPath".to_string()]);
     let secret_value = "secret-value-that-must-not-leak";
     environment_state_service.set_agent_secret(AgentSecret {
+        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+        destinations: vec![],
         id: AgentSecretId::new(),
         environment_id: context.default_environment_id,
         path: secret_path,
@@ -8419,6 +8423,8 @@ async fn capabilities_round_trip_between_agents_and_codec_rejects_reuse(
     let environment_state_service = Arc::new(TestEnvironmentStateService::default());
     let secret_value = "capability-rpc-secret";
     environment_state_service.set_agent_secret(AgentSecret {
+        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+        destinations: vec![],
         id: AgentSecretId::new(),
         environment_id: context.default_environment_id,
         path: CanonicalAgentSecretPath(vec!["secretPath".to_string()]),
@@ -8544,6 +8550,8 @@ async fn snapshot_restores_admitted_secret_handle_without_reauthorization(
     let environment_state_service = Arc::new(TestEnvironmentStateService::default());
     let secret_value = "snapshot-secret-value";
     environment_state_service.set_agent_secret(AgentSecret {
+        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+        destinations: vec![],
         id: AgentSecretId::new(),
         environment_id: context.default_environment_id,
         path: CanonicalAgentSecretPath(vec!["secretPath".to_string()]),

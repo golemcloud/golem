@@ -662,20 +662,20 @@ impl AgentSecretService {
     pub async fn get_revision_unchecked(
         &self,
         environment_id: EnvironmentId,
+        owner: AgentSecretOwner,
         agent_secret_id: AgentSecretId,
         path: CanonicalAgentSecretPath,
-        revision: AgentSecretRevision,
+        selector: AgentSecretRevisionSelector,
+        mode: AgentSecretReadMode,
     ) -> Result<Option<AgentSecret>, AgentSecretError> {
         self.agent_secret_repo
-            // Secret values are not stored in the oplog, so replay must be able to
-            // resolve historical secret revisions after the owning entities are deleted.
             .get_revision(
                 environment_id.0,
-                &AgentSecretOwner::Environment,
+                &owner,
                 agent_secret_id,
                 path.0,
-                AgentSecretRevisionSelector::Fixed(revision),
-                AgentSecretReadMode::Historical,
+                selector,
+                mode,
             )
             .await?
             .map(TryInto::try_into)

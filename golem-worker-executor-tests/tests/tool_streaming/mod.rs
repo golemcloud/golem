@@ -22016,6 +22016,8 @@ async fn builtin_git_remote_secrets_redirects_and_discovery(
     )?;
     harness.environment_state.set_agent_secret(AgentSecret {
         id: secret_id,
+        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+        destinations: vec![],
         environment_id: harness.context.default_environment_id,
         path: CanonicalAgentSecretPath(secret_path.clone()),
         revision: AgentSecretRevision::INITIAL,
@@ -23908,6 +23910,8 @@ async fn native_tool_secret_permissions_and_completed_replay(
         let secret_id = AgentSecretId::new();
         let path = vec!["nativeSecret".to_string()];
         environment_state.set_agent_secret(AgentSecret {
+            owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+            destinations: vec![],
             id: secret_id,
             environment_id: context.default_environment_id,
             path: CanonicalAgentSecretPath(path.clone()),

@@ -274,6 +274,8 @@ async fn run_resource_contract(
     let environment_state = Arc::new(TestEnvironmentStateService::default());
     environment_state.set_agent_secret(AgentSecret {
         id: AgentSecretId::new(),
+        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+        destinations: vec![],
         environment_id: context.default_environment_id,
         path: CanonicalAgentSecretPath(vec!["secret".to_string()]),
         revision: AgentSecretRevision::INITIAL,
@@ -923,6 +925,8 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
     let environment = Arc::new(TestEnvironmentStateService::default());
     environment.set_agent_secret(AgentSecret {
         id: AgentSecretId::new(),
+        owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
+        destinations: vec![],
         environment_id: context.default_environment_id,
         path: CanonicalAgentSecretPath(vec!["secret".to_string()]),
         revision: AgentSecretRevision::INITIAL,

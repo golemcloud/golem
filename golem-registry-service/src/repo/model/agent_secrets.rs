@@ -298,6 +298,13 @@ impl TryFrom<AgentSecretExtRevisionRecord> for AgentSecret {
     fn try_from(value: AgentSecretExtRevisionRecord) -> Result<Self, Self::Error> {
         Ok(Self {
             id: AgentSecretId(value.revision.agent_secret_id),
+            owner: AgentSecretOwner::try_from(&value.owner)?,
+            destinations: match value.revision.destinations {
+                AgentSecretDestinations::Set(destinations) => destinations,
+                AgentSecretDestinations::Copy => {
+                    return Err(anyhow::anyhow!("Unresolved secret destinations").into());
+                }
+            },
             environment_id: EnvironmentId(value.environment_id),
             path: CanonicalAgentSecretPath(value.path.0),
             revision: value.revision.revision_id.try_into()?,
