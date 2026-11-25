@@ -2093,6 +2093,7 @@ typed quota traps. Denied calls and historical claims do not consume HTTP quota.
 replay never resends that cancelled call. Only crash-like loss leaves an incomplete send.
 Request-body intake continues while replay resolution waits, so a streamed writer can reach its
 next durable call. A trap leaves the Start incomplete, never Cancelled.
+Each HTTP send reserves its key position synchronously before its first await, in guest import order, through `IdempotencyKeyPosition`. Admission and completion order can differ on replay. An eligible denied send reserves a position too, but sends nothing. A guest key or disabled injection reserves no position. Managed headers use the captured position once after Start admission, before replay resolution, even for a recorded HTTP error or an incomplete-call repair. No later branch advances the key position.
 A crash before the response headers therefore completes the recorded send
 `Start` in place (same index, same derived idempotency key, the deterministic guest re-produces
 the request body) and keeps every operation recorded next to it. The response body's

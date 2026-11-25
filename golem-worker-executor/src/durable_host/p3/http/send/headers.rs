@@ -15,16 +15,7 @@
 use super::*;
 use golem_service_base::headers::TraceContextHeaders;
 
-/// Everything needed to re-issue a recorded p3 `client::send` after a restart
-/// (the P3 counterpart of P2's `rebuild_request_after_replay`): the request
-/// head + options recorded in the send's `Start` payload (reconstructed
-/// deterministically from the guest-rebuilt request resource during replay)
-/// and the Golem-managed headers (`traceparent`/`tracestate`,
-/// `idempotency-key`) re-derived from recorded state — the replayed span and
-/// the send's own `Start` index — so the re-issued request is byte-identical
-/// to the original in every Golem-controlled aspect.
-///
-/// The request body is reconstructed from its durable frame recording when the request is re-issued.
+/// Reconstructs the outgoing URI from the recorded request head.
 pub(in crate::durable_host::p3::http) fn outgoing_http_request_uri(
     request: &SerializableP3HttpClientSend,
 ) -> String {
@@ -44,8 +35,7 @@ pub(in crate::durable_host::p3::http) fn outgoing_http_request_uri(
     )
 }
 
-/// Span attributes for the `outgoing-http-request` invocation-context span,
-/// mirroring the P2 `http::outgoing_handler::handle` span shape.
+/// Span attributes for the `outgoing-http-request` invocation-context span.
 pub(in crate::durable_host::p3::http) fn outgoing_http_request_span_attributes(
     request: &SerializableP3HttpClientSend,
 ) -> Vec<(String, AttributeValue)> {
@@ -63,17 +53,15 @@ pub(in crate::durable_host::p3::http) fn outgoing_http_request_span_attributes(
     ]
 }
 
-/// Computes the Golem-managed headers to inject into an outgoing p3 HTTP
-/// request via the shared policy (see `http::policy::golem_managed_http_headers`),
-/// using the send's own host-call `Start` index as the idempotency-key
-/// derivation point — stable across live execution and replay, so a retried
-/// send reuses the same key. `guest_headers` is the serialized request head
-/// used to detect a guest-provided idempotency key.
+/// Builds trace headers and selects key injection through the shared policy.
+/// Derivation uses the send's `Start` index or its reserved entity logical position.
+/// A guest-provided key suppresses derivation.
 pub(in crate::durable_host::p3::http) fn golem_outgoing_http_headers<Ctx: WorkerCtx, U: Send>(
     store: &Accessor<U, DurableP3<Ctx>>,
     span_id: &SpanId,
     start_index: OplogIndex,
     guest_headers: &HashMap<String, Vec<Vec<u8>>>,
+    key_position: &crate::durable_host::IdempotencyKeyPosition,
 ) -> Result<Vec<(String, String)>, WorkerExecutorError> {
     store.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
@@ -98,14 +86,14 @@ pub(in crate::durable_host::p3::http) fn golem_outgoing_http_headers<Ctx: Worker
             guest_headers.contains_key("idempotency-key"),
             start_index,
         );
-        Ok(plan.resolve(|index| ctx.derive_idempotency_key(index)))
+        Ok(plan.resolve(|index| key_position.derive(index)))
     })
 }
 
 /// Applies the injected headers to the actual request resource (replacing any
 /// existing values for the same names) so the network request carries them.
 /// The guest constructed the request with immutable headers, so they are
-/// briefly remarked mutable, mirroring the P2 injection.
+/// briefly remarked mutable during injection.
 pub(in crate::durable_host::p3::http) fn apply_headers_to_request_resource<
     Ctx: WorkerCtx,
     U: Send,

@@ -16052,6 +16052,40 @@ async fn entity_generated_key_replay_reserves_position_for_incomplete_http_retry
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    entity_http_key_recovery(last_unique_id, deps, provider, caller, None).await
+}
+
+#[test]
+#[timeout("3m")]
+async fn entity_http_error_replay_preserves_later_key(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    entity_http_key_recovery(last_unique_id, deps, provider, caller, Some("before")).await
+}
+
+#[test]
+#[timeout("3m")]
+async fn entity_http_error_completion_does_not_reorder_an_incomplete_send_key(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    entity_http_key_recovery(last_unique_id, deps, provider, caller, Some("overlap")).await
+}
+
+async fn entity_http_key_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    provider: &PrecompiledComponent,
+    caller: &PrecompiledComponent,
+    http_error_mode: Option<&str>,
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
     let executor = start_with_overrides(
@@ -16092,16 +16126,14 @@ async fn entity_generated_key_replay_reserves_position_for_incomplete_http_retry
     );
 
     let agent_id = agent_key!("ToolStreamingCaller", "entity-idempotency-recovery");
+    let env = std::iter::once((
+        "IDEMPOTENCY_EFFECT_PORT".to_string(),
+        effect_port.to_string(),
+    ))
+    .chain(http_error_mode.map(|mode| ("HTTP_ERROR_MODE".to_string(), mode.to_string())))
+    .collect();
     let worker_id = executor
-        .start_agent_with(
-            &caller_component.id,
-            agent_id.clone(),
-            HashMap::from([(
-                "IDEMPOTENCY_EFFECT_PORT".to_string(),
-                effect_port.to_string(),
-            )]),
-            Vec::new(),
-        )
+        .start_agent_with(&caller_component.id, agent_id.clone(), env, Vec::new())
         .await?;
     let input = b"entity-idempotency".to_vec();
     let call = executor.invoke_and_await_agent(
@@ -16116,7 +16148,33 @@ async fn entity_generated_key_replay_reserves_position_for_incomplete_http_retry
             .map_err(|_| anyhow::anyhow!("initial idempotent HTTP effect timed out"))?
             .ok_or_else(|| anyhow::anyhow!("idempotency effect server stopped"))?;
 
-        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let oplog = if http_error_mode.is_some() {
+            crate::http::wait_for_oplog(
+                &executor,
+                &worker_id,
+                "the entity's recorded HTTP error beside its incomplete effect",
+                |oplog| {
+                    let sends = oplog
+                        .iter()
+                        .filter_map(|entry| match &entry.entry {
+                            PublicOplogEntry::Start(params)
+                                if params.function_name == "http::client::send" =>
+                            {
+                                Some(entry.oplog_index)
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    sends.len() == 2 && oplog.iter().filter(|entry| matches!(
+                        &entry.entry,
+                        PublicOplogEntry::End(params) if sends.contains(&params.start_index)
+                    )).count() == 1
+                },
+            )
+            .await?
+        } else {
+            executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?
+        };
         let entity_starts = oplog
             .iter()
             .filter_map(|entry| match &entry.entry {
@@ -16136,6 +16194,48 @@ async fn entity_generated_key_replay_reserves_position_for_incomplete_http_retry
         else {
             unreachable!()
         };
+        if http_error_mode.is_some() {
+            let sends = oplog
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Start(params)
+                        if params.function_name == "http::client::send" =>
+                    {
+                        assert!(params.parent_start_index.is_some());
+                        let is_error_request =
+                            params.span_started.as_ref().is_some_and(|span| {
+                                span.attributes.iter().any(|attribute| {
+                                    let golem_common::model::oplog::PublicAttributeValue::String(
+                                        value,
+                                    ) = &attribute.value;
+                                    attribute.key == "request.uri"
+                                        && value.value
+                                            == format!(
+                                                "https://127.0.0.1:{effect_port}/unsupported"
+                                            )
+                                })
+                            });
+                        Some((entry.oplog_index, is_error_request))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                sends.len(),
+                2,
+                "the entity must make an error call and the effect"
+            );
+            let (error_start, _) = sends
+                .iter()
+                .find(|(_, is_error)| *is_error)
+                .expect("the TLS error request must have its own Start");
+            assert!(
+                oplog.iter().any(|entry| matches!(&entry.entry,
+                    PublicOplogEntry::End(params) if params.start_index == *error_start
+                )),
+                "the send error must be recorded before the crash"
+            );
+        }
 
         executor.simulated_crash(&worker_id).await?;
         let retry_key = tokio::time::timeout(std::time::Duration::from_secs(30), attempts.recv())
