@@ -41,6 +41,174 @@ fn invocation_rejection_lookup_preserves_the_typed_error() {
     ));
 }
 
+fn initialization_position(
+    terminal: u64,
+    end: golem_common::model::InvocationEnd,
+    operation: golem_common::model::InvocationOperation,
+) -> golem_common::model::InvocationResultPosition {
+    golem_common::model::InvocationResultPosition {
+        terminal: OplogIndex::from_u64(terminal),
+        request: Some(OplogIndex::from_u64(terminal - 1)),
+        end,
+        operation: Some(operation),
+        accepted_at: Some(Timestamp::from(1_u64)),
+        changed_at: Timestamp::from(2_u64),
+    }
+}
+
+/// The status answers for a completed initialization whose terminal entry is below the retained
+/// start, because a read of that entry is expired. A terminal entry at or after the start, a
+/// result that did not complete and a result of another operation are read from the oplog.
+#[test]
+fn only_a_completed_initialization_below_the_start_is_answered_from_the_status() {
+    use crate::services::oplog::retention::test_oplog::at;
+    use golem_common::model::{InvocationEnd, InvocationOperation};
+
+    let completed = initialization_position(
+        5,
+        InvocationEnd::Completed,
+        InvocationOperation::Constructor,
+    );
+    assert!(initialization_finished_below_start(at(6), Some(&completed)));
+    assert!(initialization_finished_below_start(at(9), Some(&completed)));
+    assert!(!initialization_finished_below_start(
+        at(5),
+        Some(&completed)
+    ));
+    assert!(!initialization_finished_below_start(
+        at(1),
+        Some(&completed)
+    ));
+    assert!(!initialization_finished_below_start(at(6), None));
+    [
+        InvocationEnd::Failed,
+        InvocationEnd::Retrying,
+        InvocationEnd::Cancelled,
+    ]
+    .into_iter()
+    .for_each(|end| {
+        let position = initialization_position(5, end, InvocationOperation::Constructor);
+        assert!(
+            !initialization_finished_below_start(at(6), Some(&position)),
+            "{end:?}"
+        );
+    });
+    let method = initialization_position(
+        5,
+        InvocationEnd::Completed,
+        InvocationOperation::Method("increment".to_string()),
+    );
+    assert!(!initialization_finished_below_start(at(6), Some(&method)));
+}
+
+/// A fork whose initialization is below the retained start finds the key of the initialization
+/// in the invocation results of its status. With the start at index 1 the walk reads every entry,
+/// so the status gives no key.
+#[test]
+fn the_key_of_an_initialization_below_the_start_comes_from_the_status() {
+    use crate::services::oplog::retention::test_oplog::at;
+    use golem_common::model::{InvocationEnd, InvocationOperation};
+
+    let initialization = InvocationId(uuid::Uuid::from_u128(0x1455));
+    let method = InvocationId(uuid::Uuid::from_u128(0x1456));
+    let mut status = AgentStatusRecord::default();
+    status.invocation_results.insert(
+        method,
+        initialization_position(
+            9,
+            InvocationEnd::Completed,
+            InvocationOperation::Method("increment".to_string()),
+        ),
+    );
+    assert_eq!(initialization_key_below_start(at(4), &status), None);
+    status.invocation_results.insert(
+        initialization,
+        initialization_position(
+            3,
+            InvocationEnd::Completed,
+            InvocationOperation::Constructor,
+        ),
+    );
+    assert_eq!(
+        initialization_key_below_start(at(4), &status),
+        Some(initialization)
+    );
+    assert_eq!(initialization_key_below_start(at(1), &status), None);
+}
+
+fn initialization_started(key: InvocationId) -> OplogEntry {
+    match crate::services::oplog::retention::test_oplog::invocation_started() {
+        OplogEntry::AgentInvocationStarted {
+            timestamp,
+            payload,
+            trace_id,
+            trace_states,
+            invocation_context,
+            wallet_pin,
+            ..
+        } => OplogEntry::AgentInvocationStarted {
+            timestamp,
+            invocation_id: key,
+            operation: Box::new(InvocationRequestOperation::AgentInitialization),
+            payload,
+            trace_id,
+            trace_states,
+            invocation_context,
+            wallet_pin,
+        },
+        other => panic!("expected an invocation start, got {other:?}"),
+    }
+}
+
+/// The walk for the initialization of a fork reads from the retained start. It finds an
+/// initialization at or after the start, and gives no key, with no read error, for an
+/// initialization below the start.
+#[test]
+async fn the_initialization_walk_reads_from_the_retained_start() {
+    use crate::services::oplog::retention::test_oplog::{RetainedOplog, jump};
+
+    let key = InvocationId(uuid::Uuid::from_u128(0x1455));
+    let after = RetainedOplog::new().await;
+    after
+        .add([
+            jump(1),
+            jump(2),
+            jump(3),
+            initialization_started(key),
+            jump(5),
+        ])
+        .await;
+    after.advance(3).await;
+    let status = AgentStatusRecord {
+        oplog_idx: OplogIndex::from_u64(5),
+        ..AgentStatusRecord::default()
+    };
+    assert_eq!(
+        find_initialization_key(after.open().await.as_ref(), &status)
+            .await
+            .unwrap(),
+        Some(key)
+    );
+
+    let below = RetainedOplog::new().await;
+    below
+        .add([
+            jump(1),
+            initialization_started(key),
+            jump(3),
+            jump(4),
+            jump(5),
+        ])
+        .await;
+    below.advance(3).await;
+    assert_eq!(
+        find_initialization_key(below.open().await.as_ref(), &status)
+            .await
+            .unwrap(),
+        None
+    );
+}
+
 #[test]
 async fn a_stop_after_the_ordinary_terminal_check_remains_for_the_invocation_loop() {
     let interrupts = Interrupts::default();
