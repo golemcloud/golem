@@ -44,6 +44,14 @@ mod executor_count {
     #[test]
     #[timeout("600s")]
     async fn a_third_executor_refreshes_both_existing_counts_within_one_lease() {
+        if golem_common::config::env_config_provider()
+            .iter()
+            .any(|(key, _)| key == "rebalance_threshold")
+        {
+            panic!(
+                "GOLEM__REBALANCE_THRESHOLD is not supported by this fixture; use the checked manager configuration"
+            );
+        }
         if let Some(variable) = ["REDIS_PORT", "REGISTRY_HTTP_PORT"]
             .into_iter()
             .find(|variable| std::env::var_os(variable).is_some())
@@ -54,7 +62,6 @@ mod executor_count {
         let config = EnvBasedTestDependenciesConfig {
             worker_executor_cluster_size: 2,
             number_of_shards_override: Some(4),
-            rebalance_threshold_override: Some(0.1),
             db_type: DbType::Sqlite,
             redis_port: 23100,
             registry_http_port: 23101,
@@ -96,13 +103,16 @@ mod executor_count {
             .join("golem-shard-manager/config/shard-manager.toml")
             .canonicalize()
             .unwrap();
-        let lease_duration = ConfigLoader::<ShardManagerConfig>::new(&manager_config)
+        let manager_config = ConfigLoader::<ShardManagerConfig>::new(&manager_config)
             .figment()
             .merge(("number_of_shards", 4usize))
-            .merge(("rebalance_threshold", 0.1))
             .extract::<ShardManagerConfig>()
-            .expect("the effective shard manager configuration must load")
-            .shard_lease_duration;
+            .expect("the effective shard manager configuration must load");
+        assert_eq!(
+            manager_config.rebalance_threshold, 0.1,
+            "the fixture requires the manager's 10% rebalance threshold"
+        );
+        let lease_duration = manager_config.shard_lease_duration;
         let deps = EnvBasedTestDependencies::new(config).await.unwrap();
         let executors = deps.worker_executor_cluster().to_vec().into_boxed_slice();
         let client = reqwest::Client::new();
