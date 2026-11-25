@@ -99,16 +99,36 @@ impl AuditContext {
 pub struct DecisionAudit {
     sink: Arc<dyn AuditSink>,
     retry_after: Duration,
+    record_allowed: bool,
 }
 
 impl DecisionAudit {
     pub fn new(sink: Arc<dyn AuditSink>, retry_after: Duration) -> Self {
-        Self { sink, retry_after }
+        Self {
+            sink,
+            retry_after,
+            record_allowed: true,
+        }
+    }
+
+    /// This audit, but it records only denials. For a decision about a target that does not
+    /// exist: an allowed caller learns only that the target is missing, so nothing is read or
+    /// changed, and no record is written.
+    pub fn denials_only(&self) -> Self {
+        Self {
+            record_allowed: false,
+            ..self.clone()
+        }
     }
 
     /// `inner`, with every decision audited and counted.
     pub fn authorizer(&self, inner: Arc<dyn Authorizer>) -> AuditedAuthorizer {
-        AuditedAuthorizer::new(inner, self.sink.clone(), self.retry_after)
+        let authorizer = AuditedAuthorizer::new(inner, self.sink.clone(), self.retry_after);
+        if self.record_allowed {
+            authorizer
+        } else {
+            authorizer.denials_only()
+        }
     }
 }
 
@@ -116,6 +136,7 @@ impl std::fmt::Debug for DecisionAudit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DecisionAudit")
             .field("retry_after", &self.retry_after)
+            .field("record_allowed", &self.record_allowed)
             .finish_non_exhaustive()
     }
 }
@@ -146,6 +167,7 @@ pub struct AuditedAuthorizer {
     inner: Arc<dyn Authorizer>,
     sink: Arc<dyn AuditSink>,
     retry_after: Duration,
+    record_allowed: bool,
 }
 
 impl AuditedAuthorizer {
@@ -158,7 +180,15 @@ impl AuditedAuthorizer {
             inner,
             sink,
             retry_after,
+            record_allowed: true,
         }
+    }
+
+    /// This authorizer, but it records only denials (see [`DecisionAudit::denials_only`]). It
+    /// still counts every decision.
+    pub fn denials_only(mut self) -> Self {
+        self.record_allowed = false;
+        self
     }
 
     /// Decides the request and writes its audit record before it answers.
@@ -171,7 +201,9 @@ impl AuditedAuthorizer {
         count(&request.operation, &decision, context.surface);
 
         let needs_record = match &decision {
-            Decision::Allow(_) => audited_when_allowed(request.operation.name()),
+            Decision::Allow(_) => {
+                self.record_allowed && audited_when_allowed(request.operation.name())
+            }
             Decision::Deny(_) => true,
         };
         if !needs_record {

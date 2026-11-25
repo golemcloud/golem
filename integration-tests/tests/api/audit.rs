@@ -16,10 +16,11 @@
 //! staging table.
 
 use golem_client::api::RegistryServiceClient;
-use golem_common::agent_key;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::authority::CatalogOperation;
+use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::{agent_key, data_value};
 use golem_service_base::model::auth::audit::{AuditOutcome, AuditRecord};
 use golem_test_framework::components::rdb::DbInfo;
 use golem_test_framework::config::dsl_impl::TestUserContext;
@@ -29,17 +30,25 @@ use pretty_assertions::assert_eq;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use test_r::{inherit_test_dep, test, timeout};
+use uuid::Uuid;
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
-/// The records that wait in the registry's staging table for `operation` on a target in
+/// A record that waits in the registry's staging table, with the account that the registry
+/// stored for its target.
+struct StagedRow {
+    record: AuditRecord,
+    target_account_id: Option<Uuid>,
+}
+
+/// The rows that wait in the registry's staging table for `operation` on a target in
 /// `environment_id`.
-async fn staged_records(
+async fn staged_rows(
     deps: &EnvBasedTestDependencies,
     environment_id: EnvironmentId,
     operation: CatalogOperation,
-) -> anyhow::Result<Vec<AuditRecord>> {
-    let rows: Vec<String> = match deps.rdb().info() {
+) -> anyhow::Result<Vec<StagedRow>> {
+    let rows: Vec<(String, Option<Uuid>)> = match deps.rdb().info() {
         DbInfo::Sqlite(root) => {
             let pool = SqlitePoolOptions::new()
                 .max_connections(1)
@@ -49,8 +58,8 @@ async fn staged_records(
                         .journal_mode(SqliteJournalMode::Wal),
                 )
                 .await?;
-            sqlx::query_scalar(
-                "SELECT record FROM audit_staging \
+            sqlx::query_as(
+                "SELECT record, target_account_id FROM audit_staging \
                  WHERE target_environment_id = $1 AND operation = $2",
             )
             .bind(environment_id.0)
@@ -63,8 +72,8 @@ async fn staged_records(
                 .max_connections(1)
                 .connect_with(postgres.to_connect_options())
                 .await?;
-            sqlx::query_scalar(
-                "SELECT record FROM golem_registry.audit_staging \
+            sqlx::query_as(
+                "SELECT record, target_account_id FROM golem_registry.audit_staging \
                  WHERE target_environment_id = $1 AND operation = $2",
             )
             .bind(environment_id.0)
@@ -74,8 +83,13 @@ async fn staged_records(
         }
         DbInfo::Mysql(_) => anyhow::bail!("registry service does not support MySQL"),
     };
-    rows.iter()
-        .map(|row| Ok(serde_json::from_str(row)?))
+    rows.into_iter()
+        .map(|(record, target_account_id)| {
+            Ok(StagedRow {
+                record: serde_json::from_str(&record)?,
+                target_account_id,
+            })
+        })
         .collect()
 }
 
@@ -83,7 +97,11 @@ async fn staged_records(
 async fn owned_agent(
     deps: &EnvBasedTestDependencies,
     name: &str,
-) -> anyhow::Result<(TestUserContext<EnvBasedTestDependencies>, OwnedAgentId)> {
+) -> anyhow::Result<(
+    TestUserContext<EnvBasedTestDependencies>,
+    ComponentDto,
+    OwnedAgentId,
+)> {
     let owner = deps.user().await?;
     let (_, env) = owner.app_and_env().await?;
     let component = owner
@@ -93,7 +111,7 @@ async fn owned_agent(
     let agent_id = owner
         .start_agent(&component.id, agent_key!("RpcBlockingCounter", name))
         .await?;
-    Ok((owner, agent_id))
+    Ok((owner, component, agent_id))
 }
 
 #[test]
@@ -101,7 +119,7 @@ async fn owned_agent(
 async fn an_allowed_oplog_read_waits_in_the_staging_table_with_its_token_and_grantors(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
-    let (owner, agent_id) = owned_agent(deps, "audit-allowed").await?;
+    let (owner, _, agent_id) = owned_agent(deps, "audit-allowed").await?;
     let tokens = deps
         .registry_service()
         .client(&owner.token)
@@ -112,14 +130,16 @@ async fn an_allowed_oplog_read_waits_in_the_staging_table_with_its_token_and_gra
 
     owner.get_oplog_last_index(&agent_id).await?;
 
-    let records = staged_records(
+    let rows = staged_rows(
         deps,
         agent_id.environment_id,
         CatalogOperation::ReadAgentOplog,
     )
     .await?;
-    assert_eq!(records.len(), 1);
-    let record = &records[0];
+    assert_eq!(rows.len(), 1);
+    // The record names only the agent's environment; the registry stores its account.
+    assert_eq!(rows[0].target_account_id, Some(owner.account_id.0));
+    let record = &rows[0].record;
     assert_eq!(record.outcome, AuditOutcome::Allowed);
     assert_eq!(record.surface, "rest");
     assert_eq!(record.authenticated_by, Some(tokens.values[0].id));
@@ -140,20 +160,22 @@ async fn an_allowed_oplog_read_waits_in_the_staging_table_with_its_token_and_gra
 async fn a_refused_oplog_read_waits_in_the_staging_table_with_the_real_target(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
-    let (_owner, agent_id) = owned_agent(deps, "audit-refused").await?;
+    let (owner, _, agent_id) = owned_agent(deps, "audit-refused").await?;
     let stranger = deps.user().await?;
 
     let refused = stranger.get_oplog_last_index(&agent_id).await;
     assert!(refused.is_err(), "{refused:?}");
 
-    let records = staged_records(
+    let rows = staged_rows(
         deps,
         agent_id.environment_id,
         CatalogOperation::ReadAgentOplog,
     )
     .await?;
-    assert_eq!(records.len(), 1);
-    let record = &records[0];
+    assert_eq!(rows.len(), 1);
+    // The record names only the agent's environment; the registry stores its account.
+    assert_eq!(rows[0].target_account_id, Some(owner.account_id.0));
+    let record = &rows[0].record;
     assert!(record.outcome != AuditOutcome::Allowed, "{record:?}");
     assert_eq!(record.surface, "rest");
     assert_eq!(
@@ -165,5 +187,40 @@ async fn a_refused_oplog_read_waits_in_the_staging_table_with_the_real_target(
         Some(agent_id.environment_id)
     );
     assert!(record.grantors.is_empty());
+    Ok(())
+}
+
+#[test]
+#[timeout("6m")]
+async fn a_refused_invoke_adds_no_oplog_entry_and_its_refusal_waits_in_the_staging_table(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let (owner, component, agent_id) = owned_agent(deps, "audit-invoke").await?;
+    let before = owner.get_oplog_last_index(&agent_id).await?;
+    let stranger = deps.user().await?;
+
+    let refused = stranger
+        .invoke_and_await_agent(
+            &component,
+            &agent_key!("RpcBlockingCounter", "audit-invoke"),
+            "inc_by",
+            data_value!(5u64),
+        )
+        .await;
+
+    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(owner.get_oplog_last_index(&agent_id).await?, before);
+    // The agent-type lookup refused the stranger before the invocation was decided, so its
+    // record is the lookup's check.
+    let rows = staged_rows(deps, agent_id.environment_id, CatalogOperation::ListAgents).await?;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].record.outcome,
+        AuditOutcome::Forbidden {
+            missing_grant: None
+        }
+    );
+    assert_eq!(rows[0].record.surface, "rest");
+    assert_eq!(rows[0].target_account_id, Some(owner.account_id.0));
     Ok(())
 }

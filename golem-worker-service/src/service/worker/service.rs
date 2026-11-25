@@ -767,6 +767,17 @@ impl ManagedAgent {
     }
 }
 
+/// Why a request asks whether its caller may see the agents of a type.
+#[derive(Clone, Copy, Debug)]
+enum TypeQuestion {
+    /// The request lists agents. The listing decides itself, so its decision has its audit
+    /// record, allowed or denied.
+    Listing(Surface),
+    /// A lookup before another operation, which decides and records itself. A refused lookup
+    /// writes its denial; an allowed one writes nothing.
+    Lookup(Surface),
+}
+
 pub struct WorkerService {
     component_service: Arc<dyn ComponentService>,
     _auth_service: Arc<dyn AuthService>,
@@ -868,17 +879,12 @@ impl WorkerService {
 
     /// Whether the caller may list the agents of `agent_type`, which `component` implements, as
     /// today's type-wide `agent : view` check answers. A listing asks it before it scans.
-    ///
-    /// `listing` is the surface of a request that lists agents: it decides the listing itself,
-    /// with the same check, so that the decision has its audit record. Without it, the question
-    /// is a lookup before another operation, which decides and records itself; it asks only the
-    /// scope.
     async fn may_list_agent_type(
         &self,
         auth: &AuthCtx,
         component: &Component,
         agent_type: &AgentTypeName,
-        listing: Option<Surface>,
+        question: TypeQuestion,
     ) -> WorkerResult<bool> {
         if auth.is_system() {
             return Ok(true);
@@ -887,24 +893,43 @@ impl WorkerService {
             return Ok(false);
         };
         let check = agent_type_check(component, agent_type);
-        if let Some(surface) = listing {
-            return match self
-                .decide(auth, operation, vec![vec![check]], surface)
-                .await
-            {
-                Ok(_) => Ok(true),
-                Err(error @ AuthorizationError::AuditUnavailable(_)) => Err(error.into()),
-                Err(_) => Ok(false),
-            };
+        match question {
+            TypeQuestion::Listing(surface) => {
+                match self
+                    .decide(auth, operation, vec![vec![check]], surface)
+                    .await
+                {
+                    Ok(_) => Ok(true),
+                    Err(error @ AuthorizationError::AuditUnavailable(_)) => Err(error.into()),
+                    Err(_) => Ok(false),
+                }
+            }
+            TypeQuestion::Lookup(surface) => {
+                let authorizer = CompatibilityAuthorizer::new(auth.clone(), Vec::new())
+                    .with_type_checks([(agent_type.clone(), vec![check.clone()])]);
+                let request = AuthorizationRequest::new(self.rest_caller(auth), operation.clone());
+                let allowed = authorizer
+                    .scope(&request)
+                    .await
+                    .agent_types
+                    .contains(agent_type);
+                if !allowed {
+                    // Only to write the refusal: the same check, decided with an audit that records
+                    // denials only. Its answer is the scope's answer, and a lost record does not
+                    // change it.
+                    let _ = self
+                        .decide_with(
+                            &self.audit.denials_only(),
+                            auth,
+                            operation,
+                            vec![vec![check]],
+                            surface,
+                        )
+                        .await;
+                }
+                Ok(allowed)
+            }
         }
-        let authorizer = CompatibilityAuthorizer::new(auth.clone(), Vec::new())
-            .with_type_checks([(agent_type.clone(), vec![check])]);
-        let request = AuthorizationRequest::new(self.rest_caller(auth), operation);
-        Ok(authorizer
-            .scope(&request)
-            .await
-            .agent_types
-            .contains(agent_type))
     }
 
     /// The caller of a request that an account token authenticated: the account in both roles.
@@ -922,21 +947,35 @@ impl WorkerService {
         checks: Vec<Vec<PermissionTarget>>,
         surface: Surface,
     ) -> Result<Grantors, AuthorizationError> {
+        self.decide_with(&self.audit, auth, operation, checks, surface)
+            .await
+    }
+
+    /// `decide`, with the records written as `audit` says.
+    async fn decide_with(
+        &self,
+        audit: &DecisionAudit,
+        auth: &AuthCtx,
+        operation: Operation,
+        checks: Vec<Vec<PermissionTarget>>,
+        surface: Surface,
+    ) -> Result<Grantors, AuthorizationError> {
         decide_with_todays_checks(
             auth,
             self.rest_caller(auth),
             operation,
             checks,
-            &self.audit,
+            audit,
             surface,
         )
         .await
     }
 
-    /// Decides `access` on one agent. An owner without an agent type has no decision target, so
-    /// it keeps today's checks.
+    /// Decides `access` on one agent, with the records written as `audit` says. An owner without
+    /// an agent type has no decision target, so it keeps today's checks.
     async fn decide_on_agent(
         &self,
+        audit: &DecisionAudit,
         auth: &AuthCtx,
         agent: DecidedAgent<'_>,
         access: &AgentAccess,
@@ -961,7 +1000,7 @@ impl WorkerService {
         };
         match access.decision(target, &agent.owner) {
             Ok((operation, checks)) => self
-                .decide(auth, operation, checks, surface)
+                .decide_with(audit, auth, operation, checks, surface)
                 .await
                 .map(|_| ()),
             Err(error) => {
@@ -983,7 +1022,7 @@ impl WorkerService {
         access: &AgentAccess,
         surface: Surface,
     ) -> WorkerResult<()> {
-        self.decide_on_agent(auth_ctx, agent.decided(), access, surface)
+        self.decide_on_agent(&self.audit, auth_ctx, agent.decided(), access, surface)
             .await
             .map_err(|error| {
                 error.hide_denial(|| WorkerServiceError::AgentAccessDenied(agent.agent_id.agent_id))
@@ -1007,7 +1046,7 @@ impl WorkerService {
             fingerprint: None,
             owner: agent_owner(component, target.agent_id, target.agent_type.clone()),
         };
-        self.decide_on_agent(auth_ctx, agent, access, surface)
+        self.decide_on_agent(&self.audit, auth_ctx, agent, access, surface)
             .await
             .map_err(AuthServiceError::Unauthorized)?;
         Ok(())
@@ -1174,19 +1213,23 @@ impl WorkerService {
             fingerprint: None,
             owner: agent_owner(&component, agent_id.agent_id, Some(tagged.name.clone())),
         };
-        self.decide_on_agent(auth_ctx, agent, access, surface)
+        // The agent does not exist: an allowed caller learns only that, so the decision records
+        // a denial but no allowed read or control.
+        self.decide_on_agent(&self.audit.denials_only(), auth_ctx, agent, access, surface)
             .await
             .map_err(|error| error.hide_denial(denied))
     }
 
     /// The agent type of the environment's current deployment that has the name, with the
     /// component revision that implements it. A caller without the permission to view the
-    /// type's agents gets not found, as from the registry's lookup by names.
+    /// type's agents gets not found, as from the registry's lookup by names, and the refusal
+    /// gets its audit record.
     pub async fn deployed_agent_type(
         &self,
         environment_id: EnvironmentId,
         agent_type_name: &AgentTypeName,
         auth_ctx: &AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<(Arc<RegisteredAgentType>, Component)> {
         let not_found = || {
             WorkerServiceError::RegistryServiceError(RegistryServiceError::NotFound(format!(
@@ -1209,7 +1252,12 @@ impl WorkerService {
             return Err(not_found());
         }
         if !self
-            .may_list_agent_type(auth_ctx, &component, agent_type_name, None)
+            .may_list_agent_type(
+                auth_ctx,
+                &component,
+                agent_type_name,
+                TypeQuestion::Lookup(surface),
+            )
             .await?
         {
             return Err(not_found());
@@ -1219,13 +1267,12 @@ impl WorkerService {
 
     /// Authorizes the retained namespace before scanning agents, without requiring its
     /// current implementer. Every returned agent still needs its recorded owner's permission.
-    /// `listing` is the surface of a request that lists agents (see `may_list_agent_type`).
     async fn retained_agent_types(
         &self,
         environment_id: EnvironmentId,
         name: &AgentTypeName,
         auth: &AuthCtx,
-        listing: Option<Surface>,
+        question: TypeQuestion,
     ) -> WorkerResult<Vec<(RegisteredAgentType, Component)>> {
         let mut allowed = Vec::new();
         for registered in self.agent_types.retained(environment_id, name).await? {
@@ -1237,7 +1284,7 @@ impl WorkerService {
                 )
                 .await?;
             if self
-                .may_list_agent_type(auth, &component, name, listing)
+                .may_list_agent_type(auth, &component, name, question)
                 .await?
             {
                 allowed.push((registered, component));
@@ -1691,7 +1738,12 @@ impl WorkerService {
         surface: Surface,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<AgentMetadataDto>)> {
         let registered = self
-            .retained_agent_types(environment_id, agent_type_name, &auth_ctx, Some(surface))
+            .retained_agent_types(
+                environment_id,
+                agent_type_name,
+                &auth_ctx,
+                TypeQuestion::Listing(surface),
+            )
             .await?;
 
         let (cursor, agents) = self
@@ -4192,7 +4244,7 @@ impl WorkerService {
         surface: Surface,
     ) -> WorkerResult<AgentReference> {
         let (registered, component) = self
-            .deployed_agent_type(environment_id, agent_type_name, &auth)
+            .deployed_agent_type(environment_id, agent_type_name, &auth, surface)
             .await?;
         let caller = self.rest_caller(&auth);
         self.create_resolved_agent(
@@ -4274,7 +4326,7 @@ impl WorkerService {
         surface: Surface,
     ) -> WorkerResult<AgentReference> {
         let (registered, component) = self
-            .deployed_agent_type(environment_id, agent_type_name, &auth)
+            .deployed_agent_type(environment_id, agent_type_name, &auth, surface)
             .await?;
         if registered.agent_type.mode == AgentMode::Ephemeral {
             return Err(WorkerServiceError::TypeChecker(
@@ -4319,7 +4371,12 @@ impl WorkerService {
         surface: Surface,
     ) -> WorkerResult<AgentReference> {
         let mut retained = self
-            .retained_agent_types(environment_id, agent_type_name, &auth, None)
+            .retained_agent_types(
+                environment_id,
+                agent_type_name,
+                &auth,
+                TypeQuestion::Lookup(surface),
+            )
             .await?;
         let (registered, component) = match self
             .agent_types
@@ -4793,7 +4850,12 @@ impl WorkerService {
             match (request.agent_id, request.parameters) {
                 (Some(agent_id), None) => {
                     let retained = self
-                        .retained_agent_types(environment_id, agent_type_name, &auth, None)
+                        .retained_agent_types(
+                            environment_id,
+                            agent_type_name,
+                            &auth,
+                            TypeQuestion::Lookup(surface),
+                        )
                         .await
                         .map_err(|error| match error {
                             WorkerServiceError::RegistryServiceError(
@@ -4827,7 +4889,7 @@ impl WorkerService {
                 }
                 (None, Some(parameters)) => {
                     let (registered, component) = self
-                        .deployed_agent_type(environment_id, agent_type_name, &auth)
+                        .deployed_agent_type(environment_id, agent_type_name, &auth, surface)
                         .await?;
                     let constructor = Self::rest_constructor(&registered, parameters)?;
                     let (target, freshness_disposition) = Self::invocation_target(
@@ -11494,6 +11556,125 @@ mod tests {
             );
         }
 
+        fn is_type_not_found(error: &WorkerServiceError) -> bool {
+            matches!(
+                error,
+                WorkerServiceError::RegistryServiceError(RegistryServiceError::NotFound(_))
+            )
+        }
+
+        #[test]
+        async fn a_refused_type_lookup_is_not_found_and_writes_one_denial() {
+            let sink = TestAuditSink::keeping();
+            let mut harness = RestHarness::new(AgentMode::Durable);
+            harness.worker_service.audit = audit_into(sink.clone());
+
+            let error = harness
+                .worker_service
+                .deployed_agent_type(
+                    harness.environment_id,
+                    &harness.agent_type_name,
+                    &auth_ctx_with_permissions(Vec::new()),
+                    Surface::Rest,
+                )
+                .await
+                .unwrap_err();
+
+            assert!(is_type_not_found(&error), "{error:?}");
+            let records = sink.records();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].operation, CatalogOperation::ListAgents.name());
+            assert_eq!(
+                records[0].outcome,
+                AuditOutcome::Forbidden {
+                    missing_grant: None
+                }
+            );
+            assert_eq!(records[0].surface, "rest");
+            assert_eq!(
+                records[0].target_environment_id(),
+                Some(harness.environment_id)
+            );
+        }
+
+        #[test]
+        async fn a_refused_type_lookup_is_not_found_also_when_the_sink_fails() {
+            let mut harness = RestHarness::new(AgentMode::Durable);
+            harness.worker_service.audit = audit_into(TestAuditSink::failing());
+
+            let error = harness
+                .worker_service
+                .deployed_agent_type(
+                    harness.environment_id,
+                    &harness.agent_type_name,
+                    &auth_ctx_with_permissions(Vec::new()),
+                    Surface::Rest,
+                )
+                .await
+                .unwrap_err();
+
+            assert!(is_type_not_found(&error), "{error:?}");
+        }
+
+        /// May view every environment, so a missing agent reaches its decision.
+        fn environment_viewer() -> PermissionTarget {
+            use golem_common::model::card::owner::EnvironmentOwnerPattern;
+            use golem_common::model::card::{EnvironmentResourcePattern, EnvironmentVerb};
+            PermissionTarget::Environment(ClassPermissionTarget {
+                owner: EnvironmentOwnerPattern::AnyEnvironments,
+                verb: Some(EnvironmentVerb::View),
+                resource: EnvironmentResourcePattern::Any,
+            })
+        }
+
+        #[test]
+        async fn an_authorized_read_of_a_missing_agent_is_not_found_and_writes_no_record() {
+            for sink in [TestAuditSink::keeping(), TestAuditSink::failing()] {
+                let mut harness = RestHarness::new(AgentMode::Durable);
+                harness.worker_service.audit = audit_into(sink.clone());
+                // No metadata: the keyed agent does not exist.
+                let agent_id = harness.keyed_agent_id();
+                let auth_ctx = auth_ctx_with_permissions(vec![
+                    environment_viewer(),
+                    oplog_target(&agent_id, OplogResourcePattern::range(Some(5), Some(7))),
+                ]);
+
+                let error = read_oplog(&harness, &harness.owned(&agent_id), auth_ctx)
+                    .await
+                    .unwrap_err();
+
+                assert!(
+                    matches!(error, WorkerServiceError::AgentNotFound(_)),
+                    "{error:?}"
+                );
+                assert!(sink.records().is_empty());
+            }
+        }
+
+        #[test]
+        async fn an_unauthorized_read_of_a_missing_agent_writes_one_denial() {
+            let sink = TestAuditSink::keeping();
+            let mut harness = RestHarness::new(AgentMode::Durable);
+            harness.worker_service.audit = audit_into(sink.clone());
+            let agent_id = harness.keyed_agent_id();
+
+            let error = read_oplog(
+                &harness,
+                &harness.owned(&agent_id),
+                auth_ctx_with_permissions(vec![environment_viewer()]),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(
+                matches!(error, WorkerServiceError::AgentAccessDenied(_)),
+                "{error:?}"
+            );
+            let records = sink.records();
+            assert_eq!(records.len(), 1);
+            assert!(records[0].outcome != AuditOutcome::Allowed);
+        }
+
         #[test]
         async fn a_listing_of_agents_writes_one_record_with_its_surface() {
             let sink = TestAuditSink::keeping();
@@ -11535,15 +11716,12 @@ mod tests {
                     harness.environment_id,
                     &harness.agent_type_name,
                     &scoped_invocation_auth(),
+                    Surface::Rest,
                 )
                 .await
                 .unwrap();
 
-            assert!(
-                sink.records()
-                    .iter()
-                    .all(|record| record.operation != CatalogOperation::ListAgents.name())
-            );
+            assert!(sink.records().is_empty());
         }
     }
 }

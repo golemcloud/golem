@@ -233,6 +233,45 @@ async fn an_allowed_invocation_writes_no_record() {
 }
 
 #[test]
+async fn a_denials_only_audit_writes_no_record_for_an_allowed_management_read() {
+    let sink = Arc::new(RecordingSink::default());
+    let authorizer = audited(Decision::Allow(grantors()), sink.clone()).denials_only();
+
+    let decision = authorizer
+        .decide(&read_oplog(account_caller()), &rest())
+        .await;
+
+    assert!(decision == Ok(Decision::Allow(grantors())));
+    assert!(sink.records().is_empty());
+}
+
+#[test]
+async fn a_denials_only_audit_answers_an_allowed_read_also_when_the_sink_fails() {
+    let authorizer = audited(Decision::Allow(grantors()), Arc::new(FailingSink)).denials_only();
+
+    let decision = authorizer
+        .decide(&read_oplog(account_caller()), &rest())
+        .await;
+
+    assert!(decision == Ok(Decision::Allow(grantors())));
+}
+
+#[test]
+async fn a_denials_only_audit_still_records_a_denial() {
+    let sink = Arc::new(RecordingSink::default());
+    let authorizer = audited(looks_unknown(), sink.clone()).denials_only();
+
+    let decision = authorizer
+        .decide(&read_oplog(account_caller()), &rest())
+        .await;
+
+    assert!(decision == Ok(looks_unknown()));
+    let records = sink.records();
+    assert!(records.len() == 1);
+    assert!(records[0].outcome != AuditOutcome::Allowed);
+}
+
+#[test]
 async fn a_denied_invocation_writes_one_record_with_the_real_target() {
     let sink = Arc::new(RecordingSink::default());
     let authorizer = audited(looks_unknown(), sink.clone());
