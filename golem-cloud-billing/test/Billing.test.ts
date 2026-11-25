@@ -4,6 +4,7 @@ import type pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import type { BillingConfigShape } from "../src/BillingConfig.ts"
 import * as Cleanup from "../src/Cleanup.ts"
+import { type Currency, currencies } from "../src/Currency.ts"
 import { webhookBodyLimit } from "../src/Http.ts"
 import * as Settlement from "../src/Settlement.ts"
 import * as Subscriptions from "../src/Subscriptions.ts"
@@ -18,6 +19,7 @@ import {
   internalPlanId,
   makeApp,
   makeServices,
+  overagePrices,
   paidPlanId,
   polarApiUrl,
   polarCleanupToken,
@@ -40,6 +42,17 @@ const longDateTime = new Intl.DateTimeFormat("en", { dateStyle: "long", timeStyl
 const fixedPriceId = "price_fixed"
 const meteredPriceId = "price_compute"
 
+/** The fixed and the metered price of the paid product in the currency; USD has the IDs above. */
+const priceIdsOf = (currency: Currency) =>
+  currency === "usd"
+    ? { fixed: fixedPriceId, metered: meteredPriceId }
+    : { fixed: `${fixedPriceId}_${currency}`, metered: `${meteredPriceId}_${currency}` }
+
+const pricesOf = (currency: Currency) => [
+  { id: priceIdsOf(currency).fixed, amount_type: "fixed", price_currency: currency },
+  { id: priceIdsOf(currency).metered, amount_type: "metered_unit", price_currency: currency }
+]
+
 describe("Polar billing", () => {
   // The registry tables in `public` with the grants of the hosted deployment: the app reads
   // whether an account is deleted.
@@ -49,12 +62,14 @@ describe("Polar billing", () => {
   let app: ReturnType<typeof makeApp>
   let services: ReturnType<typeof makeServices>
   let upstreams: FakeUpstreams
+  /** The JSON log lines of the app, of every test so far. */
+  const logs: Array<Record<string, unknown>> = []
 
   beforeAll(async () => {
     await registry.create()
     config = registry.configs.web
     pool = queryPool(registry.ownerConfig)
-    app = makeApp(config)
+    app = makeApp(config, logs)
     services = makeServices(config)
     vi.stubGlobal("fetch", (input: string | URL | Request, init?: RequestInit) => upstreams.fetch(input, init))
   }, 60_000)
@@ -87,38 +102,43 @@ describe("Polar billing", () => {
     return { jar, accountId: upstreams.registryAccount.accountId }
   }
 
-  const subscription = (accountId: string, overrides: Record<string, unknown> = {}) => ({
-    id: "sub_1",
-    status: "active",
-    created_at: "2026-11-04T10:00:00Z",
-    modified_at: "2026-11-04T10:00:00Z",
-    current_period_start: "2026-11-04T10:00:00Z",
-    current_period_end: "2026-12-04T10:00:00Z",
-    cancel_at_period_end: false,
-    product_id: polarProductId,
-    product: {
-      id: polarProductId,
-      prices: [
-        { id: fixedPriceId, amount_type: "fixed" },
-        { id: meteredPriceId, amount_type: "metered_unit" }
-      ]
-    },
-    customer_id: "cus_1",
-    customer: { id: "cus_1", external_id: accountId },
-    ...overrides
-  })
+  /**
+   * `sub_1` as Polar sends it, in USD unless `overrides` give another currency. The subscription
+   * lists its prices, in its currency, and its product lists the prices of every currency.
+   */
+  const subscription = (accountId: string, overrides: Record<string, unknown> = {}) => {
+    const currency = (overrides["currency"] as Currency | undefined) ?? "usd"
+    return {
+      id: "sub_1",
+      status: "active",
+      currency,
+      created_at: "2026-11-04T10:00:00Z",
+      modified_at: "2026-11-04T10:00:00Z",
+      current_period_start: "2026-11-04T10:00:00Z",
+      current_period_end: "2026-12-04T10:00:00Z",
+      cancel_at_period_end: false,
+      product_id: polarProductId,
+      product: { id: polarProductId, prices: currencies.flatMap(pricesOf) },
+      prices: pricesOf(currency),
+      customer_id: "cus_1",
+      customer: { id: "cus_1", external_id: accountId },
+      ...overrides
+    }
+  }
 
   /** A renewal order of `sub_1`: the price of the next period and, by default, paid overage. */
   /** An order as Polar sends it: no discount and no tax unless `overrides` give them. */
   const order = (accountId: string, overrides: Record<string, unknown> = {}) => {
+    const currency = (overrides["currency"] as Currency | undefined) ?? "usd"
     const items = (overrides["items"] as ReadonlyArray<{ readonly amount: number }> | undefined) ?? [
-      { product_price_id: fixedPriceId, amount: 2000, tax_amount: 0, proration: false },
-      { product_price_id: meteredPriceId, amount: 345, tax_amount: 0, proration: false }
+      { product_price_id: priceIdsOf(currency).fixed, amount: 2000, tax_amount: 0, proration: false },
+      { product_price_id: priceIdsOf(currency).metered, amount: 345, tax_amount: 0, proration: false }
     ]
     const subtotal = items.reduce((sum, item) => sum + item.amount, 0)
     return {
       id: "order_1",
       status: "pending",
+      currency,
       paid: false,
       created_at: new Date().toISOString(),
       modified_at: null,
@@ -200,6 +220,15 @@ describe("Polar billing", () => {
       })
     })
 
+    it("shows the monthly price of Pro in each currency next to the checkout", async () => {
+      const { jar } = await signedIn()
+
+      const html = await page(jar)
+
+      expect(html).toMatch(/<form method="post" action="\/billing\/checkout">\s*<button type="submit" class="btn btn-primary">Upgrade to Pro<\/button>\s*<\/form>\s*<\/div>\s*<p class="price-note">/)
+      expect(html).toContain("Pro costs <strong>$20</strong> a month plus tax. In euro countries it costs <strong>€24</strong>, and in the UK <strong>£19</strong>, including tax. Polar's checkout shows your price before you pay.")
+    })
+
     it("refuses a checkout form that another site posts", async () => {
       const { jar } = await signedIn()
 
@@ -235,10 +264,12 @@ describe("Polar billing", () => {
       upstreams.planOf(accountId).planId = planId
 
       expectRefused(await postCheckout(jar))
-      expect(await page(jar)).not.toContain(`action="/billing/checkout"`)
+      const html = await page(jar)
+      expect(html).not.toContain(`action="/billing/checkout"`)
+      expect(html).not.toContain("Pro costs")
     })
 
-    it("offers Paid to an account on the default plan of the registry, and starts its checkout", async () => {
+    it("offers Pro to an account on the default plan of the registry, and starts its checkout", async () => {
       const { jar, accountId } = await signedIn()
       upstreams.planOf(accountId).planId = registryDefaultPlanId
 
@@ -246,6 +277,8 @@ describe("Polar billing", () => {
       expect(body).toContain("<h1>Default</h1>")
       expect(body).toContain("When the subscription ends, your plan changes to Free, not back to Default.")
       expect(body).toContain(`action="/billing/checkout"`)
+      expect(body).toContain("Pro costs <strong>$20</strong> a month plus tax. In euro countries it costs <strong>€24</strong>, and in the UK <strong>£19</strong>, including tax. Polar's checkout shows your price before you pay.")
+      expect(body).toContain("2.5M of 100M GCU included · 3%")
       const response = await postCheckout(jar)
       expect(response.status).toBe(303)
       expect(response.headers.get("location")).toBe("https://sandbox.polar.sh/checkout/polar_c_1")
@@ -282,7 +315,7 @@ describe("Polar billing", () => {
       expect(html).toContain("<h1>Default</h1>")
       expect(html).not.toContain(`action="/billing/checkout"`)
       expect(html).toContain(`action="/billing/portal"`)
-      expect(html).toContain("The last payment for Paid failed.")
+      expect(html).toContain("The last payment for Pro failed.")
     })
 
     it("refuses a checkout when the registry does not send the account", async () => {
@@ -334,7 +367,9 @@ describe("Polar billing", () => {
       const { jar } = await signedIn()
 
       expect(await page(jar)).toContain(`action="/billing/checkout"`)
-      expect(await page(jar, "/?checkout_id=polar_c_test")).toContain("Polar has your payment")
+      const returned = await page(jar, "/?checkout_id=polar_c_test")
+      expect(returned).toContain("Polar has your payment")
+      expect(returned).toContain("Your plan changes to Pro within one minute.")
     })
 
     it("links the stylesheet and the script with a hash of their content", async () => {
@@ -379,20 +414,66 @@ describe("Polar billing", () => {
         `mode=${mode}`
       )
 
-    it("shows the switch and the overage prices on the paid plan", async () => {
-      const { jar } = await paidAccount()
+    it("shows the switch and the overage prices of the currency of the subscription on the paid plan", async () => {
+      const { jar, accountId } = await paidAccount()
+      await deliver("subscription.active", subscription(accountId))
 
       const html = await page(jar)
 
       expect(html).toContain("Paid overage")
       expect(html).toContain("Off. When the account uses all of its monthly allowance, its agents stop")
-      expect(html).toContain("$0.0112 per million GCU")
-      expect(html).toContain("$0.045 per GB-hour")
-      expect(html).toContain("$0.27 per GB-month")
-      expect(html).toContain("$0.24 per GB-month")
+      expect(html).toContain("<dt>Compute</dt><dd>$0.0112 per million GCU")
+      expect(html).toContain("<dt>Active memory</dt><dd>$0.045 per GiB-hour")
+      expect(html).toContain("<dt>Active durable filesystem</dt><dd>$0.27 per GiB-month")
+      expect(html).toContain("<dt>Active ephemeral filesystem</dt><dd>$0.24 per GiB-month")
+      expect(html).toContain("Prices in USD, plus tax.")
       expect(html).toContain(`action="/billing/overage"`)
       expect(html).toContain(`value="allowOverage"`)
       expect(html).toContain("Golem uses a new setting within 5 minutes.")
+    })
+
+    it("shows the switch and the usage, without prices or costs, when the page cannot read the subscription", async () => {
+      const { jar, accountId } = await paidAccount()
+      upstreams.usageModes.set(accountId, "allowOverage")
+      upstreams.monthly = {
+        ...(upstreams.monthly as object),
+        computeGcu: {
+          metering: "enabled",
+          resolvedMonthlyAmount: 100_000_000,
+          usage: 101_500_000,
+          allowOverageUsage: 1_500_000,
+          unit: "GCU"
+        }
+      }
+
+      const schema = config.db.schema
+      await pool.query(`ALTER TABLE "${schema}".polar_subscriptions RENAME TO polar_subscriptions_hidden`)
+      let html: string
+      try {
+        html = await page(jar)
+      } finally {
+        await pool.query(`ALTER TABLE "${schema}".polar_subscriptions_hidden RENAME TO polar_subscriptions`)
+      }
+
+      expect(html).toContain("This page cannot read the subscription, so it does not show the overage prices.")
+      expect(html).toContain("Polar bills the usage above the allowance at the overage prices of the subscription.")
+      expect(html).toContain("+ 1.5M GCU of paid overage</dd>")
+      expect(html).not.toContain("per million GCU")
+      expect(html).not.toContain("Paid overage so far this month")
+      expect(html).toContain(`value="hardLimit"`)
+    })
+
+    it("says that Polar bills no overage on the paid plan without a subscription, and asks for no reload", async () => {
+      const { jar, accountId } = await paidAccount()
+      upstreams.usageModes.set(accountId, "allowOverage")
+
+      const html = await page(jar)
+
+      expect(html).toContain("The account has no Pro subscription in Polar, so Polar bills no overage.")
+      expect(html).toContain("Polar bills no usage above the allowance, because the account has no Pro subscription.")
+      expect(html).not.toContain("cannot read the subscription")
+      expect(html).not.toContain("per million GCU")
+      expect(html).toContain(`value="hardLimit"`)
     })
 
     it("turns paid overage on with the token of the owner, and tells the delay", async () => {
@@ -445,11 +526,16 @@ describe("Polar billing", () => {
       expect(html).not.toContain(`action="/billing/overage"`)
     })
 
-    it("shows no switch on the free plan", async () => {
+    it("shows the usage on the free plan, without a switch, prices or costs", async () => {
       const { jar } = await signedIn()
 
-      expect(await page(jar)).not.toContain(`action="/billing/overage"`)
-      expect(upstreams.requests.filter((request) => request.url.pathname.endsWith("/limits"))).toEqual([])
+      const html = await page(jar)
+
+      expect(html).toContain("Monthly usage")
+      expect(html).toContain("2.5M of 100M GCU included · 3%")
+      expect(html).toContain("When the account uses all of its monthly allowance, its agents stop until the next month.")
+      expect(html).not.toContain(`action="/billing/overage"`)
+      expect(html).not.toContain("per million GCU")
     })
 
     it("refuses an overage form that another site posts", async () => {
@@ -471,10 +557,11 @@ describe("Polar billing", () => {
         "This month, against the monthly allowance of the plan. The monthly allowance starts again on the 1st of each month (UTC)."
       )
       expect(html).toContain("2.5M of 100M GCU included · 3%")
-      expect(html).toContain("250 of 912.5 GB-hours included · 27%")
+      expect(html).toContain("250 of 912.5 GiB-hours included · 27%")
       expect(html).toContain(`max="100000000" value="2500000"`)
-      expect(html).toContain("Not metered")
-      expect(html).toContain("No usage this month")
+      expect(html).toContain(`aria-label="Active memory used"`)
+      expect(html).toContain("<dt>Active durable filesystem</dt><dd class=\"muted\">Not metered</dd>")
+      expect(html).toContain("<dt>Active ephemeral filesystem</dt><dd class=\"muted\">No usage this month</dd>")
     })
 
     it("shows a used-up allowance and the paid overage above it", async () => {
@@ -511,7 +598,7 @@ describe("Polar billing", () => {
 
       const html = await page(jar)
 
-      expect(html).toContain("0.001 of 912.5 GB-hours included · &lt;1%")
+      expect(html).toContain("0.001 of 912.5 GiB-hours included · &lt;1%")
       expect(html).not.toContain("Paid overage so far this month")
     })
 
@@ -580,7 +667,7 @@ describe("Polar billing", () => {
       expect(change!.headers.get("authorization")).toBe(`Bearer ${registryBillingToken}`)
       expect(change!.body).toEqual({ currentRevision: 0, plan: paidPlanId })
       const html = await page(jar)
-      expect(html).toContain("<h1>Paid</h1>")
+      expect(html).toContain("<h1>Pro</h1>")
       expect(html).toContain("renews on December 4, 2026")
       expect(html).toContain(`action="/billing/portal"`)
     })
@@ -732,7 +819,7 @@ describe("Polar billing", () => {
       expect(stored.rows).toEqual([{ status: "paid" }])
     })
 
-    it("keeps Paid in the past-due grace when the payment of the price fails, then gives Free until the payment", async () => {
+    it("keeps Pro in the past-due grace when the payment of the price fails, then gives Free until the payment", async () => {
       const { jar, accountId } = await signedIn()
       const failedAt = new Date()
       const graceEnd = new Date(failedAt.getTime() + config.pastDueGraceMs)
@@ -744,7 +831,7 @@ describe("Polar billing", () => {
       expect(response.status).toBe(200)
       expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
       expect(await page(jar)).toContain(
-        `The last payment for Paid failed. Change the payment method in the Polar customer portal before ${longDateTime.format(graceEnd)} UTC.`
+        `The last payment for Pro failed. Change the payment method in the Polar customer portal before ${longDateTime.format(graceEnd)} UTC.`
       )
 
       await sweep(new Date(graceEnd.getTime() - MINUTE))
@@ -754,7 +841,7 @@ describe("Polar billing", () => {
       expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
       const html = await page(jar)
       expect(html).toContain("<h1>Free</h1>")
-      expect(html).toContain("The last payment for Paid failed")
+      expect(html).toContain("The last payment for Pro failed")
       expect(html).not.toContain(`action="/billing/checkout"`)
 
       await deliver("order.paid", order(accountId, { ...priceOnly, ...paidLater }))
@@ -762,7 +849,7 @@ describe("Polar billing", () => {
       expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
     })
 
-    it("keeps Paid when Polar gets the payment in the past-due grace", async () => {
+    it("keeps Pro when Polar gets the payment in the past-due grace", async () => {
       const { jar, accountId } = await signedIn()
       const failedAt = new Date()
 
@@ -775,7 +862,7 @@ describe("Polar billing", () => {
 
       expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
       expect(upstreams.planChanges()).toHaveLength(1)
-      expect(await page(jar)).not.toContain("The last payment for Paid failed")
+      expect(await page(jar)).not.toContain("The last payment for Pro failed")
     })
 
     it("suspends the account after the past-due grace when an order with overage is not paid, until the order is paid", async () => {
@@ -875,7 +962,7 @@ describe("Polar billing", () => {
       expect(upstreams.deletionHolds.has(accountId)).toBe(true)
     })
 
-    it("moves an account on the default plan to Paid with its subscription, and to Free after the end", async () => {
+    it("moves an account on the default plan to Pro with its subscription, and to Free after the end", async () => {
       const accountId = randomUUID()
       upstreams.planOf(accountId).planId = registryDefaultPlanId
 
@@ -970,9 +1057,9 @@ describe("Polar billing", () => {
   })
 
   describe("deletion hold", () => {
-    const subscriptionHold = `Golem Cloud billing: The account has a subscription to Paid. Cancel it in Manage billing at ${baseUrl}. The subscription then runs to the end of the period. Delete the account after the period ends.`
+    const subscriptionHold = `Golem Cloud billing: The account has a subscription to Pro. Cancel it in Manage billing at ${baseUrl}. The subscription then runs to the end of the period. Delete the account after the period ends.`
     const canceledHold =
-      "Golem Cloud billing: The subscription to Paid is canceled and runs to the end of the period. Delete the account after the period ends."
+      "Golem Cloud billing: The subscription to Pro is canceled and runs to the end of the period. Delete the account after the period ends."
     const unbilledHold =
       "Golem Cloud billing: The account has paid overage that Polar has not billed yet. Polar bills it on the invoice at the end of the period. Delete the account after that invoice is paid."
     const unsettledHold =
@@ -1043,8 +1130,8 @@ describe("Polar billing", () => {
       await pool.query(
         `INSERT INTO polar_subscriptions
            (subscription_id, account_id, product_id, status, current_period_end, cancel_at_period_end, modified_at,
-            metered_price_ids)
-         VALUES ($1, $2, $3, 'active', now() + interval '20 days', false, now(), '{}')`,
+            metered_price_ids, currency)
+         VALUES ($1, $2, $3, 'active', now() + interval '20 days', false, now(), '{}', 'usd')`,
         [`sub_${accountId}`, accountId, polarProductId]
       )
 
@@ -1347,17 +1434,17 @@ describe("Polar billing", () => {
   })
 
   describe("checkout hold", () => {
-    const subscriptionHold = `Golem Cloud billing: The account has a subscription to Paid. Cancel it in Manage billing at ${baseUrl}. The subscription then runs to the end of the period. Delete the account after the period ends.`
+    const subscriptionHold = `Golem Cloud billing: The account has a subscription to Pro. Cancel it in Manage billing at ${baseUrl}. The subscription then runs to the end of the period. Delete the account after the period ends.`
     const paidCheckoutHold =
-      "Golem Cloud billing: Polar has a payment for Paid, and Golem Cloud billing has not recorded its subscription yet. Try again in an hour. If the delete still fails, contact Golem Cloud at sales@golem.cloud."
+      "Golem Cloud billing: Polar has a payment for Pro, and Golem Cloud billing has not recorded its subscription yet. Try again in an hour. If the delete still fails, contact Golem Cloud at sales@golem.cloud."
     /**
      * The hold of an open checkout that expires at `expiresAt`: the job of Polar expires it every 15
      * minutes, and the sweep reads it every 5.
      */
     const openCheckoutHold = (expiresAt: Date) =>
-      `Golem Cloud billing: A checkout for Paid from the billing page is open. Delete the account after ${longDateTime.format(new Date(expiresAt.getTime() + 30 * MINUTE))} UTC.`
+      `Golem Cloud billing: A checkout for Pro from the billing page is open. Delete the account after ${longDateTime.format(new Date(expiresAt.getTime() + 30 * MINUTE))} UTC.`
     const lateCheckoutHold =
-      "Golem Cloud billing: A checkout for Paid from the billing page is past its expiry, and Polar has not closed it yet. Try again in an hour. If the delete still fails, contact Golem Cloud at sales@golem.cloud."
+      "Golem Cloud billing: A checkout for Pro from the billing page is past its expiry, and Polar has not closed it yet. Try again in an hour. If the delete still fails, contact Golem Cloud at sales@golem.cloud."
 
     /** One run of the cleanup CronJob, with the database role and the Polar token of the cleanup. */
     const cleanup = () =>
@@ -1563,6 +1650,40 @@ describe("Polar billing", () => {
       expect(upstreams.deletionHolds.get(accountId)).toBe(openCheckoutHold(expiryOf("polar_c_2")))
     })
 
+    /** The route shows the error page and never sends the URL of the checkout, which pays it. */
+    const expectErrorPage = async (response: Response, checkoutId: string) => {
+      expect(response.status).toBe(500)
+      expect(response.headers.get("location")).toBeNull()
+      expect(await response.text()).not.toContain(checkoutId)
+    }
+
+    it("refuses a new checkout in a currency that the app has no prices for, and neither records it nor holds the account", async () => {
+      const { jar, accountId } = await signedInToRegistryAccount()
+      upstreams.checkoutCurrency = "cad"
+
+      await expectErrorPage(await postCheckout(jar), "polar_c_1")
+      expect(upstreams.polarRequests("/v1/checkouts/")).toHaveLength(1)
+      expect(upstreams.deletionHolds.has(accountId)).toBe(false)
+      const recorded = await pool.query("SELECT 1 FROM polar_checkouts WHERE account_id = $1", [accountId])
+      expect(recorded.rowCount).toBe(0)
+    })
+
+    it("starts a new checkout at each click after a checkout in such a currency, and sends it once its currency has prices", async () => {
+      const { jar, accountId } = await signedIn()
+      upstreams.checkoutCurrency = "cad"
+      await expectErrorPage(await postCheckout(jar), "polar_c_1")
+      await expectErrorPage(await postCheckout(jar), "polar_c_2")
+      // An operator removes the prices in CAD from the product.
+      upstreams.checkoutCurrency = "usd"
+
+      const later = await postCheckout(jar)
+
+      expect(later.status).toBe(303)
+      expect(later.headers.get("location")).toBe(upstreams.checkoutUrl("polar_c_3"))
+      expect(upstreams.polarRequests("/v1/checkouts/")).toHaveLength(3)
+      expect(upstreams.deletionHolds.get(accountId)).toBe(openCheckoutHold(expiryOf("polar_c_3")))
+    })
+
     it.each(["confirmed", "succeeded"] as const)(
       "sends each later click to the payment notice while Polar has the payment of a %s checkout",
       async (status) => {
@@ -1701,6 +1822,7 @@ describe("Polar billing", () => {
       created_at: new Date().toISOString(),
       modified_at: null,
       billing_reason: "purchase",
+      currency: "usd",
       customer_id: "cus_1",
       customer: { id: "cus_1", external_id: accountId },
       product_id: polarSettlementProductId,
@@ -1730,7 +1852,11 @@ describe("Polar billing", () => {
       })
 
     const settledOrders = async () =>
-      (await pool.query("SELECT order_id, settlement_order_id, amount::int AS amount FROM overage_settlements")).rows
+      (
+        await pool.query(
+          "SELECT order_id, settlement_order_id, currency, amount::int AS amount FROM overage_settlements ORDER BY settled_at"
+        )
+      ).rows
 
     it("lets the person settle the unpaid last order of an ended subscription, which frees the account", async () => {
       const { jar, accountId } = await signedIn()
@@ -1754,6 +1880,7 @@ describe("Polar billing", () => {
         prices: {
           [polarSettlementProductId]: [{ amount_type: "fixed", price_amount: 345, price_currency: "usd", tax_behavior: "inclusive" }]
         },
+        currency: "usd",
         external_customer_id: accountId,
         customer_email: "octocat@example.com",
         customer_name: "Octo Cat",
@@ -1770,7 +1897,9 @@ describe("Polar billing", () => {
       await deliver("order.created", settlementOrder(accountId))
       expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
       expect(upstreams.deletionHolds.has(accountId)).toBe(false)
-      expect(await settledOrders()).toEqual([{ order_id: "order_1", settlement_order_id: "order_settlement_1", amount: 345 }])
+      expect(await settledOrders()).toEqual([
+        { order_id: "order_1", settlement_order_id: "order_settlement_1", currency: "usd", amount: 345 }
+      ])
       const reloaded = await page(jar, "/?settlement_orders=order_1")
       expect(reloaded).not.toContain("Polar has your payment")
       expect(reloaded).toContain("<h1>Free</h1>")
@@ -1783,7 +1912,7 @@ describe("Polar billing", () => {
       expect(await page(jar)).not.toContain("Settle $")
     })
 
-    it("keeps an account that subscribed again suspended until it settles, and then gives it Paid", async () => {
+    it("keeps an account that subscribed again suspended until it settles, and then gives it Pro", async () => {
       const { jar, accountId } = await signedIn()
       await unpaidAfterEnd(accountId)
       await deliver(
@@ -1801,7 +1930,7 @@ describe("Polar billing", () => {
 
       const html = await page(jar)
       expect(html).toContain("Settle $3.45")
-      expect(html).toContain("When the account owes no paid overage, your plan is Paid")
+      expect(html).toContain("When the account owes no paid overage, your plan is Pro")
 
       await deliver("order.created", settlementOrder(accountId))
       expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
@@ -1874,7 +2003,9 @@ describe("Polar billing", () => {
       // Polar takes the tax out of the inclusive price, so the net amount is below the price.
       await deliver("order.paid", settlementOrder(accountId, { subtotal_amount: 386, net_amount: 345, tax_amount: 41, total_amount: 386 }))
 
-      expect(await settledOrders()).toEqual([{ order_id: "order_1", settlement_order_id: "order_settlement_1", amount: 386 }])
+      expect(await settledOrders()).toEqual([
+        { order_id: "order_1", settlement_order_id: "order_settlement_1", currency: "usd", amount: 386 }
+      ])
       expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
     })
 
@@ -1998,6 +2129,297 @@ describe("Polar billing", () => {
       expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
       expect(upstreams.deletionHolds.has(accountId)).toBe(false)
       expect(await settledOrders()).toHaveLength(1)
+    })
+
+    it.each([
+      ["eur", "€"],
+      ["gbp", "£"]
+    ] as const)(
+      "settles an unpaid last order in %s in its currency, with the price of 0 in USD that Polar requires",
+      async (currency, symbol) => {
+        const { jar, accountId } = await signedIn()
+        await deliver("subscription.active", subscription(accountId, { currency }))
+        await deliver("subscription.revoked", subscription(accountId, { currency, ...ended }))
+        await deliver("order.created", order(accountId, { currency, ...lastOrder }))
+        expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
+
+        expect(await page(jar)).toContain(`Settle ${symbol}3.45 here. This amount includes the tax of the invoice.`)
+        const response = await postSettle(jar)
+        expect(response.status).toBe(303)
+        const [checkout] = upstreams.polarRequests("/v1/checkouts/")
+        expect(checkout!.body).toMatchObject({
+          products: [polarSettlementProductId],
+          prices: {
+            [polarSettlementProductId]: [
+              { amount_type: "fixed", price_amount: 0, price_currency: "usd", tax_behavior: "inclusive" },
+              { amount_type: "fixed", price_amount: 345, price_currency: currency, tax_behavior: "inclusive" }
+            ]
+          },
+          currency,
+          customer_ip_address: "198.51.100.7",
+          metadata: { golem_settled_order_ids: "order_1" }
+        })
+
+        await deliver("order.paid", settlementOrder(accountId, { currency }))
+        expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
+        expect(upstreams.deletionHolds.has(accountId)).toBe(false)
+        expect(await settledOrders()).toEqual([
+          { order_id: "order_1", settlement_order_id: "order_settlement_1", currency, amount: 345 }
+        ])
+      }
+    )
+
+    it("settles the orders of each currency in a settlement of their own, the oldest first", async () => {
+      const { jar, accountId } = await signedIn()
+      await deliver("subscription.revoked", subscription(accountId, { currency: "gbp", ...ended }))
+      await deliver(
+        "subscription.revoked",
+        subscription(accountId, {
+          id: "sub_2",
+          current_period_end: "2027-01-04T10:00:00Z",
+          ...ended,
+          modified_at: "2027-01-04T10:00:00Z"
+        })
+      )
+      await deliver(
+        "order.created",
+        order(accountId, { currency: "gbp", created_at: new Date(Date.now() - 180 * MINUTE).toISOString() })
+      )
+      await deliver(
+        "order.created",
+        order(accountId, {
+          id: "order_2",
+          subscription_id: "sub_2",
+          ...lastOrder,
+          items: [{ product_price_id: meteredPriceId, amount: 500, tax_amount: 0, proration: false }]
+        })
+      )
+      expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
+      expect(await page(jar)).toContain("Settle £3.45")
+
+      await deliver("order.paid", settlementOrder(accountId, { currency: "gbp" }))
+      expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
+      expect(await page(jar)).toContain("Settle $5.00")
+
+      await postSettle(jar)
+      const [checkout] = upstreams.polarRequests("/v1/checkouts/")
+      expect(checkout!.body).toMatchObject({ currency: "usd", metadata: { golem_settled_order_ids: "order_2" } })
+      await deliver(
+        "order.paid",
+        settlementOrder(accountId, {
+          id: "order_settlement_2",
+          subtotal_amount: 500,
+          net_amount: 500,
+          metadata: { golem_settled_order_ids: "order_2" }
+        })
+      )
+      expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
+      expect(await settledOrders()).toEqual([
+        { order_id: "order_1", settlement_order_id: "order_settlement_1", currency: "gbp", amount: 345 },
+        { order_id: "order_2", settlement_order_id: "order_settlement_2", currency: "usd", amount: 500 }
+      ])
+    })
+
+    it.each([
+      [
+        "eur",
+        "the USD price of 0 that the customer selected",
+        "price_ad_hoc_usd",
+        "A settlement order is in another currency than the orders that it settles",
+        { orderIds: "order_1", orderCurrencies: "eur" }
+      ],
+      [
+        "eur",
+        "the price of 0 of the settlement product, after an update with only the product",
+        "price_settlement",
+        "A settlement order is in another currency than the orders that it settles",
+        { orderIds: "order_1", orderCurrencies: "eur" }
+      ],
+      [
+        "usd",
+        "the price of 0 of the settlement product, after an update with only the product",
+        "price_settlement",
+        "A settlement paid less than the paid overage of its orders",
+        { paid: 0, amount: 345 }
+      ]
+    ] as const)("settles nothing for %s orders with a free USD order at %s, and logs an error", async (currency, _, priceId, message, annotations) => {
+      const { jar, accountId } = await signedIn()
+      await deliver("subscription.revoked", subscription(accountId, { currency, ...ended }))
+      await deliver("order.created", order(accountId, { currency, ...lastOrder }))
+      await postSettle(jar)
+
+      await deliver(
+        "order.paid",
+        settlementOrder(accountId, {
+          currency: "usd",
+          subtotal_amount: 0,
+          net_amount: 0,
+          items: [{ product_price_id: priceId, amount: 0, tax_amount: 0 }]
+        })
+      )
+
+      expect(await settledOrders()).toEqual([])
+      expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
+      expect(await page(jar)).toContain(currency === "eur" ? "Settle €3.45" : "Settle $3.45")
+      expect(
+        logs.filter((line) => (line["annotations"] as Record<string, unknown>)["golemAccountId"] === accountId)
+      ).toContainEqual(
+        expect.objectContaining({
+          message,
+          level: "ERROR",
+          annotations: expect.objectContaining({ settlementOrderId: "order_settlement_1", currency: "usd", ...annotations })
+        })
+      )
+
+      await deliver("order.paid", settlementOrder(accountId, { id: "order_settlement_2", currency }))
+      expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
+    })
+
+    it("settles nothing with a settlement order in another currency than its orders", async () => {
+      const accountId = randomUUID()
+      await unpaidAfterEnd(accountId)
+
+      await deliver("order.paid", settlementOrder(accountId, { currency: "gbp" }))
+
+      expect(await settledOrders()).toEqual([])
+      expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
+    })
+  })
+
+  describe("currencies", () => {
+    describe.each([
+      ["eur", "€", 2400],
+      ["gbp", "£", 1900]
+    ] as const)("%s", (currency, symbol, proPrice) => {
+      const prices = overagePrices[currency]
+      const { fixed, metered } = priceIdsOf(currency)
+      /** A renewal of `sub_1` in the currency: the price of Pro and 3.45 of paid overage, tax included. */
+      const renewal = (accountId: string, overrides: Record<string, unknown> = {}) =>
+        order(accountId, {
+          currency,
+          items: [
+            { product_price_id: fixed, amount: proPrice, tax_amount: 0, proration: false },
+            { product_price_id: metered, amount: 345, tax_amount: 0, proration: false }
+          ],
+          ...overrides
+        })
+      const pastDue = (accountId: string, failedAt: Date) =>
+        subscription(accountId, {
+          currency,
+          status: "past_due",
+          past_due_at: failedAt.toISOString(),
+          modified_at: "2026-12-04T10:00:00Z"
+        })
+
+      it("lets Polar choose the currency of the checkout, records the currency of the subscription, and shows its prices with the tax included", async () => {
+        const { jar, accountId } = await signedIn()
+        upstreams.checkoutCurrency = currency
+
+        const checkout = await request(app.handler, jar, "POST", "/billing/checkout", {
+          origin: baseUrl,
+          "x-forwarded-for": "203.0.113.7, 198.51.100.7"
+        })
+        expect(checkout.status).toBe(303)
+        expect(checkout.headers.get("location")).toBe(upstreams.checkoutUrl("polar_c_1"))
+        const [created] = upstreams.polarRequests("/v1/checkouts/")
+        expect(created!.body).toMatchObject({ products: [polarProductId], customer_ip_address: "198.51.100.7" })
+        expect(created!.body).not.toHaveProperty("currency")
+        expect(created!.body).not.toHaveProperty("prices")
+
+        await deliver("subscription.active", subscription(accountId, { currency, checkout_id: "polar_c_1" }))
+        expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
+        const stored = await pool.query(
+          "SELECT currency, metered_price_ids FROM polar_subscriptions WHERE account_id = $1",
+          [accountId]
+        )
+        // The metered price of the subscription first, then the other ones of the product.
+        const otherMetered = currencies.map((other) => priceIdsOf(other).metered).filter((id) => id !== metered)
+        expect(stored.rows).toEqual([{ currency, metered_price_ids: [metered, ...otherMetered] }])
+
+        upstreams.usageModes.set(accountId, "allowOverage")
+        upstreams.monthly = {
+          ...(upstreams.monthly as object),
+          computeGcu: {
+            metering: "enabled",
+            resolvedMonthlyAmount: 100_000_000,
+            usage: 101_500_000,
+            allowOverageUsage: 1_500_000,
+            unit: "GCU"
+          }
+        }
+        const html = await page(jar)
+        expect(html).toContain(`${symbol}${prices.perMillionGcu} per million GCU`)
+        expect(html).toContain(`${symbol}${prices.perGbHour} per GiB-hour`)
+        expect(html).toContain(`${symbol}${prices.perDurableGbMonth} per GiB-month`)
+        expect(html).toContain(`${symbol}${prices.perEphemeralGbMonth} per GiB-month`)
+        expect(html).toContain(`Prices in ${currency.toUpperCase()}, including tax.`)
+        expect(html).toContain(`+ 1.5M GCU of paid overage · ${symbol}0.02`)
+        expect(html).toContain(`Paid overage so far this month: about ${symbol}0.02 including tax, at the prices below.`)
+        expect(html).not.toContain("$")
+      })
+
+      it("suspends the account when a renewal with paid overage is not paid after the past-due grace, until the payment", async () => {
+        const { jar, accountId } = await signedIn()
+        const failedAt = new Date()
+
+        await deliver("subscription.active", subscription(accountId, { currency }))
+        await deliver("order.created", renewal(accountId))
+        await deliver("subscription.past_due", pastDue(accountId, failedAt))
+        expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
+
+        await sweep(new Date(failedAt.getTime() + config.pastDueGraceMs + MINUTE))
+        expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
+        expect(await page(jar)).toContain("Pay the invoice")
+        const stored = await pool.query("SELECT currency FROM polar_orders WHERE account_id = $1", [accountId])
+        expect(stored.rows).toEqual([{ currency }])
+
+        await deliver("order.paid", renewal(accountId, paidLater))
+        await deliver("subscription.active", subscription(accountId, { currency, modified_at: "2026-12-05T10:00:00Z" }))
+        expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
+      })
+
+      it("gives Free, not Suspended, when only the price of a renewal is not paid after the past-due grace", async () => {
+        const accountId = randomUUID()
+        const failedAt = new Date()
+
+        await deliver("subscription.active", subscription(accountId, { currency }))
+        await deliver(
+          "order.created",
+          renewal(accountId, { items: [{ product_price_id: fixed, amount: proPrice, tax_amount: 0, proration: false }] })
+        )
+        await deliver("subscription.past_due", pastDue(accountId, failedAt))
+
+        await sweep(new Date(failedAt.getTime() + config.pastDueGraceMs + MINUTE))
+        expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
+      })
+    })
+
+    it("counts the overage of a metered price that only the subscription lists", async () => {
+      const accountId = randomUUID()
+      const product = { id: polarProductId, prices: currencies.flatMap(pricesOf).filter((price) => price.amount_type === "fixed") }
+      const createdAt = new Date(Date.now() - 2 * Settlement.ORDER_PAYMENT_GRACE_MS).toISOString()
+
+      await deliver("subscription.active", subscription(accountId, { currency: "gbp", product }))
+      await deliver("order.created", order(accountId, { currency: "gbp", created_at: createdAt }))
+
+      expect(upstreams.planOf(accountId).planId).toBe(suspendedPlanId)
+    })
+
+    it("ignores a subscription and an order in a currency that the app has no prices for", async () => {
+      const accountId = randomUUID()
+
+      const created = await deliver("subscription.active", subscription(accountId, { currency: "cad" }))
+      const ordered = await deliver("order.created", order(accountId, { currency: "cad" }))
+
+      expect([created.status, ordered.status]).toEqual([200, 200])
+      expect(upstreams.planChanges()).toEqual([])
+      expect(upstreams.holdChanges()).toEqual([])
+      const stored = await pool.query(
+        `SELECT (SELECT count(*)::int FROM polar_subscriptions WHERE account_id = $1) AS subscriptions,
+                (SELECT count(*)::int FROM polar_orders WHERE account_id = $1) AS orders`,
+        [accountId]
+      )
+      expect(stored.rows).toEqual([{ subscriptions: 0, orders: 0 }])
     })
   })
 })

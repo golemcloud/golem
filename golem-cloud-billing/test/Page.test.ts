@@ -3,7 +3,7 @@ import { breakAtHyphens, canCheckOut, canSettle, cliBootstrapCommand, html, type
 import type { Subscription } from "../src/Subscriptions.ts"
 
 describe("canSettle", () => {
-  const offer = { orders: [{ orderId: "order_1", amount: 345 }], amount: 345 }
+  const offer = { currency: "usd" as const, orders: [{ orderId: "order_1", amount: 345 }], amount: 345 }
 
   it.each<[PlanState, boolean]>([
     ["suspended", true],
@@ -26,6 +26,7 @@ describe("canCheckOut", () => {
     subscriptionId: "sub_1",
     accountId: "01a1c567-0cc6-7d91-943e-998dafbebc78",
     productId: "115e800a-2b62-42e0-97bf-9e8a5d6022b3",
+    currency: "usd",
     status,
     currentPeriodEnd: undefined,
     cancelAtPeriodEnd: false,

@@ -12,6 +12,7 @@ import {
 } from "effect/http"
 import { Auth, type SignedIn } from "./Auth.ts"
 import { BillingConfig } from "./BillingConfig.ts"
+import { isCurrency } from "./Currency.ts"
 import { Database } from "./Database.ts"
 import {
   canCheckOut,
@@ -220,9 +221,10 @@ export const routes = HttpRouter.use((router) =>
             )
           )
         )
-        const subscription: Subscription | undefined = yield* subscriptions
+        const read: { readonly subscription: Subscription | undefined } | undefined = yield* subscriptions
           .latest(user.golemAccountId, config.polar.productId)
           .pipe(
+            Effect.map((subscription) => ({ subscription })),
             Effect.catch((error) =>
               Effect.logWarning("Cannot read the subscription").pipe(
                 Effect.annotateLogs({ golemAccountId: user.golemAccountId, error: error.message }),
@@ -230,6 +232,7 @@ export const routes = HttpRouter.use((router) =>
               )
             )
           )
+        const subscription = read?.subscription
         const plan = planOf(account)
         const params = new URL(request.url, config.baseUrl).searchParams
         // Polar redirects here with the checkout ID after a payment; the webhook that changes the
@@ -254,10 +257,10 @@ export const routes = HttpRouter.use((router) =>
         const paidOrderIds = (params.get(settlementOrdersParam) ?? "").split(",").filter((id) => id !== "")
         const settlementPending = debt !== undefined && paidOrderIds.some((id) => debt.unpaidOrderIds.includes(id))
         const limits: AccountLimits | undefined =
-          plan === "paid"
+          plan === "paid" || plan === "free" || plan === "default"
             ? yield* registry.getLimits(user.golemToken, user.golemAccountId).pipe(
                 Effect.catch((error) =>
-                  Effect.logWarning("Cannot read the monthly usage mode").pipe(
+                  Effect.logWarning("Cannot read the limits of the account").pipe(
                     Effect.annotateLogs({ golemAccountId: user.golemAccountId, error: error.message }),
                     Effect.as(undefined)
                   )
@@ -271,6 +274,7 @@ export const routes = HttpRouter.use((router) =>
             account,
             plan,
             subscription,
+            subscriptionUnread: read === undefined,
             pastDueGraceEnd:
               plan === "paid" && subscription !== undefined
                 ? pastDueGraceEnd(subscription, config.pastDueGraceMs)
@@ -281,6 +285,7 @@ export const routes = HttpRouter.use((router) =>
             settlementPending,
             cliCommand,
             limits,
+            monthlyPrices: config.monthlyPrices,
             overagePrices: config.overagePrices,
             overageNotice: overageNoticeOf(params.get("overage"))
           })
@@ -434,6 +439,13 @@ export const routes = HttpRouter.use((router) =>
                     successUrl: `${home}?checkout_id={CHECKOUT_ID}`,
                     returnUrl: home
                   })
+                  // The app has no prices for another currency, so the person must never pay
+                  // such a checkout. The route never sends its URL, so nobody can pay it: the
+                  // route does not record it, and no deletion hold covers it. A later click
+                  // creates a new checkout, in the currency of the prices of the product then.
+                  if (!isCurrency(session.currency)) {
+                    return { unsupported: session }
+                  }
                   yield* subscriptions.recordCheckout({
                     checkoutId: session.id,
                     accountId,
@@ -448,6 +460,17 @@ export const routes = HttpRouter.use((router) =>
               const notice = new URL(home)
               notice.searchParams.set("checkout_id", started.paid)
               return HttpServerResponse.redirect(notice.href, { status: 303 })
+            }
+            if (started.unsupported !== undefined) {
+              yield* Effect.logError("Refused a checkout in a currency that the app has no prices for").pipe(
+                Effect.annotateLogs({
+                  event: "unsupported_currency",
+                  golemAccountId: accountId,
+                  checkoutId: started.unsupported.id,
+                  currency: started.unsupported.currency
+                })
+              )
+              return errorPage
             }
             const { session, reasons } = started
             if (reasons === "deleted" || !reasons.includes("openCheckout")) {
@@ -515,6 +538,7 @@ export const routes = HttpRouter.use((router) =>
               customerEmail: user.email,
               customerName: user.name === "" ? undefined : user.name,
               customerIpAddress: clientAddress(request),
+              currency: offered.currency,
               amount: offered.amount,
               orderIds: offered.orders.map((order) => order.orderId),
               successUrl: successUrl.href,
@@ -523,6 +547,7 @@ export const routes = HttpRouter.use((router) =>
             yield* Effect.logInfo("Started a settlement of paid overage").pipe(
               Effect.annotateLogs({
                 golemAccountId: user.golemAccountId,
+                currency: offered.currency,
                 amount: offered.amount,
                 orderIds: offered.orders.map((order) => order.orderId).join(",")
               })

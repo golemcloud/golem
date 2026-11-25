@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
 import type { OveragePrices } from "./BillingConfig.ts"
+import { type Currency, isoCode, type PerCurrency, perCurrency, taxIncluded } from "./Currency.ts"
 import type { Account, AccountLimits, MonthlyLimit } from "./Registry.ts"
 import type { SettlementOffer } from "./Settlement.ts"
 import type { Subscription } from "./Subscriptions.ts"
@@ -192,6 +193,8 @@ export interface SignedInPageOptions {
   readonly plan: PlanState
   /** The subscription of the paid product that changed last, if the account had one. */
   readonly subscription: Subscription | undefined
+  /** The read of `subscription` failed, so the account can have a subscription that the page does not show. */
+  readonly subscriptionUnread: boolean
   /** When the past-due grace of the subscription ends, on the paid plan after a failed payment. */
   readonly pastDueGraceEnd: Date | undefined
   /** Polar has redirected back after a payment, and the plan has not changed yet. */
@@ -209,9 +212,15 @@ export interface SignedInPageOptions {
    */
   readonly settlementPending: boolean
   readonly cliCommand: string
-  /** The monthly usage mode of a paid account; `undefined` on another plan or when the call failed. */
+  /**
+   * The monthly usage mode and the usage of an account on the paid, free or default plan;
+   * `undefined` on another plan or when the call failed.
+   */
   readonly limits: AccountLimits | undefined
-  readonly overagePrices: OveragePrices
+  /** The monthly price of the paid plan in each currency; the page shows them all before a checkout. */
+  readonly monthlyPrices: PerCurrency<string>
+  /** The overage prices of the paid plan in each currency; the page shows the ones of the subscription. */
+  readonly overagePrices: PerCurrency<OveragePrices>
   readonly overageNotice: OverageNotice | undefined
 }
 
@@ -220,11 +229,11 @@ const longDate = new Intl.DateTimeFormat("en", { dateStyle: "long", timeZone: "U
 const longDateTime = new Intl.DateTimeFormat("en", { dateStyle: "long", timeStyle: "short", timeZone: "UTC" })
 
 const checkoutForm = html`<form method="post" action="/billing/checkout">
-            <button type="submit" class="btn btn-primary">Upgrade to Paid</button>
+            <button type="submit" class="btn btn-primary">Upgrade to Pro</button>
           </form>`
 
-const settleForm = (amount: number) => html`<form method="post" action="/billing/settle">
-            <button type="submit" class="btn btn-primary">Settle ${usd.format(amount / 100)}</button>
+const settleForm = (settlement: SettlementOffer) => html`<form method="post" action="/billing/settle">
+            <button type="submit" class="btn btn-primary">Settle ${minorUnits(settlement.currency, settlement.amount)}</button>
           </form>`
 
 const portalForm = (label: string) => html`<form method="post" action="/billing/portal">
@@ -240,18 +249,18 @@ const renewal = (subscription: Subscription | undefined) => {
 }
 
 const pastDueNotice = (end: Date) =>
-  html`<p class="alert" role="alert">The last payment for Paid failed. Change the payment method in the Polar customer portal before ${longDateTime.format(end)} UTC. If Polar does not get the payment before then, your plan changes to Free. If the invoice also has paid overage, Golem stops the agents of this account until you pay it.</p>`
+  html`<p class="alert" role="alert">The last payment for Pro failed. Change the payment method in the Polar customer portal before ${longDateTime.format(end)} UTC. If Polar does not get the payment before then, your plan changes to Free. If the invoice also has paid overage, Golem stops the agents of this account until you pay it.</p>`
 
 const planHero = (options: SignedInPageOptions) => {
   if (options.checkoutPending) {
     return html`<span class="eyebrow">Your plan</span>
         <h1>Polar has your payment</h1>
-        <p class="lead">Your plan changes to Paid within one minute. Reload the page to see the change.</p>`
+        <p class="lead">Your plan changes to Pro within one minute. Reload the page to see the change.</p>`
   }
   switch (options.plan) {
     case "paid":
       return html`<span class="eyebrow">Your plan</span>
-        <h1>Paid</h1>
+        <h1>Pro</h1>
         ${options.pastDueGraceEnd === undefined ? renewal(options.subscription) : pastDueNotice(options.pastDueGraceEnd)}
         <div class="actions">
           ${portalForm("Manage billing")}
@@ -265,9 +274,9 @@ const planHero = (options: SignedInPageOptions) => {
       if (options.settlement !== undefined && canSettle(options.plan, options.settlement)) {
         return html`<span class="eyebrow">Your plan</span>
         <h1>Suspended</h1>
-        <p class="alert" role="alert">An invoice for paid overage is not paid, so Golem stopped the agents of this account. The subscription of the invoice has ended, and Polar does not try the payment again. Settle ${usd.format(options.settlement.amount / 100)} here. This amount includes the tax of the invoice. When the account owes no paid overage, your plan is ${options.planAfterSettlement === "paid" ? "Paid" : "Free"}, and the agents can run again.</p>
+        <p class="alert" role="alert">An invoice for paid overage is not paid, so Golem stopped the agents of this account. The subscription of the invoice has ended, and Polar does not try the payment again. Settle ${minorUnits(options.settlement.currency, options.settlement.amount)} here. This amount includes the tax of the invoice. When the account owes no paid overage, your plan is ${options.planAfterSettlement === "paid" ? "Pro" : "Free"}, and the agents can run again.</p>
         <div class="actions">
-          ${settleForm(options.settlement.amount)}
+          ${settleForm(options.settlement)}
           ${portalForm("Billing history")}
         </div>`
       }
@@ -281,16 +290,17 @@ const planHero = (options: SignedInPageOptions) => {
       if (canCheckOut(options.plan, options.subscription)) {
         return html`<span class="eyebrow">Your plan</span>
         <h1>Free</h1>
-        <p class="lead">Paid has larger monthly allowances. You pay through Polar.</p>
+        <p class="lead">Pro has larger monthly allowances. You pay through Polar.</p>
         <div class="actions">
           ${checkoutForm}
           ${options.subscription === undefined ? null : portalForm("Billing history")}
-        </div>`
+        </div>
+        ${monthlyPriceNote(options.monthlyPrices)}`
       }
       // On the free plan, `canCheckOut` refuses only an account with a `past_due` subscription.
       return html`<span class="eyebrow">Your plan</span>
         <h1>Free</h1>
-        <p class="alert" role="alert">The last payment for Paid failed, so your plan is Free. Change the payment method in the Polar customer portal. After the payment, your plan is Paid again.</p>
+        <p class="alert" role="alert">The last payment for Pro failed, so your plan is Free. Change the payment method in the Polar customer portal. After the payment, your plan is Pro again.</p>
         <div class="actions">
           ${portalForm("Manage billing")}
         </div>`
@@ -298,16 +308,17 @@ const planHero = (options: SignedInPageOptions) => {
       if (canCheckOut(options.plan, options.subscription)) {
         return html`<span class="eyebrow">Your plan</span>
         <h1>Default</h1>
-        <p class="lead">Golem gave this account its default plan. Paid has larger monthly allowances. You pay through Polar. When the subscription ends, your plan changes to Free, not back to Default.</p>
+        <p class="lead">Golem gave this account its default plan. Pro has larger monthly allowances. You pay through Polar. When the subscription ends, your plan changes to Free, not back to Default.</p>
         <div class="actions">
           ${checkoutForm}
           ${options.subscription === undefined ? null : portalForm("Billing history")}
-        </div>`
+        </div>
+        ${monthlyPriceNote(options.monthlyPrices)}`
       }
       // On the default plan, `canCheckOut` refuses only an account with a `past_due` subscription.
       return html`<span class="eyebrow">Your plan</span>
         <h1>Default</h1>
-        <p class="alert" role="alert">The last payment for Paid failed. Change the payment method in the Polar customer portal. After the payment, your plan is Paid.</p>
+        <p class="alert" role="alert">The last payment for Pro failed. Change the payment method in the Polar customer portal. After the payment, your plan is Pro.</p>
         <div class="actions">
           ${portalForm("Manage billing")}
         </div>`
@@ -342,7 +353,10 @@ interface UsageMeter {
   /** Converts an amount of the meter into the unit that the page shows. */
   readonly scale: number
   readonly format: Intl.NumberFormat
-  /** The overage price of the meter, and the amount of the meter that the price is for. */
+  /**
+   * The overage price of the meter in one currency, and the amount of the meter that the price is
+   * for.
+   */
   readonly price: (prices: OveragePrices) => string
   readonly pricedAmount: number
 }
@@ -352,9 +366,48 @@ const oneDecimal = new Intl.NumberFormat("en", { maximumFractionDigits: 1 })
 const twoDecimals = new Intl.NumberFormat("en", { maximumFractionDigits: 2 })
 // An amount below one shows two significant digits, so that a small usage does not show as 0.
 const small = new Intl.NumberFormat("en", { maximumSignificantDigits: 2 })
-const usd = new Intl.NumberFormat("en", { style: "currency", currency: "USD" })
+const moneyFormat: PerCurrency<Intl.NumberFormat> = perCurrency(
+  (currency) => new Intl.NumberFormat("en", { style: "currency", currency: isoCode(currency) })
+)
+// A price shows every decimal of its configuration, such as €0.0131.
+const priceFormat: PerCurrency<Intl.NumberFormat> = perCurrency(
+  (currency) =>
+    new Intl.NumberFormat("en", { style: "currency", currency: isoCode(currency), maximumFractionDigits: 20 })
+)
 
-// Memory shows GB-hours, the unit of its overage price, not the GB-seconds of the meter.
+/** An amount in minor units of the currency (cents or pence), with the symbol of the currency. */
+const minorUnits = (currency: Currency, amount: number): string => moneyFormat[currency].format(amount / 100)
+
+const taxNote = (currency: Currency): string => (taxIncluded[currency] ? "including tax" : "plus tax")
+
+// A monthly price shows no decimals when it has none, such as $20.
+const monthlyPriceFormat: PerCurrency<Intl.NumberFormat> = perCurrency(
+  (currency) =>
+    new Intl.NumberFormat("en", { style: "currency", currency: isoCode(currency), trailingZeroDisplay: "stripIfInteger" })
+)
+
+/**
+ * The monthly price of the paid plan in each currency, next to the checkout. The page cannot know
+ * the currency of a checkout before Polar creates it: Polar selects EUR in a euro country, GBP in
+ * the UK and USD elsewhere.
+ */
+const monthlyPriceNote = (prices: PerCurrency<string>) => {
+  const price = (currency: Currency) =>
+    monthlyPriceFormat[currency].format(prices[currency] as Intl.StringNumericLiteral)
+  return html`<p class="price-note">Pro costs <strong>${price("usd")}</strong> a month ${taxNote("usd")}. In euro countries it costs <strong>${price("eur")}</strong>, and in the UK <strong>${price("gbp")}</strong>, ${taxNote("eur")}. Polar's checkout shows your price before you pay.</p>`
+}
+
+/**
+ * The overage prices that the page shows: the ones in the currency of the subscription. The page
+ * shows no prices or costs when it cannot read the subscription, or the account has none.
+ */
+interface Pricing {
+  readonly currency: Currency
+  readonly prices: OveragePrices
+}
+
+// Active memory shows GiB-hours, the unit of its overage price, not the GiB-seconds of the meter.
+// The names and units match the customer copy of Golem Cloud. A GiB is 1024^3 bytes.
 const usageMeters = {
   computeGcu: {
     label: "Compute",
@@ -365,24 +418,24 @@ const usageMeters = {
     pricedAmount: 1_000_000
   },
   memoryGbSeconds: {
-    label: "Memory",
-    unit: "GB-hours",
+    label: "Active memory",
+    unit: "GiB-hours",
     scale: 1 / 3600,
     format: oneDecimal,
     price: (prices) => prices.perGbHour,
     pricedAmount: 3600
   },
   durableStorageGbMonth: {
-    label: "Durable storage",
-    unit: "GB-month",
+    label: "Active durable filesystem",
+    unit: "GiB-month",
     scale: 1,
     format: twoDecimals,
     price: (prices) => prices.perDurableGbMonth,
     pricedAmount: 1
   },
   ephemeralStorageGbMonth: {
-    label: "Ephemeral storage",
-    unit: "GB-month",
+    label: "Active ephemeral filesystem",
+    unit: "GiB-month",
     scale: 1,
     format: twoDecimals,
     price: (prices) => prices.perEphemeralGbMonth,
@@ -394,13 +447,14 @@ type MeterKey = keyof typeof usageMeters
 
 const meterKeys = Object.keys(usageMeters) as Array<MeterKey>
 
-/** The paid overage of a meter in USD, at the overage prices of the page. */
+/** The paid overage of a meter in the major unit of the currency of the prices. */
 const overageCost = (meter: UsageMeter, limit: MonthlyLimit, prices: OveragePrices): number =>
   ((limit.allowOverageUsage ?? 0) / meter.pricedAmount) * Number(meter.price(prices))
 
-const money = (value: number): string => (value > 0 && value < 0.01 ? "less than $0.01" : usd.format(value))
+const money = (currency: Currency, value: number): string =>
+  value > 0 && value < 0.01 ? `less than ${moneyFormat[currency].format(0.01)}` : moneyFormat[currency].format(value)
 
-const usageItem = (meter: UsageMeter, limit: MonthlyLimit, prices: OveragePrices) => {
+const usageItem = (meter: UsageMeter, limit: MonthlyLimit, pricing: Pricing | undefined) => {
   const number = (value: number) => {
     const shown = value * meter.scale
     return shown > 0 && shown < 1 ? small.format(shown) : meter.format.format(shown)
@@ -427,7 +481,9 @@ const usageItem = (meter: UsageMeter, limit: MonthlyLimit, prices: OveragePrices
             </dd>
             ${
               overage > 0
-                ? html`<dd class="overage-amount">+ ${amount(overage)} of paid overage · ${money(overageCost(meter, limit, prices))}</dd>`
+                ? html`<dd class="overage-amount">+ ${amount(overage)} of paid overage${
+                    pricing === undefined ? "" : ` · ${money(pricing.currency, overageCost(meter, limit, pricing.prices))}`
+                  }</dd>`
                 : null
             }
           </div>`
@@ -454,50 +510,87 @@ const overageBilling = (subscription: Subscription | undefined): string => {
  */
 const polarDelay = "Polar shows this amount after a delay."
 
-const usageSection = (limits: AccountLimits, prices: OveragePrices, subscription: Subscription | undefined) => {
+const usageSection = (limits: AccountLimits, pricing: Pricing | undefined, subscription: Subscription | undefined) => {
   const monthly = limits.monthly
   if (monthly === undefined) {
     return html`<p class="muted">Golem did not send the usage of this month. Reload the page.</p>`
   }
-  const total = meterKeys.reduce((sum, key) => sum + overageCost(usageMeters[key], monthly[key], prices), 0)
+  const total =
+    pricing === undefined
+      ? 0
+      : meterKeys.reduce((sum, key) => sum + overageCost(usageMeters[key], monthly[key], pricing.prices), 0)
   return html`<p class="muted">This month, against the monthly allowance of the plan. The monthly allowance starts again on the 1st of each month (UTC).</p>
         ${
-          total > 0
-            ? html`<p class="notice">Paid overage so far this month: about ${money(total)} plus tax, at the prices below. ${overageBilling(subscription)} ${polarDelay}</p>`
+          pricing !== undefined && total > 0
+            ? html`<p class="notice">Paid overage so far this month: about ${money(pricing.currency, total)} ${taxNote(pricing.currency)}, at the prices below. ${overageBilling(subscription)} ${polarDelay}</p>`
             : null
         }
         <dl class="facts usage">
-          ${meterKeys.map((key) => usageItem(usageMeters[key], monthly[key], prices))}
+          ${meterKeys.map((key) => usageItem(usageMeters[key], monthly[key], pricing))}
         </dl>`
 }
 
+const priceList = ({ currency, prices }: Pricing) => {
+  const price = (value: string) => priceFormat[currency].format(value as Intl.StringNumericLiteral)
+  return html`<dl class="facts prices">
+          <div><dt>Compute</dt><dd>${price(prices.perMillionGcu)} per million GCU</dd></div>
+          <div><dt>Active memory</dt><dd>${price(prices.perGbHour)} per GiB-hour</dd></div>
+          <div><dt>Active durable filesystem</dt><dd>${price(prices.perDurableGbMonth)} per GiB-month</dd></div>
+          <div><dt>Active ephemeral filesystem</dt><dd>${price(prices.perEphemeralGbMonth)} per GiB-month</dd></div>
+        </dl>
+        <p class="muted">Prices in ${isoCode(currency)}, ${taxNote(currency)}. Polar bills the overage of a month on the next invoice.</p>`
+}
+
 /**
- * The usage of the month against the allowance of a paid account, and its paid-overage switch with
- * the overage prices. Without the card, only the notice of the last post of the overage form shows.
+ * Who bills the usage above the allowance on the paid plan. Polar bills overage only to an account
+ * with a subscription; an administrator can give the paid plan without one.
+ */
+const overageCharge = (pricing: Pricing | undefined, subscriptionUnread: boolean): string =>
+  pricing !== undefined
+    ? "Polar bills the usage above the allowance at these prices."
+    : subscriptionUnread
+      ? "Polar bills the usage above the allowance at the overage prices of the subscription."
+      : "Polar bills no usage above the allowance, because the account has no Pro subscription."
+
+/**
+ * The usage of the month against the allowance: on the free and the default plan without paid
+ * overage, and on the paid plan with its paid-overage switch and the overage prices. Without the
+ * card, only the notice of the last post of the overage form shows.
  */
 const usageCard = (options: SignedInPageOptions) => {
-  if (options.plan !== "paid" || options.checkoutPending || options.limits?.overageAllowedByPlan !== true) {
+  if (options.checkoutPending || options.limits === undefined) {
+    return overageNoticeHtml(options.overageNotice)
+  }
+  if (options.plan === "free" || options.plan === "default") {
+    return html`${overageNoticeHtml(options.overageNotice)}<section class="card usage-card" aria-labelledby="usage-heading">
+        <h2 id="usage-heading">Monthly usage</h2>
+        ${usageSection(options.limits, undefined, undefined)}
+        <p class="muted">When the account uses all of its monthly allowance, its agents stop until the next month.</p>
+      </section>`
+  }
+  if (options.plan !== "paid" || options.limits.overageAllowedByPlan !== true) {
     return overageNoticeHtml(options.overageNotice)
   }
   const on = options.limits.monthlyUsageMode === "allowOverage"
-  const prices = options.overagePrices
+  const currency = options.subscription?.currency
+  const pricing = currency === undefined ? undefined : { currency, prices: options.overagePrices[currency] }
   return html`<section class="card usage-card" aria-labelledby="usage-heading">
         <h2 id="usage-heading">Monthly usage</h2>
-        ${usageSection(options.limits, prices, options.subscription)}
+        ${usageSection(options.limits, pricing, options.subscription)}
         <h3>Paid overage</h3>
         ${overageNoticeHtml(options.overageNotice)}
         <p>${
           on
-            ? "On. When the account uses all of its monthly allowance, its agents continue to run. Polar bills the usage above the allowance at these prices."
+            ? `On. When the account uses all of its monthly allowance, its agents continue to run. ${overageCharge(pricing, options.subscriptionUnread)}`
             : "Off. When the account uses all of its monthly allowance, its agents stop until the next month."
         }</p>
-        <dl class="facts prices">
-          <div><dt>Compute</dt><dd>$${prices.perMillionGcu} per million GCU</dd></div>
-          <div><dt>Memory</dt><dd>$${prices.perGbHour} per GB-hour</dd></div>
-          <div><dt>Durable storage</dt><dd>$${prices.perDurableGbMonth} per GB-month</dd></div>
-          <div><dt>Ephemeral storage</dt><dd>$${prices.perEphemeralGbMonth} per GB-month</dd></div>
-        </dl>
-        <p class="muted">Prices in USD, plus tax. Polar bills the overage of a month on the next invoice.</p>
+        ${
+          pricing !== undefined
+            ? priceList(pricing)
+            : options.subscriptionUnread
+              ? html`<p class="muted">This page cannot read the subscription, so it does not show the overage prices. Reload the page.</p>`
+              : html`<p class="muted">The account has no Pro subscription in Polar, so Polar bills no overage.</p>`
+        }
         <form method="post" action="/billing/overage" class="actions">
           <input type="hidden" name="mode" value="${on ? "hardLimit" : "allowOverage"}">
           <button type="submit" class="btn ${on ? "btn-secondary" : "btn-primary"}">${on ? "Turn off paid overage" : "Turn on paid overage"}</button>

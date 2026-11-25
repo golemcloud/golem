@@ -159,3 +159,36 @@ export const requireTables = (tables: ReadonlyArray<string>): Effect.Effect<void
       })
     }
   })
+
+/**
+ * Fails unless every column of `columns`, a table and a column, exists in the schema of the app.
+ * `migrate` creates a table only when it does not exist, so it does not add a column to a table
+ * that has one; the owner of the schema changes such a table by hand. The catalog shows every
+ * column to every role, so the check needs no privilege on the tables.
+ */
+export const requireColumns = (
+  columns: ReadonlyArray<readonly [table: string, column: string]>
+): Effect.Effect<void, SchemaError, Database> =>
+  Effect.gen(function* () {
+    const { pool, schema } = yield* Database
+    const result = yield* Effect.tryPromise({
+      try: () =>
+        pool.query<{ name: string }>(
+          `SELECT c.t || '.' || c.col AS name FROM unnest($2::text[], $3::text[]) AS c(t, col)
+            WHERE NOT EXISTS (
+              SELECT 1 FROM pg_catalog.pg_attribute a
+                JOIN pg_catalog.pg_class r ON r.oid = a.attrelid
+                JOIN pg_catalog.pg_namespace n ON n.oid = r.relnamespace
+               WHERE n.nspname = $1 AND r.relname = c.t AND a.attname = c.col AND NOT a.attisdropped)
+            ORDER BY name`,
+          [schema, columns.map(([table]) => table), columns.map(([, column]) => column)]
+        ),
+      catch: (error) => new SchemaError({ reason: error instanceof Error ? error.message : String(error) })
+    })
+    const missing = result.rows.map((row) => row.name)
+    if (missing.length > 0) {
+      return yield* new SchemaError({
+        reason: `the schema ${schema} has no column ${missing.join(", ")}. Change each table to the table that \`node main.mjs migrate\` creates, as the owner of the schema`
+      })
+    }
+  })

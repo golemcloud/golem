@@ -59,7 +59,10 @@ variables. It runs under a PostgreSQL advisory lock, so two runs migrate one aft
 a run on a migrated schema changes nothing. It does not create the schema: an administrator
 creates the schema for the owner role first, and `migrate` fails without it. The web app,
 `push-usage` and `cleanup-deleted-accounts` run no DDL. At start, each checks that the tables
-exist, and fails with a message that names `migrate` when one is missing.
+exist, and fails with a message that names `migrate` when one is missing. `migrate` does not add a
+column to a table that exists, so the web app and the cleanup also check the `currency` column of
+`polar_subscriptions`, `polar_orders` and `overage_settlements` (`Subscriptions.requiredColumns`),
+and fail with a message that names the missing column.
 
 Better Auth reads the columns of every table in the database during `migrate`. When a registry
 migration changes a table at the same moment, the read fails; `migrate` tries it again up to five
@@ -110,10 +113,11 @@ the billing account, the checkout route, the webhooks and the sweep call `GET /v
 ## Subscriptions
 
 A subscription of the Polar product `POLAR_PRODUCT_ID` and its orders move the Golem account
-between three plans. The Polar customer has the Golem account ID as its external ID.
+between three plans. The Polar customer has the Golem account ID as its external ID. The page and
+the deletion hold show the paid plan as Pro.
 
 The registry gives a new account its default plan (`initial_plans.default`). With
-`GOLEM_CLOUD_BILLING_DEFAULT_PLAN_ID`, the page offers Paid to an account on that plan too, and a
+`GOLEM_CLOUD_BILLING_DEFAULT_PLAN_ID`, the page offers Pro to an account on that plan too, and a
 subscription moves the account from it only to the paid plan. A trial, or a subscription that is
 never active, leaves the account on the default plan. After a subscription the account follows
 the table below, so its plan is free after the end and never goes back to the default plan.
@@ -156,7 +160,8 @@ plan.
   (`confirmed` or `succeeded`), each click redirects to `/?checkout_id=...` and starts no new
   checkout, also when the person paid in another tab. Else a click goes back to an open checkout
   that takes payments for more than an hour (`CHECKOUT_REUSE_MS`), so the hold does not grow with
-  each click.
+  each click. The route never sends a checkout in a currency that the app has no prices for, and
+  neither records it nor holds the account for it (see [Currencies](#currencies)).
 - **Customer portal.** `POST /billing/portal` creates a customer session for the Golem account and
   redirects to the customer portal of Polar: payment method, invoices, cancellation.
 - **Settlement.** `POST /billing/settle` creates a checkout session of the settlement product for
@@ -181,9 +186,10 @@ plan.
   gave it, keeps it, and gets the deletion hold all the same. An event of an account that the
   registry deleted is stored and answers 200, without a change of the plan or the hold, so that
   deleted accounts do not make Polar disable the endpoint.
-- **Metered prices.** An order item names its price. The subscription lists the prices of its
-  product, so `polar_subscriptions` keeps the IDs of the metered prices, and the handler counts
-  the items of these prices as overage.
+- **Metered prices.** An order item names its price. The subscription lists its own prices, in its
+  currency, and its product lists the prices of every currency. `polar_subscriptions` keeps the IDs
+  of the metered prices of both lists, and the handler counts the items of these prices as
+  overage.
 - **Failed payments.** Polar sets `past_due_at` on the subscription when a payment fails, clears
   it when a payment succeeds, and keeps it when it revokes the subscription after the failed
   retries. When the last order of a subscription that has ended fails, Polar does not retry it
@@ -242,6 +248,43 @@ places and removes only its own deletion hold, so the owner of an account cannot
 of the billing account. The token of the billing account can read accounts, change plans and set
 its deletion holds, and nothing else.
 
+### Currencies
+
+The paid plan has prices in USD, EUR and GBP (`src/Currency.ts`). The checkout sends the IP
+address of the browser, and Polar selects the currency from the country of that address. When the
+product has no price in the currency of that country, Polar uses USD, the default currency of the
+Polar organization. A subscription keeps the currency of its checkout, and its orders have it too.
+The app stores the currency of each subscription, order and settlement in
+`polar_subscriptions.currency`, `polar_orders.currency` and `overage_settlements.currency`, as Polar
+names it: `usd`, `eur` or `gbp`. An amount is in the minor unit of its currency: cents or pence.
+
+Polar adds the tax on top of a USD price (`tax_behavior` `exclusive`), and takes it out of a EUR or
+GBP price (`inclusive`), so a customer in the EU or the UK sees what they pay. The prices of the
+Polar product must have this tax behavior: the page says "plus tax" next to a USD amount and
+"including tax" next to a EUR or GBP amount.
+
+The page shows the overage prices and the amounts of an account in the currency of its
+subscription, with the prices of that currency in the configuration (see
+[Configuration](#configuration)). When the page cannot read the subscription, it shows the usage
+without prices or costs, and asks for a reload. An account on the paid plan without a subscription,
+for example from an administrator, sees the usage without prices or costs too, and that Polar bills
+no overage: the usage push holds its usage (see [Billable overage](#billable-overage)). Before a subscription, the page cannot know the currency: Polar selects it
+only when it creates the checkout, and has no API that selects a currency without a checkout. So
+next to the checkout the page shows the monthly price of the paid plan in each currency, and says
+that the checkout of Polar shows the price before the payment. On the free and the default plan,
+the page shows the usage without overage prices.
+
+The checkout route reads the currency of the checkout that Polar returns. For a currency that the
+app has no prices for, it logs the error `unsupported_currency` and shows the error page, and it
+never sends the URL of the checkout. Nobody can pay a checkout without its URL, so the route does
+not record the checkout and places no deletion hold for it. Polar selects the currency at the
+creation of a checkout, and the billing address that the customer enters on the checkout page does
+not change it. So each later click creates a new checkout, and gets the currency of the prices of
+the product at that time. The app also stores no subscription or
+order in such a currency: the webhook logs the error `unsupported_currency` and answers 200,
+because a delivery again changes nothing. So the Polar product must have prices in USD, EUR and GBP
+only.
+
 ### Settlement
 
 Polar bills a usage event only if the customer has a billable subscription (`active`, `trialing`
@@ -283,14 +326,14 @@ default card in the customer portal pays it at once. Polar collects no other unp
   a payment. A void collects nothing, so the app does not let a void remove a debt.
 
 The person pays the orders that Polar no longer collects with a settlement. On the suspended plan
-the page offers "Settle $X" in place of the customer portal, and `POST /billing/settle` accepts it
-only then (`canSettle` in `src/Page.ts`, `settlementFor` in `src/Settlement.ts`). The route reads
-the orders and the amount from the database, and opens a checkout of the private one-time product
-`POLAR_SETTLEMENT_PRODUCT_ID` with an ad-hoc fixed price of that amount, discount codes off, and
-the order IDs in the metadata `golem_settled_order_ids`. The amount is what the invoices charged
-for the paid overage, after the discount and with the tax, and the price includes tax
-(`tax_behavior` `inclusive`), so the person pays what the invoices asked. Polar gives the discount
-and the tax only for a whole order, so the webhook shares them over the items
+the page offers "Settle" with the amount, in place of the customer portal, and `POST /billing/settle`
+accepts it only then (`canSettle` in `src/Page.ts`, `settlementFor` in `src/Settlement.ts`). The
+route reads the orders, their currency and the amount from the database, and opens a checkout of
+the private one-time product `POLAR_SETTLEMENT_PRODUCT_ID` with an ad-hoc fixed price of that amount
+in that currency, discount codes off, and the order IDs in the metadata `golem_settled_order_ids`.
+The amount is what the invoices charged for the paid overage, after the discount and with the tax,
+and the price includes tax (`tax_behavior` `inclusive`), so the person pays what the invoices asked.
+Polar gives the discount and the tax only for a whole order, so the webhook shares them over the items
 (`src/OrderTotals.ts`): the discount over the items that are not a proration, by their amounts,
 and the total of the order over all items, by their amounts after the discount. The total holds
 the tax when Polar adds it on top, and the subtotal holds it when the tax is inclusive, so no tax
@@ -298,14 +341,35 @@ setting of the organization or of a price changes the amount. Credit from the wa
 customer, for example after a downgrade, pays part of an order. A pending order keeps that credit,
 so it shares its due amount. A void gives the credit back to the wallet, so a void order shares its
 total. Polar also takes credit that the customer gained after the order against a void, and the
-order does not show it; such a person pays that part twice, and an operator refunds it. One
-settlement pays the oldest orders
-that fit: at most 13, the most IDs that fit in a metadata value, and at most $999,999.99, the
-largest price of Polar.
+order does not show it; such a person pays that part twice, and an operator refunds it.
+
+A checkout has one currency, so one settlement pays orders in one currency: the currency of the
+oldest order that fits. It pays the oldest orders in that currency that fit: at most 13, the most
+IDs that fit in a metadata value, and at most 999,999.99 in the currency, the largest price of
+Polar. The orders in another currency wait for a later settlement. The checkout names the currency
+(`currency`), so Polar charges in it whatever the address of the browser. Polar refuses a list of
+prices without a price in the default currency of the organization, also for ad-hoc prices, and
+each currency must have the same types of price. So a settlement in EUR or GBP also gets a fixed
+USD price of 0. The customer can select that price through the public checkout update of Polar,
+and the checkout currency then follows the price. Only Polar can refuse that change. At 0, the
+change charges nothing: Polar makes a free order, and the webhook settles nothing.
+
+A public checkout update that names only the product, with no price, replaces the ad-hoc prices
+with the prices of the product, in USD when the product has no price in the currency of the
+checkout. The `update_order` tool that the checkout page of Polar gives to AI agents sends such an
+update. So the settlement product has one fixed price of 0 in USD, and that update charges nothing
+either. The webhook then settles nothing: the currency of the order is wrong, or the payment is
+below the paid overage. A price of the product in the currency of the checkout comes before the
+USD price, so the product has no other price. The Polar dashboard refuses a fixed price of 0: give
+the product the price type "Free" in USD, and delete every other price. The API shows that price
+as `amount_type` `fixed` with `price_amount` 0.
 
 A paid order of the settlement product records a settlement for each order in its metadata that
-the account still owes. When the account owes no more paid overage, it moves to the plan of its
-subscriptions: the free plan, or the paid plan when the person subscribed again. A new
+the account still owes. When the account owes one of those orders in another currency than the
+settlement order, the app records nothing and logs `A settlement order is in another currency than
+the orders that it settles`; the account stays suspended. The app reads the currency of each order
+from its database, not from the checkout. When the account owes no more paid
+overage, it moves to the plan of its subscriptions: the free plan, or the paid plan when the person subscribed again. A new
 subscription does not end the suspension before that, and the page names the plan that follows.
 A settlement order settles nothing when its price, the subtotal after the discount, is less than
 the amount of those orders, and logs an error. An order that the account does not owe logs a warning; an operator refunds that part in the Polar dashboard. Polar sends a
@@ -313,8 +377,9 @@ paid order in several events, and the later ones change nothing. If Polar charge
 order after its settlement, the app logs `An order was paid after its settlement`, and an operator
 refunds the settlement order. The app has no `refunds:write`.
 
-Polar refuses a fixed price below $0.50. When the paid overage of an order that Polar no longer
-collects is below that, the app writes the order off for good: it does not suspend or hold the
+Polar refuses a fixed price below $0.50, €0.50 or £0.40. When the paid overage of an order that
+Polar no longer collects is below $0.50, €0.50 or £0.50 in its currency (`SETTLEMENT_MINIMUM` in
+`src/Settlement.ts`), the app writes the order off for good: it does not suspend or hold the
 account, and other unpaid orders do not change this.
 
 Only Polar support can void an original order or charge it again. Until then, the customer portal
@@ -441,7 +506,7 @@ of the registry), so it can also read a month that has closed:
 Each run reads the previous and the current UTC month, so usage that the registry receives for a
 month after its last run in that month still reaches Polar. The table `usage_events` keeps one
 event for every increase: it goes from the amount that earlier events submitted to the current
-billable overage, in millionths of GCU, GB-seconds or GB-month. Polar refuses a numeric metadata
+billable overage, in millionths of GCU, GiB-seconds or GiB-month. Polar refuses a numeric metadata
 value above 2^53 - 1, so an increase above that becomes several events, each with an ID that ends
 in the amount that it reaches. A run records its events first and then sends every event that is
 not sent yet. Polar skips an event whose `external_id` it has
@@ -454,12 +519,16 @@ not bill them. A held event is never sent: the run logs the warning `unbilled_us
 account, the meter and the amount, and `usage_events` keeps the event with `held_at`. The usage
 of an account on an internal plan with overage is held in the same way.
 
-| Event name | Unit |
-| --- | --- |
-| `golem.compute` | GCU |
-| `golem.memory` | GB-seconds |
-| `golem.durable_storage` | GB-month |
-| `golem.ephemeral_storage` | GB-month |
+| Event name | Resource | Unit |
+| --- | --- | --- |
+| `golem.compute` | Compute | GCU |
+| `golem.memory` | Active memory | GiB-seconds |
+| `golem.durable_storage` | Active durable filesystem | GiB-month |
+| `golem.ephemeral_storage` | Active ephemeral filesystem | GiB-month |
+
+A GiB is 1,073,741,824 bytes (`BillableUsage.ts`, as in golem-common). The page shows active memory
+in GiB-hours, the unit of its overage price. The resource names and the units match the customer
+copy of Golem Cloud.
 
 Each event carries `units` (the increase in the unit of the meter), `micro_units` (the same
 increase as an integer) and `period` (`YYYY-MM`). The Polar meters sum `units`.
@@ -529,20 +598,21 @@ until the cleanup has deleted the user of the deleted account (see
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | | GitHub OAuth app with the callback URL `<BETTER_AUTH_URL>/api/auth/callback/github`. |
 | `GOLEM_CLOUD_BILLING_REGISTRY_TOKEN` | | Registry token of the billing account, which has `view`, `set-plan` and `hold-deletion` on every account through a permission share (see [Subscriptions](#subscriptions)). |
 | `GOLEM_CLOUD_BILLING_FREE_PLAN_ID`, `GOLEM_CLOUD_BILLING_PAID_PLAN_ID`, `GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID` | | The plans that a subscription switches between (see [Subscriptions](#subscriptions)). |
-| `GOLEM_CLOUD_BILLING_DEFAULT_PLAN_ID` | | Optional. The default plan of the registry (`initial_plans.default`), if the page offers Paid to an account on it (see [Subscriptions](#subscriptions)). It must differ from the three plans above. |
-| `GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_MILLION_GCU`, `GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_GB_HOUR`, `GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_DURABLE_GB_MONTH`, `GOLEM_CLOUD_BILLING_OVERAGE_USD_PER_EPHEMERAL_GB_MONTH` | | The overage prices that the paid plan shows next to the paid-overage switch, in USD, as decimal numbers such as `0.045`. Polar bills with the metered prices of the product, so these values must match the product. A change needs a restart, not a new image. |
+| `GOLEM_CLOUD_BILLING_DEFAULT_PLAN_ID` | | Optional. The default plan of the registry (`initial_plans.default`), if the page offers Pro to an account on it (see [Subscriptions](#subscriptions)). It must differ from the three plans above. |
+| `GOLEM_CLOUD_BILLING_PAID_<code>_PER_MONTH`, with `<code>` `USD`, `EUR` and `GBP` | | The monthly price of the paid plan in each currency, as a decimal number such as `20`: three variables. The page shows them next to the checkout (see [Currencies](#currencies)). Polar charges the fixed prices of the product, so these values must match the product. A change needs a restart, not a new image. |
+| `GOLEM_CLOUD_BILLING_OVERAGE_<code>_PER_MILLION_GCU`, `GOLEM_CLOUD_BILLING_OVERAGE_<code>_PER_GB_HOUR`, `GOLEM_CLOUD_BILLING_OVERAGE_<code>_PER_DURABLE_GB_MONTH`, `GOLEM_CLOUD_BILLING_OVERAGE_<code>_PER_EPHEMERAL_GB_MONTH`, with `<code>` `USD`, `EUR` and `GBP` | | The overage prices of the paid plan in each currency, as decimal numbers such as `0.045`: twelve variables. The paid plan shows the prices of the currency of the subscription next to the paid-overage switch (see [Currencies](#currencies)). Polar bills with the metered prices of the product, so these values must match the product. A change needs a restart, not a new image. |
 | `GOLEM_CLOUD_BILLING_PAST_DUE_GRACE` | `7 days` | How long an account keeps the paid plan after a payment of its subscription fails, as a duration such as `7 days` or `30 minutes` (see [Subscriptions](#subscriptions)). `0 seconds` turns the past-due grace off. Polar revokes the subscription after its last retry, 21 days after the failed payment, so a longer value has no effect. A test can use a short value, so that the past-due grace ends within the test. |
 | `POLAR_API_URL` | | `https://sandbox-api.polar.sh` or `https://api.polar.sh`. |
 | `POLAR_ACCESS_TOKEN` | | An organization access token of Polar. The web app needs `checkouts:write` (which also reads a checkout) and `customer_sessions:write`, `push-usage` needs `events:write`, and `cleanup-deleted-accounts` needs `customers:write`. Each gets its own token. |
 | `POLAR_PRODUCT_ID` | | The Polar product of the paid plan. |
-| `POLAR_SETTLEMENT_PRODUCT_ID` | | The Polar product of a settlement: a private one-time product with a fixed price, which each checkout replaces with an ad-hoc price. It must differ from `POLAR_PRODUCT_ID` and have the same tax category. |
+| `POLAR_SETTLEMENT_PRODUCT_ID` | | The Polar product of a settlement: a private one-time product with one fixed price of 0 in USD and no other price, which each checkout replaces with ad-hoc prices. A public checkout update that names only the product brings that price back, so it must be 0. In the Polar dashboard, choose the price type "Free" in USD and delete every other price (see [Unpaid orders](#unpaid-orders)). It must differ from `POLAR_PRODUCT_ID` and have the same tax category. |
 | `POLAR_WEBHOOK_SECRET` | | The secret that Polar signs the webhooks with (`whsec_...`). |
 
 ## Endpoints
 
 | Path | Purpose |
 | --- | --- |
-| `GET /` | Landing page: the sign-in form, or the plan, the account and the CLI command. |
+| `GET /` | Landing page: the sign-in form, or the plan, the usage of the month, the account and the CLI command. |
 | `POST /sign-in/github`, `POST /sign-out` | Form targets of the landing page. |
 | `POST /billing/checkout`, `POST /billing/settle`, `POST /billing/portal` | Form targets of the plan: redirect to the checkout of the paid plan, the checkout of a settlement, or the customer portal of Polar. |
 | `POST /billing/overage` | Form target of the paid-overage switch of the paid plan. It sets the monthly usage mode of the account (`allowOverage` or `hardLimit`) with the registry token of the session: the registry accepts paid overage only from the owner, and records the consent. The executors apply the change within 5 minutes, and the page says so. |
