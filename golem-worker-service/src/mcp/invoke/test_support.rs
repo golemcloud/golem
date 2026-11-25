@@ -519,6 +519,7 @@ struct RecordingWorkerClient {
 pub(crate) struct OplogRead {
     pub range: OplogRange,
     pub query: Option<String>,
+    pub allowance: Option<golem_common::model::oplog::OplogScanAllowance>,
 }
 
 fn empty_oplog_page() -> GetOplogResponse {
@@ -704,15 +705,16 @@ impl WorkerClient for RecordingWorkerClient {
         range: OplogRange,
         _: Option<OplogCursor>,
         _: u64,
-        _: Option<golem_common::model::oplog::OplogScanAllowance>,
+        allowance: Option<golem_common::model::oplog::OplogScanAllowance>,
         _: golem_common::model::caller::ClaimVisibility,
         _: EnvironmentId,
         _: AuthCtx,
     ) -> Result<GetOplogResponse, crate::service::worker::WorkerServiceError> {
-        self.oplog_reads
-            .lock()
-            .unwrap()
-            .push(OplogRead { range, query: None });
+        self.oplog_reads.lock().unwrap().push(OplogRead {
+            range,
+            query: None,
+            allowance,
+        });
         Ok(empty_oplog_page())
     }
 
@@ -730,6 +732,7 @@ impl WorkerClient for RecordingWorkerClient {
         self.oplog_reads.lock().unwrap().push(OplogRead {
             range,
             query: Some(query),
+            allowance: None,
         });
         Ok(empty_oplog_page())
     }

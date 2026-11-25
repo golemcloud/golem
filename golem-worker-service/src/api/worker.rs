@@ -838,6 +838,7 @@ fn oplog_scan_allowance(
 #[cfg(test)]
 mod tests {
     use super::{WorkerApi, oplog_scan_allowance};
+    use crate::api::common::ApiEndpointError;
     use crate::mcp::OplogRead;
     use golem_common::model::OwnedAgentId;
     use golem_common::model::agent::{AgentKey, AgentMode};
@@ -852,21 +853,28 @@ mod tests {
             entries: 7,
             millis: 9,
         };
+        let needs_to = "The 'scanEntries' and 'scanMillis' parameters need the 'to' parameter";
+        let no_query = "Cannot specify both the 'scanEntries' and 'scanMillis' parameters and the 'query' parameter";
+        let together = "The 'scanEntries' and 'scanMillis' parameters go together";
         [
-            ((None, None, None, None), Some(None)),
-            ((None, Some(9), None, None), Some(None)),
-            ((Some("error"), Some(9), None, None), Some(None)),
-            ((None, Some(9), Some(7), Some(9)), Some(Some(allowance))),
-            ((None, None, Some(7), Some(9)), None),
-            ((Some("error"), Some(9), Some(7), Some(9)), None),
-            ((None, Some(9), Some(7), None), None),
-            ((None, Some(9), None, Some(9)), None),
+            ((None, None, None, None), Ok(None)),
+            ((None, Some(9), None, None), Ok(None)),
+            ((Some("error"), Some(9), None, None), Ok(None)),
+            ((None, Some(9), Some(7), Some(9)), Ok(Some(allowance))),
+            ((None, None, Some(7), Some(9)), Err(needs_to)),
+            ((Some("error"), None, Some(7), Some(9)), Err(needs_to)),
+            ((Some("error"), Some(9), Some(7), Some(9)), Err(no_query)),
+            ((None, Some(9), Some(7), None), Err(together)),
+            ((None, Some(9), None, Some(9)), Err(together)),
         ]
         .into_iter()
         .for_each(|((query, to, entries, millis), expected)| {
             assert_eq!(
-                oplog_scan_allowance(query, to, entries, millis).ok(),
-                expected,
+                oplog_scan_allowance(query, to, entries, millis).map_err(|error| match error {
+                    ApiEndpointError::BadRequest(body) => body.0.errors.join(" "),
+                    _ => "not a bad request".to_string(),
+                }),
+                expected.map_err(str::to_string),
                 "query {query:?}, to {to:?}, scanEntries {entries:?}, scanMillis {millis:?}"
             )
         });
@@ -887,7 +895,11 @@ mod tests {
         .unwrap();
         let agent_id = OwnedAgentId::new(harness.environment_id, &harness.add_keyed_agent(&key));
         let index = OplogIndex::from_u64;
-        let read = |from, to, query: Option<&str>| {
+        let allowance = OplogScanAllowance {
+            entries: 7,
+            millis: 9,
+        };
+        let read = |from, to, query: Option<&str>, allowance| {
             api.get_oplog_internal(
                 agent_id.clone(),
                 from,
@@ -896,18 +908,18 @@ mod tests {
                 None,
                 query.map(str::to_string),
                 None,
-                None,
+                allowance,
                 Default::default(),
                 AuthCtx::system(),
             )
         };
 
-        read(Some(3), Some(9), Some("error")).await.unwrap();
-        read(Some(4), None, None).await.unwrap();
+        read(Some(3), Some(9), Some("error"), None).await.unwrap();
+        read(Some(4), None, None, None).await.unwrap();
         // A read without `from` keeps its start open, so that the executor starts it at the first
-        // entry that the oplog holds.
-        read(None, Some(9), None).await.unwrap();
-        assert!(read(Some(5), Some(4), Some("error")).await.is_err());
+        // entry that the oplog holds. The scan allowance of a range read goes to the executor.
+        read(None, Some(9), None, Some(allowance)).await.unwrap();
+        assert!(read(Some(5), Some(4), Some("error"), None).await.is_err());
 
         assert_eq!(
             *harness.oplog_reads.lock().unwrap(),
@@ -915,14 +927,17 @@ mod tests {
                 OplogRead {
                     range: OplogRange::new(Some(index(3)), Some(index(9))).unwrap(),
                     query: Some("error".to_string()),
+                    allowance: None,
                 },
                 OplogRead {
                     range: OplogRange::new(Some(index(4)), None).unwrap(),
                     query: None,
+                    allowance: None,
                 },
                 OplogRead {
                     range: OplogRange::new(None, Some(index(9))).unwrap(),
                     query: None,
+                    allowance: Some(allowance),
                 },
             ]
         );
