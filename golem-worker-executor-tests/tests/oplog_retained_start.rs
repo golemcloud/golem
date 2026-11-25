@@ -33,7 +33,7 @@ use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
     WorkerExecutorTestDependencies, force_oplog_retained_start,
-    remove_cached_status_and_result_index, start_with_snapshot_policy,
+    remove_cached_status_and_result_index, start, start_with_snapshot_policy,
     stored_primary_oplog_entries,
 };
 use pretty_assertions::assert_eq;
@@ -165,17 +165,30 @@ async fn an_agent_whose_oplog_starts_at_its_snapshot_recovers_and_answers_reads(
         .into_typed::<u32>()?;
     assert_eq!(keyed, 4);
     let history = executor.get_oplog(&agent_id, OplogIndex::INITIAL).await?;
-    let fingerprint = executor.get_worker_metadata(&agent_id).await?.fingerprint;
+    let before = executor.get_worker_metadata(&agent_id).await?;
     drop(executor);
 
     force_oplog_retained_start(deps, &context, &agent_id, retained_start).await?;
-    remove_cached_status_and_result_index(deps, &context, &agent_id, fingerprint).await?;
+    let removed =
+        remove_cached_status_and_result_index(deps, &context, &agent_id, before.fingerprint)
+            .await?;
+    assert!(
+        removed > 0,
+        "the cached status is removed before the restart"
+    );
     let executor = start_with_snapshot_policy(deps, &context, policy).await?;
 
+    // The status comes from the fold of the checkpoint and the oplog after the start: the default
+    // status has none of these values.
+    let after = executor.get_worker_metadata(&agent_id).await?;
+    assert_eq!(after.status, AgentStatus::Idle);
+    assert_eq!(after.last_oplog_index, before.last_oplog_index);
+    assert!(after.last_oplog_index > retained_start);
     assert_eq!(
-        executor.get_worker_metadata(&agent_id).await?.status,
-        AgentStatus::Idle
+        after.total_linear_memory_size,
+        before.total_linear_memory_size
     );
+    assert!(after.total_linear_memory_size > 0);
     let repeated = executor
         .invoke_and_await_agent_with_key(&component, &agent, &key, "increment", data_value!())
         .await?
@@ -549,4 +562,70 @@ async fn a_recovery_with_an_unusable_snapshot_fails_and_keeps_the_oplog(
         },
     )
     .await
+}
+
+/// The indexes of the entries that start an initialization of the agent.
+fn initializations(entries: &[PublicOplogEntryWithIndex]) -> Vec<OplogIndex> {
+    entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+                    invocation: PublicAgentInvocation::AgentInitialization(_),
+                    ..
+                })
+            )
+        })
+        .map(|entry| entry.oplog_index)
+        .collect()
+}
+
+/// A create of an existing agent after a real restart waits until the agent is initialized. The
+/// initialization of the agent is at or after the retained start of 2, so the executor finds it
+/// in the retained oplog. The create succeeds without a second initialization, and the agent
+/// keeps its state.
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn a_create_after_the_retained_start_finds_the_initialization(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent = agent_key!("JsonSnapshotCounter", "initialized-after-the-start");
+    let agent_id = executor.start_agent(&component.id, agent.clone()).await?;
+    increment(&executor, &component, &agent, 2).await?;
+    let initialized = initializations(&executor.get_oplog(&agent_id, OplogIndex::INITIAL).await?);
+    let retained_start = OplogIndex::from_u64(2);
+    assert_eq!(initialized.len(), 1, "{initialized:?}");
+    assert!(initialized[0] >= retained_start, "{initialized:?}");
+    drop(executor);
+
+    force_oplog_retained_start(deps, &context, &agent_id, retained_start).await?;
+    let executor = start(deps, &context).await?;
+
+    assert_eq!(
+        executor.start_agent(&component.id, agent.clone()).await?,
+        agent_id,
+        "the create of the existing agent waits for its initialization"
+    );
+    let value = executor
+        .invoke_and_await_agent(&component, &agent, "get", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(value, 2, "the agent keeps its state");
+    assert_eq!(
+        initializations(&executor.get_oplog(&agent_id, retained_start).await?),
+        initialized,
+        "the create initializes the agent once"
+    );
+    Ok(())
 }

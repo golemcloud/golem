@@ -3205,13 +3205,14 @@ pub async fn force_oplog_retained_start(
 /// Removes the cached status and the invocation result index of the agent incarnation
 /// `fingerprint` from the key-value storage of executors started with the SQLite storage config.
 /// The clean status checkpoint stays. Call it while no executor runs; the next executor then
-/// answers the status and the results by key from the checkpoint and the oplog.
+/// answers the status and the results by key from the checkpoint and the oplog. Gives the number
+/// of keys that it removed.
 pub async fn remove_cached_status_and_result_index(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
     owned_agent_id: &OwnedAgentId,
     fingerprint: AgentFingerprint,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<usize> {
     use golem_worker_executor::storage::keyvalue::KeyValueStorageNamespace;
 
     let storage =
@@ -3231,16 +3232,19 @@ pub async fn remove_cached_status_and_result_index(
             fingerprint,
         },
     ];
-    futures::future::try_join_all(namespaces.into_iter().map(|namespace| async move {
-        let keys = storage
-            .keys("test", "remove_cached_status", namespace.clone())
-            .await?;
-        storage
-            .del_many("test", "remove_cached_status", namespace, keys.into())
-            .await
-    }))
-    .await?;
-    Ok(())
+    let removed =
+        futures::future::try_join_all(namespaces.into_iter().map(|namespace| async move {
+            let keys = storage
+                .keys("test", "remove_cached_status", namespace.clone())
+                .await?;
+            let count = keys.len();
+            storage
+                .del_many("test", "remove_cached_status", namespace, keys.into())
+                .await
+                .map(|_| count)
+        }))
+        .await?;
+    Ok(removed.into_iter().sum())
 }
 
 /// The indexed storage of executors started with the SQLite storage config (`start`,
@@ -3465,7 +3469,7 @@ pub async fn stored_primary_oplog_entries(
     owned_agent_id: &OwnedAgentId,
     first: OplogIndex,
     last: OplogIndex,
-) -> anyhow::Result<Vec<(OplogIndex, OplogEntry)>> {
+) -> anyhow::Result<Box<[(OplogIndex, OplogEntry)]>> {
     let storage = sqlite_indexed_storage(deps, context).await?;
     storage
         .read(
