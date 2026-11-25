@@ -515,7 +515,9 @@ impl ToolCommandHandler {
                 .ok_or_else(|| anyhow!("the tool session ended without an acceptance"))?;
             let view = ToolInvocationSessionView {
                 target: PublicNativeToolTarget::Agent {
-                    agent_id: *accepted.agent_id(),
+                    agent_id: *accepted.agent_id().ok_or_else(|| {
+                        anyhow!("the tool session requires an agent-owned invocation ID")
+                    })?,
                 },
                 idempotency_key: accepted.id(),
                 result,

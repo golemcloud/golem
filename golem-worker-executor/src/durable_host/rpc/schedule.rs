@@ -255,7 +255,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     };
                     let remote_agent_id = OwnedAgentId::new(
                         self.owned_agent_id().environment_id,
-                        invocation_id.agent_id(),
+                        invocation_id.agent_id().ok_or_else(|| {
+                            WorkerExecutorError::runtime(
+                                "agent RPC schedule has a tool-owned invocation ID",
+                            )
+                        })?,
                     );
                     let schedule_id = serialize(&schedule_id).map_err(|err| {
                         anyhow::Error::from(WorkerExecutorError::runtime(format!(

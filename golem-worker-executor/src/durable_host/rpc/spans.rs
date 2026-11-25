@@ -31,12 +31,13 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub(super) fn invocation_metadata(invocation_id: &OwnedInvocationId) -> InvocationMetadata {
+    let agent_id = *invocation_id
+        .agent_id()
+        .expect("agent RPC has an agent-owned invocation ID");
     InvocationMetadata {
-        agent_id: (*invocation_id.agent_id()).into(),
+        agent_id: agent_id.into(),
         invocation_id: golem_schema::schema::wit::wire::InvocationId {
-            owner: golem_schema::schema::wit::wire::InvocationOwner::Agent(
-                (*invocation_id.agent_id()).into(),
-            ),
+            owner: golem_schema::schema::wit::wire::InvocationOwner::Agent(agent_id.into()),
             id: invocation_id.uuid().into(),
         },
     }

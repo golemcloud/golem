@@ -58,7 +58,9 @@ impl WorkerService {
         invocation_id: &OwnedInvocationId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Invocation> {
-        let agent_id = invocation_id.agent_id();
+        let agent_id = invocation_id
+            .agent_id()
+            .ok_or_else(|| WorkerServiceError::InvocationNotFound(invocation_id.to_string()))?;
         let agent = self
             .agent_for_invocation_read(
                 environment_id,
@@ -175,7 +177,9 @@ impl WorkerService {
         invocation_id: &OwnedInvocationId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<InvocationSummary> {
-        let agent_id = invocation_id.agent_id();
+        let agent_id = invocation_id
+            .agent_id()
+            .ok_or_else(|| WorkerServiceError::InvocationNotFound(invocation_id.to_string()))?;
         let agent = self
             .agent_for_invocation_read(
                 environment_id,
@@ -237,7 +241,9 @@ impl WorkerService {
         invocation_id: &OwnedInvocationId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<InvocationSummary> {
-        let agent_id = invocation_id.agent_id();
+        let agent_id = invocation_id
+            .agent_id()
+            .ok_or_else(|| WorkerServiceError::InvocationNotFound(invocation_id.to_string()))?;
         let summary = self
             .worker_client
             .get_invocation(agent_id, &invocation_id.id(), environment_id, auth_ctx)
@@ -254,7 +260,9 @@ impl WorkerService {
         summary: &InvocationSummary,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Option<InvocationOutcome>> {
-        let agent_id = invocation_id.agent_id();
+        let agent_id = invocation_id
+            .agent_id()
+            .ok_or_else(|| WorkerServiceError::InvocationNotFound(invocation_id.to_string()))?;
         let start = InvocationStart {
             target: Some(golem_api_grpc::proto::golem::worker::AgentTarget {
                 target: Some(
