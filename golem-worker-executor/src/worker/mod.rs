@@ -960,6 +960,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.execution_status.read().unwrap().agent_mode()
     }
 
+    /// Whether a stream-permitted invocation needs a stream session. An ephemeral agent executes the
+    /// component it was created with, so its method is classified before acceptance; its
+    /// runtime ends with the invocation and cannot retain a durable attachment for scalar work.
+    pub(crate) fn invocation_needs_stream_session(&self, invocation: &AgentInvocation) -> bool {
+        self.agent_mode() != AgentMode::Ephemeral
+            || crate::worker::invocation::invocation_uses_streams(
+                invocation,
+                &self.current_component.load().metadata,
+                self.parsed_agent_id.as_ref(),
+            )
+    }
+
     /// Gets the timestamp of the last time the execution status changed
     pub fn last_execution_state_change(&self) -> Timestamp {
         self.execution_status.read().unwrap().timestamp()

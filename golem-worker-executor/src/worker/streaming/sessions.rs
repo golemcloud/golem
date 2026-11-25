@@ -20,6 +20,8 @@ use golem_common::serialization::DecodeError;
 
 use crate::worker::*;
 
+/// The persisted execution configuration of a stream session: the encoded `InvocationStart`
+/// without its identity fields, the sorted environment, and the stdout and stderr flags.
 type StreamExecutionConfig = (Vec<u8>, Option<Vec<(String, String)>>, bool, bool);
 
 pub(crate) struct RetainedStreamSessionRecords {

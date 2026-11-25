@@ -617,11 +617,10 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                 )
                                 .await?;
                                 drop(status);
-                                let appended = if let Some(attachment) = attachment {
-                                    let mut attachment = *attachment;
+                                let appended = if let Some(mut attachment) = attachment {
                                     state.oplog.add_pair(*entry, Box::new(move |index| {
                                         attachment.pending_invocation_oplog_index = index;
-                                        let record = golem_common::model::durable_stream::StreamSessionRecord::Attached(attachment);
+                                        let record = golem_common::model::durable_stream::StreamSessionRecord::Attached(*attachment);
                                         let summary = DurableStreamEventSummary::session(&record);
                                         OplogEntry::stream_session(None, golem_common::model::oplog::OplogPayload::Inline(Box::new(record)), summary)
                                     })).await.map(|(pending_index, _)| pending_index)

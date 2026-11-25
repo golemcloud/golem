@@ -380,7 +380,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     output.idempotency_key = Some(ik);
                     return Ok(output);
                 }
-                let mut invocation_output = if request.allow_streams {
+                let mut invocation_output = if request.allow_streams
+                    && worker.invocation_needs_stream_session(&invocation)
+                {
                     let attempt_id = golem_common::model::durable_stream::AttemptId(
                         request
                             .attempt_id
@@ -532,7 +534,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule => {
                 // A caller that names an incarnation is answered for that incarnation alone, so
-                // it is pinned first, and its revision and method are validated against it.
+                // it is pinned first. The method and its input are validated only when the
+                // invocation executes, against the revision that the agent selects then.
                 let pinned = match (expected_fingerprint, schedule_at) {
                     // A delayed schedule for a named incarnation is not refused because that
                     // incarnation failed, the same as a guest's local scheduled call.
@@ -557,11 +560,27 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                     (None, _) => None,
                 };
+                // A pinned incarnation that is being deleted refuses the request before its
+                // scope is bound, as a deletion can already have stopped its state actor.
+                if let Some((worker, _)) = &pinned {
+                    worker
+                        .deleted_incarnation_as_not_found(
+                            expected_fingerprint,
+                            worker.try_get_latest_worker_metadata().await,
+                        )
+                        .await?;
+                }
                 let (worker, _response_lease) = match pinned {
                     Some(pinned) => pinned,
                     None => {
+                        // A scheduled call never attaches streams, so the revision that a
+                        // missing agent is created with validates it without them.
+                        let detached = golem_api_grpc::proto::golem::worker::InvocationStart {
+                            allow_streams: false,
+                            ..request.clone()
+                        };
                         self.get_or_create_pending_with_freshness(
-                            request,
+                            &detached,
                             &resolved,
                             freshness_disposition,
                             None,

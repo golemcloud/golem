@@ -338,14 +338,39 @@ fn builder_fixture() -> (InvocationStart, ComponentMetadata, AgentInvocation) {
         SchemaType::stream(Some(SchemaType::string())),
     );
     let tail_type = SchemaType::stream(Some(SchemaType::bool()));
+    let input = SchemaValue::Record {
+        fields: vec![
+            SchemaValue::Map {
+                entries: vec![(
+                    SchemaValue::Stream(SchemaValueStream::from_host_endpoint(TransportStreamId(
+                        101,
+                    ))),
+                    SchemaValue::Stream(SchemaValueStream::from_host_endpoint(TransportStreamId(
+                        7,
+                    ))),
+                )],
+            },
+            SchemaValue::Stream(SchemaValueStream::from_host_endpoint(TransportStreamId(55))),
+        ],
+    };
+    builder_fixture_for(
+        vec![
+            NamedField::user_supplied("mapping", mapping_type),
+            NamedField::user_supplied("tail", tail_type),
+        ],
+        input,
+    )
+}
+
+fn builder_fixture_for(
+    parameters: Vec<NamedField>,
+    input: SchemaValue,
+) -> (InvocationStart, ComponentMetadata, AgentInvocation) {
     let method = AgentMethodSchema {
         name: "run".to_string(),
         description: String::new(),
         prompt_hint: None,
-        input_schema: InputSchema::Parameters(vec![
-            NamedField::user_supplied("mapping", mapping_type),
-            NamedField::user_supplied("tail", tail_type),
-        ]),
+        input_schema: InputSchema::Parameters(parameters),
         output_schema: OutputSchema::Unit,
         http_endpoint: Vec::new(),
         read_only: None,
@@ -378,21 +403,6 @@ fn builder_fixture() -> (InvocationStart, ComponentMetadata, AgentInvocation) {
     let callee = AgentId::from_parts(7, 1);
     let idempotency_key = golem_common::model::InvocationId::from(uuid::Uuid::from_u128(901));
     let fingerprint = AgentFingerprint(uuid::Uuid::from_u128(3));
-    let input = SchemaValue::Record {
-        fields: vec![
-            SchemaValue::Map {
-                entries: vec![(
-                    SchemaValue::Stream(SchemaValueStream::from_host_endpoint(TransportStreamId(
-                        101,
-                    ))),
-                    SchemaValue::Stream(SchemaValueStream::from_host_endpoint(TransportStreamId(
-                        7,
-                    ))),
-                )],
-            },
-            SchemaValue::Stream(SchemaValueStream::from_host_endpoint(TransportStreamId(55))),
-        ],
-    };
     let request = InvocationStart {
         target: Some(golem_api_grpc::proto::golem::worker::AgentTarget {
             target: Some(
@@ -950,6 +960,31 @@ fn durable_request_builder_preserves_size_precedence_and_stream_metadata_order()
         error
             .to_string()
             .contains("input exceeds the 16 MiB logical value limit")
+    );
+
+    // A scalar method runs in a session too, but its input is an ordinary method input that
+    // the logical value limit does not bound.
+    let (request, metadata, invocation) = builder_fixture_for(
+        vec![NamedField::user_supplied("payload", SchemaType::string())],
+        SchemaValue::Record {
+            fields: vec![SchemaValue::String("payload".to_string())],
+        },
+    );
+    let (acceptance_committed, _) = tokio::sync::oneshot::channel();
+    assert!(
+        build_durable_streaming_request(
+            &request,
+            callee_of(&request),
+            Some(&AgentTypeName("test-agent".to_string())),
+            &metadata,
+            ComponentRevision::INITIAL,
+            AgentFingerprint(uuid::Uuid::from_u128(3)),
+            invocation,
+            MAX_DURABLE_STREAM_ITEM_SIZE + 1,
+            acceptance_committed,
+            8,
+        )
+        .is_ok()
     );
 
     let (mut request, metadata, invocation) = builder_fixture();

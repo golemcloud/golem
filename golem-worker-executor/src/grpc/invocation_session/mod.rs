@@ -139,20 +139,6 @@ fn retained_response_stream(
     ))
 }
 
-type QueuedStreamAttachment = (
-    golem_common::model::durable_stream::StreamSessionAttachedRecord,
-    futures::future::BoxFuture<
-        'static,
-        Result<
-            (
-                golem_common::model::durable_stream::StreamSessionPreparedRecord,
-                StreamSession,
-            ),
-            WorkerExecutorError,
-        >,
-    >,
-);
-
 struct AcceptedInvocation {
     /// The agent that accepted the invocation, which a key target resolves to.
     agent_id: AgentId,
@@ -162,8 +148,23 @@ struct AcceptedInvocation {
     prepared: Option<golem_common::model::durable_stream::StreamSessionPreparedRecord>,
     durable_replayed: bool,
     joined_origin_observer: bool,
-    queued: Option<QueuedStreamAttachment>,
+    queued: Option<(
+        golem_common::model::durable_stream::StreamSessionAttachedRecord,
+        QueuedReadiness,
+    )>,
 }
+
+/// Resolves when a queued method session becomes ready to execute.
+type QueuedReadiness = futures::future::BoxFuture<
+    'static,
+    Result<
+        (
+            golem_common::model::durable_stream::StreamSessionPreparedRecord,
+            StreamSession,
+        ),
+        WorkerExecutorError,
+    >,
+>;
 
 pub(crate) struct TransportStreamId(pub(crate) u64);
 

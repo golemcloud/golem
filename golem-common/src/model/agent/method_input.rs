@@ -4,7 +4,7 @@
 use crate::base_model::durable_stream::{DurableStreamHandle, StreamMapSide, StreamValuePathStep};
 pub use crate::model::invocation_session_public::JsonMethodInput;
 use crate::schema::streaming::{
-    decode_recursive_stream_value, preflight_proto_recursive_stream_value,
+    decode_recursive_stream_value, proto_method_input_stream_references,
 };
 use crate::schema::{
     FromSchema, IntoSchema, IntoTypedSchemaValue, SchemaValue, TypedSchemaValue,
@@ -28,7 +28,7 @@ impl TryFrom<SchemaValue> for AgentMethodInput {
     type Error = String;
 
     fn try_from(value: SchemaValue) -> Result<Self, Self::Error> {
-        let value = value.try_into()?;
+        let value: ProtoSchemaValue = value.try_into()?;
         let (input, _) = NativeMethodInput::capture(value, Vec::new())?;
         Ok(Self::Native(input))
     }
@@ -49,6 +49,12 @@ pub enum PublicMethodInput {
 }
 
 impl AgentMethodInput {
+    /// Whether the input came through external REST, which forbids host-managed result
+    /// capabilities.
+    pub fn is_external_rest(&self) -> bool {
+        matches!(self, Self::Native(input) if input.is_external_rest())
+    }
+
     /// Projects captured input without resolving a method or an execution revision.
     /// Raw JSON values include fields that execution can subsequently reject.
     pub fn to_public_value(&self) -> Result<TypedSchemaValue, String> {
@@ -99,7 +105,7 @@ impl NativeMethodInput {
         input: ProtoSchemaValue,
         foreign_streams: Vec<(u64, DurableStreamHandle)>,
     ) -> Result<(Self, Vec<u64>), String> {
-        let transport_ids = preflight_proto_recursive_stream_value(&input)?;
+        let transport_ids = proto_method_input_stream_references(&input)?;
         if transport_ids.iter().copied().collect::<HashSet<_>>().len() != transport_ids.len() {
             return Err("method input references a transport stream more than once".into());
         }
@@ -260,6 +266,31 @@ mod tests {
         let value = input.to_public_value().unwrap();
         crate::schema::render::to_json_value(value.graph(), value.root_type(), value.value())
             .unwrap()
+    }
+
+    #[test]
+    fn a_method_input_is_not_bound_by_the_stream_item_limit() {
+        let value = SchemaValue::Tuple {
+            elements: vec![
+                SchemaValue::String("/large-input".into()),
+                SchemaValue::String("b".repeat(16 * 1024 * 1024)),
+            ],
+        };
+        let proto: ProtoSchemaValue = value.clone().try_into().unwrap();
+        assert!(
+            prost::Message::encoded_len(&proto)
+                > crate::base_model::durable_stream::MAX_DURABLE_STREAM_ITEM_SIZE
+        );
+        assert!(
+            crate::schema::streaming::preflight_proto_recursive_stream_value(&proto)
+                .unwrap_err()
+                .contains("16 MiB logical value limit")
+        );
+        let AgentMethodInput::Native(input) = AgentMethodInput::try_from(value.clone()).unwrap()
+        else {
+            panic!("expected native input");
+        };
+        assert_eq!(input.value, value);
     }
 
     #[test]
