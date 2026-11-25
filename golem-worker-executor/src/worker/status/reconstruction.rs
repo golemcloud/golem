@@ -125,8 +125,9 @@ where
 /// Calculates the latest worker status, trying baselines in order of decreasing freshness:
 ///
 /// 1. the live cached status (`last_known`), folded forward — the common cold-load path;
-/// 2. on a fold failure (e.g. a jump deleted the cached index, or the cached status is below the
-///    retained start, so its fold is expired), the *clean* status checkpoint
+/// 2. on a fold failure (e.g. a jump deleted the cached index, or the cached status is two or more
+///    entries below the retained start, so that its fold reads below it and is expired), the
+///    *clean* status checkpoint
 ///    (read lazily via `read_checkpoint`), folded forward — this predates any later jump region and
 ///    avoids re-reading the whole oplog;
 /// 3. a full recompute from the start of the oplog.
@@ -182,8 +183,9 @@ where
     }
 
     // 2. Live cache baseline missing or its fold was impossible (e.g. a jump deleted the cached
-    //    index, a revert moved the oplog behind it, or the cached status is below the retained
-    //    start, so its fold is expired): try folding from the clean checkpoint.
+    //    index, a revert moved the oplog behind it, or the cached status is two or more entries
+    //    below the retained start, so that its fold reads below it and is expired): try folding
+    //    from the clean checkpoint.
     if let Some(checkpoint) = read_checkpoint().await
         && let Some(status) = try_fold_status_from_reader(this, reader, checkpoint).await?
     {
@@ -199,8 +201,9 @@ where
     Ok(status)
 }
 
-/// Whether the fold failed because it read below the retained start. A baseline that is older
-/// than the retained start cannot fold, but a newer baseline can.
+/// Whether the fold failed because it read below the retained start. The fold reads from the entry
+/// after its baseline. So a baseline two or more entries below the retained start cannot fold, but
+/// a baseline at the entry before the start, or later, can.
 fn is_expired_fold(error: &StatusError) -> bool {
     matches!(
         error,
