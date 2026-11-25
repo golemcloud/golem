@@ -375,22 +375,22 @@ wire_schema_scalar! {
     f32 => wire::SchemaTypeBody::F32Type(None), f64 => wire::SchemaTypeBody::F64Type(None),
     char => wire::SchemaTypeBody::CharType, String => wire::SchemaTypeBody::StringType,
     str => wire::SchemaTypeBody::StringType,
-    chrono::DateTime<chrono::Utc> => wire::SchemaTypeBody::DatetimeType,
+    jiff::Timestamp => wire::SchemaTypeBody::DatetimeType,
     std::time::Duration => wire::SchemaTypeBody::DurationType,
 }
 
-impl IntoWire for chrono::DateTime<chrono::Utc> {
+impl IntoWire for jiff::Timestamp {
     fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
         Ok(
             writer.push(wire::SchemaValueNode::DatetimeValue(wire::Datetime {
-                seconds: self.timestamp(),
-                nanoseconds: self.timestamp_subsec_nanos(),
+                seconds: self.as_nanosecond().div_euclid(1_000_000_000) as i64,
+                nanoseconds: self.as_nanosecond().rem_euclid(1_000_000_000) as u32,
             })),
         )
     }
 }
 
-impl FromWire for chrono::DateTime<chrono::Utc> {
+impl FromWire for jiff::Timestamp {
     fn read_wire(reader: &mut WireReader, index: ValueNodeIndex) -> Result<Self, WireError> {
         let wire::SchemaValueNode::DatetimeValue(value) = reader.take(index)? else {
             return Err(WireError::Shape("datetime"));
@@ -1268,7 +1268,7 @@ scalar! {
     feature = "rust_decimal",
     feature = "num_bigint",
     feature = "serde_json_types",
-    feature = "chrono"
+    feature = "jiff"
 ))]
 macro_rules! wire_string {
     ($ty:ty, $encode:expr, $decode:expr) => {
@@ -1318,7 +1318,7 @@ macro_rules! wire_string {
     feature = "rust_decimal",
     feature = "num_bigint",
     feature = "serde_json_types",
-    feature = "chrono"
+    feature = "jiff"
 ))]
 pub(crate) use wire_string;
 

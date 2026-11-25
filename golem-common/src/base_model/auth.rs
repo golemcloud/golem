@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::base_model::account::AccountId;
-use crate::{declare_enums, declare_structs, newtype_uuid};
-use chrono::Utc;
+use crate::{declare_enums, newtype_uuid};
+use jiff::Timestamp;
 
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
@@ -79,24 +79,40 @@ impl TryFrom<String> for TokenSecret {
 
 newtype_uuid!(TokenId);
 
-declare_structs! {
+crate::declare_datetime_struct! {
+    crate::base_model::auth::Token,
+    [],
+    [],
+    [],
     pub struct Token {
         pub id: TokenId,
         pub account_id: AccountId,
-        pub created_at: chrono::DateTime<Utc>,
-        pub expires_at: chrono::DateTime<Utc>,
+        pub created_at: Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
+        pub expires_at: Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
     }
+}
 
+crate::declare_datetime_struct! {
+    crate::base_model::auth::TokenCreation,
+    [],
+    [],
+    [],
     pub struct TokenCreation {
-        pub expires_at: chrono::DateTime<Utc>,
+        pub expires_at: Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
     }
+}
 
+crate::declare_datetime_struct! {
+    crate::base_model::auth::TokenWithSecret,
+    [],
+    [],
+    [],
     pub struct TokenWithSecret {
         pub id: TokenId,
         pub secret: TokenSecret,
         pub account_id: AccountId,
-        pub created_at: chrono::DateTime<Utc>,
-        pub expires_at: chrono::DateTime<Utc>,
+        pub created_at: Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
+        pub expires_at: Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
     }
 }
 

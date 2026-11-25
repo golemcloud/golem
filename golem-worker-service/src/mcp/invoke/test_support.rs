@@ -22,7 +22,6 @@ use crate::service::worker::{
     WorkerStream,
 };
 use async_trait::async_trait;
-use chrono::Utc;
 use futures::future::BoxFuture;
 use golem_api_grpc::proto::golem::worker::{InvocationContext, LogEvent};
 use golem_common::base_model::component_metadata::KnownExports;
@@ -55,6 +54,7 @@ use golem_service_base::clients::registry::{
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
 use golem_service_base::model::{ComponentFileSystemNode, FileReadResponse, GetOplogResponse};
+use jiff::Timestamp;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -1267,7 +1267,7 @@ impl InvocationHarness {
                 vec![agent_type.clone()],
                 BTreeMap::new(),
             ),
-            created_at: Utc::now(),
+            created_at: Timestamp::now(),
             wasm_hash: Hash::empty(),
             package_metadata: None,
             object_store_key: String::new(),

@@ -16,7 +16,6 @@ use crate::model::cli_output::StructuredOutput;
 use crate::model::grant::{format_grants, grant_count};
 use crate::model::masking::Masked;
 use crate::model::text_format::*;
-use chrono::SecondsFormat;
 use golem_client::model::{Account, PermissionShare};
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
@@ -170,12 +169,7 @@ impl AccountUsageView {
     fn rendered_fields(&self) -> [(&'static str, String); 6] {
         [
             ("Period", self.usage.period.to_string()),
-            (
-                "As of",
-                self.usage
-                    .as_of
-                    .to_rfc3339_opts(SecondsFormat::Millis, true),
-            ),
+            ("As of", format!("{:.3}", self.usage.as_of)),
             ("Compute", self.usage.format_compute()),
             ("Memory", self.usage.format_memory()),
             ("Durable storage", self.usage.format_durable_storage()),
@@ -467,20 +461,13 @@ fn add_active_admin_grants(fields: &mut FieldsBuilder, policy: &AccountResourceP
 }
 
 fn format_active_admin_grant(dimension: &str, grant: &AdminResourceGrant, unit: &str) -> String {
-    let granted_at = grant
-        .granted_at
-        .to_rfc3339_opts(SecondsFormat::AutoSi, true);
+    let granted_at = grant.granted_at.to_string();
     let mut rendered = format!(
         "{dimension}: {} {unit}; reason: {}; actor: {}; granted at: {granted_at}",
         grant.value, grant.reason, grant.actor_account_id
     );
     if let Some(expires_at) = grant.expires_at {
-        write!(
-            rendered,
-            "; expires at: {}",
-            expires_at.to_rfc3339_opts(SecondsFormat::AutoSi, true)
-        )
-        .expect("writing to a String cannot fail");
+        write!(rendered, "; expires at: {}", expires_at).expect("writing to a String cannot fail");
     } else {
         rendered.push_str("; no expiry");
     }
@@ -687,7 +674,6 @@ mod tests {
         ACCOUNT_USAGE_LABELS, AccountLimitsView, AccountUsageView, MessageWithFields,
         format_active_admin_grant, format_limit, format_optional_limit, format_storage_limit,
     };
-    use chrono::{DateTime, TimeZone, Timelike, Utc};
     use golem_common::model::account_usage::{
         AccountResourcePolicy, AccountUsageMetering, AccountUsageMetrics, AccountUsagePeriod,
         AdminResourceGrant, AdminResourceGrantDimension, AdminResourceGrantReason, MemoryLimit,
@@ -696,6 +682,7 @@ mod tests {
         MonthlyStorageUnit, MonthlyUsageMode, PerAgentLimitUnit, ResourceLimitValue, StorageLimit,
         StorageResourceLimitValue,
     };
+    use jiff::Timestamp;
     use proptest::prelude::*;
     use test_r::test;
     use uuid::uuid;
@@ -738,7 +725,7 @@ mod tests {
                             durable_storage_gb_month,
                             ephemeral_storage_gb_month,
                             period,
-                            as_of: Utc.with_ymd_and_hms(2026, 4, 2, 3, 4, 5).unwrap(),
+                            as_of: "2026-04-02T03:04:05Z".parse().unwrap(),
                             metering: AccountUsageMetering {
                                 compute: MeteringStatus::Enabled,
                                 memory: MeteringStatus::Enabled,
@@ -762,7 +749,7 @@ mod tests {
                     year: 2026,
                     month: 4,
                 },
-                as_of: Utc.with_ymd_and_hms(2026, 4, 2, 3, 4, 5).unwrap(),
+                as_of: "2026-04-02T03:04:05Z".parse().unwrap(),
                 metering: AccountUsageMetering {
                     compute: MeteringStatus::Enabled,
                     memory: MeteringStatus::Enabled,
@@ -800,7 +787,7 @@ mod tests {
     fn admin_grant(
         dimension: AdminResourceGrantDimension,
         value: u64,
-        expires_at: Option<DateTime<Utc>>,
+        expires_at: Option<Timestamp>,
     ) -> AdminResourceGrant {
         AdminResourceGrant {
             dimension,
@@ -809,7 +796,7 @@ mod tests {
             actor_account_id: golem_common::model::account::AccountId(uuid!(
                 "f30c30f7-c541-4386-bc8c-de92a5607ca2"
             )),
-            granted_at: Utc.with_ymd_and_hms(2026, 4, 1, 2, 3, 4).unwrap(),
+            granted_at: "2026-04-01T02:03:04Z".parse().unwrap(),
             expires_at,
         }
     }
@@ -829,7 +816,7 @@ mod tests {
                     active_admin_grant: Some(admin_grant(
                         AdminResourceGrantDimension::MonthlyComputeGcu,
                         12,
-                        Some(Utc.with_ymd_and_hms(2026, 5, 1, 2, 3, 4).unwrap()),
+                        Some("2026-05-01T02:03:04Z".parse().unwrap()),
                     )),
                     resolved_monthly_amount: Some(12),
                     usage: Some(3.5),
@@ -989,17 +976,8 @@ mod tests {
     #[test]
     fn admin_grant_timestamps_preserve_fractional_precision() {
         let mut grant = admin_grant(AdminResourceGrantDimension::MonthlyComputeGcu, 12, None);
-        grant.granted_at = Utc
-            .with_ymd_and_hms(2026, 4, 1, 2, 3, 4)
-            .unwrap()
-            .with_nanosecond(123_456_789)
-            .unwrap();
-        grant.expires_at = Some(
-            Utc.with_ymd_and_hms(2026, 5, 1, 2, 3, 4)
-                .unwrap()
-                .with_nanosecond(987_654_321)
-                .unwrap(),
-        );
+        grant.granted_at = "2026-04-01T02:03:04.123456789Z".parse().unwrap();
+        grant.expires_at = Some("2026-05-01T02:03:04.987654321Z".parse().unwrap());
 
         assert_eq!(
             format_active_admin_grant("Monthly compute", &grant, "GCU"),

@@ -16,7 +16,6 @@ use crate::repo::model::account_resource_override::{
     AccountResourceOverrideDimension, persisted_admin_reason,
 };
 use crate::repo::model::plan::PlanRecord;
-use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
     AccountUsagePeriod, AdminResourceGrant, AdminResourceGrantDimension,
@@ -28,6 +27,7 @@ use golem_service_base::clients::registry::ResourceUsageMetering;
 use golem_service_base::model::{MonthlyResourcePolicy, ResourceLimits};
 use golem_service_base::repo::NumericU64;
 use golem_service_base::repo::{RepoError, RepoResult, SqlDateTime};
+use jiff::Timestamp;
 use sqlx::FromRow;
 use std::collections::BTreeMap;
 use strum_macros::EnumIter;
@@ -408,7 +408,7 @@ impl AccountUsagePlan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccountUsageRecord {
     pub period: AccountUsagePeriod,
-    pub as_of: Option<DateTime<Utc>>,
+    pub as_of: Option<Timestamp>,
     pub durable_storage_byte_seconds: u64,
     pub ephemeral_storage_byte_seconds: u64,
     pub compute_fuel: u64,
@@ -475,7 +475,7 @@ pub struct MonthlyUsageTransitionBaseline {
 pub struct PersistedMonthlyUsageModeTransition {
     pub revision: u64,
     pub actor_account_id: golem_common::model::account::AccountId,
-    pub changed_at: DateTime<Utc>,
+    pub changed_at: Timestamp,
     pub source: MonthlyUsageModeTransitionSource,
     pub previous_mode: MonthlyUsageMode,
     pub new_mode: MonthlyUsageMode,
@@ -576,7 +576,7 @@ impl AccountUsageRecord {
         }
     }
 
-    pub fn apply(&mut self, usage_type: UsageType, value: u64, updated_at: DateTime<Utc>) {
+    pub fn apply(&mut self, usage_type: UsageType, value: u64, updated_at: Timestamp) {
         if self.as_of.is_none_or(|as_of| updated_at > as_of) {
             self.as_of = Some(updated_at);
         }
@@ -598,7 +598,7 @@ impl AccountUsageRecord {
         compute: bool,
         memory: bool,
         filesystem: bool,
-        updated_at: DateTime<Utc>,
+        updated_at: Timestamp,
     ) {
         if self.as_of.is_none_or(|as_of| updated_at > as_of) {
             self.as_of = Some(updated_at);
@@ -794,18 +794,18 @@ mod tests {
         monthly_usage_mode_transition_source, resolved_per_agent_value,
     };
     use crate::repo::model::plan::PlanRecord;
-    use chrono::{DateTime, Utc};
     use golem_common::model::account_usage::{
         AccountUsagePeriod, MemoryLimit, MonthlyUsageMode, MonthlyUsageModeTransitionSource,
         StorageLimit,
     };
     use golem_service_base::repo::{NumericU64, SqlDateTime};
+    use jiff::Timestamp;
     use std::collections::BTreeMap;
     use test_r::test;
     use uuid::Uuid;
 
-    fn timestamp(seconds: i64) -> DateTime<Utc> {
-        DateTime::from_timestamp(seconds, 0).unwrap()
+    fn timestamp(seconds: i64) -> Timestamp {
+        Timestamp::new(seconds, 0).unwrap()
     }
 
     fn test_plan() -> PlanRecord {

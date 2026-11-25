@@ -15,8 +15,8 @@
 //! Primitive support for the derive macros.
 //!
 //! Concrete `IntoSchema` / `FromSchema` impls for all primitives, `Option`,
-//! `Vec`, tuples, `Result`, `HashMap` / `BTreeMap`, `chrono::DateTime<Utc>`,
-//! `chrono::Duration`, and `std::time::Duration` live in
+//! `Vec`, tuples, `Result`, `HashMap` / `BTreeMap`, `jiff::Timestamp`,
+//! `jiff::SignedDuration`, and `std::time::Duration` live in
 //! `golem_common::schema::conversion`. The derive macros only need to delegate
 //! through `<T as IntoSchema>::register(builder)` / `<T as FromSchema>::…`,
 //! which automatically picks up those impls for any type whose `T: IntoSchema`

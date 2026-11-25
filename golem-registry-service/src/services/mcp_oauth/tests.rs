@@ -206,7 +206,7 @@ impl Fixture {
             .unwrap()
             .tokens
             .unwrap();
-        tokens.expires_at = Some(Utc::now() - chrono::Duration::seconds(1));
+        tokens.expires_at = Some(Timestamp::now() - jiff::SignedDuration::from_secs(1));
         self.pool
             .with_rw("oauth-service-test", "expire")
             .execute(
@@ -932,7 +932,7 @@ async fn refreshed_tokens_preserve_omitted_refresh_and_scopes_but_replace_presen
         .unwrap()
         .tokens
         .unwrap();
-    let now = Utc::now();
+    let now = Timestamp::now();
     let response = serde_json::from_value(
         json!({"access_token":"new", "token_type":"Bearer", "expires_in":50}),
     )
@@ -941,7 +941,10 @@ async fn refreshed_tokens_preserve_omitted_refresh_and_scopes_but_replace_presen
     assert_eq!(next.access_token, "new");
     assert_eq!(next.refresh_token.as_deref(), Some("rotating"));
     assert_eq!(next.scopes, vec!["tools"]);
-    assert_eq!(next.expires_at, Some(now + chrono::Duration::seconds(50)));
+    assert_eq!(
+        next.expires_at,
+        Some(now + jiff::SignedDuration::from_secs(50))
+    );
     let response = serde_json::from_value(json!({"access_token":"third", "token_type":"Bearer", "refresh_token":"replacement", "scope":"narrower"})).unwrap();
     let next = tokens(response, now, previous.session.clone(), Some(&previous)).unwrap();
     assert_eq!(next.refresh_token.as_deref(), Some("replacement"));
@@ -1272,7 +1275,7 @@ async fn resource_rejection_expires_only_used_generation_and_refresh_keeps_provi
     let expired = fixture.service.grants.load(&key).await.unwrap().unwrap();
     assert_ne!(expired.generation, used_generation);
     assert!(expired.tokens.as_ref().unwrap().refresh_token.is_some());
-    assert!(expired.tokens.unwrap().expires_at.unwrap() <= Utc::now());
+    assert!(expired.tokens.unwrap().expires_at.unwrap() <= Timestamp::now());
     // Resource access does not implicitly authorize the provider token endpoint.
     assert!(matches!(
         fixture

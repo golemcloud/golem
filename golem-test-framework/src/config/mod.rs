@@ -23,7 +23,7 @@ use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
 use async_trait::async_trait;
 pub use benchmark::{BenchmarkCliParameters, BenchmarkTestDependencies, CliTestService};
-use chrono::{DateTime, Utc};
+
 pub use env::EnvBasedTestDependencies;
 pub use env::EnvBasedTestDependenciesConfig;
 pub use env::service_executable;
@@ -114,7 +114,7 @@ pub trait TestDependencies: Send + Sync + Clone {
             .create_token(
                 &account.id.0,
                 &TokenCreation {
-                    expires_at: DateTime::<Utc>::MAX_UTC,
+                    expires_at: jiff::Timestamp::MAX,
                 },
             )
             .await?;
@@ -153,7 +153,7 @@ pub trait TestDependencies: Send + Sync + Clone {
             .create_token(
                 &account.id.0,
                 &TokenCreation {
-                    expires_at: DateTime::<Utc>::MAX_UTC,
+                    expires_at: jiff::Timestamp::MAX,
                 },
             )
             .await?;

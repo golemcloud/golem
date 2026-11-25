@@ -13,7 +13,7 @@ golem-rust = { path = "../../../..", default-features = false, features = [
     "bigdecimal",
     "bit_vec",
     "bytes",
-    "chrono",
+    "jiff",
     "default",
     "durability",
     "export_golem_agentic",

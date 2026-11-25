@@ -480,7 +480,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         let deadline = i64::try_from(deadline_millis)
             .ok()
-            .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis)
+            .and_then(|v| jiff::Timestamp::from_millisecond(v).ok())
             .ok_or_else(|| WorkerExecutorError::invalid_request("stream expiry is out of range"))?;
         self.deps
             .scheduler_service()

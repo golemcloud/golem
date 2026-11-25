@@ -290,7 +290,7 @@ pub struct RecoveryStats {
 pub struct RoutingSnapshot {
     /// Label for when it was taken, e.g. `before-fault`, `after-recovery`.
     pub at: String,
-    pub taken_at: chrono::DateTime<chrono::Utc>,
+    pub taken_at: jiff::Timestamp,
     /// Executor endpoints and the shard count each held. `None` when the
     /// shard-manager could not be reached, which is expected mid-fault and is
     /// recorded rather than treated as an error.
@@ -678,7 +678,7 @@ impl ChaosSummary {
         records: &[OperationRecord],
         readback: Vec<AgentReadback>,
         routing_snapshots: Vec<RoutingSnapshot>,
-        fault_injected_at: Option<chrono::DateTime<chrono::Utc>>,
+        fault_injected_at: Option<jiff::Timestamp>,
     ) -> Self {
         let mut phases = Vec::new();
         for stream in Stream::ALL {
@@ -728,7 +728,7 @@ impl ChaosSummary {
                         RecoveryStats {
                             stream,
                             time_to_first_success_ms: first
-                                .map(|at| (at - injected).num_milliseconds().max(0) as u64),
+                                .map(|at| (at - injected).as_millis().max(0) as u64),
                             recovered: first.is_some(),
                         }
                     })
@@ -1106,11 +1106,11 @@ pub fn duration_ms(d: Duration) -> u64 {
 mod tests {
     use super::*;
     use crate::chaos::history::OperationRecord;
-    use chrono::{TimeZone, Utc};
+
     use test_r::test;
 
-    fn at(secs: i64) -> chrono::DateTime<chrono::Utc> {
-        Utc.timestamp_opt(1_800_000_000 + secs, 0).unwrap()
+    fn at(secs: i64) -> jiff::Timestamp {
+        jiff::Timestamp::new(1_800_000_000 + secs, 0).unwrap()
     }
 
     /// The field is `storage_fault` in Rust and `storageOutage` on disk, and

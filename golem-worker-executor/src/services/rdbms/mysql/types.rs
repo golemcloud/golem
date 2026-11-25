@@ -225,10 +225,10 @@ pub enum DbValue {
     Float(f32),
     Double(f64),
     Decimal(BigDecimal),
-    Date(chrono::NaiveDate),
-    Datetime(chrono::DateTime<chrono::Utc>),
-    Timestamp(chrono::DateTime<chrono::Utc>),
-    Time(chrono::NaiveTime),
+    Date(jiff::civil::Date),
+    Datetime(jiff::Timestamp),
+    Timestamp(jiff::Timestamp),
+    Time(jiff::civil::Time),
     Year(u16),
     Fixchar(String),
     Varchar(String),
@@ -508,21 +508,25 @@ pub mod tests {
             mysql_types::DbValue::Float(6.0),
             mysql_types::DbValue::Double(7.0),
             mysql_types::DbValue::Decimal(BigDecimal::from_str("80.00").unwrap()),
-            mysql_types::DbValue::Date(chrono::NaiveDate::from_ymd_opt(2030, 10, 12).unwrap()),
-            mysql_types::DbValue::Datetime(chrono::DateTime::from_naive_utc_and_offset(
-                chrono::NaiveDateTime::new(
-                    chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
-                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                ),
-                chrono::Utc,
-            )),
-            mysql_types::DbValue::Timestamp(chrono::DateTime::from_naive_utc_and_offset(
-                chrono::NaiveDateTime::new(
-                    chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
-                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                ),
-                chrono::Utc,
-            )),
+            mysql_types::DbValue::Date(jiff::civil::Date::new(2030, 10, 12).unwrap()),
+            mysql_types::DbValue::Datetime(
+                jiff::civil::DateTime::from_parts(
+                    jiff::civil::Date::new(2023, 1, 1).unwrap(),
+                    jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
+                )
+                .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+                .unwrap()
+                .timestamp(),
+            ),
+            mysql_types::DbValue::Timestamp(
+                jiff::civil::DateTime::from_parts(
+                    jiff::civil::Date::new(2023, 1, 1).unwrap(),
+                    jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
+                )
+                .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+                .unwrap()
+                .timestamp(),
+            ),
             mysql_types::DbValue::Fixchar("0123456789".to_string()),
             mysql_types::DbValue::Varchar(format!("name-{}", Uuid::new_v4())),
             mysql_types::DbValue::Tinytext("Tinytext".to_string()),
@@ -552,7 +556,7 @@ pub mod tests {
             mysql_types::DbValue::IntUnsigned(40),
             mysql_types::DbValue::BigintUnsigned(50),
             mysql_types::DbValue::Year(2020),
-            mysql_types::DbValue::Time(chrono::NaiveTime::from_hms_opt(1, 20, 30).unwrap()),
+            mysql_types::DbValue::Time(jiff::civil::Time::new(1, 20, 30, 0).unwrap()),
         ]
     }
 
@@ -610,22 +614,26 @@ pub mod tests {
         #[test]
         fn test_dbvalue_roundtrip_temporal_types() {
             let test_values = vec![
-                DbValue::Date(chrono::NaiveDate::from_ymd_opt(2030, 10, 12).unwrap()),
-                DbValue::Datetime(chrono::DateTime::from_naive_utc_and_offset(
-                    chrono::NaiveDateTime::new(
-                        chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
-                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                    ),
-                    chrono::Utc,
-                )),
-                DbValue::Timestamp(chrono::DateTime::from_naive_utc_and_offset(
-                    chrono::NaiveDateTime::new(
-                        chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
-                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                    ),
-                    chrono::Utc,
-                )),
-                DbValue::Time(chrono::NaiveTime::from_hms_opt(1, 20, 30).unwrap()),
+                DbValue::Date(jiff::civil::Date::new(2030, 10, 12).unwrap()),
+                DbValue::Datetime(
+                    jiff::civil::DateTime::from_parts(
+                        jiff::civil::Date::new(2023, 1, 1).unwrap(),
+                        jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
+                    )
+                    .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+                    .unwrap()
+                    .timestamp(),
+                ),
+                DbValue::Timestamp(
+                    jiff::civil::DateTime::from_parts(
+                        jiff::civil::Date::new(2023, 1, 1).unwrap(),
+                        jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
+                    )
+                    .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+                    .unwrap()
+                    .timestamp(),
+                ),
+                DbValue::Time(jiff::civil::Time::new(1, 20, 30, 0).unwrap()),
                 DbValue::Year(2020),
             ];
 

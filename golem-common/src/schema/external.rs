@@ -535,7 +535,7 @@ pub(crate) fn decode_external_schema_value(value: &Value) -> Result<SchemaValue,
         }
         "datetime" => {
             let object = exact_object(value, &["value"])?;
-            let value = serde_json::from_value(required(object, "value")?.clone())
+            let value = crate::schema::canonical::datetime::from_json(required(object, "value")?)
                 .map_err(|error| format!("invalid datetime: {error}"))?;
             Ok(SchemaValue::Datetime { value })
         }
@@ -908,8 +908,8 @@ mod poem_impl {
 
     #[allow(dead_code)]
     mod openapi_schema {
+        use crate::model::poem::datetime::OpenApiTimestamp;
         use crate::schema::SchemaGraph;
-        use chrono::{DateTime, Utc};
         use poem_openapi::registry::{MetaSchema, MetaSchemaRef, Registry};
         use poem_openapi::types::Type;
         use std::borrow::Cow;
@@ -1105,7 +1105,7 @@ mod poem_impl {
                 url: String,
             },
             Datetime {
-                value: DateTime<Utc>,
+                value: OpenApiTimestamp,
             },
             Duration(ExternalDurationValuePayload),
             Quantity(ExternalQuantityValue),
@@ -1241,9 +1241,49 @@ mod tests {
         ResultValuePayload, SchemaGraph, SchemaType, SchemaTypeDef, TextValuePayload,
         UnionValuePayload, VariantValuePayload,
     };
-    use chrono::{TimeZone, Utc};
+    use jiff::Timestamp as JiffTimestamp;
     use serde_json::{Value, json};
     use test_r::test;
+
+    #[test]
+    fn external_datetimes_use_strict_timestamp_parsing() {
+        for input in [
+            "2025-04-12T13:14Z",
+            "2025-04-12T13:14:15Z[UTC]",
+            "2025-04-12T13:14:15+0200",
+            "2016-12-31T23:59:60.123456789Z",
+        ] {
+            let value = json!({"kind": "datetime", "value": {"value": input}});
+            assert!(
+                decode_external_schema_value(&value).is_err(),
+                "accepted {input}"
+            );
+            assert!(
+                serde_json::from_value::<ExternalSchemaValue>(value).is_err(),
+                "accepted {input}"
+            );
+        }
+        for timestamp in [
+            JiffTimestamp::new(-1, 123_456_789).unwrap(),
+            JiffTimestamp::MAX,
+        ] {
+            let value = json!({"kind": "datetime", "value": {"value": timestamp.to_string()}});
+            let decoded: ExternalSchemaValue = serde_json::from_value(value).unwrap();
+            assert_eq!(
+                decoded.into_inner(),
+                SchemaValue::Datetime { value: timestamp }
+            );
+        }
+        let value =
+            json!({"kind": "datetime", "value": {"value": "1969-12-31T22:59:59.999999999-01:00"}});
+        let decoded: ExternalSchemaValue = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            decoded.into_inner(),
+            SchemaValue::Datetime {
+                value: JiffTimestamp::from_nanosecond(-1).unwrap()
+            }
+        );
+    }
 
     fn forged_quota_token() -> SchemaValue {
         SchemaValue::QuotaToken(QuotaTokenValuePayload {
@@ -1251,7 +1291,7 @@ mod tests {
             resource_name: "forged".to_string(),
             expected_use: 100,
             last_credit: 100,
-            last_credit_at: Utc.timestamp_opt(0, 0).unwrap(),
+            last_credit_at: JiffTimestamp::new(0, 0).unwrap(),
         })
     }
 
@@ -1277,7 +1317,7 @@ mod tests {
 
     #[test]
     fn native_external_value_wire_corpus_is_stable() {
-        let datetime = Utc.timestamp_opt(1_725_190_496, 123_456_789).unwrap();
+        let datetime = JiffTimestamp::new(1_725_190_496, 123_456_789).unwrap();
         let vectors = [
             (SchemaValue::Bool(true), json!({"kind":"bool","value":true})),
             (SchemaValue::S8(-8), json!({"kind":"s8","value":-8})),

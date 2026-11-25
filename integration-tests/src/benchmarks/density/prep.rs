@@ -30,7 +30,7 @@
 
 use crate::benchmarks::density::DensitySection;
 use anyhow::Context;
-use chrono::{DateTime, Utc};
+
 use golem_client::api::RegistryServiceClient;
 use golem_common::model::account::{AccountCreation, AccountEmail, AccountId};
 use golem_common::model::application::{ApplicationCreation, ApplicationName};
@@ -182,7 +182,7 @@ pub async fn run_prep(
         .create_token(
             &account.id.0,
             &TokenCreation {
-                expires_at: DateTime::<Utc>::MAX_UTC,
+                expires_at: jiff::Timestamp::MAX,
             },
         )
         .await

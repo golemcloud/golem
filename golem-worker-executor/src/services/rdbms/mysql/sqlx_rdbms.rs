@@ -19,6 +19,7 @@ use crate::services::rdbms::sqlx_common::{
     GolemTransactionRepo, PoolCreator, QueryExecutor, QueryParamsBinder, SqlxDbResultStream,
     SqlxRdbms, create_db_result,
 };
+use crate::services::rdbms::sqlx_types::SqlValue;
 use crate::services::rdbms::{
     DbResult, DbResultStream, DbRow, Rdbms, RdbmsError, RdbmsTransactionStatus,
 };
@@ -268,11 +269,11 @@ fn bind_value(
             let v: serde_json::Value = serde_json::from_str(&v).map_err(|e| e.to_string())?;
             Ok(query.bind(v))
         }
-        DbValue::Timestamp(v) => Ok(query.bind(v)),
-        DbValue::Datetime(v) => Ok(query.bind(v)),
-        DbValue::Time(v) => Ok(query.bind(v)),
+        DbValue::Timestamp(v) => Ok(query.bind(SqlValue(v))),
+        DbValue::Datetime(v) => Ok(query.bind(SqlValue(v))),
+        DbValue::Time(v) => Ok(query.bind(SqlValue(v))),
         DbValue::Year(v) => Ok(query.bind(v)),
-        DbValue::Date(v) => Ok(query.bind(v)),
+        DbValue::Date(v) => Ok(query.bind(SqlValue(v))),
         DbValue::Enumeration(v) => Ok(query.bind(v)),
         DbValue::Set(v) => Ok(query.bind(v)),
         DbValue::Bit(v) => {
@@ -414,22 +415,24 @@ fn get_db_value(index: usize, row: &sqlx::mysql::MySqlRow) -> Result<DbValue, St
             v.map(DbValue::Longblob).unwrap_or(DbValue::Null)
         }
         DbColumnType::Timestamp => {
-            let v: Option<chrono::DateTime<chrono::Utc>> =
+            let v: Option<SqlValue<jiff::Timestamp>> =
                 row.try_get(index).map_err(|e| e.to_string())?;
-            v.map(DbValue::Timestamp).unwrap_or(DbValue::Null)
+            v.map(|v| DbValue::Timestamp(v.0)).unwrap_or(DbValue::Null)
         }
         DbColumnType::Datetime => {
-            let v: Option<chrono::DateTime<chrono::Utc>> =
+            let v: Option<SqlValue<jiff::Timestamp>> =
                 row.try_get(index).map_err(|e| e.to_string())?;
-            v.map(DbValue::Datetime).unwrap_or(DbValue::Null)
+            v.map(|v| DbValue::Datetime(v.0)).unwrap_or(DbValue::Null)
         }
         DbColumnType::Date => {
-            let v: Option<chrono::NaiveDate> = row.try_get(index).map_err(|e| e.to_string())?;
-            v.map(DbValue::Date).unwrap_or(DbValue::Null)
+            let v: Option<SqlValue<jiff::civil::Date>> =
+                row.try_get(index).map_err(|e| e.to_string())?;
+            v.map(|v| DbValue::Date(v.0)).unwrap_or(DbValue::Null)
         }
         DbColumnType::Time => {
-            let v: Option<chrono::NaiveTime> = row.try_get(index).map_err(|e| e.to_string())?;
-            v.map(DbValue::Time).unwrap_or(DbValue::Null)
+            let v: Option<SqlValue<jiff::civil::Time>> =
+                row.try_get(index).map_err(|e| e.to_string())?;
+            v.map(|v| DbValue::Time(v.0)).unwrap_or(DbValue::Null)
         }
         DbColumnType::Year => {
             let v: Option<u16> = row.try_get(index).map_err(|e| e.to_string())?;

@@ -78,7 +78,7 @@ use crate::chaos::split::FaultWindow;
 use crate::chaos::summary::{AgentReadback, ChaosSummary, ExactlyOnceReport, TerminationReason};
 use crate::chaos::workload::{self, PhaseMarker, WorkloadContext};
 use crate::chaos::{ScenarioCode, ScenarioConfig};
-use chrono::Utc;
+
 use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::dsl::TestDsl;
 use std::time::Duration;
@@ -98,7 +98,7 @@ pub async fn run(
     signals: &FaultSignals,
     outputs: &OutputPaths,
 ) -> anyhow::Result<ChaosResult> {
-    let started_at = Utc::now();
+    let started_at = jiff::Timestamp::now();
     let workload_config = config.require_workload()?;
     let relay_config = config.require_relay()?;
     let history = OperationHistory::new(code.as_str());
@@ -212,13 +212,13 @@ pub async fn run(
         "{code}: baseline phase, running mixed workload for {:?}",
         config.phases.baseline()
     );
-    phases.baseline = Some(PhaseWindow::started(Utc::now()));
+    phases.baseline = Some(PhaseWindow::started(jiff::Timestamp::now()));
     let handle = workload::start(ctx.clone(), workload_config);
     tokio::time::sleep(config.phases.baseline()).await;
     routing_snapshots.push(snapshot_routing(deps, "before-fault").await);
     ownership_samples.push(sample_ownership(deps, "before-fault", None, true).await);
     if let Some(window) = phases.baseline.as_mut() {
-        window.end(Utc::now());
+        window.end(jiff::Timestamp::now());
     }
 
     // ── Gate ────────────────────────────────────────────────────────────────
@@ -292,7 +292,7 @@ pub async fn run(
     );
     signals.write_baseline_ready(&BaselineReady {
         scenario_code: code.as_str().to_string(),
-        ready_at: Utc::now(),
+        ready_at: jiff::Timestamp::now(),
         baseline_operations,
         // Neither scenario pins a pod. S2 partitions every executor from every
         // other one and S21 loads every worker-service replica, both selected by
@@ -345,11 +345,11 @@ pub async fn run(
         config.phases.recovery()
     );
     ctx.phase.set(Phase::Recovery);
-    phases.recovery = Some(PhaseWindow::started(Utc::now()));
+    phases.recovery = Some(PhaseWindow::started(jiff::Timestamp::now()));
     tokio::time::sleep(config.phases.recovery()).await;
     handle.stop().await;
     if let Some(window) = phases.recovery.as_mut() {
-        window.end(Utc::now());
+        window.end(jiff::Timestamp::now());
     }
     routing_snapshots.push(snapshot_routing(deps, "after-recovery").await);
     ownership_samples
