@@ -1306,17 +1306,29 @@ async fn probes_and_invalid_paths(volume: &dyn VolumeClient, versioned: bool) {
     );
 }
 
+fn byte_limit_key(bytes: usize, multibyte: bool) -> Box<str> {
+    // Keep each component below the RustFS limit while testing the full key byte limit.
+    let directories = format!("{}/", "a".repeat(200)).repeat(4);
+    let tail_bytes = bytes - directories.len();
+    if multibyte {
+        format!(
+            "{directories}{}{}",
+            "é".repeat(tail_bytes / 2),
+            "a".repeat(tail_bytes % 2)
+        )
+        .into_boxed_str()
+    } else {
+        format!("{directories}{}", "a".repeat(tail_bytes)).into_boxed_str()
+    }
+}
+
 async fn key_byte_contract(volume: &dyn VolumeClient, key_bytes: usize) {
     stream::iter([false, true])
         .flat_map(|is_probe| {
             let name_bytes = key_bytes - if is_probe { 7 } else { 0 };
             stream::iter([
-                "a".repeat(name_bytes),
-                format!(
-                    "{}{}",
-                    "é".repeat(name_bytes / 2),
-                    "a".repeat(name_bytes % 2)
-                ),
+                byte_limit_key(name_bytes, false),
+                byte_limit_key(name_bytes, true),
             ])
             .map(move |name| (is_probe, name))
         })
@@ -1324,7 +1336,7 @@ async fn key_byte_contract(volume: &dyn VolumeClient, key_bytes: usize) {
             let key = if is_probe {
                 format!(".golem/{name}").into_boxed_str()
             } else {
-                name.into_boxed_str()
+                name
             };
             let invalid = format!("{key}x").into_boxed_str();
             assert_eq!(key.len(), key_bytes);
@@ -1511,19 +1523,19 @@ fn empty_key_prefixes() -> [(Box<str>, VolumeError); 5] {
     [
         ("".into(), VolumeError::NotFound),
         (
-            format!("{}/", "p".repeat(1023)).into_boxed_str(),
+            format!("{}/", byte_limit_key(1023, false)).into_boxed_str(),
             VolumeError::NotFound,
         ),
         (
-            format!("{}/", "p".repeat(1024)).into_boxed_str(),
+            format!("{}/", byte_limit_key(1024, false)).into_boxed_str(),
             VolumeError::InvalidRequest,
         ),
         (
-            format!("{}a/", "é".repeat(511)).into_boxed_str(),
+            format!("{}/", byte_limit_key(1023, true)).into_boxed_str(),
             VolumeError::NotFound,
         ),
         (
-            format!("{}/", "é".repeat(512)).into_boxed_str(),
+            format!("{}/", byte_limit_key(1024, true)).into_boxed_str(),
             VolumeError::InvalidRequest,
         ),
     ]
