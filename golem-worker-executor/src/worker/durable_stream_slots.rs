@@ -37,7 +37,7 @@ use golem_common::schema::{
 };
 use golem_schema::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
 use golem_schema::schema::fingerprint::schema_fingerprint_v1;
-use golem_schema::schema::validation::validate_value;
+use golem_schema::schema::validation::{ValueError, validate_value};
 use prost::Message;
 
 /// Domain result of creating or replay-attaching a stream session.
@@ -1826,8 +1826,30 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     let SlotSource::Stream(handle) = slot.source else {
                         return Err(WorkerExecutorError::runtime("input slot has no stream").into());
                     };
+                    let invalid_item = |errors: Vec<ValueError>| {
+                        WorkerExecutorError::invalid_request(format!(
+                            "invalid stream item: {}",
+                            errors
+                                .iter()
+                                .map(ValueError::diagnostic)
+                                .collect::<Vec<_>>()
+                                .join("; ")
+                        ))
+                    };
                     match &payload {
-                        Some(StreamItemsPayload::PackedU8(_)) if slot.bytes => {}
+                        Some(StreamItemsPayload::PackedU8(bytes)) if slot.bytes => {
+                            let mut validated = [false; 256];
+                            for byte in bytes {
+                                if !std::mem::replace(&mut validated[*byte as usize], true) {
+                                    validate_value(
+                                        &slot.graph,
+                                        &slot.graph.root,
+                                        &SchemaValue::U8(*byte),
+                                    )
+                                    .map_err(invalid_item)?;
+                                }
+                            }
+                        }
                         Some(StreamItemsPayload::Values(values)) if !slot.bytes => {
                             for encoded in values {
                                 let proto =
@@ -1837,13 +1859,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 let value: SchemaValue = proto
                                     .try_into()
                                     .map_err(WorkerExecutorError::invalid_request)?;
-                                validate_value(&slot.graph, &slot.graph.root, &value).map_err(
-                                    |errors| {
-                                        WorkerExecutorError::invalid_request(format!(
-                                            "invalid stream item: {errors:?}"
-                                        ))
-                                    },
-                                )?;
+                                validate_value(&slot.graph, &slot.graph.root, &value)
+                                    .map_err(invalid_item)?;
                             }
                         }
                         None => {}

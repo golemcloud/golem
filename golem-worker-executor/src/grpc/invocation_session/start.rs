@@ -24,7 +24,7 @@ use super::{
     rejection_worker_error, request_agent_id, request_idempotency_key, route_durable_request,
     send_attachment_revocation, send_protocol_failure, send_rejection,
     send_rejection_with_worker_error, send_unvalidated_rejection, send_worker_failure,
-    until_response_closed,
+    until_response_closed, with_input_server_terminals,
 };
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
@@ -344,6 +344,44 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         } else {
             HashMap::new()
         };
+        let stream_mappings = match &accepted.durable_streams {
+            Some(streams) => match streams.input_server_terminals().await.and_then(|terminals| {
+                with_input_server_terminals(
+                    streams
+                        .materialized_mappings()
+                        .iter()
+                        .map(|mapping| {
+                            durable_stream_mapping_to_proto(
+                                mapping,
+                                high_waters.get(&mapping.transport_stream_id),
+                            )
+                        })
+                        .collect(),
+                    &terminals,
+                )
+                .map_err(SessionError::from)
+            }) {
+                Ok(stream_mappings) => stream_mappings,
+                Err(error) => {
+                    tracing::warn!(
+                        target = ?start.target,
+                        attempt_id = ?start.attempt_id,
+                        error = %error,
+                        "Invocation session input terminal lookup failed"
+                    );
+                    send_rejection_with_worker_error(
+                        &responses,
+                        InvocationRejectionReason::Internal,
+                        error.to_string(),
+                        rejection_worker_error(&error),
+                        &start,
+                    )
+                    .await;
+                    return;
+                }
+            },
+            None => Vec::new(),
+        };
 
         let acceptance_forwarded = response_state_changed.notified();
         tokio::pin!(acceptance_forwarded);
@@ -371,22 +409,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         epoch: accepted.durable_streams.as_ref()
                             .filter(|_| !accepted.joined_origin_observer)
                             .map(StreamSession::attachment_epoch).unwrap_or_default(),
-                        stream_mappings: accepted
-                            .durable_streams
-                            .as_ref()
-                            .map(|streams| {
-                                streams
-                                    .materialized_mappings()
-                                    .iter()
-                                    .map(|mapping| {
-                                        durable_stream_mapping_to_proto(
-                                            mapping,
-                                            high_waters.get(&mapping.transport_stream_id),
-                                        )
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default(),
+                        stream_mappings,
                         environment_id: accepted.prepared.as_ref().map(|prepared| {
                             prepared.attempt.session_key.callee_environment_id.into()
                         }),
