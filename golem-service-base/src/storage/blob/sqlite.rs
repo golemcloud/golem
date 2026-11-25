@@ -15,6 +15,7 @@
 use crate::db::sqlite::SqlitePool;
 use crate::db::{DBValue, PoolApi};
 use crate::repo::RepoError;
+use crate::repo::SqlDateTime;
 use crate::storage::blob::{
     BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobRangeStream, BlobStorageBackend,
     BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
@@ -23,7 +24,6 @@ use crate::storage::blob::{
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
 use bytes::Bytes;
-use chrono::NaiveDateTime;
 use futures::stream::BoxStream;
 use sqlx::Connection;
 use std::io::Read;
@@ -785,20 +785,19 @@ fn descendant_bounds(dir: &str) -> (String, String) {
 
 #[derive(sqlx::FromRow)]
 struct DBMetadata {
-    last_modified_at: NaiveDateTime,
+    last_modified_at: SqlDateTime,
     size: i64,
 }
 impl DBMetadata {
-    pub const ISO_8601_FORMAT: &'static str = "%Y-%m-%dT%H:%M:%S";
     fn into_blob_metadata(self) -> Result<BlobMetadata, String> {
-        let str = self
-            .last_modified_at
-            .format(Self::ISO_8601_FORMAT)
-            .to_string();
-        str.parse().map(|last_modified_at| BlobMetadata {
-            last_modified_at,
-            size: self.size as u64,
-        })
+        self.last_modified_at
+            .into_utc()
+            .to_string()
+            .parse()
+            .map(|last_modified_at| BlobMetadata {
+                last_modified_at,
+                size: self.size as u64,
+            })
     }
 }
 

@@ -17,10 +17,10 @@ use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::MapServiceError;
 use crate::model::token::{TokenDeleteView, TokenListView, TokenNewView};
-use chrono::{DateTime, Utc};
 use golem_client::api::{AccountClient, TokenClient};
 use golem_client::model::TokenCreation;
 use golem_common::model::auth::TokenId;
+use jiff::Timestamp;
 use std::sync::Arc;
 
 pub struct ApiTokenCommandHandler {
@@ -56,7 +56,7 @@ impl ApiTokenCommandHandler {
         Ok(())
     }
 
-    async fn cmd_new(&self, expires_at: DateTime<Utc>) -> anyhow::Result<()> {
+    async fn cmd_new(&self, expires_at: Timestamp) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
 
         let token = clients

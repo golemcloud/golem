@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use chrono::{DateTime, Utc};
 use golem_common::model::Pod;
 use golem_common::model::quota::{
     EnforcementAction, LeaseEpoch, ResourceDefinitionId, ResourceLimit,
 };
-use std::time::SystemTime;
+use jiff::Timestamp;
 
 #[derive(Debug, Clone)]
 pub enum QuotaLease {
@@ -26,14 +25,14 @@ pub enum QuotaLease {
         pod: Pod,
         epoch: LeaseEpoch,
         allocated_amount: u64,
-        expires_at: DateTime<Utc>,
+        expires_at: Timestamp,
         resource_limit: ResourceLimit,
         enforcement_action: EnforcementAction,
         total_available_amount: u64,
     },
     Unlimited {
         pod: Pod,
-        expires_at: DateTime<Utc>,
+        expires_at: Timestamp,
     },
 }
 
@@ -68,7 +67,10 @@ impl From<QuotaLease> for golem_api_grpc::proto::golem::common::QuotaLease {
                     pod: Some(pod.into()),
                     epoch: epoch.0,
                     allocation: allocated_amount,
-                    expires_at: Some(prost_types::Timestamp::from(SystemTime::from(expires_at))),
+                    expires_at: Some(prost_types::Timestamp {
+                        seconds: expires_at.as_nanosecond().div_euclid(1_000_000_000) as i64,
+                        nanos: expires_at.as_nanosecond().rem_euclid(1_000_000_000) as i32,
+                    }),
                     resource_limit: Some(resource_limit.into()),
                     enforcement_action:
                         golem_api_grpc::proto::golem::common::EnforcementAction::from(
@@ -81,7 +83,10 @@ impl From<QuotaLease> for golem_api_grpc::proto::golem::common::QuotaLease {
             QuotaLease::Unlimited { pod, expires_at } => Self {
                 kind: Some(quota_lease::Kind::Unlimited(quota_lease::Unlimited {
                     pod: Some(pod.into()),
-                    expires_at: Some(prost_types::Timestamp::from(SystemTime::from(expires_at))),
+                    expires_at: Some(prost_types::Timestamp {
+                        seconds: expires_at.as_nanosecond().div_euclid(1_000_000_000) as i64,
+                        nanos: expires_at.as_nanosecond().rem_euclid(1_000_000_000) as i32,
+                    }),
                 })),
             },
         }

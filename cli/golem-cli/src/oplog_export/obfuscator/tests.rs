@@ -70,6 +70,22 @@ fn key() -> TokenKey {
     TokenKey::from_bytes(KEY)
 }
 
+#[test]
+fn canonical_datetime_uses_floor_seconds_and_positive_fractional_nanoseconds() {
+    for (text, seconds, nanoseconds) in [
+        ("1969-12-31T23:59:59.5Z", -1i64, 500_000_000u32),
+        ("1970-01-01T00:00:00Z", 0, 0),
+        ("1970-01-01T00:00:00.5Z", 0, 500_000_000),
+    ] {
+        let bytes = encode(&SchemaValue::Datetime {
+            value: text.parse().unwrap(),
+        });
+        assert_eq!(bytes.len(), 13);
+        assert_eq!(&bytes[1..9], &seconds.to_be_bytes());
+        assert_eq!(&bytes[9..13], &nanoseconds.to_be_bytes());
+    }
+}
+
 fn json(node: &impl serde::Serialize) -> String {
     serde_json::to_string(node).unwrap()
 }
@@ -844,7 +860,7 @@ fn leaf_pair() -> impl Strategy<Value = Pair> {
         (0i64..4_000_000_000).prop_map(|s| (
             SchemaType::datetime(),
             SchemaValue::Datetime {
-                value: chrono::DateTime::from_timestamp(s, 0).unwrap(),
+                value: jiff::Timestamp::new(s, 0).unwrap(),
             },
         )),
         any::<i64>().prop_map(|n| (
@@ -1234,7 +1250,7 @@ fn host_managed_values_redacted() {
         secret_id: Uuid::from_u128(99),
         config_key: Some(vec!["MARKERKEY".into()]),
         version: 1,
-        resolved_at: chrono::Utc::now(),
+        resolved_at: jiff::Timestamp::now(),
         category: Some("MARKERCAT".into()),
     });
     let value = SchemaValue::Record {

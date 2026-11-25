@@ -14,7 +14,7 @@
 
 use crate::base_model::account::AccountId;
 use crate::{declare_enums, declare_structs, declare_unions};
-use chrono::{DateTime, Datelike, NaiveDate, Utc};
+use jiff::{Timestamp, civil::Date};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
@@ -212,16 +212,24 @@ declare_structs! {
         pub durable_storage: MeteringStatus,
         pub ephemeral_storage: MeteringStatus,
     }
+}
 
+crate::declare_datetime_struct! {
+    crate::base_model::account_usage::AccountUsageMetrics,
+    [],
+    [],
+    [],
     pub struct AccountUsageMetrics {
         pub period: AccountUsagePeriod,
-        pub as_of: DateTime<Utc>,
+        pub as_of: Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
         pub compute_gcu: f64,
         pub memory_gb_seconds: u64,
         pub durable_storage_gb_month: f64,
         pub ephemeral_storage_gb_month: f64,
         pub metering: AccountUsageMetering,
     }
+}
+declare_structs! {
 
     pub struct AccountUsage {
         pub account_id: AccountId,
@@ -297,15 +305,30 @@ declare_structs! {
         pub durable_storage_gb_month: MonthlyStorageLimit,
         pub ephemeral_storage_gb_month: MonthlyStorageLimit,
     }
+}
 
-    #[cfg_attr(feature = "full", oai(example))]
+crate::declare_datetime_struct! {
+    crate::base_model::account_usage::MonthlyUsageModeTransition,
+    [],
+    [#[cfg_attr(feature = "full", oai(example))]],
+    [
+        impl poem_openapi::types::Example for MonthlyUsageModeTransition {
+            fn example() -> Self {
+                serde_json::from_value(serde_json::to_value(
+                    <Original as poem_openapi::types::Example>::example()
+                ).unwrap()).unwrap()
+            }
+        }
+    ],
     pub struct MonthlyUsageModeTransition {
         pub actor_account_id: AccountId,
-        pub changed_at: DateTime<Utc>,
+        pub changed_at: Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
         pub source: MonthlyUsageModeTransitionSource,
         pub previous_mode: MonthlyUsageMode,
         pub new_mode: MonthlyUsageMode,
     }
+}
+declare_structs! {
 
     pub struct SetMonthlyUsageMode {
         pub mode: MonthlyUsageMode,
@@ -358,41 +381,71 @@ declare_structs! {
     pub struct SetMemoryLimit {
         pub value: u64,
     }
+}
 
-    #[cfg_attr(feature = "full", oai(skip_serializing_if_is_none))]
-    #[derive(Eq)]
+crate::declare_datetime_struct! {
+    crate::base_model::account_usage::AdminResourceGrant,
+    [#[derive(Eq)]],
+    [#[cfg_attr(feature = "full", oai(skip_serializing_if_is_none))]],
+    [],
     pub struct AdminResourceGrant {
         pub dimension: AdminResourceGrantDimension,
         /// The finite grant amount in the unit associated with `dimension`.
         pub value: u64,
         pub reason: AdminResourceGrantReason,
         pub actor_account_id: AccountId,
-        pub granted_at: DateTime<Utc>,
+        pub granted_at: Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub expires_at: Option<DateTime<Utc>>,
+        pub expires_at: Option<Timestamp> => Option<crate::model::poem::datetime::OpenApiTimestamp>,
     }
+}
 
-    #[cfg_attr(feature = "full", oai(example, skip_serializing_if_is_none))]
+crate::declare_datetime_struct! {
+    crate::base_model::account_usage::SetAdminResourceGrant,
+    [],
+    [#[cfg_attr(feature = "full", oai(example, skip_serializing_if_is_none))]],
+    [
+        impl poem_openapi::types::Example for SetAdminResourceGrant {
+            fn example() -> Self {
+                serde_json::from_value(serde_json::to_value(
+                    <Original as poem_openapi::types::Example>::example()
+                ).unwrap()).unwrap()
+            }
+        }
+    ],
     pub struct SetAdminResourceGrant {
         pub value: u64,
         pub reason: AdminResourceGrantReason,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub expires_at: Option<DateTime<Utc>>,
+        pub expires_at: Option<Timestamp> => Option<crate::model::poem::datetime::OpenApiTimestamp>,
     }
+}
 
-    #[cfg_attr(feature = "full", oai(example, skip_serializing_if_is_none))]
+crate::declare_datetime_struct! {
+    crate::base_model::account_usage::AdminResourceGrantChange,
+    [],
+    [#[cfg_attr(feature = "full", oai(example, skip_serializing_if_is_none))]],
+    [
+        impl poem_openapi::types::Example for AdminResourceGrantChange {
+            fn example() -> Self {
+                serde_json::from_value(serde_json::to_value(
+                    <Original as poem_openapi::types::Example>::example()
+                ).unwrap()).unwrap()
+            }
+        }
+    ],
     pub struct AdminResourceGrantChange {
         pub account_id: AccountId,
         pub dimension: AdminResourceGrantDimension,
         pub event_type: AdminResourceGrantEventType,
         pub reason: AdminResourceGrantReason,
         pub actor_account_id: AccountId,
-        pub changed_at: DateTime<Utc>,
+        pub changed_at: Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
         /// The previous finite amount in the unit associated with `dimension`.
         pub old_value: u64,
         pub new_value: AdminResourceGrantChangeValue,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub expires_at: Option<DateTime<Utc>>,
+        pub expires_at: Option<Timestamp> => Option<crate::model::poem::datetime::OpenApiTimestamp>,
     }
 }
 
@@ -555,10 +608,10 @@ impl Display for AccountUsagePeriod {
 
 impl AccountUsagePeriod {
     pub fn current() -> Self {
-        let now = Utc::now();
+        let now = Timestamp::now().to_zoned_datetime(jiff::tz::TimeZone::UTC);
         Self {
-            year: now.year(),
-            month: now.month(),
+            year: i32::from(now.year()),
+            month: now.month() as u32,
         }
     }
 }
@@ -605,8 +658,7 @@ impl poem_openapi::types::Example for MonthlyUsageModeTransition {
     fn example() -> Self {
         Self {
             actor_account_id: AccountId(uuid::Uuid::from_u128(1)),
-            changed_at: DateTime::from_timestamp(1_700_000_000, 0)
-                .expect("example timestamp is valid"),
+            changed_at: Timestamp::new(1_700_000_000, 0).expect("example timestamp is valid"),
             source: MonthlyUsageModeTransitionSource::Owner,
             previous_mode: MonthlyUsageMode::AllowOverage,
             new_mode: MonthlyUsageMode::HardLimit,
@@ -700,8 +752,7 @@ impl poem_openapi::types::Example for AdminResourceGrantChange {
             event_type: AdminResourceGrantEventType::OverrideGranted,
             reason: AdminResourceGrantReason::Support,
             actor_account_id: AccountId(uuid::Uuid::from_u128(2)),
-            changed_at: DateTime::from_timestamp(1_700_000_000, 0)
-                .expect("example timestamp is valid"),
+            changed_at: Timestamp::new(1_700_000_000, 0).expect("example timestamp is valid"),
             old_value: 5,
             new_value: AdminResourceGrantChangeValue::from_raw(
                 AdminResourceGrantDimension::MonthlyComputeGcu,
@@ -729,8 +780,7 @@ impl poem_openapi::types::Example for StorageLimit {
             value: 2 * 1024 * 1024 * 1024,
             reason: AdminResourceGrantReason::Support,
             actor_account_id: AccountId(uuid::Uuid::from_u128(2)),
-            granted_at: DateTime::from_timestamp(1_700_000_000, 0)
-                .expect("example timestamp is valid"),
+            granted_at: Timestamp::new(1_700_000_000, 0).expect("example timestamp is valid"),
             expires_at: None,
         });
         limit
@@ -747,8 +797,7 @@ impl poem_openapi::types::Example for MemoryLimit {
             value: 2 * 1024 * 1024 * 1024,
             reason: AdminResourceGrantReason::Support,
             actor_account_id: AccountId(uuid::Uuid::from_u128(2)),
-            granted_at: DateTime::from_timestamp(1_700_000_000, 0)
-                .expect("example timestamp is valid"),
+            granted_at: Timestamp::new(1_700_000_000, 0).expect("example timestamp is valid"),
             expires_at: None,
         });
         limit
@@ -795,7 +844,11 @@ impl FromStr for AccountUsagePeriod {
         if !(1..=12).contains(&month) {
             return Err("period month must be between 01 and 12".to_string());
         }
-        if NaiveDate::from_ymd_opt(year, month, 1).is_none() {
+        if i16::try_from(year)
+            .ok()
+            .and_then(|year| Date::new(year, month as i8, 1).ok())
+            .is_none()
+        {
             return Err("period year is outside the supported range".to_string());
         }
 
@@ -858,7 +911,7 @@ mod tests {
         SetAdminResourceGrant, StorageLimit, StorageResourceLimitValue, byte_seconds_to_gb_month,
         fuel_to_gcu,
     };
-    use chrono::Utc;
+    use jiff::Timestamp;
     use std::str::FromStr;
     use test_r::test;
 
@@ -995,7 +1048,7 @@ mod tests {
                     "value": 2 * 1024 * 1024 * 1024_u64,
                     "reason": "support",
                     "actorAccountId": "00000000-0000-0000-0000-000000000002",
-                    "grantedAt": "2023-11-14T22:13:20+00:00",
+                    "grantedAt": "2023-11-14T22:13:20Z",
                 },
                 "effectiveValue": {
                     "type": "finite",
@@ -1285,7 +1338,7 @@ mod tests {
                 year: 2026,
                 month: 4,
             },
-            as_of: Utc::now(),
+            as_of: Timestamp::now(),
             compute_gcu: 0.0,
             memory_gb_seconds: 0,
             durable_storage_gb_month: 0.0,

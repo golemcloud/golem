@@ -329,7 +329,7 @@ impl<Ctx: WorkerCtx> RegistryInvalidationHandler
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
+
     use golem_common::model::card::{Card, StoredCard};
     use std::collections::HashMap;
     use test_r::test;
@@ -342,7 +342,7 @@ mod tests {
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
-            created_at: Utc::now(),
+            created_at: jiff::Timestamp::now(),
             expires_at: None,
             system_card: false,
             managed_by: None,

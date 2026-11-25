@@ -67,7 +67,7 @@ pub type StreamOutcome = Result<(), StreamError>;
 pub type Uuid = uuid::Uuid;
 
 /// Native counterpart of `golem:core/types@2.0.0::datetime`.
-pub type Datetime = chrono::DateTime<chrono::Utc>;
+pub type Datetime = jiff::Timestamp;
 
 /// Native counterpart of `golem:core/types@2.0.0::environment-id`.
 #[derive(

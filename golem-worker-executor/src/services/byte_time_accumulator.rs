@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use chrono::{DateTime, Datelike, TimeZone, Utc};
 use golem_common::model::account_usage::AccountUsagePeriod;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -20,20 +19,20 @@ use std::time::{Duration, Instant};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct MeteringTime {
     pub(crate) instant: Instant,
-    pub(crate) utc: DateTime<Utc>,
+    pub(crate) utc: jiff::Timestamp,
 }
 
 impl MeteringTime {
     pub(crate) fn now() -> Self {
         let before = Instant::now();
-        let utc = Utc::now();
+        let utc = jiff::Timestamp::now();
         let after = Instant::now();
         Self::between(before, utc, after)
     }
 
     /// Associates a wall-clock sample with the midpoint of its monotonic sampling bracket.
     /// The pairing uncertainty is at most half the bracket width; the clocks are not atomic.
-    pub(crate) fn between(before: Instant, utc: DateTime<Utc>, after: Instant) -> Self {
+    pub(crate) fn between(before: Instant, utc: jiff::Timestamp, after: Instant) -> Self {
         let uncertainty = after.saturating_duration_since(before);
         Self {
             instant: before + uncertainty / 2,
@@ -44,12 +43,12 @@ impl MeteringTime {
     pub(crate) fn at_instant(self, instant: Instant) -> Self {
         let utc = if instant >= self.instant {
             self.utc
-                + chrono::Duration::from_std(instant.duration_since(self.instant))
-                    .unwrap_or(chrono::Duration::MAX)
+                + jiff::SignedDuration::try_from(instant.duration_since(self.instant))
+                    .unwrap_or(jiff::SignedDuration::MAX)
         } else {
             self.utc
-                - chrono::Duration::from_std(self.instant.duration_since(instant))
-                    .unwrap_or(chrono::Duration::MAX)
+                - jiff::SignedDuration::try_from(self.instant.duration_since(instant))
+                    .unwrap_or(jiff::SignedDuration::MAX)
         };
         Self { instant, utc }
     }
@@ -120,8 +119,7 @@ impl ByteTimeAccumulator {
             if boundary >= end.utc {
                 break;
             }
-            let boundary_offset = (boundary - start.utc)
-                .to_std()
+            let boundary_offset = Duration::try_from(boundary - start.utc)
                 .unwrap_or(Duration::ZERO)
                 .as_nanos()
                 .min(elapsed);
@@ -161,22 +159,25 @@ impl ByteTimeAccumulator {
     }
 }
 
-fn period_at(at: DateTime<Utc>) -> AccountUsagePeriod {
+fn period_at(at: jiff::Timestamp) -> AccountUsagePeriod {
+    let at = at.to_zoned_datetime(jiff::tz::TimeZone::UTC);
     AccountUsagePeriod {
-        year: at.year(),
-        month: at.month(),
+        year: i32::from(at.year()),
+        month: at.month() as u32,
     }
 }
 
-fn next_period_start(period: AccountUsagePeriod) -> DateTime<Utc> {
+fn next_period_start(period: AccountUsagePeriod) -> jiff::Timestamp {
     let (year, month) = if period.month == 12 {
         (period.year + 1, 1)
     } else {
         (period.year, period.month + 1)
     };
-    Utc.with_ymd_and_hms(year, month, 1, 0, 0, 0)
-        .single()
+    jiff::civil::DateTime::new((year) as i16, (month) as i8, 1, 0, 0, 0, 0)
         .expect("account usage period must have a valid successor")
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+        .unwrap()
+        .timestamp()
 }
 
 #[cfg(test)]
@@ -184,7 +185,7 @@ mod tests {
     use super::*;
     use test_r::test;
 
-    fn at(instant: Instant, utc: DateTime<Utc>) -> MeteringTime {
+    fn at(instant: Instant, utc: jiff::Timestamp) -> MeteringTime {
         MeteringTime { instant, utc }
     }
 
@@ -198,12 +199,16 @@ mod tests {
     #[test]
     fn units_above_the_batch_range_remain_pending() {
         let now = Instant::now();
-        let utc = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).single().unwrap();
+        let utc = jiff::civil::DateTime::new(2026, 1, 1, 0, 0, 0, 0)
+            .unwrap()
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp();
         let mut accumulator = ByteTimeAccumulator::new(1, at(now, utc));
         accumulator.accrue(
             at(
                 now + Duration::from_nanos(2),
-                utc + chrono::Duration::nanoseconds(2),
+                utc + jiff::SignedDuration::from_nanos(2),
             ),
             Some(u64::MAX),
         );
@@ -219,14 +224,18 @@ mod tests {
     #[test]
     fn settlements_split_exactly_at_utc_month_boundaries() {
         let now = Instant::now();
-        let boundary = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).single().unwrap();
+        let boundary = jiff::civil::DateTime::new(2027, 1, 1, 0, 0, 0, 0)
+            .unwrap()
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp();
         let mut accumulator =
-            ByteTimeAccumulator::new(10, at(now, boundary - chrono::Duration::nanoseconds(2)));
+            ByteTimeAccumulator::new(10, at(now, boundary - jiff::SignedDuration::from_nanos(2)));
 
         accumulator.accrue(
             at(
                 now + Duration::from_nanos(7),
-                boundary + chrono::Duration::nanoseconds(5),
+                boundary + jiff::SignedDuration::from_nanos(5),
             ),
             Some(3),
         );
@@ -240,10 +249,14 @@ mod tests {
     #[test]
     fn interval_ending_at_utc_month_boundary_emits_only_the_old_period() {
         let now = Instant::now();
-        let boundary = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).single().unwrap();
+        let boundary = jiff::civil::DateTime::new(2027, 1, 1, 0, 0, 0, 0)
+            .unwrap()
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp();
         let elapsed = Duration::from_nanos(2);
         let mut accumulator =
-            ByteTimeAccumulator::new(10, at(now, boundary - chrono::Duration::nanoseconds(2)));
+            ByteTimeAccumulator::new(10, at(now, boundary - jiff::SignedDuration::from_nanos(2)));
 
         accumulator.accrue(at(now + elapsed, boundary), Some(3));
 
@@ -261,12 +274,16 @@ mod tests {
     #[test]
     fn backward_utc_movement_attributes_monotonic_elapsed_to_the_start_period() {
         let now = Instant::now();
-        let start = Utc.with_ymd_and_hms(2030, 2, 1, 0, 0, 0).single().unwrap();
+        let start = jiff::civil::DateTime::new(2030, 2, 1, 0, 0, 0, 0)
+            .unwrap()
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp();
         let elapsed = Duration::from_nanos(7);
         let mut accumulator = ByteTimeAccumulator::new(10, at(now, start));
 
         accumulator.accrue(
-            at(now + elapsed, start - chrono::Duration::nanoseconds(1)),
+            at(now + elapsed, start - jiff::SignedDuration::from_nanos(1)),
             Some(3),
         );
 
@@ -279,12 +296,17 @@ mod tests {
     #[test]
     fn settlements_span_multiple_utc_month_boundaries() {
         let now = Instant::now();
-        let start = Utc
-            .with_ymd_and_hms(2030, 1, 31, 23, 59, 59)
-            .single()
-            .unwrap();
-        let end = Utc.with_ymd_and_hms(2030, 4, 1, 0, 0, 1).single().unwrap();
-        let elapsed = (end - start).to_std().unwrap();
+        let start = jiff::civil::DateTime::new(2030, 1, 31, 23, 59, 59, 0)
+            .unwrap()
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp();
+        let end = jiff::civil::DateTime::new(2030, 4, 1, 0, 0, 1, 0)
+            .unwrap()
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp();
+        let elapsed = Duration::try_from(end - start).unwrap();
         let mut accumulator = ByteTimeAccumulator::new(1_000_000_000, at(now, start));
 
         accumulator.accrue(at(now + elapsed, end), Some(1));
@@ -311,9 +333,17 @@ mod tests {
     #[test]
     fn settlements_count_all_of_leap_year_february() {
         let now = Instant::now();
-        let start = Utc.with_ymd_and_hms(2028, 2, 1, 0, 0, 0).single().unwrap();
-        let end = Utc.with_ymd_and_hms(2028, 3, 1, 0, 0, 1).single().unwrap();
-        let elapsed = (end - start).to_std().unwrap();
+        let start = jiff::civil::DateTime::new(2028, 2, 1, 0, 0, 0, 0)
+            .unwrap()
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp();
+        let end = jiff::civil::DateTime::new(2028, 3, 1, 0, 0, 1, 0)
+            .unwrap()
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp();
+        let elapsed = Duration::try_from(end - start).unwrap();
         let mut accumulator = ByteTimeAccumulator::new(1_000_000_000, at(now, start));
 
         accumulator.accrue(at(now + elapsed, end), Some(1));
@@ -339,7 +369,11 @@ mod tests {
     fn wall_clock_sample_uses_the_midpoint_of_its_monotonic_bracket() {
         let before = Instant::now();
         let after = before + Duration::from_nanos(10);
-        let boundary = Utc.with_ymd_and_hms(2030, 2, 1, 0, 0, 0).single().unwrap();
+        let boundary = jiff::civil::DateTime::new(2030, 2, 1, 0, 0, 0, 0)
+            .unwrap()
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp();
 
         assert_eq!(
             MeteringTime::between(before, boundary, after),

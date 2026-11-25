@@ -36,7 +36,7 @@ use uuid::Uuid;
 const COMPONENT_FILES_LABEL: &str = "component_files";
 const STAGE_TIMEOUT: Duration = Duration::from_secs(600);
 // Give an in-flight upload time to finish writing and attach before collection.
-const STAGE_LEASE: chrono::TimeDelta = chrono::TimeDelta::hours(1);
+const STAGE_LEASE: jiff::SignedDuration = jiff::SignedDuration::from_hours(1);
 
 #[derive(Debug)]
 pub struct ComponentObjectStore {
@@ -136,7 +136,7 @@ impl ComponentObjectStore {
 
         // Every request stages all bytes before the database decides which copy to retain.
         // The unique key also fences a retry from deletion of an older copy of the digest.
-        let expires = SqlDateTime::from(chrono::Utc::now() + STAGE_LEASE);
+        let expires = SqlDateTime::from(jiff::Timestamp::now() + STAGE_LEASE);
         repo.register_upload(account_id.0, &object_key, expires)
             .await?;
         tokio::time::timeout(

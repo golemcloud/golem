@@ -18,7 +18,6 @@ use crate::repo::token::TokenRepo;
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
-use chrono::{DateTime, Utc};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::TokenId;
 use golem_common::model::auth::{TokenSecret, TokenWithSecret};
@@ -30,6 +29,7 @@ use golem_common::model::card::{
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
+use jiff::Timestamp;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -186,7 +186,7 @@ impl TokenService {
     pub async fn create(
         &self,
         account_id: AccountId,
-        expires_at: DateTime<Utc>,
+        expires_at: Timestamp,
         auth: &AuthCtx,
     ) -> Result<TokenWithSecret, TokenError> {
         let account =
@@ -216,10 +216,10 @@ impl TokenService {
         &self,
         account_id: AccountId,
         secret: TokenSecret,
-        expires_at: DateTime<Utc>,
+        expires_at: Timestamp,
         impersonated_by: Option<AccountId>,
     ) -> Result<TokenWithSecret, TokenError> {
-        let created_at = Utc::now();
+        let created_at = Timestamp::now();
         let token_id = TokenId::new();
 
         let record = TokenRecord {
@@ -249,13 +249,8 @@ impl TokenService {
                 .get_optional_by_secret(secret, &AuthCtx::System)
                 .await?;
             if existing.is_none() {
-                self.create_known_secret(
-                    *account_id,
-                    secret.clone(),
-                    DateTime::<Utc>::MAX_UTC,
-                    None,
-                )
-                .await?;
+                self.create_known_secret(*account_id, secret.clone(), Timestamp::MAX, None)
+                    .await?;
             }
         }
         Ok(())
@@ -269,7 +264,7 @@ impl TokenService {
     pub async fn create_impersonation_token(
         &self,
         target_account_id: AccountId,
-        expires_at: DateTime<Utc>,
+        expires_at: Timestamp,
         auth: &AuthCtx,
     ) -> Result<TokenWithSecret, TokenError> {
         authorize_system_permission(auth, SystemVerb::ImpersonateUser)?;

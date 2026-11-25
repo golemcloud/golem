@@ -177,8 +177,11 @@ fn write(out: &mut Vec<u8>, value: &SchemaValue) {
         }
         SchemaValue::Datetime { value } => {
             out.push(TAG_DATETIME);
-            out.extend_from_slice(&value.timestamp().to_be_bytes());
-            out.extend_from_slice(&value.timestamp_subsec_nanos().to_be_bytes());
+            let nanoseconds = value.as_nanosecond();
+            let seconds = nanoseconds.div_euclid(1_000_000_000) as i64;
+            let fractional_nanoseconds = nanoseconds.rem_euclid(1_000_000_000) as u32;
+            out.extend_from_slice(&seconds.to_be_bytes());
+            out.extend_from_slice(&fractional_nanoseconds.to_be_bytes());
         }
         SchemaValue::Duration(duration) => {
             out.push(TAG_DURATION);
