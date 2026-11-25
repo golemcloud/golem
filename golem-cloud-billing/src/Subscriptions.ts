@@ -1,6 +1,14 @@
 import { Context, Data, Effect, Layer, RcMap, type Scope, Semaphore } from "effect"
 import type pg from "pg"
-import { connectionOf, Database, LockConnection, requireTables, type SchemaError } from "./Database.ts"
+import type { Currency } from "./Currency.ts"
+import {
+  connectionOf,
+  Database,
+  LockConnection,
+  requireColumns,
+  requireTables,
+  type SchemaError
+} from "./Database.ts"
 
 /**
  * The statuses in which Polar bills the usage events of a subscription (`billable` of a Polar
@@ -15,6 +23,8 @@ export interface Subscription {
   /** The Golem account ID: the external ID of the Polar customer. */
   readonly accountId: string
   readonly productId: string
+  /** The currency of the checkout that started the subscription. Its orders have it too. */
+  readonly currency: Currency
   readonly status: string
   readonly currentPeriodEnd: Date | undefined
   readonly cancelAtPeriodEnd: boolean
@@ -31,7 +41,10 @@ export interface Subscription {
    * it (`record`).
    */
   readonly modifiedAt: string
-  /** The metered prices of the product: an order item of one of them bills paid overage. */
+  /**
+   * The metered prices of the subscription and of its product, in every currency: an order item of
+   * one of them bills paid overage.
+   */
   readonly meteredPriceIds: ReadonlyArray<string>
   /**
    * When a payment of the subscription failed (`past_due_at` of Polar). Polar clears it when a
@@ -45,15 +58,17 @@ export interface Order {
   readonly orderId: string
   readonly accountId: string
   readonly subscriptionId: string
+  /** The currency of the order: the currency of its subscription. */
+  readonly currency: Currency
   /** `draft`, `pending` (not paid), `paid`, `refunded`, `partially_refunded` or `void`. */
   readonly status: string
   readonly createdAt: Date
   /** `modified_at` of the order in Polar, or `created_at` before its first change, as `Subscription.modifiedAt`. */
   readonly modifiedAt: string
   /**
-   * `amount` is before the discount and the tax. `total` is what the order asks for the item: after
-   * the discount, with the tax, and less the credit that a pending order uses
-   * (`OrderTotals.itemTotals`).
+   * In minor units of `currency`. `amount` is before the discount and the tax. `total` is what the
+   * order asks for the item: after the discount, with the tax, and less the credit that a pending
+   * order uses (`OrderTotals.itemTotals`).
    */
   readonly items: ReadonlyArray<{
     readonly productPriceId: string | null
@@ -64,7 +79,7 @@ export interface Order {
 
 /**
  * An order that is not paid, with what its invoice charges for the items of metered prices, tax
- * included, in cents (`meteredTotal`): `pending`, or `void` and not settled. Polar voids the
+ * included, in minor units of its currency (`meteredTotal`): `pending`, or `void` and not settled. Polar voids the
  * pending orders of a subscription that it revokes, also after the failed retries of a payment. A
  * void collects nothing, so the account still owes the paid overage of the order until a
  * settlement pays it (see `Settlement.ts`).
@@ -72,6 +87,7 @@ export interface Order {
 export interface UnpaidOrder {
   readonly orderId: string
   readonly subscriptionId: string
+  readonly currency: Currency
   /** `pending` or `void`. */
   readonly status: string
   readonly createdAt: Date
@@ -81,11 +97,12 @@ export interface UnpaidOrder {
 /**
  * A payment of the paid overage of unpaid orders through an order of the settlement product (see
  * `Settlement.ts`): the order of the settlement, and the metered amount of each order that it
- * settles, in cents.
+ * settles, in minor units of the currency of the settlement and of each order.
  */
 export interface OverageSettlement {
   readonly accountId: string
   readonly settlementOrderId: string
+  readonly currency: Currency
   readonly orders: ReadonlyArray<{ readonly orderId: string; readonly amount: number }>
 }
 
@@ -287,6 +304,7 @@ export const tables = `
     subscription_id TEXT PRIMARY KEY,
     account_id UUID NOT NULL,
     product_id TEXT NOT NULL,
+    currency TEXT NOT NULL,
     status TEXT NOT NULL,
     current_period_end TIMESTAMPTZ,
     cancel_at_period_end BOOLEAN NOT NULL,
@@ -301,6 +319,7 @@ export const tables = `
     order_id TEXT PRIMARY KEY,
     account_id UUID NOT NULL,
     subscription_id TEXT NOT NULL,
+    currency TEXT NOT NULL,
     status TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL,
     modified_at TIMESTAMPTZ NOT NULL,
@@ -324,6 +343,7 @@ export const tables = `
     order_id TEXT PRIMARY KEY,
     account_id UUID NOT NULL,
     settlement_order_id TEXT NOT NULL,
+    currency TEXT NOT NULL,
     amount BIGINT NOT NULL,
     settled_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
   );
@@ -386,6 +406,16 @@ export const tableNames: ReadonlyArray<string> = [
 ]
 
 /**
+ * The columns of `tables` that the startup check requires besides the tables: the currency of
+ * each subscription, order and settlement. `migrate` does not add them to a table that exists.
+ */
+export const requiredColumns: ReadonlyArray<readonly [string, string]> = [
+  ["polar_subscriptions", "currency"],
+  ["polar_orders", "currency"],
+  ["overage_settlements", "currency"]
+]
+
+/**
  * The usage events of account $1 that an order can still bill: not held, recorded after the usage
  * settlement of the account, and either
  *
@@ -434,6 +464,7 @@ interface SubscriptionRow {
   readonly subscription_id: string
   readonly account_id: string
   readonly product_id: string
+  readonly currency: Currency
   readonly status: string
   readonly current_period_end: Date | null
   readonly cancel_at_period_end: boolean
@@ -447,6 +478,7 @@ const fromRow = (row: SubscriptionRow): Subscription => ({
   subscriptionId: row.subscription_id,
   accountId: row.account_id,
   productId: row.product_id,
+  currency: row.currency,
   status: row.status,
   currentPeriodEnd: row.current_period_end ?? undefined,
   cancelAtPeriodEnd: row.cancel_at_period_end,
@@ -456,7 +488,7 @@ const fromRow = (row: SubscriptionRow): Subscription => ({
   pastDueAt: row.past_due_at ?? undefined
 })
 
-const columns = `subscription_id, account_id::text AS account_id, product_id, status, current_period_end,
+const columns = `subscription_id, account_id::text AS account_id, product_id, currency, status, current_period_end,
                 cancel_at_period_end, ended_at,
                 to_char(modified_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS modified_at,
                 metered_price_ids, past_due_at`
@@ -484,10 +516,11 @@ const fromCheckoutRow = (row: CheckoutRow): Checkout => ({
   expiresAt: row.expires_at
 })
 
-/** Checks that the tables exist, and returns the queries. */
+/** Checks that the tables and their required columns exist, and returns the queries. */
 const make: Effect.Effect<SubscriptionsShape, SchemaError, Database | Scope.Scope> =
   Effect.gen(function* () {
     yield* requireTables(tableNames)
+    yield* requireColumns(requiredColumns)
     const { pool } = yield* Database
     // A queue for each account with a caller of `withAccountLock`. A caller that waited for the
     // advisory lock on a connection would hold that connection, and enough callers of one account
@@ -503,11 +536,12 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database | Scope.Scop
       query(
         `INSERT INTO polar_subscriptions
            (subscription_id, account_id, product_id, status, current_period_end, cancel_at_period_end, ended_at,
-            modified_at, metered_price_ids, past_due_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            modified_at, metered_price_ids, past_due_at, currency)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          ON CONFLICT (subscription_id) DO UPDATE SET
            account_id = EXCLUDED.account_id,
            product_id = EXCLUDED.product_id,
+           currency = EXCLUDED.currency,
            status = EXCLUDED.status,
            current_period_end = EXCLUDED.current_period_end,
            cancel_at_period_end = EXCLUDED.cancel_at_period_end,
@@ -527,14 +561,15 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database | Scope.Scop
           subscription.endedAt ?? null,
           subscription.modifiedAt,
           subscription.meteredPriceIds,
-          subscription.pastDueAt ?? null
+          subscription.pastDueAt ?? null,
+          subscription.currency
         ]
       ).pipe(Effect.asVoid)
 
     const recordOrder = (order: Order) =>
       query(
-        `INSERT INTO polar_orders (order_id, account_id, subscription_id, status, created_at, modified_at, items)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `INSERT INTO polar_orders (order_id, account_id, subscription_id, currency, status, created_at, modified_at, items)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (order_id) DO UPDATE SET
            status = EXCLUDED.status,
            modified_at = EXCLUDED.modified_at,
@@ -545,6 +580,7 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database | Scope.Scop
           order.orderId,
           order.accountId,
           order.subscriptionId,
+          order.currency,
           order.status,
           order.createdAt,
           order.modifiedAt,
@@ -561,8 +597,15 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database | Scope.Scop
     // An order of a subscription that no webhook has reported yet has no metered prices to match;
     // the webhook of that subscription reconciles the plan again.
     const unpaidOrders = (accountId: string, productId: string | undefined) =>
-      query<{ order_id: string; subscription_id: string; status: string; created_at: Date; metered_total: string }>(
-        `SELECT o.order_id, o.subscription_id, o.status, o.created_at,
+      query<{
+        order_id: string
+        subscription_id: string
+        currency: Currency
+        status: string
+        created_at: Date
+        metered_total: string
+      }>(
+        `SELECT o.order_id, o.subscription_id, o.currency, o.status, o.created_at,
                 coalesce((SELECT sum(i.total)
                             FROM jsonb_to_recordset(o.items) AS i("productPriceId" text, total bigint)
                            WHERE i."productPriceId" = ANY(s.metered_price_ids)), 0)::text AS metered_total
@@ -577,6 +620,7 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database | Scope.Scop
           result.rows.map((row) => ({
             orderId: row.order_id,
             subscriptionId: row.subscription_id,
+            currency: row.currency,
             status: row.status,
             createdAt: row.created_at,
             meteredTotal: Number(row.metered_total)
@@ -586,11 +630,11 @@ const make: Effect.Effect<SubscriptionsShape, SchemaError, Database | Scope.Scop
 
     const recordSettlement = (settlement: OverageSettlement) =>
       query(
-        `INSERT INTO overage_settlements (order_id, account_id, settlement_order_id, amount)
-         SELECT o."orderId", $1, $2, o.amount
-           FROM jsonb_to_recordset($3::jsonb) AS o("orderId" text, amount bigint)
+        `INSERT INTO overage_settlements (order_id, account_id, settlement_order_id, currency, amount)
+         SELECT o."orderId", $1, $2, $3, o.amount
+           FROM jsonb_to_recordset($4::jsonb) AS o("orderId" text, amount bigint)
          ON CONFLICT (order_id) DO NOTHING`,
-        [settlement.accountId, settlement.settlementOrderId, JSON.stringify(settlement.orders)]
+        [settlement.accountId, settlement.settlementOrderId, settlement.currency, JSON.stringify(settlement.orders)]
       ).pipe(Effect.asVoid)
 
     const settlementOrderOf = (orderId: string) =>

@@ -36,6 +36,7 @@ describe("account lock", () => {
     subscriptionId: `sub_${accountId}`,
     accountId,
     productId: "paid-product",
+    currency: "usd",
     status: "active",
     currentPeriodEnd: new Date("2026-12-04T10:00:00Z"),
     cancelAtPeriodEnd: false,

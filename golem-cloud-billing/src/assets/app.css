@@ -289,6 +289,18 @@ main {
   gap: 0.75rem;
 }
 
+.price-note {
+  max-width: 60ch;
+  margin-top: 1rem;
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+}
+
+.price-note strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .alert {
   margin-bottom: 2rem;
   padding: 0.9rem 1.1rem;

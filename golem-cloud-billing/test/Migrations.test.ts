@@ -193,6 +193,16 @@ describe("migrate", () => {
 
     expect(await tablesIn(config.db.schema)).toEqual([])
   })
+
+  it("refuses to start the web app and the cleanup on a table without the currency column, and names the column", async () => {
+    const config = await emptySchema()
+    await migrate(config)
+    await pool.query(`ALTER TABLE "${config.db.schema}".polar_orders DROP COLUMN currency`)
+    const missingColumn = `the schema ${config.db.schema} has no column polar_orders.currency.`
+
+    await expect(startWebApp(config)).rejects.toThrow(missingColumn)
+    await expect(cleanup(config)).rejects.toThrow(missingColumn)
+  })
 })
 
 describe("database roles", () => {

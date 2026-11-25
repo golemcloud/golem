@@ -1,6 +1,7 @@
 import { webhooks } from "@polar-sh/sdk/2026-10"
 import { Data, Effect, Redacted } from "effect"
 import { BillingConfig } from "./BillingConfig.ts"
+import { type Currency, isCurrency } from "./Currency.ts"
 import { itemTotals } from "./OrderTotals.ts"
 import { SETTLED_ORDERS_METADATA_KEY } from "./Polar.ts"
 import type { RegistryError } from "./Registry.ts"
@@ -41,20 +42,27 @@ class WebhookIgnored extends Data.TaggedError("WebhookIgnored")<{
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
+const isMetered = (price: { readonly amount_type: string }): boolean =>
+  price.amount_type === "metered_unit" || price.amount_type === "metered_tiers"
+
 // validateEvent checks the signature and the event type, not the shape of the data, so the
 // optional parts of the payload are read with a fallback.
-const toSubscription = (accountId: string, data: SubscriptionPayload["data"]): Subscription => ({
+//
+// The subscription lists its own prices, in its currency, and its product lists the prices of
+// every currency. An order item of a metered price of either list bills paid overage.
+const toSubscription = (accountId: string, currency: Currency, data: SubscriptionPayload["data"]): Subscription => ({
   subscriptionId: data.id,
   accountId,
   productId: data.product_id,
+  currency,
   status: data.status,
   currentPeriodEnd: new Date(data.current_period_end),
   cancelAtPeriodEnd: data.cancel_at_period_end,
   endedAt: data.ended_at ? new Date(data.ended_at) : undefined,
   modifiedAt: data.modified_at ?? data.created_at,
-  meteredPriceIds: (data.product?.prices ?? [])
-    .filter((price) => price.amount_type === "metered_unit" || price.amount_type === "metered_tiers")
-    .map((price) => price.id),
+  meteredPriceIds: [
+    ...new Set([...(data.prices ?? []), ...(data.product?.prices ?? [])].filter(isMetered).map((price) => price.id))
+  ],
   pastDueAt: data.past_due_at ? new Date(data.past_due_at) : undefined
 })
 
@@ -68,7 +76,7 @@ const toSubscription = (accountId: string, data: SubscriptionPayload["data"]): S
 const owedAmount = (data: OrderPayload["data"]): number =>
   data.status === "void" ? data.total_amount : data.due_amount
 
-const toOrder = (accountId: string, subscriptionId: string, data: OrderPayload["data"]): Order => {
+const toOrder = (accountId: string, subscriptionId: string, currency: Currency, data: OrderPayload["data"]): Order => {
   const items = data.items ?? []
   const totals = itemTotals({
     items: items.map((item) => ({ amount: item.amount, proration: item.proration === true })),
@@ -79,6 +87,7 @@ const toOrder = (accountId: string, subscriptionId: string, data: OrderPayload["
     orderId: data.id,
     accountId,
     subscriptionId,
+    currency,
     status: data.status,
     createdAt: new Date(data.created_at),
     modifiedAt: data.modified_at ?? data.created_at,
@@ -100,7 +109,10 @@ const toOrder = (accountId: string, subscriptionId: string, data: OrderPayload["
  * it. A subscription links the checkout that started it (`checkout_id`), which finishes the
  * checkout. A paid order of the settlement product records a settlement of the orders in its
  * metadata. An event of a deleted account is stored and answers 200, so that the account does not
- * make Polar disable the endpoint.
+ * make Polar disable the endpoint. A subscription or an order in a currency that the app has no
+ * prices for (`Currency.currencies`) is not stored, logs the error `unsupported_currency` and
+ * answers 200: delivering it again changes nothing, and the Polar product must not have the
+ * currency.
  * A failed registry or database call answers 500, so Polar delivers the webhook again. This
  * includes a 404 of the registry for an account that is not deleted: the permission share of the
  * billing account is missing.
@@ -125,6 +137,11 @@ export const makeHandler = Effect.gen(function* () {
       }
     })
 
+  const unsupportedCurrency = (
+    message: string,
+    annotations: { readonly golemAccountId: string; readonly currency: string } & Record<string, string>
+  ) => Effect.logError(message).pipe(Effect.annotateLogs({ event: "unsupported_currency", ...annotations }))
+
   const handleSubscription = (
     payload: SubscriptionPayload
   ): Effect.Effect<void, RegistryError | SubscriptionsError | RegistryAccountsError> => {
@@ -140,10 +157,18 @@ export const makeHandler = Effect.gen(function* () {
         Effect.annotateLogs({ subscriptionId: data.id, productId: data.product_id })
       )
     }
+    const currency = data.currency
+    if (!isCurrency(currency)) {
+      return unsupportedCurrency("Ignored a subscription in a currency that the app has no prices for", {
+        golemAccountId: accountId,
+        subscriptionId: data.id,
+        currency
+      })
+    }
     return subscriptions.withAccountLock(
       accountId,
       Effect.gen(function* () {
-        yield* subscriptions.record(toSubscription(accountId, data))
+        yield* subscriptions.record(toSubscription(accountId, currency, data))
         // The checkout that started the subscription no longer holds the account: the
         // subscription does, while it is billable.
         if (data.checkout_id) {
@@ -161,12 +186,16 @@ export const makeHandler = Effect.gen(function* () {
 
   /**
    * A paid order of the settlement product settles each order in its metadata that the account
-   * owes, and reconciles the account. It settles nothing when its price, the subtotal after the
-   * discount, is smaller than what the invoices of those orders charge for paid overage. The price
-   * includes the tax, so the net amount is smaller than the price. Polar delivers a paid order in
-   * several events (five in the sandbox), so an order that this settlement already settled is
-   * skipped. An order that the account does not owe logs a warning, for example an order that
-   * Polar charged after the checkout began: an operator refunds that part of the settlement.
+   * owes, and reconciles the account. It settles nothing and logs an error when the account owes
+   * one of those orders in another currency, for example after a public checkout update of Polar
+   * changed the checkout to a price of 0 in the default currency (`Polar.settlementPrices`).
+   * The currencies of the orders come from the database, not from the checkout. It also settles
+   * nothing when its price, the subtotal after the discount, is smaller than what the invoices of
+   * those orders charge for paid overage. The price includes the tax, so the net amount is smaller
+   * than the price. Polar delivers a paid order in several events (five in the sandbox), so an
+   * order that this settlement already settled is skipped. An order that the account does not owe
+   * logs a warning, for example an order that Polar charged after the checkout began: an operator
+   * refunds that part of the settlement.
    */
   const handleSettlementOrder = (
     accountId: string,
@@ -177,6 +206,14 @@ export const makeHandler = Effect.gen(function* () {
         Effect.annotateLogs({ golemAccountId: accountId, settlementOrderId: data.id, status: data.status })
       )
     }
+    const currency = data.currency
+    if (!isCurrency(currency)) {
+      return unsupportedCurrency("Ignored a settlement order in a currency that the app has no prices for", {
+        golemAccountId: accountId,
+        settlementOrderId: data.id,
+        currency
+      })
+    }
     const listed = String(data.metadata?.[SETTLED_ORDERS_METADATA_KEY] ?? "")
       .split(",")
       .filter((orderId) => orderId !== "")
@@ -185,7 +222,22 @@ export const makeHandler = Effect.gen(function* () {
       Effect.gen(function* () {
         const accountSubscriptions = yield* subscriptions.ofAccount(accountId, config.polar.productId)
         const unpaid = yield* subscriptions.unpaidOrders(accountId, config.polar.productId)
-        const owed = Settlement.owedOrders(accountSubscriptions, unpaid).filter((order) => listed.includes(order.orderId))
+        const owed = Settlement.owedOrders(accountSubscriptions, unpaid).filter((order) =>
+          listed.includes(order.orderId)
+        )
+        const otherCurrency = owed.filter((order) => order.currency !== currency)
+        if (otherCurrency.length > 0) {
+          yield* Effect.logError("A settlement order is in another currency than the orders that it settles").pipe(
+            Effect.annotateLogs({
+              golemAccountId: accountId,
+              settlementOrderId: data.id,
+              currency,
+              orderIds: listed.join(","),
+              orderCurrencies: [...new Set(otherCurrency.map((order) => order.currency))].join(",")
+            })
+          )
+          return
+        }
         const notOwed: Array<string> = []
         for (const orderId of listed.filter((orderId) => !owed.some((order) => order.orderId === orderId))) {
           if ((yield* subscriptions.settlementOrderOf(orderId)) !== data.id) {
@@ -202,7 +254,7 @@ export const makeHandler = Effect.gen(function* () {
           typeof data.subtotal_amount === "number" ? data.subtotal_amount - (data.discount_amount ?? 0) : 0
         if (paid < amount) {
           yield* Effect.logError("A settlement paid less than the paid overage of its orders").pipe(
-            Effect.annotateLogs({ golemAccountId: accountId, settlementOrderId: data.id, paid, amount })
+            Effect.annotateLogs({ golemAccountId: accountId, settlementOrderId: data.id, currency, paid, amount })
           )
           return
         }
@@ -210,6 +262,7 @@ export const makeHandler = Effect.gen(function* () {
           yield* subscriptions.recordSettlement({
             accountId,
             settlementOrderId: data.id,
+            currency,
             orders: owed.map((order) => ({ orderId: order.orderId, amount: order.meteredTotal }))
           })
           yield* Effect.logInfo("Recorded a settlement of paid overage").pipe(
@@ -217,6 +270,7 @@ export const makeHandler = Effect.gen(function* () {
               golemAccountId: accountId,
               settlementOrderId: data.id,
               orderIds: owed.map((order) => order.orderId).join(","),
+              currency,
               amount
             })
           )
@@ -243,10 +297,18 @@ export const makeHandler = Effect.gen(function* () {
       )
     }
     const subscriptionId = data.subscription_id
+    const currency = data.currency
+    if (!isCurrency(currency)) {
+      return unsupportedCurrency("Ignored an order in a currency that the app has no prices for", {
+        golemAccountId: accountId,
+        orderId: data.id,
+        currency
+      })
+    }
     return subscriptions.withAccountLock(
       accountId,
       Effect.gen(function* () {
-        yield* subscriptions.recordOrder(toOrder(accountId, subscriptionId, data))
+        yield* subscriptions.recordOrder(toOrder(accountId, subscriptionId, currency, data))
         if (data.status === "paid") {
           const settlementOrderId = yield* subscriptions.settlementOrderOf(data.id)
           if (settlementOrderId !== undefined) {

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { Layer, ManagedRuntime, Redacted } from "effect"
+import { Layer, Logger, ManagedRuntime, Redacted } from "effect"
 import { FetchHttpClient, HttpRouter } from "effect/http"
 import type pg from "pg"
 import * as App from "../src/App.ts"
@@ -24,15 +24,17 @@ export const billingAccountId = "5f0c2e7a-91d4-4b3c-8a6e-2d7b1c9e0f34"
 export const freePlanId = "6d3b6a42-2d71-4b0e-9b1a-1f4e7b3b2c10"
 export const paidPlanId = "9a1f3c2e-5b7d-4e8f-a6c4-2d1e0b9f8a73"
 export const suspendedPlanId = "3e8b1d47-0c2a-4f96-b5e1-7a9d2c4f6b08"
+/** The monthly prices of the paid plan at the ECB rate of 23 November 2026. */
+export const monthlyPrices = { usd: "20", eur: "24", gbp: "19" }
+/** The overage prices of the paid plan at the ECB rate of 23 November 2026. */
 export const overagePrices = {
-  perMillionGcu: "0.0112",
-  perGbHour: "0.045",
-  perDurableGbMonth: "0.27",
-  perEphemeralGbMonth: "0.24"
+  usd: { perMillionGcu: "0.0112", perGbHour: "0.045", perDurableGbMonth: "0.27", perEphemeralGbMonth: "0.24" },
+  eur: { perMillionGcu: "0.0131", perGbHour: "0.053", perDurableGbMonth: "0.32", perEphemeralGbMonth: "0.28" },
+  gbp: { perMillionGcu: "0.0103", perGbHour: "0.042", perDurableGbMonth: "0.25", perEphemeralGbMonth: "0.23" }
 }
 /** A plan that an administrator gave the account; subscriptions do not change it. */
 export const internalPlanId = "c4e2a9b1-7d3f-4a6e-8b5c-1f0e9d2c3b4a"
-/** The plan that the registry gives a new account; a subscription moves the account to Paid. */
+/** The plan that the registry gives a new account; a subscription moves the account to the paid plan. */
 export const registryDefaultPlanId = "8d2f6b1e-4a7c-4e93-9b05-6c1d3e8f2a47"
 export const polarApiUrl = "https://sandbox-api.polar.test"
 export const polarWebToken = "polar_oat_web_token_for_the_tests"
@@ -72,6 +74,7 @@ export const testConfig = (): BillingConfigShape => {
     registryBillingToken: Redacted.make(registryBillingToken),
     plans: { free: freePlanId, paid: paidPlanId, suspended: suspendedPlanId },
     defaultPlanId: registryDefaultPlanId,
+    monthlyPrices,
     overagePrices,
     pastDueGraceMs: 7 * 24 * 60 * 60 * 1000,
     polar: {
@@ -99,13 +102,22 @@ export const dropSchema = async (pool: pg.Pool, schema: string) => {
   await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
 }
 
-/** The billing app as a Fetch handler, built from the same layers as the server. */
-export const makeApp = (config: BillingConfigShape) =>
+/**
+ * The billing app as a Fetch handler, built from the same layers as the server. `logs`, if given,
+ * receives each log line of the app as parsed JSON, next to the default logger.
+ */
+export const makeApp = (config: BillingConfigShape, logs?: Array<Record<string, unknown>>) =>
   HttpRouter.toWebHandler(
     Http.routes.pipe(
       Layer.provide(App.services),
       Layer.provide(FetchHttpClient.layer),
-      Layer.provide(Layer.succeed(BillingConfig, config))
+      Layer.provide(Layer.succeed(BillingConfig, config)),
+      Layer.provideMerge(
+        Logger.layer(
+          logs === undefined ? [] : [Logger.map(Logger.formatJson, (line) => void logs.push(JSON.parse(line)))],
+          { mergeWithExisting: true }
+        )
+      )
     ),
     { disableLogger: true }
   )
@@ -219,7 +231,12 @@ export class FakeUpstreams {
    * The checkouts of Polar by ID, with what `GET /v1/checkouts/{id}` reports. `POST /v1/checkouts/`
    * creates `polar_c_1`, `polar_c_2` and so on, which Polar takes payments for 24 hours.
    */
-  readonly checkouts = new Map<string, { status: CheckoutStatus; expiresAt: Date }>()
+  readonly checkouts = new Map<string, { status: CheckoutStatus; currency: string; expiresAt: Date }>()
+  /**
+   * The currency of a checkout that `POST /v1/checkouts/` creates without `currency`, which Polar
+   * selects from the address of the browser.
+   */
+  checkoutCurrency = "usd"
   /** The status of `POST /v1/checkouts/`; with another status than 201, Polar creates no checkout. */
   checkoutCreateStatus = 201
   /** The external IDs of the Polar customers; `DELETE /v1/customers/external/{id}` removes one. */
@@ -293,7 +310,11 @@ export class FakeUpstreams {
           return Response.json({ detail: "unavailable" }, { status: this.checkoutCreateStatus })
         }
         const id = `polar_c_${this.checkouts.size + 1}`
-        this.checkouts.set(id, { status: "open", expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) })
+        this.checkouts.set(id, {
+          status: "open",
+          currency: (body as { readonly currency?: string }).currency ?? this.checkoutCurrency,
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
+        })
         return Response.json(this.checkoutJson(id), { status: 201 })
       }
       case `POST ${polarApiUrl}/v1/customer-sessions/`:
@@ -488,6 +509,7 @@ export class FakeUpstreams {
       id: checkoutId,
       url: this.checkoutUrl(checkoutId),
       status: checkout.status,
+      currency: checkout.currency,
       expires_at: checkout.expiresAt.toISOString()
     }
   }

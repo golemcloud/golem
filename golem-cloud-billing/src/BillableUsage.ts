@@ -98,7 +98,7 @@ export const BYTE_NANOSECONDS_PER_GB_SECOND = 1024n ** 3n * 1_000_000_000n
 /** `BYTE_SECONDS_PER_GB_MONTH` of golem-common, in nanoseconds: one GiB for 730 hours. */
 export const BYTE_NANOSECONDS_PER_GB_MONTH = 1024n ** 3n * 730n * 3600n * 1_000_000_000n
 
-/** Usage in millionths of the customer units: GCU, GB-seconds and GB-month. */
+/** Usage in millionths of the customer units: GCU, GiB-seconds and GiB-month. */
 export interface MicroUnits {
   readonly compute: bigint
   readonly memory: bigint
