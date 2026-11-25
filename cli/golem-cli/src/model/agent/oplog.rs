@@ -22,11 +22,11 @@ use golem_common::model::caller::{PublicCaller, PublicPrincipal};
 use golem_common::model::oplog::public_oplog_entry::FailedUpdateParams;
 use golem_common::model::oplog::public_oplog_entry::PendingUpdateParams;
 use golem_common::model::oplog::{
-    MultipartPartData, OmittedOplogEntry, OplogIndex, OplogRange, PluginInstallationDescription,
-    PublicAgentInvocation, PublicAgentInvocationResult, PublicEntityCallMode,
-    PublicEntityInvocation, PublicEntityInvocationOperation, PublicExternalToolResult,
-    PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicSnapshotData,
-    PublicUpdateDescription,
+    MultipartPartData, OmittedOplogEntry, OplogCursor, OplogIndex, OplogRange,
+    PluginInstallationDescription, PublicAgentInvocation, PublicAgentInvocationResult,
+    PublicEntityCallMode, PublicEntityInvocation, PublicEntityInvocationOperation,
+    PublicExternalToolResult, PublicOplogEntry, PublicOplogEntryAttribution,
+    PublicOplogEntryWithIndex, PublicSnapshotData, PublicUpdateDescription,
 };
 use golem_common::schema::TypedSchemaValue;
 use serde::{Deserialize, Serialize};
@@ -252,6 +252,117 @@ impl<W: std::io::Write> OplogJsonlWriter<W> {
         self.writer.flush()?;
         Ok((self.writer, self.count))
     }
+}
+
+/// One page of an oplog export read.
+pub struct OplogExportPage<E> {
+    pub entries: Vec<E>,
+    pub next: Option<OplogCursor>,
+    /// The `last_index` of the response of the read.
+    pub last_index: OplogIndex,
+}
+
+/// The read of the pages of an oplog export.
+enum OplogExportRead {
+    /// The first page, from the start of the range of the export.
+    First,
+    /// A later page, from the cursor of the page before it. `range` ends at the last index of the
+    /// range in the oplog at the first page, so the export ends also when the oplog grows.
+    Next {
+        range: OplogRange,
+        cursor: OplogCursor,
+    },
+    /// The page before it had no cursor, so the read is complete.
+    Done,
+}
+
+impl OplogExportRead {
+    /// The read after a page of `range` that gave `next` and `last_index`.
+    fn after(
+        range: OplogRange,
+        next: Option<OplogCursor>,
+        last_index: OplogIndex,
+    ) -> anyhow::Result<Self> {
+        match next {
+            None => Ok(Self::Done),
+            Some(cursor) => {
+                let next = cursor.next_oplog_index;
+                range
+                    .close_in(last_index)
+                    .map(|range| Self::Next { range, cursor })
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "the oplog read gave a cursor at index {next}, but the range holds no \
+                             index of the oplog that ends at index {last_index}"
+                        )
+                    })
+            }
+        }
+    }
+}
+
+/// Writes the oplog entries of `range` to `writer`, page by page. `read_page` reads one page of a
+/// range from a cursor. `read_in_full` gives the full view of an entry of a page.
+/// `check_agent` checks after the last page that the agent is still the incarnation of the first
+/// page. The function closes the range at the end of the oplog at the first page, so a growing
+/// oplog does not make the export endless. It writes each page before it reads the next page. It
+/// gives the inner writer and the count of the written entries.
+pub async fn write_oplog_export<
+    W,
+    E,
+    ReadPage,
+    PageRead,
+    ReadInFull,
+    EntryRead,
+    CheckAgent,
+    AgentCheck,
+>(
+    writer: OplogJsonlWriter<W>,
+    range: OplogRange,
+    read_page: ReadPage,
+    read_in_full: ReadInFull,
+    check_agent: CheckAgent,
+) -> anyhow::Result<(W, u64)>
+where
+    W: std::io::Write,
+    ReadPage: Fn(OplogRange, Option<OplogCursor>) -> PageRead,
+    PageRead: std::future::Future<Output = anyhow::Result<OplogExportPage<E>>>,
+    ReadInFull: Fn(E) -> EntryRead,
+    EntryRead: std::future::Future<Output = anyhow::Result<AgentOplogEntryView>>,
+    CheckAgent: FnOnce() -> AgentCheck,
+    AgentCheck: std::future::Future<Output = anyhow::Result<()>>,
+{
+    use futures_util::TryStreamExt;
+    let (read_page, read_in_full) = (&read_page, &read_in_full);
+    let pages = futures_util::stream::try_unfold(OplogExportRead::First, move |read| async move {
+        let (read_range, cursor) = match read {
+            OplogExportRead::First => (range, None),
+            OplogExportRead::Next { range, cursor } => (range, Some(cursor)),
+            OplogExportRead::Done => return anyhow::Ok(None),
+        };
+        let page = read_page(read_range, cursor).await?;
+        let range_last = read_range.last_index_in(page.last_index);
+        let next = OplogExportRead::after(read_range, page.next, page.last_index)?;
+        Ok(Some(((page.entries, range_last), next)))
+    });
+    let (writer, range_last) = pages
+        .try_fold(
+            (writer, None),
+            |(writer, _), (entries, range_last)| async move {
+                let writer = futures_util::stream::iter(entries.into_iter().map(anyhow::Ok))
+                    .try_fold(writer, |mut writer, entry| async move {
+                        writer.write(read_in_full(entry).await?)?;
+                        Ok(writer)
+                    })
+                    .await?;
+                Ok((writer, Some(range_last)))
+            },
+        )
+        .await?;
+    let range_last =
+        range_last.ok_or_else(|| anyhow::anyhow!("The oplog read returned no page"))?;
+    check_agent().await?;
+    writer.finish(range_last)
 }
 
 impl TextOutput for AgentOplogPageView {
@@ -2064,6 +2175,191 @@ mod tests {
                 ("agent.oplog", 3, "c")
             ]
         );
+    }
+
+    fn export_cursor(next: u64) -> OplogCursor {
+        OplogCursor {
+            next_oplog_index: next,
+            current_component_revision: 0,
+            query_hash: String::new(),
+        }
+    }
+
+    /// A page of an export read: the indices of its entries, the next index of its cursor, and
+    /// the `last_index` of the response.
+    fn export_page(entries: &[u64], next: Option<u64>, last_index: u64) -> OplogExportPage<u64> {
+        OplogExportPage {
+            entries: entries.to_vec(),
+            next: next.map(export_cursor),
+            last_index: OplogIndex::from_u64(last_index),
+        }
+    }
+
+    /// The reads of an export: the range and the cursor of each read.
+    type ExportReads = std::sync::Mutex<Vec<(OplogRange, Option<u64>)>>;
+
+    /// Runs the export of `range` with `selection` over `pages`, which the reads get in order.
+    /// Gives the indices of the written lines, or the error, and the reads.
+    async fn export_pages(
+        selection: OplogExportSelection,
+        range: OplogRange,
+        pages: Vec<OplogExportPage<u64>>,
+        agent: anyhow::Result<()>,
+    ) -> (anyhow::Result<Vec<u64>>, Vec<(OplogRange, Option<u64>)>) {
+        let reads = ExportReads::default();
+        let pages = std::sync::Mutex::new(pages.into_iter());
+        let writer = OplogJsonlWriter::new(
+            Vec::new(),
+            crate::model::masking::MaskingConfig::hide_secrets(),
+            selection,
+        );
+        let result = write_oplog_export(
+            writer,
+            range,
+            |range, cursor: Option<OplogCursor>| {
+                reads
+                    .lock()
+                    .unwrap()
+                    .push((range, cursor.map(|cursor| cursor.next_oplog_index)));
+                let page = pages.lock().unwrap().next();
+                std::future::ready(page.ok_or_else(|| anyhow::anyhow!("no more pages")))
+            },
+            |index| std::future::ready(Ok(log_view(index, "entry"))),
+            || std::future::ready(agent),
+        )
+        .await
+        .map(|(written, _)| {
+            String::from_utf8(written)
+                .unwrap()
+                .lines()
+                .map(|line| {
+                    serde_json::from_str::<serde_json::Value>(line).unwrap()["index"]
+                        .as_u64()
+                        .unwrap()
+                })
+                .collect()
+        });
+        (result, reads.into_inner().unwrap())
+    }
+
+    #[test]
+    async fn an_oplog_export_writes_every_page_and_follows_each_cursor() {
+        let all = OplogRange::ALL;
+        let closed = |from, to| OplogRange::from_indices(from, Some(to)).unwrap();
+        let rows = [
+            // A page boundary in the middle of the range, and a last page without a cursor.
+            (
+                (every_entry(None, None), all),
+                vec![
+                    export_page(&[1, 2], Some(3), 5),
+                    export_page(&[3, 4], Some(5), 5),
+                    export_page(&[5], None, 5),
+                ],
+                (
+                    vec![1u64, 2, 3, 4, 5],
+                    vec![
+                        (all, None),
+                        (closed(None, 5), Some(3u64)),
+                        (closed(None, 5), Some(5)),
+                    ],
+                ),
+            ),
+            // A page that ends exactly at the end of the range.
+            (
+                (every_entry(Some(2), Some(5)), closed(Some(2), 5)),
+                vec![
+                    export_page(&[2, 3], Some(4), 9),
+                    export_page(&[4, 5], None, 9),
+                ],
+                (
+                    vec![2, 3, 4, 5],
+                    vec![(closed(Some(2), 5), None), (closed(Some(2), 5), Some(4))],
+                ),
+            ),
+            // A search page with no match and with a cursor, and a match on the last page.
+            (
+                (OplogExportSelection::Matches, OplogRange::ALL),
+                vec![
+                    export_page(&[2], Some(4), 9),
+                    export_page(&[], Some(7), 9),
+                    export_page(&[8], None, 9),
+                ],
+                (
+                    vec![2, 8],
+                    vec![
+                        (all, None),
+                        (closed(None, 9), Some(4)),
+                        (closed(None, 9), Some(7)),
+                    ],
+                ),
+            ),
+        ];
+        futures_util::future::join_all(rows.into_iter().map(
+            |((selection, range), pages, (lines, reads))| async move {
+                let (written, done) = export_pages(selection, range, pages, Ok(())).await;
+                assert_eq!(written.unwrap(), lines, "{selection:?}");
+                assert_eq!(done, reads, "{selection:?}");
+            },
+        ))
+        .await;
+    }
+
+    #[test]
+    async fn an_oplog_export_of_a_growing_oplog_ends_at_the_end_of_the_oplog_at_its_first_page() {
+        // The oplog ends at index 4 at the first read, and grows by 2 entries on each read. A page
+        // holds at most 2 entries, so a read that follows the end of the oplog never ends.
+        let reads = std::sync::atomic::AtomicU64::new(0);
+        let writer = OplogJsonlWriter::new(
+            Vec::new(),
+            crate::model::masking::MaskingConfig::hide_secrets(),
+            every_entry(None, None),
+        );
+        let (written, count) = write_oplog_export(
+            writer,
+            OplogRange::ALL,
+            |range: OplogRange, cursor: Option<OplogCursor>| {
+                let read = reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let oplog_last = 4 + 2 * read;
+                let from = cursor.map_or(1, |cursor| cursor.next_oplog_index);
+                let range_last = range
+                    .last_index_in(OplogIndex::from_u64(oplog_last))
+                    .as_u64();
+                let page_last = (from + 1).min(range_last);
+                let page = (read < 20)
+                    .then(|| {
+                        export_page(
+                            &(from..=page_last).collect::<Vec<_>>(),
+                            (page_last < range_last).then_some(page_last + 1),
+                            oplog_last,
+                        )
+                    })
+                    .ok_or_else(|| anyhow::anyhow!("the export read 20 pages and did not end"));
+                std::future::ready(page)
+            },
+            |index| std::future::ready(Ok(log_view(index, "entry"))),
+            || std::future::ready(Ok(())),
+        )
+        .await
+        .unwrap();
+        assert_eq!(count, 4);
+        assert_eq!(String::from_utf8(written).unwrap().lines().count(), 4);
+    }
+
+    #[test]
+    async fn an_oplog_export_fails_when_the_agent_became_another_incarnation() {
+        let (written, reads) = export_pages(
+            every_entry(None, None),
+            OplogRange::ALL,
+            vec![export_page(&[1, 2], Some(3), 3), export_page(&[3], None, 3)],
+            Err(anyhow::anyhow!("another incarnation")),
+        )
+        .await;
+        assert_eq!(
+            written.unwrap_err().to_string(),
+            "another incarnation",
+            "the export checks the agent after the last page"
+        );
+        assert_eq!(reads.len(), 2);
     }
 
     #[test]

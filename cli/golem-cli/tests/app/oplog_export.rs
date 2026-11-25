@@ -1654,6 +1654,54 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
         "the CLI read the oplog for a range that ends before it starts"
     );
     assert!(!reversed_path.exists());
+
+    // An export without `--to` ends at the end of the oplog when the export starts. The proxy
+    // holds the read of the second page while the agent adds entries. The file then holds the
+    // entries from before the invocation only.
+    let growing_path = ctx.cwd_path_join("export/growing.jsonl");
+    let (held, release) = proxy.hold(is_oplog_page_after_cursor, 0);
+    let growing_export = ctx.cli_with_env(
+        [
+            cmd::AGENT,
+            "oplog",
+            LONG_PROBE,
+            flag::FORMAT,
+            "jsonl",
+            "--output",
+            growing_path.to_str().unwrap(),
+        ],
+        &[("GOLEM_HTTP_BATCH_SIZE", "2")],
+    );
+    let grow = async {
+        tokio::time::timeout(std::time::Duration::from_secs(300), held)
+            .await
+            .expect("the export never read the second page")
+            .unwrap();
+        let outputs = ctx
+            .cli_with_env(
+                [
+                    flag::YES,
+                    cmd::AGENT,
+                    cmd::INVOKE,
+                    LONG_PROBE,
+                    "log_many",
+                    "200",
+                ],
+                &proxy.bypass(),
+            )
+            .await;
+        assert!(outputs.success_or_dump());
+        release.send(()).unwrap();
+    };
+    let (grown, ()) = tokio::join!(growing_export, grow);
+    assert!(grown.success_or_dump());
+    let grown = fs::read_to_string(&growing_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(grown, plain);
+
     let exported_files = || {
         let mut files = std::fs::read_dir(ctx.cwd_path_join("export"))
             .unwrap()
@@ -1663,6 +1711,7 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
         files
     };
     let expected_files = vec![
+        "growing.jsonl",
         "large.jsonl",
         "late.jsonl",
         "oplog.jsonl",

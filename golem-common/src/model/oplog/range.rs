@@ -168,6 +168,16 @@ impl OplogRange {
         oplog_last < self.first_possible()
     }
 
+    /// The range with the same start that ends at the last index of the range in an oplog whose
+    /// last index is `oplog_last`. A read of the result stops there, also when the oplog grows
+    /// later. The result is `None` when the range holds no index of the oplog.
+    pub fn close_in(&self, oplog_last: OplogIndex) -> Option<Self> {
+        (!self.is_empty_in(oplog_last)).then(|| Self {
+            start: self.start,
+            end: Some(self.last_index_in(oplog_last)),
+        })
+    }
+
     /// The rest of the range from the next index of `cursor`. A cursor before the start or after
     /// the end of the range gives an error, because a page of this range never gives it. A range
     /// without a start starts at 1 for this check. The rest of the range has a start.
@@ -437,6 +447,30 @@ mod tests {
             assert_eq!(
                 range.last_index_in(index(oplog_last)),
                 index(expected),
+                "{range:?} in an oplog that ends at {oplog_last}"
+            )
+        });
+    }
+
+    #[test]
+    fn a_closed_range_ends_at_the_last_index_of_the_range_in_the_oplog() {
+        [
+            ((range(None, None), 10), Some(range(None, Some(10)))),
+            ((range(Some(4), None), 10), Some(range(Some(4), Some(10)))),
+            ((range(Some(4), Some(7)), 10), Some(range(Some(4), Some(7)))),
+            (
+                (range(Some(4), Some(12)), 10),
+                Some(range(Some(4), Some(10))),
+            ),
+            ((range(Some(4), None), 4), Some(range(Some(4), Some(4)))),
+            ((range(Some(4), None), 3), None),
+            ((range(None, None), 0), None),
+        ]
+        .into_iter()
+        .for_each(|((range, oplog_last), expected)| {
+            assert_eq!(
+                range.close_in(index(oplog_last)),
+                expected,
                 "{range:?} in an oplog that ends at {oplog_last}"
             )
         });

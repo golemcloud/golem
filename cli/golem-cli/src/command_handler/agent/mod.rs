@@ -47,7 +47,8 @@ use crate::model::agent::action_result::{
 };
 use crate::model::agent::files::{AgentFilesView, FileNodeView};
 use crate::model::agent::oplog::{
-    AgentOplogEntryView, AgentOplogPageView, OplogExportSelection, OplogJsonlWriter,
+    AgentOplogEntryView, AgentOplogPageView, OplogExportPage, OplogExportSelection,
+    OplogJsonlWriter, write_oplog_export,
 };
 use crate::model::agent::oplog_html::{
     OplogViewerDocument, OplogViewerMode, export_temporary_file, render_oplog_viewer_html,
@@ -1167,15 +1168,18 @@ impl AgentCommandHandler {
     }
 
     /// Exports the oplog entries of `range` that match `query` to `path` as JSON Lines. The export
-    /// follows the cursor of each page to the end of the range and writes each page before it
-    /// reads the next, so its memory does not grow with the oplog. A search page that the scan
-    /// budget of the server ends early still has a cursor, so the budget does not end the export.
-    /// A page read without a query passes no scan allowance, so the server sets no scan limit on
-    /// it. The export reads in full each entry that a page omits for its size, and a failed read
-    /// fails the export. Every read names the fingerprint of the agent at the start of the export,
-    /// so the export fails when the agent becomes another incarnation. The export writes to a
-    /// temporary file in the directory of `path`, and renames it to `path` only after the last
-    /// entry, so a failed export leaves no file at `path`.
+    /// follows the cursor of each page to the end of the range. It ends at the end of the oplog at
+    /// its first page, also when the agent adds entries during the export. It writes each page
+    /// before it reads the next, so its memory does not grow with the oplog. A search page that the
+    /// scan budget of the server ends early still has a cursor, so the budget does not end the
+    /// export. A page read without a query passes no scan allowance, so the server sets no scan
+    /// limit on it. The export reads in full each entry that a page omits for its size, and a
+    /// failed read fails the export. The export reads the fingerprint of the agent before the first
+    /// page. Each read names that fingerprint, and the worker service compares it with the agent
+    /// before the read. After the last page, the export reads the fingerprint again. It fails when
+    /// the agent became another incarnation. The export writes to a temporary file in the directory
+    /// of `path`. It renames the file to `path` only after the last entry, so a failed export
+    /// leaves no file at `path`.
     async fn cmd_oplog_jsonl_export(
         &self,
         agent_id: AgentIdArgs,
@@ -1217,12 +1221,11 @@ impl AgentCommandHandler {
             &fingerprint,
         );
         let batch_size = ctx.http_batch_size();
-        let (from, to) = range.to_indices();
-        let pages =
-            futures_util::stream::try_unfold(Some(None::<OplogCursor>), move |cursor| async move {
-                let Some(cursor) = cursor else {
-                    return anyhow::Ok(None);
-                };
+        let (buffered, count) = write_oplog_export(
+            writer,
+            range,
+            move |range: OplogRange, cursor: Option<OplogCursor>| async move {
+                let (from, to) = range.to_indices();
                 let page = ctx
                     .golem_clients()
                     .await?
@@ -1242,41 +1245,39 @@ impl AgentCommandHandler {
                     )
                     .await
                     .map_service_error()?;
-                Ok(Some(((page.entries, page.last_index), page.next.map(Some))))
-            });
-        let (writer, range_last) = futures_util::TryStreamExt::try_fold(
-            pages,
-            (writer, None),
-            |(writer, _), (entries, last_index)| async move {
-                let writer = futures_util::TryStreamExt::try_fold(
-                    futures_util::stream::iter(entries.into_iter().map(anyhow::Ok)),
-                    writer,
-                    move |mut writer, entry| async move {
-                        writer.write(
-                            oplog_page_entry_in_full(
-                                ctx,
-                                environment_id,
-                                agent_id,
-                                entry,
-                                show_claims,
-                                fingerprint,
-                            )
-                            .await?,
-                        )?;
-                        Ok(writer)
-                    },
+                anyhow::Ok(OplogExportPage {
+                    entries: page.entries,
+                    next: page.next,
+                    last_index: OplogIndex::from_u64(page.last_index),
+                })
+            },
+            move |entry| {
+                oplog_page_entry_in_full(
+                    ctx,
+                    environment_id,
+                    agent_id,
+                    entry,
+                    show_claims,
+                    fingerprint,
                 )
-                .await?;
-                Ok((
-                    writer,
-                    Some(range.last_index_in(OplogIndex::from_u64(last_index))),
-                ))
+            },
+            move || async move {
+                let current = ctx
+                    .golem_clients()
+                    .await?
+                    .worker
+                    .get_worker_metadata(&environment_id.0, &agent_id.0, None)
+                    .await
+                    .map_service_error()?
+                    .fingerprint;
+                anyhow::ensure!(
+                    current == *fingerprint,
+                    "The agent became another incarnation during the export"
+                );
+                Ok(())
             },
         )
         .await?;
-
-        let range_last = range_last.ok_or_else(|| anyhow!("The oplog read returned no page"))?;
-        let (buffered, count) = writer.finish(range_last)?;
         let file = buffered
             .into_inner()
             .map_err(|error| error.into_error())

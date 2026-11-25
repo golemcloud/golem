@@ -1943,8 +1943,9 @@ pub mod worker {
             #[arg(long, conflicts_with = "cursor")]
             from: Option<u64>,
             /// Index of the last oplog entry to get. If missing, or after the end of the oplog,
-            /// the read goes to the end of the oplog. With --query, the read returns only the
-            /// matching entries up to this index.
+            /// the read goes to the end of the oplog. An export with --output goes to the end of
+            /// the oplog when the export starts. With --query, the read returns only the matching
+            /// entries up to this index.
             #[arg(long, conflicts_with_all = ["html", "serve", "obfuscate"])]
             to: Option<u64>,
             #[arg(
