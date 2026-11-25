@@ -933,7 +933,7 @@ async fn fork_cut_validation_rejects_a_malformed_request_hash() {
 
     cut.request_hash.clear();
     assert!(
-        StreamForkLineage::validate_fork_cut(&oplog, cut)
+        StreamForkLineage::validate_fork_cut(&oplog, &owner, cut)
             .await
             .is_err(),
         "the persisted request hash must remain a 32-byte digest"

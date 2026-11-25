@@ -59,7 +59,7 @@ use crate::services::oplog::{
 };
 use crate::services::rpc::{DurableStreamRemoteError, Rpc};
 use crate::services::worker::WorkerService;
-use crate::services::worker_fork::lineage::StreamForkLineage;
+use crate::services::worker_fork::lineage::{LineageError, StreamForkLineage};
 use async_trait::async_trait;
 use futures::FutureExt;
 use golem_common::base_model::component::ComponentRevision;
@@ -514,6 +514,24 @@ impl SessionError {
     }
 }
 
+impl From<LineageError> for StreamStoreError {
+    fn from(error: LineageError) -> Self {
+        match error {
+            LineageError::Unreadable(unreadable) => Self::Unreadable(unreadable),
+            LineageError::Invalid(text) => Self::CorruptHistory(text),
+        }
+    }
+}
+
+impl From<LineageError> for SessionError {
+    fn from(error: LineageError) -> Self {
+        match error {
+            LineageError::Unreadable(unreadable) => Self::Unreadable(unreadable),
+            LineageError::Invalid(text) => Self::Failed(text),
+        }
+    }
+}
+
 impl From<UnreadableOplog> for StreamStoreError {
     fn from(error: UnreadableOplog) -> Self {
         Self::Unreadable(error)
@@ -691,6 +709,9 @@ struct ProducerStreamIndex {
     open_streams: usize,
     deleting: bool,
     consumer_deleting: bool,
+    /// The producer and the retention of the oplog that the index folds. A record at or after
+    /// the retained start can reference a registration below it, which the fold does not see.
+    retained: Option<(AgentId, crate::services::oplog::retention::OplogRetention)>,
 }
 
 #[derive(Clone, Default, desert_rust::BinaryCodec)]
@@ -970,11 +991,10 @@ impl DurableStreamStore {
         let owner = OwnedAgentId::new(environment_id, producer);
         let lineage =
             StreamForkLineage::load_at_horizon(oplog, &owner, producer_fingerprint, current_index)
-                .await
-                .map_err(StreamStoreError::CorruptHistory)?;
-        let mut index = ProducerStreamIndex::default();
-        let mut pending_nested_registrations = Vec::new();
+                .await?;
         let retention = oplog.retention();
+        let mut index = ProducerStreamIndex::retained_by(*producer, retention);
+        let mut pending_nested_registrations = Vec::new();
         let mut covered = OplogIndex::NONE;
         while let Some(chunk) = retention.chunk(covered.next(), current_index, 1024) {
             let entries = oplog.read_exact(chunk.start, chunk.count).await?;

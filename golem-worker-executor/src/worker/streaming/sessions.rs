@@ -180,95 +180,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         session_key: &golem_common::base_model::durable_stream::StreamSessionKey,
         attempt: Option<AttemptId>,
     ) -> Result<Vec<StreamSessionRecord>, WorkerExecutorError> {
-        let service = self.worker_service();
-        let mut metadata = service
-            .lookup_durable_stream_control_metadata(
-                &self.owned_agent_id,
-                self.agent_mode(),
-                self.initial_worker_metadata.fingerprint,
-                session_key,
-            )
-            .await
-            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
-        let mut resume_offset = match attempt {
-            Some(attempt) => service
-                .lookup_durable_stream_resume_offset(
-                    &self.owned_agent_id,
-                    self.agent_mode(),
-                    self.initial_worker_metadata.fingerprint,
-                    session_key,
-                    attempt,
-                )
-                .await
-                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?,
-            None => None,
-        };
-        let current = self.oplog.current_oplog_index().await;
-        let retention = self.oplog.retention();
-        'suffix: while let Some(chunk) =
-            retention.chunk(metadata.covered_through().next(), current, 1024)
-        {
-            let entries = self.oplog.read_exact(chunk.start, chunk.count).await?;
-            for (index, entry) in entries {
-                if let OplogEntry::StreamSession { record, .. } = entry {
-                    let record = self
-                        .oplog
-                        .download_payload(record)
-                        .await
-                        .map_err(WorkerExecutorError::runtime)?;
-                    if matches!(record, StreamSessionRecord::ForkCut(_)) {
-                        metadata = service
-                            .lookup_durable_stream_control_metadata(
-                                &self.owned_agent_id,
-                                self.agent_mode(),
-                                self.initial_worker_metadata.fingerprint,
-                                session_key,
-                            )
-                            .await
-                            .map_err(|error| {
-                                error.into_worker_executor_error(WorkerExecutorError::runtime)
-                            })?;
-                        if metadata.covered_through() < index {
-                            return Err(WorkerExecutorError::runtime(
-                                "fork marker is not committed to the session index",
-                            ));
-                        }
-                        resume_offset = match attempt {
-                            Some(attempt) => service
-                                .lookup_durable_stream_resume_offset(
-                                    &self.owned_agent_id,
-                                    self.agent_mode(),
-                                    self.initial_worker_metadata.fingerprint,
-                                    session_key,
-                                    attempt,
-                                )
-                                .await
-                                .map_err(|error| {
-                                    error.into_worker_executor_error(WorkerExecutorError::runtime)
-                                })?,
-                            None => None,
-                        };
-                        continue 'suffix;
-                    }
-                    if let StreamSessionRecord::ResumeAttempt(record) = &record
-                        && record.session_key == session_key.idempotency_key
-                        && Some(record.attempt.attempt_id) == attempt
-                    {
-                        resume_offset.get_or_insert(index);
-                    }
-                    metadata.apply(
-                        index,
-                        session_key,
-                        &record,
-                        self.owned_agent_id.environment_id,
-                        &self.owned_agent_id.agent_id,
-                        self.initial_worker_metadata.fingerprint,
-                    );
-                } else {
-                    metadata.advance_coverage(index);
-                }
-            }
-        }
+        let (metadata, resume_offset) = fold_stream_session_suffix(
+            self.oplog.as_ref(),
+            self.worker_service().as_ref(),
+            &self.owned_agent_id,
+            self.agent_mode(),
+            self.initial_worker_metadata.fingerprint,
+            session_key,
+            attempt,
+        )
+        .await?;
         let mut records = Vec::new();
         for offset in [
             metadata.prepared_position(),
@@ -1176,6 +1097,97 @@ pub(in crate::worker) fn validate_stream_session_record(
             "unsupported or malformed durable Stream Session record version",
         ))
     }
+}
+
+/// The control metadata of the stream session `session_key` of `owner`, and the resume offset of
+/// `attempt`: the indexed metadata, folded on with the oplog after it. The fold reads `oplog` from
+/// its retained start at the earliest.
+pub(crate) async fn fold_stream_session_suffix(
+    oplog: &dyn Oplog,
+    service: &dyn WorkerService,
+    owner: &OwnedAgentId,
+    mode: AgentMode,
+    fingerprint: AgentFingerprint,
+    session_key: &golem_common::base_model::durable_stream::StreamSessionKey,
+    attempt: Option<AttemptId>,
+) -> Result<(SessionControlMetadata, Option<OplogIndex>), WorkerExecutorError> {
+    let mut metadata = service
+        .lookup_durable_stream_control_metadata(owner, mode, fingerprint, session_key)
+        .await
+        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+    let mut resume_offset = match attempt {
+        Some(attempt) => service
+            .lookup_durable_stream_resume_offset(owner, mode, fingerprint, session_key, attempt)
+            .await
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?,
+        None => None,
+    };
+    let current = oplog.current_oplog_index().await;
+    let retention = oplog.retention();
+    'suffix: while let Some(chunk) =
+        retention.chunk(metadata.covered_through().next(), current, 1024)
+    {
+        let entries = oplog.read_exact(chunk.start, chunk.count).await?;
+        for (index, entry) in entries {
+            if let OplogEntry::StreamSession { record, .. } = entry {
+                let record = oplog
+                    .download_payload(record)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?;
+                if matches!(record, StreamSessionRecord::ForkCut(_)) {
+                    metadata = service
+                        .lookup_durable_stream_control_metadata(
+                            owner,
+                            mode,
+                            fingerprint,
+                            session_key,
+                        )
+                        .await
+                        .map_err(|error| {
+                            error.into_worker_executor_error(WorkerExecutorError::runtime)
+                        })?;
+                    if metadata.covered_through() < index {
+                        return Err(WorkerExecutorError::runtime(
+                            "fork marker is not committed to the session index",
+                        ));
+                    }
+                    resume_offset = match attempt {
+                        Some(attempt) => service
+                            .lookup_durable_stream_resume_offset(
+                                owner,
+                                mode,
+                                fingerprint,
+                                session_key,
+                                attempt,
+                            )
+                            .await
+                            .map_err(|error| {
+                                error.into_worker_executor_error(WorkerExecutorError::runtime)
+                            })?,
+                        None => None,
+                    };
+                    continue 'suffix;
+                }
+                if let StreamSessionRecord::ResumeAttempt(record) = &record
+                    && record.session_key == session_key.idempotency_key
+                    && Some(record.attempt.attempt_id) == attempt
+                {
+                    resume_offset.get_or_insert(index);
+                }
+                metadata.apply(
+                    index,
+                    session_key,
+                    &record,
+                    owner.environment_id,
+                    &owner.agent_id,
+                    fingerprint,
+                );
+            } else {
+                metadata.advance_coverage(index);
+            }
+        }
+    }
+    Ok((metadata, resume_offset))
 }
 
 #[cfg(test)]

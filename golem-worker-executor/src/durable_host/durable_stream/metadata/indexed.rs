@@ -41,7 +41,7 @@ impl DurableStreamStore {
                 "producer metadata lookup returned an incorrect row count".into(),
             ));
         }
-        let mut index = ProducerStreamIndex::default();
+        let mut index = ProducerStreamIndex::retained_by(owner.agent_id, oplog.retention());
         let Some(ProducerMetadataRow::Lineage(lineage)) = rows.pop().flatten() else {
             return Err(StreamStoreError::CorruptHistory(
                 "producer metadata lookup did not return fork lineage".into(),
@@ -273,7 +273,7 @@ impl DurableStreamStore {
                 || index.batch_positions.len() > 128
                 || index.streams.len() > 128)
         {
-            *index = ProducerStreamIndex::default();
+            *index = ProducerStreamIndex::retained_by(self.producer, self.oplog.retention());
             self.buses
                 .write()
                 .expect("durable stream bus map lock poisoned")
@@ -328,7 +328,7 @@ impl DurableStreamStore {
         }
         let result = self.try_load_index_keys(index, keys).await;
         if result.is_err() {
-            *index = ProducerStreamIndex::default();
+            *index = ProducerStreamIndex::retained_by(self.producer, self.oplog.retention());
             self.buses
                 .write()
                 .expect("durable stream bus map lock poisoned")

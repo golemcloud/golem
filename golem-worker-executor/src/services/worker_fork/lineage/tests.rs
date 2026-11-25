@@ -719,20 +719,26 @@ async fn suffix_discovery_is_fixed_to_its_horizon_and_finds_a_later_marker() {
 }
 
 #[test]
-#[should_panic(expected = "missing oplog entries in range [2..=2]")]
 async fn service_lineage_loader_rejects_a_missing_requested_range() {
     let source = owner("source");
     let fingerprint = AgentFingerprint(uuid::Uuid::from_u128(37));
     let fixture = ServiceFixture::new(&source, fingerprint).await;
-    StreamForkLineage::load_from_service(
+    let result = StreamForkLineage::load_from_service(
         &*fixture.service,
         &source,
         AgentMode::Durable,
         fingerprint,
         OplogIndex::from_u64(2),
     )
-    .await
-    .unwrap();
+    .await;
+    assert!(
+        matches!(
+            &result,
+            Err(LineageError::Unreadable(unreadable))
+                if unreadable.to_string().contains("missing oplog entries in range [2..=2]")
+        ),
+        "{result:?}"
+    );
 }
 
 #[test]
@@ -1075,7 +1081,7 @@ impl OplogService for ScriptedReadService {
     }
 }
 
-async fn load_with_reads(reads: &[&[u64]]) -> Result<StreamForkLineage, String> {
+async fn load_with_reads(reads: &[&[u64]]) -> Result<StreamForkLineage, LineageError> {
     StreamForkLineage::load_from_service(
         &ScriptedReadService::new(reads),
         &owner("source"),
@@ -1090,11 +1096,15 @@ async fn load_with_reads(reads: &[&[u64]]) -> Result<StreamForkLineage, String> 
 async fn a_lineage_read_with_an_entry_less_fails() {
     assert_eq!(
         load_with_reads(&[&[1, 3, 4]]).await,
-        Err("missing oplog entries while discovering reverted stream history".to_string())
+        Err(LineageError::Invalid(
+            "missing oplog entries while discovering reverted stream history".to_string()
+        ))
     );
     assert_eq!(
         load_with_reads(&[&[1, 2, 3, 4], &[1, 3, 4]]).await,
-        Err("missing oplog entries while loading stream fork lineage".to_string()),
+        Err(LineageError::Invalid(
+            "missing oplog entries while loading stream fork lineage".to_string()
+        )),
         "the second pass checks its read too"
     );
     assert_eq!(
@@ -1114,6 +1124,51 @@ async fn a_lineage_read_with_an_entry_less_fails() {
 async fn a_lineage_read_with_a_gap_fails() {
     assert_eq!(
         load_with_reads(&[&[1, 3, 4, 5]]).await,
-        Err("noncontiguous oplog while discovering reverted stream history".to_string())
+        Err(LineageError::Invalid(
+            "noncontiguous oplog while discovering reverted stream history".to_string()
+        ))
     );
+}
+
+/// The lineage of a fold from the retained start does not hold the registrations below the
+/// start. A nested registration whose parent is below the start, or a fork cut that selects a
+/// stream below the start, is expired with the start. A missing registration at or after the
+/// start, or in a lineage with no retention, is not a valid lineage.
+#[test]
+fn a_reference_to_a_registration_below_the_retained_start_is_expired() {
+    use crate::services::oplog::retention::test_oplog::{at, expired, idx};
+
+    let agent_id = owner("source").agent_id;
+    let expired_at_4 = Err(LineageError::Unreadable(UnreadableOplog::new(
+        &agent_id,
+        expired(4),
+    )));
+    let mut nested = registration();
+    nested.coordinate = StreamRegistrationRecordCoordinate::Nested {
+        parent_stream: StreamRecordReference::Local(LocalStreamId(idx(3))),
+        parent_producer_sequence: 0,
+        recursive_value_path: vec![],
+    };
+    let nested = [(idx(5), nested)];
+    let validate_nested = |retained| {
+        StreamForkLineage::validate_history(Vec::new(), &nested, &[], retained).map(|_| ())
+    };
+    assert_eq!(validate_nested(Some((&agent_id, at(4)))), expired_at_4);
+    let unknown_parent = Err(LineageError::Invalid(
+        "nested stream references an unknown local registration".to_string(),
+    ));
+    assert_eq!(validate_nested(Some((&agent_id, at(3)))), unknown_parent);
+    assert_eq!(validate_nested(None), unknown_parent);
+
+    let cut = fork(Some(LocalStreamId(idx(3))), idx(6));
+    let validate_cut = |retained| {
+        StreamForkLineage::validate_history(vec![(idx(7), cut.clone())], &[], &[], retained)
+            .map(|_| ())
+    };
+    assert_eq!(validate_cut(Some((&agent_id, at(4)))), expired_at_4);
+    let unregistered = Err(LineageError::Invalid(
+        "fork cut selects an unregistered local stream".to_string(),
+    ));
+    assert_eq!(validate_cut(Some((&agent_id, at(3)))), unregistered);
+    assert_eq!(validate_cut(None), unregistered);
 }

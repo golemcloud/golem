@@ -354,6 +354,12 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         if !current.is_defined() {
             return Ok(None);
         }
+        // The journal of a reader starts at the record that introduced it. A reader introduced
+        // below the retained start has records that the oplog does not keep, so it is expired.
+        let retention = self.oplog_service.retention(&consumer, agent_mode).await?;
+        readers.iter().try_for_each(|reader_id| {
+            retention.check_agent_from(&key.consumer, reader_id.introducing_oplog_index)
+        })?;
         let lineage = StreamForkLineage::load_from_service(
             self.oplog_service.as_ref(),
             &consumer,
@@ -361,8 +367,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
             key.expected_consumer_fingerprint,
             current,
         )
-        .await
-        .map_err(StreamStoreError::CorruptHistory)?;
+        .await?;
         let mut inspections = readers
             .into_iter()
             .map(|reader_id| {

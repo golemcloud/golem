@@ -22,8 +22,36 @@ use golem_common::model::durable_stream::{
 };
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
-use golem_common::model::{AgentFingerprint, OwnedAgentId};
+use golem_common::model::{AgentFingerprint, AgentId, OwnedAgentId};
 use std::collections::HashMap;
+
+/// Why the stream fork lineage of an oplog does not load.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LineageError {
+    /// The oplog does not read. It keeps its type, so a read below the retained start stays the
+    /// expired error with the start.
+    Unreadable(UnreadableOplog),
+    /// The history of the oplog is not a valid lineage.
+    Invalid(String),
+}
+
+impl From<String> for LineageError {
+    fn from(text: String) -> Self {
+        Self::Invalid(text)
+    }
+}
+
+impl From<&str> for LineageError {
+    fn from(text: &str) -> Self {
+        Self::Invalid(text.to_string())
+    }
+}
+
+impl From<UnreadableOplog> for LineageError {
+    fn from(unreadable: UnreadableOplog) -> Self {
+        Self::Unreadable(unreadable)
+    }
+}
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, desert_rust::BinaryCodec)]
 pub struct StreamForkLineage {
@@ -42,17 +70,14 @@ enum LineageSource<'a> {
 }
 
 impl LineageSource<'_> {
-    async fn retention(&self) -> Result<OplogRetention, String> {
+    async fn retention(&self) -> Result<OplogRetention, UnreadableOplog> {
         match self {
             Self::Open(oplog) => Ok(oplog.retention()),
             Self::Service {
                 service,
                 owner,
                 mode,
-            } => service
-                .retention(owner, *mode)
-                .await
-                .map_err(|error| error.to_string()),
+            } => service.retention(owner, *mode).await,
         }
     }
 
@@ -119,7 +144,10 @@ impl StreamForkLineage {
             owner,
             mode,
         };
-        let retention = source.retention().await?;
+        let retention = source
+            .retention()
+            .await
+            .map_err(|error| error.to_string())?;
         let mut next = from;
         while let Some(chunk) = retention.chunk(next, horizon, 1024) {
             let entries = source
@@ -155,25 +183,32 @@ impl StreamForkLineage {
         oplog: &dyn Oplog,
         owner: &OwnedAgentId,
         fingerprint: AgentFingerprint,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, LineageError> {
         let horizon = oplog.current_oplog_index().await;
         Self::load_at_horizon(oplog, owner, fingerprint, horizon).await
     }
 
     pub(crate) async fn load_at_horizon(
         oplog: &dyn Oplog,
-        _owner: &OwnedAgentId,
+        owner: &OwnedAgentId,
         _fingerprint: AgentFingerprint,
         horizon: OplogIndex,
-    ) -> Result<Self, String> {
-        Self::load_from_source(LineageSource::Open(oplog), horizon, None).await
+    ) -> Result<Self, LineageError> {
+        Self::load_from_source(LineageSource::Open(oplog), &owner.agent_id, horizon, None).await
     }
 
     pub(crate) async fn validate_fork_cut(
         oplog: &dyn Oplog,
+        owner: &OwnedAgentId,
         cut: StreamForkCutRecord,
-    ) -> Result<Self, String> {
-        Self::load_from_source(LineageSource::Open(oplog), cut.cut_index, Some(cut)).await
+    ) -> Result<Self, LineageError> {
+        Self::load_from_source(
+            LineageSource::Open(oplog),
+            &owner.agent_id,
+            cut.cut_index,
+            Some(cut),
+        )
+        .await
     }
 
     pub async fn load_from_service(
@@ -182,13 +217,14 @@ impl StreamForkLineage {
         mode: AgentMode,
         _fingerprint: AgentFingerprint,
         horizon: OplogIndex,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, LineageError> {
         Self::load_from_source(
             LineageSource::Service {
                 service,
                 owner,
                 mode,
             },
+            &owner.agent_id,
             horizon,
             None,
         )
@@ -197,9 +233,10 @@ impl StreamForkLineage {
 
     async fn load_from_source(
         source: LineageSource<'_>,
+        agent_id: &AgentId,
         horizon: OplogIndex,
         pending_cut: Option<StreamForkCutRecord>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, LineageError> {
         // Both passes start at the retained start of the oplog: the history before it is gone.
         // The first bounded pass reads no external payloads. It builds the complete deletion mask
         // used by the second pass, so payloads in deleted regions are never downloaded.
@@ -208,10 +245,7 @@ impl StreamForkLineage {
         let mut first_stream_entry = None;
         let mut next = OplogIndex::NONE;
         while let Some(chunk) = retention.chunk(next, horizon, 1024) {
-            let entries = source
-                .read_exact(chunk.start, chunk.count)
-                .await
-                .map_err(|error| error.to_string())?;
+            let entries = source.read_exact(chunk.start, chunk.count).await?;
             if entries.len() as u64 != chunk.count {
                 return Err(
                     "missing oplog entries while discovering reverted stream history".into(),
@@ -248,10 +282,7 @@ impl StreamForkLineage {
         let mut finished = Vec::new();
         let mut next = OplogIndex::NONE;
         while let Some(chunk) = retention.chunk(next, horizon, 1024) {
-            let entries = source
-                .read_exact(chunk.start, chunk.count)
-                .await
-                .map_err(|error| error.to_string())?;
+            let entries = source.read_exact(chunk.start, chunk.count).await?;
             if entries.len() as u64 != chunk.count {
                 return Err("missing oplog entries while loading stream fork lineage".into());
             }
@@ -298,7 +329,8 @@ impl StreamForkLineage {
                 return Err("reverted stream history has no adjacent fork marker".into());
             }
         }
-        let mut lineage = Self::validate_history(cuts, &registrations, &finished)?;
+        let mut lineage =
+            Self::validate_history(cuts, &registrations, &finished, Some((agent_id, retention)))?;
         lineage.deleted_regions = deleted_regions;
         lineage.revert_regions = reverts;
         Ok(lineage)
@@ -309,15 +341,25 @@ impl StreamForkLineage {
         registrations: &[(OplogIndex, StreamRegisteredRecord)],
         _owner: &OwnedAgentId,
         _fingerprint: AgentFingerprint,
-    ) -> Result<Self, String> {
-        Self::validate_history(cuts, registrations, &[])
+    ) -> Result<Self, LineageError> {
+        Self::validate_history(cuts, registrations, &[], None)
     }
 
+    /// Validates the lineage of the registrations and fork cuts that a fold of the oplog found.
+    /// `retained` is the agent and the retention of the folded oplog, when the fold starts at its
+    /// retained start: a registration below the start is not in the fold, so a reference to it
+    /// is expired, not invalid.
     fn validate_history(
         cuts: Vec<(OplogIndex, StreamForkCutRecord)>,
         registrations: &[(OplogIndex, StreamRegisteredRecord)],
         finished: &[(OplogIndex, StreamRegistrationInvocation)],
-    ) -> Result<Self, String> {
+        retained: Option<(&AgentId, OplogRetention)>,
+    ) -> Result<Self, LineageError> {
+        let unregistered = |id: LocalStreamId, invalid: &str| {
+            retained
+                .and_then(|(agent_id, retention)| retention.check_agent_from(agent_id, id.0).err())
+                .map_or_else(|| LineageError::from(invalid), LineageError::Unreadable)
+        };
         let mut local = HashMap::new();
         for (index, record) in registrations {
             if record.format_version != DURABLE_STREAM_FORMAT_VERSION
@@ -333,7 +375,14 @@ impl StreamForkLineage {
             } = &record.coordinate
                 && (parent.0 >= id.0 || !local.contains_key(parent))
             {
-                return Err("nested stream references an unknown local registration".into());
+                return Err(if parent.0 < id.0 {
+                    unregistered(
+                        *parent,
+                        "nested stream references an unknown local registration",
+                    )
+                } else {
+                    "nested stream references an unknown local registration".into()
+                });
             }
         }
 
@@ -358,7 +407,9 @@ impl StreamForkLineage {
                 let registration = local
                     .get(&selected)
                     .filter(|_| selected.0 <= cut.cut_index)
-                    .ok_or("fork cut selects an unregistered local stream")?;
+                    .ok_or_else(|| {
+                        unregistered(selected, "fork cut selects an unregistered local stream")
+                    })?;
                 if cut.retained_through.is_some_and(|offset| {
                     offset.producer_oplog_index() <= selected.0
                         || offset.producer_oplog_index() > cut.cut_index

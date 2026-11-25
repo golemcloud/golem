@@ -415,6 +415,21 @@ impl DurableStreamStore {
                         }
                         *metadata = metadata.for_fork(cut)?;
                     } else {
+                        // The rebuilt metadata starts at the retained start, so a reader that a
+                        // record below the start introduced has no binding in it: it is expired.
+                        if let Some(reader) = consumer_record_reader(&record)
+                            && crate::worker::stream_session_record_key(
+                                &record,
+                                self.environment_id,
+                                &self.producer,
+                                self.producer_fingerprint,
+                            )
+                            .as_ref()
+                                == Some(session_key)
+                        {
+                            retention
+                                .check_agent_from(&self.producer, reader.introducing_oplog_index)?;
+                        }
                         metadata.apply(
                             index,
                             session_key,
@@ -1353,5 +1368,17 @@ impl DurableStreamStore {
         );
         self.notify_session_records_changed(Some(context));
         Ok(())
+    }
+}
+
+/// The reader that a consumer record of a session names.
+fn consumer_record_reader(record: &StreamSessionRecord) -> Option<LocalStreamReaderId> {
+    match record {
+        StreamSessionRecord::ConsumerItemValue(record) => Some(record.reader_id),
+        StreamSessionRecord::ConsumerTerminal(record)
+        | StreamSessionRecord::ConsumerOutcome(record) => Some(record.reader_id),
+        StreamSessionRecord::SourceUnavailable(record) => Some(record.reader_id),
+        StreamSessionRecord::ReaderForwardIntent(record) => Some(record.reader_id),
+        _ => None,
     }
 }

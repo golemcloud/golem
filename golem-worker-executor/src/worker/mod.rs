@@ -22,6 +22,8 @@ mod residency;
 mod runtime;
 mod startup;
 mod streaming;
+#[cfg(test)]
+pub(crate) use streaming::sessions::fold_stream_session_suffix;
 
 use acquisition::ConstructionError;
 #[cfg(test)]

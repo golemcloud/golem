@@ -74,14 +74,18 @@ impl DurableStreamStore {
         let index = self
             .index_for([ProducerMetadataKey::Stream(handle.stream_id)])
             .await?;
-        if index
-            .registrations
-            .get(&handle.stream_id)
-            .is_some_and(|record| record.accepts(handle, self.generation()))
-        {
-            Ok(())
-        } else {
-            Err(StreamStoreError::InvalidHandle)
+        match index.registrations.get(&handle.stream_id) {
+            Some(record) if record.accepts(handle, self.generation()) => Ok(()),
+            Some(_) => Err(StreamStoreError::InvalidHandle),
+            None => {
+                // The registration of a stream that the index does not know can be below the
+                // retained start. The check of the handle then needs entries that the oplog
+                // does not keep, so the handle is expired.
+                self.oplog
+                    .retention()
+                    .check_agent_from(&self.producer, OplogIndex::INITIAL)?;
+                Err(StreamStoreError::InvalidHandle)
+            }
         }
     }
 
@@ -163,6 +167,12 @@ impl DurableStreamStore {
         let Some(after) = after else {
             return Ok(());
         };
+        // A cursor below the retained start continues after an item that the oplog does not keep.
+        if after.producer_oplog_index().is_defined() {
+            self.oplog
+                .retention()
+                .check_agent_from(&self.producer, after.producer_oplog_index())?;
+        }
         let index = self
             .index_for([
                 ProducerMetadataKey::Stream(stream_id),

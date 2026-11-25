@@ -1163,6 +1163,11 @@ impl StreamSession {
         &self,
         reader_id: LocalStreamReaderId,
     ) -> Result<ConsumerHistory, SessionError> {
+        // The journal of a reader starts at the record that introduced it, so the journal of a
+        // reader introduced below the retained start is expired.
+        self.oplog
+            .retention()
+            .check_agent_from(self.producer.agent_id(), reader_id.introducing_oplog_index)?;
         let root_binding = self
             .current_control_metadata()
             .await?

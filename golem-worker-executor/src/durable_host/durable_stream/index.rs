@@ -35,6 +35,17 @@ impl IndexedProducerStream {
 }
 
 impl ProducerStreamIndex {
+    /// An empty index of the oplog of `producer` whose retention is `retention`.
+    pub(super) fn retained_by(
+        producer: AgentId,
+        retention: crate::services::oplog::retention::OplogRetention,
+    ) -> Self {
+        Self {
+            retained: Some((producer, retention)),
+            ..Default::default()
+        }
+    }
+
     pub(super) fn apply_external_producer_state(
         &mut self,
         record: &StreamExternalProducerStateRecord,
@@ -87,9 +98,22 @@ impl ProducerStreamIndex {
             .get(&local_id)
             .copied()
             .ok_or_else(|| {
-                StreamStoreError::CorruptHistory(
-                    "producer record references an unknown local stream registration".into(),
-                )
+                // A record at or after the retained start can reference a registration below it,
+                // which the fold of the index does not see: that registration is expired.
+                self.retained
+                    .as_ref()
+                    .and_then(|(producer, retention)| {
+                        retention.check_agent_from(producer, local_id.0).err()
+                    })
+                    .map_or_else(
+                        || {
+                            StreamStoreError::CorruptHistory(
+                                "producer record references an unknown local stream registration"
+                                    .into(),
+                            )
+                        },
+                        StreamStoreError::Unreadable,
+                    )
             })
     }
 
