@@ -270,6 +270,31 @@ mod tests {
     }
 
     #[test]
+    fn timestamp_sql_conversion_rejects_end_of_time_sentinel() {
+        let maximum = time::Date::from_calendar_date(9999, time::Month::December, 30)
+            .unwrap()
+            .with_hms_nano(22, 0, 0, 999_999_999)
+            .unwrap()
+            .assume_utc();
+        assert_eq!(
+            jiff::Timestamp::from_sql(maximum).unwrap(),
+            jiff::Timestamp::MAX
+        );
+
+        let sentinel = time::Date::from_calendar_date(9999, time::Month::December, 31)
+            .unwrap()
+            .with_hms(23, 59, 59)
+            .unwrap()
+            .assume_utc();
+        for value in [maximum + time::Duration::nanoseconds(1), sentinel] {
+            assert!(
+                jiff::Timestamp::from_sql(value).is_err(),
+                "out-of-range instant {value} must be rejected"
+            );
+        }
+    }
+
+    #[test]
     fn temporal_sql_ranges_preserve_open_and_unbounded_bounds() {
         let date = jiff::civil::date(2026, 9, 17);
         let range = ValuesRange {
