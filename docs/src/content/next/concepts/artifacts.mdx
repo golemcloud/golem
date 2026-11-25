@@ -232,7 +232,7 @@ Endpoints can require authentication. A single-page app can sign users in with t
 <Callout type="warning">
   Authentication tells an agent who is calling; it does not decide which agents a user may reach.
   A user can put any agent's name in a URL, so a method that serves user data should read the
-  authenticated caller (the principal) and check it against the application's access rules.
+  authenticated caller (`ctx.caller`) and check it against the application's access rules.
 </Callout>
 
 ## Keeping an existing web app

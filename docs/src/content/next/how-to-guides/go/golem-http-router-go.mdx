@@ -96,14 +96,14 @@ mux.HandleFunc("GET /web/hello", func(w http.ResponseWriter, r *http.Request) {
 
 In a raw handler or OpenAPI provider, pass its `ctx`. Calling `Config` with any other context panics. Config values are set in `golem.yaml` under `agents: <RouterName>: config:` (see [`golem-add-config-go`](/next/how-to-guides/go/golem-add-config-go)).
 
-## The request's principal
+## The request's caller
 
-`Site.Principal(r.Context())` (or the raw handler's `ctx`) is the principal of the request: the authenticated user behind a mount with `Auth: true`, otherwise a `golem.AnonymousPrincipal`. The OpenAPI provider serves no request, so there it is nil.
+`Site.Caller(r.Context())` (or the raw handler's `ctx`) is the caller of the request. Its `Original` is the authenticated user behind a mount with `Auth: true`, otherwise a `golem.AnonymousPrincipal`. The OpenAPI provider serves no request, so there the caller is anonymous.
 
 ```go
 mux.HandleFunc("GET /web/me", func(w http.ResponseWriter, r *http.Request) {
-    if p, ok := Site.Principal(r.Context()).(golem.OidcPrincipal); ok {
-        io.WriteString(w, p.Sub)
+    if p, ok := Site.Caller(r.Context()).Original.(golem.UserPrincipal); ok {
+        io.WriteString(w, p.Pair.Subject)
         return
     }
     http.Error(w, "login required", http.StatusUnauthorized)

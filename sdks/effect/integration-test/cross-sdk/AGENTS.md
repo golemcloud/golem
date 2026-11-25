@@ -422,7 +422,7 @@ s.result(okSchema, errSchema)    // a typed result<ok, err> return (see Typed Er
 
 ## State
 
-State lives entirely in the object returned by `init()` and is read/written through `this` in the handlers — there are no class fields. `init` receives an `InitContext` (`{ id, principal, config }`); handlers' `this` also carries SDK helpers `getId()` (the agent's `AgentId`), `getPrincipal()`, and `config`.
+State lives entirely in the object returned by `init()` and is read/written through `this` in the handlers — there are no class fields. `init` receives an `InitContext` (`{ id, config, caller }`); each handler receives the invocation context as its second argument (`ctx.caller` is who called), and `this` also carries SDK helpers `getId()` (the agent's `AgentId`) and `config`.
 
 ```typescript
 export const HttpAgentImpl = HttpAgent.implement({

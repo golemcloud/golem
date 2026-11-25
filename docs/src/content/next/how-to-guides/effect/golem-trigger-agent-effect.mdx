@@ -50,7 +50,7 @@ Trigger that starter agent as `CounterAgent("c1")`:
 golem agent invoke --trigger 'CounterAgent("c1")' increment
 ```
 
-Pass one native TypeScript literal per user-supplied `input` field in declaration order. Skip host-injected `Principal` fields; do not supply a principal value or placeholder. Do not wrap them in the named input
+Pass one native TypeScript literal per user-supplied `input` field in declaration order. Do not wrap them in the named input
 objects used by the Effect SDK client. For example, a method declared with
 `input: { amount: Schema.Number }` receives `5` from the CLI, not `{ amount: 5 }`. If a declared
 parameter is itself a record, pass that record value as one shell argument.

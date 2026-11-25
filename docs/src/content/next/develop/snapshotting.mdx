@@ -488,7 +488,7 @@ You can implement custom saving and restoration to control exactly how agent sta
         ```
     </Tabs.Tab>
     <Tabs.Tab>
-        Implement `golem.Snapshotter` (`Save() ([]byte, error)` and `Load([]byte) error`) on the state type. A restore does not run the constructor passed to `Implement`: the SDK calls `Load` on a zero state, then runs the optional `OnRestore` hook, which receives the same `*golem.InitContext` as a configured constructor (ID, agent ID, principal, config) and rebuilds what the snapshot does not carry:
+        Implement `golem.Snapshotter` (`Save() ([]byte, error)` and `Load([]byte) error`) on the state type. A restore does not run the constructor passed to `Implement`: the SDK calls `Load` on a zero state, then runs the optional `OnRestore` hook, which receives the same `*golem.InitContext` as a configured constructor (ID, agent ID, config) and rebuilds what the snapshot does not carry:
 
         ```go
         type state struct{ value int64 }
@@ -773,14 +773,14 @@ These examples save a revision counter and an in-memory binary index. The loader
 - Names are case-sensitive and match `[A-Za-z0-9_][A-Za-z0-9_.-]*`. Logical names `state` and `__proto__` are valid. Parts have no automatic resource semantics; applications decide what they mean and whether to accept extra parts.
 - Content types must be bare ASCII MIME type/subtype strings, such as `application/octet-stream`. They are normalized to lowercase; parameters such as `; charset=utf-8` are rejected. `requirePart` checks both presence and content type, returning the SDK's normal snapshot error on failure.
 - Multipart is emitted even when there are no binary parts. Binary-only applications use JSON `null` state. Empty bytes and trailing CR, LF, or CRLF are preserved exactly.
-- The SDK owns the principal envelope. On the wire, one `state` part contains UTF-8 JSON `{version:1, principal, state}`, user names become `part:<name>`, and managed SQLite images use `db:<name>`. Do not construct these prefixes or envelope metadata yourself.
+- The SDK owns the envelope. On the wire, one `state` part contains UTF-8 JSON `{version:2, state}`, user names become `part:<name>`, and managed SQLite images use `db:<name>`. Do not construct these prefixes or envelope metadata yourself. The SDK still reads a 1.6 envelope (`version:1`) and drops the principal it holds.
 - The SDK validates framing, metadata, names, duplicate structural fields, and supported namespaces before invoking user restoration. Changing snapshot modes does not enable fallback parsing or historical-format migration.
 
 Snapshots are whole-buffer operations. Copies of state, part bytes, encoded payloads, and restored resources can amplify peak memory usage. The host's 64 KiB inline/blob-spill setting is a storage threshold, **not** a maximum snapshot size. Save and load hooks are unpersisted lifecycle operations and may be retried; async hooks do not make external effects exactly-once.
 
 ## How snapshot restoration runs
 
-Snapshot loading is a specially supported SDK lifecycle operation, not an agent method. The SDKs keep it separate from normal initialization and install the returned state or instance only after restoration succeeds. Restore context exposes the agent ID, the agent's constructor parameters, and the restored principal, plus fresh configuration where applicable. Golem passes the constructor parameters to snapshot loading because the agent ID does not contain them.
+Snapshot loading is a specially supported SDK lifecycle operation, not an agent method. The SDKs keep it separate from normal initialization and install the returned state or instance only after restoration succeeds. Restore context exposes the agent ID and the agent's constructor parameters, plus fresh configuration where applicable. A snapshot holds no caller: an agent that must remember who created it stores `ctx.caller.original.ref`, a `PrincipalRef`, in its own state. Golem passes the constructor parameters to snapshot loading because the agent ID does not contain them.
 
 Golem runs snapshot loading in read-only mode and writes nothing from it to the oplog. Decoding, local computation, fresh randomness, configuration access, and other permitted reads can be used to construct the restored value. Durable host calls classified as writes, and outgoing HTTP or agent RPC calls, are rejected before they take effect. This restriction is not a general filesystem write sandbox: local filesystem writes are not blocked by it.
 

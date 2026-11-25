@@ -128,17 +128,22 @@ Read-only methods are the natural fit for HTTP `GET`/`HEAD` endpoints. Combine
 var GetCatalog = Agent.Method[golem.Unit, Catalog]("catalog", golem.ReadOnly(), golem.HTTP(golem.GET("/catalog")))
 ```
 
-## Per-principal caching
+## Caching per caller
 
-Read-only results are cached per `(method, input)` and shared across callers. Add a
-`golem.Principal` field to the input and the cache is kept per principal instead:
-the host fills the field, callers never supply it, and the method is marked as
-depending on its principal.
+Read-only results are cached per `(method, input, caller)`: each caller gets its own
+entry, and all anonymous calls share one. There is no option for this. A read-only
+handler reads its caller with `ctx.Caller()`, like any other handler:
 
 ```go
-type BalanceIn struct{ Principal golem.Principal }
+var Balance = Agent.Method[golem.Unit, int64]("balance", golem.ReadOnly(golem.CacheFor(time.Minute)))
 
-var Balance = Agent.Method[BalanceIn, int64]("balance", golem.ReadOnly(golem.CacheFor(time.Minute)))
+agent.Handle(Balance, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+	ref, ok := ctx.Caller().Original.Ref()
+	if !ok {
+		return 0 // anonymous
+	}
+	return ctx.State.balances[ref]
+})
 ```
 
 ## Key Constraints

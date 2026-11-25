@@ -44,10 +44,10 @@ object-valued field is one parameter:
 
 No-input methods take no arguments; `history '{}'` supplies an extra argument.
 
-Skip host-injected `Principal` fields and retain the order of the user-supplied inputs. Do not supply a principal value or placeholder. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
-Effect SDK clients omit explicitly declared `PrincipalSchema` input fields; the host injects
-those fields into handlers. The normal `Principal.Principal` service remains available and
-does not add a caller-supplied input. Load [`golem-http-params-effect`](/next/how-to-guides/effect/golem-http-params-effect) for the caller service example.
+Keep the order of the user-supplied inputs. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
+The caller is not an input: handlers read it from the `InvocationContext.InvocationContext`
+service, and the invocation records the CLI's account as its caller. Load [`golem-http-params-effect`](/next/how-to-guides/effect/golem-http-params-effect)
+for the caller service example.
 
 TypeScript object field names must be unquoted, not JSON keys.
 For a string parameter, if native literal parsing fails, the CLI uses the argument as raw text.

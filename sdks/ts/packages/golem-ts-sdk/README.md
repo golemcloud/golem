@@ -25,8 +25,8 @@ export const Counter = counter.implement({
 ```
 
 The state returned by `init()` or a snapshot `load()` must not contain top-level fields named
-`config`, `getId`, or `getPrincipal`. These names are reserved for the SDK's
-configuration accessor and identity/principal helpers. The SDK rejects these fields during
+`config` or `getId`. These names are reserved for the SDK's
+configuration accessor and identity helper. The SDK rejects these fields during
 initialization or restoration, even if their value is `undefined`. Rename them or nest them
 inside another state field; nested fields may use these names.
 

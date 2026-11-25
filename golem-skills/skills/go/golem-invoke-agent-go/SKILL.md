@@ -28,14 +28,13 @@ golem agent invoke <AGENT_ADDRESS> <FUNCTION_NAME> [ARGUMENTS...]
 
 Pass one shell argument per exported field of the method's input struct, in declaration order. Do not pass a JSON object wrapping all fields. A struct-valued field is one argument.
 
-Skip `golem.Principal` fields: the host fills them. Do not supply a principal value or placeholder, and keep the order of the other fields. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
+Keep the order of the input struct's fields. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
 
 | Method | CLI method and arguments |
 |--------|--------------------------|
 | `Method[PromptIn, golem.Unit]("prompt")` with `type PromptIn struct{ Text string }` | `prompt '"hello"'` |
 | `Method[SubmitIn, golem.Unit]("submit")` with `type SubmitIn struct{ Request Request }` and `type Request struct{ Text string }` | `submit '{text: "hello"}'` |
 | `Method[ProcessOrderIn, golem.Unit]("processOrder")` with `type ProcessOrderIn struct{ OrderID string; Quantity uint32 }` | `processOrder '"order-456"' 42` |
-| `Method[AuditIn, golem.Unit]("audit")` with `type AuditIn struct{ Principal golem.Principal; Note string }` | `audit '"checked"'` |
 | `Method[golem.Unit, []string]("history")` | `history` |
 
 For a method whose input is `golem.Unit` or has no user-supplied fields, omit arguments; `history '{}'` supplies an extra argument. Quote each Go literal as one shell argument. For a string field, if Go literal parsing fails, the CLI uses the argument as raw text. Passing `'{"text": "hello"}'` to `prompt` therefore passes that entire JSON text as the string; it does not extract `text`.

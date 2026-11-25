@@ -78,7 +78,7 @@ golem agent invoke --trigger -i 'increment-2026-01-15' 'CounterAgent("my-counter
 
 ## Value Syntax
 
-Pass one Go literal per exported field of the method's input struct, in declaration order. Skip `golem.Principal` fields; do not supply a principal value or placeholder. Do not wrap all fields in a JSON object. A method whose input is `golem.Unit` takes no arguments, not `'{}'`. `--format json` controls output only. Load `golem-invoke-agent-go` for the string fallback and the different HTTP body rules. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
+Pass one Go literal per exported field of the method's input struct, in declaration order. Do not wrap all fields in a JSON object. A method whose input is `golem.Unit` takes no arguments, not `'{}'`. `--format json` controls output only. Load `golem-invoke-agent-go` for the string fallback and the different HTTP body rules. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
 
 Key parameters and method arguments use Go syntax, read against the agent's schema:
 

@@ -50,6 +50,36 @@ trait MostlySecureAgent extends BaseAgent {
 }
 ```
 
+## Reading the Caller
+
+When auth is enabled, a method reads the signed-in user from an `InvocationContext` parameter. The SDK supplies it in the constructor and in any method; it is not part of the input schema and is never mapped to path, query, header or body. `context.caller.original` is the principal that started the call chain (the signed-in user); `context.caller.immediate` is the principal that made this call.
+
+```scala
+import golem.{BaseAgent, InvocationContext, Principal}
+import golem.runtime.annotations.{agentDefinition, agentImplementation, endpoint}
+
+import scala.concurrent.Future
+
+@agentDefinition(mount = "/api/{name}", auth = true)
+trait ApiAgent extends BaseAgent {
+  class Id(val name: String)
+
+  @endpoint(method = "GET", path = "/whoami")
+  def whoAmI(context: InvocationContext): Future[String]
+}
+
+@agentImplementation()
+final class ApiAgentImpl(private val name: String) extends ApiAgent {
+  override def whoAmI(context: InvocationContext): Future[String] =
+    Future.successful(context.caller.original match {
+      case user: Principal.User => user.subject
+      case other                => other.kind.toString
+    })
+}
+```
+
+The principal is one of `Principal.User` (a signed-in user; `claimsJson` holds the claim set), `Principal.Account` (a Golem account, for example the CLI), `Principal.Agent`, `Principal.Tool` and `Principal.Anonymous`. A `Principal` or `Caller` cannot appear in a method, constructor or tool signature or inside a value type: the build fails with a message that points to `ctx.caller`. To remember who called, store `context.caller.original.ref` (an `Option[PrincipalRef]`) and compare it later with `isSameAs`.
+
 ## Deployment Configuration
 
 After enabling `auth = true` in code, you must configure a security scheme in `golem.yaml`. See the [`golem-configure-api-domain`](/next/how-to-guides/common/golem-configure-api-domain) skill for the full details, including when to use `subdomain` versus `domain`. Quick reference:

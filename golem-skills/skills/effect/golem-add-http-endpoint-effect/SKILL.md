@@ -26,7 +26,7 @@ response.
 | `golem-add-agent-effect`         | Defining the Effect agent, method schemas, and durable state |
 | `golem-http-params-effect`       | Detailed path, query, header, body, and response mapping     |
 | `golem-make-http-request-effect` | Making outgoing HTTP requests from an Effect handler         |
-| `golem-add-http-auth-effect`     | Enabling authentication and reading the caller principal     |
+| `golem-add-http-auth-effect`     | Enabling authentication and reading the caller               |
 | `golem-add-cors-effect`          | Configuring mount-level or endpoint-level CORS               |
 | `golem-configure-api-domain`     | Configuring the `httpApi` deployment domain                  |
 

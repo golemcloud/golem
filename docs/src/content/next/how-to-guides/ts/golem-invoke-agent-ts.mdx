@@ -25,7 +25,7 @@ These method input schemas and commands show the distinction:
 
 For a method with no inputs, omit arguments; `history '{}'` supplies an extra argument.
 
-Skip host-injected `Principal` fields and retain the order of the user-supplied inputs. Do not supply a principal value or placeholder. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
+Keep the order of the user-supplied inputs. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
 
 Quote each native literal as one shell argument. TypeScript object field names must be unquoted, as in `{ text: "hello" }`, not JSON's `{"text": "hello"}`. For a string parameter, if native literal parsing fails, the CLI uses the argument as raw text. Passing `'{"text": "hello"}'` to `prompt` therefore passes that entire JSON text as the string; it does not extract `text`.
 

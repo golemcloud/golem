@@ -129,7 +129,7 @@ save_snapshot(Self) -> Bytes
 Agent::load_snapshot(Bytes, SnapshotRestoreContext) -> Result[Agent, String]
 ```
 
-The restoration factory does not receive `self` and does not call `Agent::new`. Its `SnapshotRestoreContext` provides the identity fields (the constructor parameters, read with `context.identity(index)`), the agent ID, the agent type and the restored principal. Fresh agent configuration remains available through the SDK's config API.
+The restoration factory does not receive `self` and does not call `Agent::new`. Its `SnapshotRestoreContext` provides the identity fields (the constructor parameters, read with `context.identity(index)`), the agent ID and the agent type. A snapshot holds no caller: to remember the agent's creator, keep `ctx.caller().original.principal_ref()` (a `PrincipalRef`) in the state. Fresh agent configuration remains available through the SDK's config API.
 
 ## Restoration Is Read-Only
 

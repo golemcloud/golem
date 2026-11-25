@@ -17,7 +17,7 @@ Mark a method read-only by setting `readOnly: true` (or a cache policy object) o
 
 ```typescript
 import { Effect, Ref, Schema } from "effect";
-import { defineAgent, method, Principal } from "@golemcloud/effect-golem";
+import { defineAgent, InvocationContext, method } from "@golemcloud/effect-golem";
 
 export const CounterAgent = defineAgent({
   name: "CounterAgent",
@@ -34,12 +34,8 @@ export const CounterAgent = defineAgent({
       success: Schema.Number,
       readOnly: { cache: { ttlNanos: 30_000_000_000n } },
     }),
-    // Principal-aware: cached per caller (derived from PrincipalSchema input)
-    myCount: method({
-      input: { caller: Principal.PrincipalSchema },
-      success: Schema.Number,
-      readOnly: true,
-    }),
+    // Reads the caller; the cache is kept per caller
+    whoAsked: method({ input: {}, success: Schema.String, readOnly: true }),
   },
 }).implement({
   init: () => Ref.make(0),
@@ -47,12 +43,16 @@ export const CounterAgent = defineAgent({
     increment: () => Ref.updateAndGet(count, (value) => value + 1),
     getCount: () => Ref.get(count),
     recent: () => Ref.get(count),
-    myCount: () => Ref.get(count),
+    whoAsked: () =>
+      Effect.gen(function* () {
+        const { caller } = yield* InvocationContext.InvocationContext;
+        return caller.original.toString();
+      }),
   }),
 });
 ```
 
-> **Cache policy & per-principal caching.** `readOnly: true` uses the `until-write` policy (cached until the next mutating invocation on the agent). For finer control, pass an object: `readOnly: { cache: 'no-cache' | 'until-write' | { ttlNanos: <bigint> } }` (`no-cache` never caches but enforces side-effect-free rules; `{ ttlNanos }` caches for that duration). Declaring a `Principal.PrincipalSchema` input automatically keys the cache per caller principal (`Cache-Control: private`). A read-only handler without that declared input **cannot access the ambient `Principal` service** (see `golem-add-http-auth-effect`). Reach for a regular (non-read-only) method whenever you need a side effect.
+> **Cache policy & per-caller caching.** `readOnly: true` uses the `until-write` policy (cached until the next mutating invocation on the agent). For finer control, pass an object: `readOnly: { cache: 'no-cache' | 'until-write' | { ttlNanos: <bigint> } }` (`no-cache` never caches but enforces side-effect-free rules; `{ ttlNanos }` caches for that duration). The cache is always keyed per caller (the full caller of the invocation), and every read-only handler can read `InvocationContext.InvocationContext` (see `golem-add-http-auth-effect`). An authenticated HTTP request gets a `Cache-Control: private` response. Reach for a regular (non-read-only) method whenever you need a side effect.
 
 ## What Works in a Read-Only Method
 
@@ -72,7 +72,6 @@ A read-only method must be a **pure function of the agent's already-loaded state
 - **Clocks, randomness, and env reads do NOT trap.** Using `Date.now()`, `Clock.currentTimeMillis`, `Math.random()`, or `process.env` does not trap, but introduces non-determinism that poisons cached results. If you need them, use a regular (non-read-only) method instead.
 - **Writes to persistent state, outgoing HTTP, and RPC do trap.** Those go through the durability layer and raise `ReadOnlyViolation` before running.
 - **Read-only and ephemeral agents are mutually exclusive.** Ephemeral agents (`mode: "ephemeral"`) get a fresh instance per invocation and have no shared state to read from; the host rejects `readOnly` methods on ephemeral agents at registration (see `golem-stateless-agent-effect`).
-- **Cannot access ambient `Principal` without `PrincipalSchema` input.** If a read-only handler needs caller identity, it must declare `Principal.PrincipalSchema` in its `input`.
 - **`cache: "no-cache"` does not relax the contract.** It only disables caching of the result; host writes, HTTP, and RPC still trap, and the same purity rules apply.
 
 ## Key Points

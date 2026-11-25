@@ -209,8 +209,8 @@ inline/blob-spill threshold is not a snapshot size cap. See the
 initialization: the implementation's companion factory receives the snapshot and a `SnapshotRestoreContext`, and it
 must return the complete fresh instance. The SDK installs that instance only after the returned `Future` succeeds.
 
-`SnapshotRestoreContext` provides typed identity fields, the typed agent ID, the restored principal, and fresh
-configuration. Snapshot loading runs in read-only mode and writes nothing to the oplog. It may decode data, perform
+`SnapshotRestoreContext` provides typed identity fields, the typed agent ID, and fresh configuration. A snapshot
+holds no caller: to remember the agent's creator, keep `context.caller.original.ref` (a `PrincipalRef`) in its state. Snapshot loading runs in read-only mode and writes nothing to the oplog. It may decode data, perform
 local computation, read configuration, and use other permitted reads. Mutating host operations and outgoing HTTP or
 agent RPC calls are rejected before they take effect.
 

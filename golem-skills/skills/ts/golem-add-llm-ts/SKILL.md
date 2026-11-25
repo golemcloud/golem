@@ -136,7 +136,7 @@ export const ChatAgent = defineAgent({
 });
 
 export const ChatAgentImpl = ChatAgent.implement({
-  // `init` receives a context with `id`, `config`, `principal`.
+  // `init` receives a context with `id`, `config` and `caller`.
   init: ({ id, config }) => {
     const client = new OpenAI({ apiKey: config.apiKey.get() });
     const messages: OpenAI.ChatCompletionMessageParam[] = [
@@ -161,7 +161,7 @@ export const ChatAgentImpl = ChatAgent.implement({
 });
 ```
 
-> **Note:** Inside a method handler, `this` is bound to the state returned by `init` plus SDK helpers (`this.config`, `this.getId()`, `this.getPrincipal()`). Inside `init`, read config/id from the context argument instead: `init: ({ id, config }) => ...`.
+> **Note:** Inside a method handler, `this` is bound to the state returned by `init` plus SDK helpers (`this.config`, `this.getId()`). Inside `init`, read config/id from the context argument instead: `init: ({ id, config }) => ...`. A handler reads its caller from its second argument: `ctx.caller`.
 
 ## Key Constraints
 

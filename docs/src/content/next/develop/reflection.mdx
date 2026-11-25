@@ -37,7 +37,7 @@ The examples below use a durable `CounterAgent` with constructor field `name: st
 
 ## Discover, inspect, and call an agent
 
-List the visible types or look up one by name. A discovered type exposes its name, description, lifecycle mode, source language, implementing component, constructor schema, methods, and configuration declarations. Each method exposes its name, description, input schema, and optional output schema. Input schemas contain caller-supplied fields, not fields supplied by Golem such as the principal.
+List the visible types or look up one by name. A discovered type exposes its name, description, lifecycle mode, source language, implementing component, constructor schema, methods, and configuration declarations. Each method exposes its name, description, input schema, and optional output schema. Input schemas contain caller-supplied fields only; the invocation context and configuration are not inputs.
 
 Discovered calls validate inputs before RPC and validate declared outputs after the call. A unit-returning method has no output schema or returned value; invocation metadata is still available.
 

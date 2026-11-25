@@ -188,8 +188,7 @@ Unstructured text and binary inputs instead consume raw bodies, without a JSON w
 CLI invocation uses a different rule: pass one native
 TypeScript literal per user-supplied `input` field in declaration order, including fields bound to
 path/query/header values over HTTP. Do not wrap CLI values in a named input object. Load
-[`golem-invoke-agent-effect`](/next/how-to-guides/effect/golem-invoke-agent-effect) for examples and caller-only input rules. Skip host-injected
-`Principal` fields without a principal value or placeholder.
+[`golem-invoke-agent-effect`](/next/how-to-guides/effect/golem-invoke-agent-effect) for examples and caller-only input rules.
 
 `Http.get` and `Http.head` are bodyless, so every parameter of those methods must be bound from
 the path, query, or headers. Prefer the standard verb helpers over `Http.custom(...)` for standard
@@ -321,26 +320,26 @@ unstructured value cannot bind to path, query, or headers; keep it as the only b
 not an input). Any of them combines with a typed `error`. Unstructured values cannot be nested
 inside `Schema.Struct` or combined into a multimodal success value.
 
-## Authenticated Principal
+## Authenticated Caller
 
-Read the authenticated caller from the normal Effect Context service:
+Read the authenticated caller from the `InvocationContext.InvocationContext` service:
 
 ```typescript
 import { Effect } from "effect";
-import { Principal } from "@golemcloud/effect-golem";
+import { InvocationContext } from "@golemcloud/effect-golem";
 
-const currentCaller = Effect.gen(function* () {
-  return yield* Principal.Principal;
+const currentUser = Effect.gen(function* () {
+  const { caller } = yield* InvocationContext.InvocationContext;
+  return caller.original;
 });
 ```
 
 Enable authentication with `Http.mount(path, { auth: true })` or an endpoint `auth` option, then
-read `Principal.Principal` inside the handler for the current invocation. Load
-[`golem-add-http-auth-effect`](/next/how-to-guides/effect/golem-add-http-auth-effect) for deployment security configuration and principal variants.
+read the service inside the handler for the current invocation. Load
+[`golem-add-http-auth-effect`](/next/how-to-guides/effect/golem-add-http-auth-effect) for deployment security configuration and the principal kinds.
 
-Explicit `PrincipalSchema` method input fields are host-injected, not HTTP body fields.
-SDK clients omit them from the named input object, and CLI callers skip them in declaration
-order without a principal value or placeholder. The host supplies them to handlers.
+The caller is not an input: it is never an HTTP body field, SDK clients send nothing for it,
+and CLI callers skip nothing for it.
 
 ## Key Constraints
 

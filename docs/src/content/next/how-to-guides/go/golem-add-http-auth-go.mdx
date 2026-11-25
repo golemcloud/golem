@@ -61,28 +61,26 @@ var (
 )
 ```
 
-## Receiving the principal
+## Reading the caller
 
-Read who is calling from a `golem.Principal` field of the method's input struct. The host fills it for every invocation (an `OidcPrincipal` for an authenticated user), so it is never mapped from the path, query, headers or body, and callers leave it nil. `ctx.Principal()` is the principal the agent was initialized with:
+Read who is calling with `ctx.Caller()`. `Original` is the principal that started the call chain (the signed-in user for an authenticated request); `Immediate` is the principal that made this call. The caller is not an input: it is never mapped from the path, query, headers or body, and callers send nothing for it.
 
 ```go
-type ProfileIn struct {
-	Principal golem.Principal
-}
+var Profile = Agent.Method[golem.Unit, string]("profile", golem.HTTP(golem.GET("/profile")))
 
-var Profile = Agent.Method[ProfileIn, string]("profile", golem.HTTP(golem.GET("/profile")))
-
-agent.Handle(Profile, func(ctx *golem.Context[state], in ProfileIn) string {
-	switch p := in.Principal.(type) {
-	case golem.OidcPrincipal:
-		return "hello " + p.Sub
+agent.Handle(Profile, func(ctx *golem.Context[state], _ golem.Unit) string {
+	switch p := ctx.Caller().Original.(type) {
+	case golem.UserPrincipal:
+		return "hello " + p.Pair.Subject
 	default:
 		return "hello stranger"
 	}
 })
 ```
 
-The principal is one of `golem.OidcPrincipal`, `golem.AgentPrincipal` (another agent over RPC), `golem.GolemUserPrincipal` (a Golem account, e.g. the CLI) and `golem.AnonymousPrincipal`.
+The principal is one of `golem.UserPrincipal` (a signed-in user; `Claims` holds the claim set as JSON text), `golem.AccountPrincipal` (a Golem account, e.g. the CLI), `golem.AgentPrincipal` (another agent), `golem.ToolPrincipal` (a tool) and `golem.AnonymousPrincipal`. `ctx.Caller()` also works in the constructor's `*golem.InitContext`.
+
+To remember who called (for example the creator of the agent), store `ctx.Caller().Original.Ref()`, a `golem.PrincipalRef`, in the state, and compare it later with `EqualsRef`. A `golem.Principal` or `golem.Caller` field in an input struct or the `ID` is a definition error.
 
 ## Deployment configuration
 
@@ -106,7 +104,6 @@ httpApi:
 - `Mount.Auth` is a plain `bool`; `golem.EndpointAuth(required bool)` takes an explicit value (`true` to require, `false` to open).
 - Setting `golem.EndpointAuth` **more than once** on one endpoint is a definition error, not a silent overwrite — set it exactly once per route.
 - An endpoint with no `golem.EndpointAuth` inherits the mount's `Auth`.
-- A `golem.Principal` field cannot be bound to a `{var}`, query parameter or header; that is a definition error.
 - Declaring auth requires an `httpApi` deployment with a security scheme to actually enforce it — mounting alone only advertises the requirement.
 
 ### Related Guides

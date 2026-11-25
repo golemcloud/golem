@@ -29,9 +29,9 @@ The function to be invoked is selected by the second parameter. Read the [page a
 
 ## Encoding parameters
 
-Pass one shell argument per user-supplied method parameter after the function name, using the source language's native value syntax. Parameters follow signature order in Rust, Scala, and MoonBit, the method's `input` declaration order in TypeScript and Effect, and the exported input-struct fields' declaration order in Go. Skip host-injected `Principal` fields without changing the order of the remaining inputs. Do not supply `self` or configuration parameters.
+Pass one shell argument per user-supplied method parameter after the function name, using the source language's native value syntax. Parameters follow signature order in Rust, Scala, and MoonBit, the method's `input` declaration order in TypeScript and Effect, and the exported input-struct fields' declaration order in Go. Do not supply `self`, configuration parameters or an invocation context parameter (`InvocationContext`); they are not inputs, and the remaining inputs keep their order.
 
-Do not supply a `Principal` value or placeholder. Effect SDK clients also omit explicitly declared `PrincipalSchema` input fields; the host injects those fields into handlers. The normal `Principal.Principal` service remains available and does not add a caller-supplied input.
+The invocation records the CLI's account as its caller; you do not pass a caller value.
 
 Do not wrap all method inputs in one JSON object. A parameter whose value is an object or struct still takes just one argument. A method with no user-supplied parameters takes no arguments, not `'{}'`. Awaited, triggered, and scheduled invocations share the same CLI argument parser and input rules.
 

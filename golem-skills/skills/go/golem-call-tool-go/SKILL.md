@@ -40,7 +40,7 @@ if err != nil {
 }
 ```
 
-`fill` may be `nil` when the defaults are enough. The call goes through the runtime like any other, so the tool's middleware applies, and the handler's principal is the one the calling agent's invocation runs on behalf of.
+`fill` may be `nil` when the defaults are enough. The call goes through the runtime like any other, so the tool's middleware applies. In the tool's handler, `ctx.Caller().Original` is the original caller of the calling agent's invocation, and `ctx.Caller().Immediate` is the calling agent.
 
 ## A Tool of Another Component
 
