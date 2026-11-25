@@ -425,10 +425,8 @@ pub trait WorkerService: Send + Sync {
 
     /// Reads the durable status baseline of the worker (the *clean* status checkpoint), if any.
     ///
-    /// The baseline is a full `AgentStatusRecord` written only at structurally clean boundaries
-    /// and stored in its own per-agent hash (see
-    /// [`KeyValueStorageNamespace::AgentStatusCheckpoint`]). Because it is never advanced into an
-    /// open jump region, a fold from it is valid also when a later jump region follows.
+    /// The baseline is a full `AgentStatusRecord` stored in its own per-agent hash (see
+    /// [`KeyValueStorageNamespace::AgentStatusCheckpoint`]).
     ///
     /// Returns `Ok(None)` when no baseline is stored or its format is stale, and `Err` when the
     /// storage could not be read. The transient `agent_mode` field (not part of the persisted
@@ -446,8 +444,8 @@ pub trait WorkerService: Send + Sync {
     /// Same split layout and delta semantics as [`write_cached_status`](Self::write_cached_status),
     /// but targeting the [`KeyValueStorageNamespace::AgentStatusCheckpoint`] hash. No-op for
     /// ephemeral workers (returning the value unchanged). Returns the reassembled record, the
-    /// delta base of the next write. Returns `Err`, not a panic, when the storage refuses the
-    /// write.
+    /// delta base of the next write. Returns `Err` when the storage refuses the write, or when the
+    /// catch-up of the durable stream session index before the write fails.
     async fn write_status_checkpoint(
         &self,
         owned_agent_id: &OwnedAgentId,

@@ -135,7 +135,8 @@ The status cache, the invocation-result index and the durable-stream index have 
 expiry and are rebuilt after expiry or cache loss. The clean checkpoint is the durable status
 baseline: it has no expiry, a completed archive keeps it, namespace routing stores it in the
 persistent backend, and only agent deletion removes it. A fold starts from it when the status
-cache is gone. Metadata compare-and-mutate operations make each multi-field publication atomic. The flat cached
+cache is gone. Metadata compare-and-set operations (for the baseline, which has no expiry) and
+compare-and-mutate operations (for the caches) make each multi-field publication atomic. The flat cached
 agent mode only chooses which oplog namespace to probe first and never proves existence or identity.
 `RunningWorkers` entries also include the fingerprint, so shard recovery admits only the recorded
 incarnation and removes only an exact stale member. A member is stale when its agent has no oplog,

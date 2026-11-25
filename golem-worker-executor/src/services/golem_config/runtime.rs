@@ -454,8 +454,9 @@ impl Default for InvocationResultsConfig {
 /// The checkpoint is a separate copy of the status written only at structurally clean boundaries
 /// where no jumpable oplog region is open: the snapshot save, the throttled idle boundary, and
 /// the throttled boundary during a long invocation. The background flusher never moves it
-/// forward. A status recompute folds forward from it, also when a later jump region follows. When
-/// `enabled` is `false`, no checkpoint is written. A recompute without a cached status then folds
+/// forward. A status recompute folds forward from it, also when a later jump region follows. The
+/// recompute folds from index 1 when no usable baseline exists. When `enabled` is `false`, no
+/// checkpoint is written. A recompute without a cached status then folds
 /// from a checkpoint that an earlier run wrote, or else from index 1.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AgentStatusCheckpointConfig {

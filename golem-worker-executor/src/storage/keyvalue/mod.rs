@@ -945,9 +945,8 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
     }
 }
 
-/// The expiry of the derived caches of an agent. Only the Redis backend applies it: there a write
-/// to a cache namespace sets or renews it. The SQLite, multi-SQLite, PostgreSQL and in-memory
-/// backends store no expiry.
+/// The expiry that each write to a cache namespace passes. A backend that supports expiry sets or
+/// renews it. The SQL and in-memory backends ignore it.
 pub(crate) const DERIVED_CACHE_EXPIRY: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// Various namespaces for key-value storage

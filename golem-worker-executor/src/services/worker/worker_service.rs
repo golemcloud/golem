@@ -346,10 +346,10 @@ impl WorkerService for DefaultWorkerService {
         // is still refused by that delete, which keeps the oplog: the state removed in between is
         // what the new owner rebuilds from it.
         //
-        // The status baseline is part of that state. A refused or partial oplog delete keeps an
-        // oplog without its baseline. Every oplog keeps its entries from index 1, so the new owner
-        // folds the status from index 1 and writes a new baseline. The cost is a longer fold. The
-        // status does not change.
+        // The status baseline is part of that state. A refused delete keeps an oplog without its
+        // baseline. Every oplog keeps its entries from index 1, so a later fold reads from index 1,
+        // and a later clean boundary writes a new baseline when checkpoints are on. A missing
+        // baseline makes the fold longer and does not change its result.
         if delete_current_oplog && let Some(epoch) = expected_epoch {
             self.oplog_service
                 .assert_owning_epoch(owned_agent_id, agent_mode, epoch)
