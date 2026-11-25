@@ -790,6 +790,8 @@ async fn the_revert_walk_counts_invocations_back_to_the_retained_start() {
     assert_eq!(cut_before(&entries, at(3), 5, 2).await, Ok(None));
     assert_eq!(cut_before(&entries, at(4), 5, 1).await, Ok(Some(3)));
     assert_eq!(cut_before(&entries, at(5), 5, 1).await, Ok(None));
+    assert_eq!(cut_before(&entries, at(6), 5, 1).await, Ok(None));
+    assert_eq!(cut_before(&entries, at(12), 10, 1).await, Ok(None));
 
     let reverted: HashMap<u64, OplogEntry> = [
         (4, invocation_started()),

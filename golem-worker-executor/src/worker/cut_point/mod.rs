@@ -184,6 +184,9 @@ where
     Read: Fn(OplogIndex) -> ReadFut,
     ReadFut: Future<Output = Result<OplogEntry, E>>,
 {
+    if !retention.retains(last_index) {
+        return Ok(None);
+    }
     let mut current = last_index;
     let mut found = 0;
     loop {
