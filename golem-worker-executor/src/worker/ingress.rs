@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use golem_common::model::caller::Caller;
-use uuid::Uuid;
 
 use golem_common::model::InvocationId;
 
@@ -984,13 +983,39 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         request: &AgentInvocationPayload,
     ) -> Result<(), WorkerExecutorError> {
         if let Some(accepted) = self.accepted_invocation_payload(key).await?
-            && !accepted.same_caller_request(request)
+            && !accepted.same_caller_request_decoding(request, |input| {
+                self.decode_scalar_method_input(request, input)
+            })
         {
             return Err(WorkerExecutorError::invalid_request(
                 "IdempotencyConflict: invocation identity was already accepted with a different request",
             ));
         }
         Ok(())
+    }
+
+    /// Decodes a stream-free method input of `request` with the executing component's schema,
+    /// so inputs captured in different representations compare by value.
+    fn decode_scalar_method_input(
+        &self,
+        request: &AgentInvocationPayload,
+        input: &golem_common::model::agent::AgentMethodInput,
+    ) -> Option<golem_common::schema::SchemaValue> {
+        let AgentInvocationPayload::AgentMethod { method_name, .. } = request else {
+            return None;
+        };
+        if matches!(input, golem_common::model::agent::AgentMethodInput::Native(native) if !native.streams().is_empty())
+        {
+            return None;
+        }
+        let agent_type = &self.parsed_agent_id.as_ref()?.agent_type;
+        let component = self.current_component.load();
+        let agent_type = component.metadata.find_agent_type_by_name_ref(agent_type)?;
+        let method = agent_type
+            .methods
+            .iter()
+            .find(|method| method.name == *method_name)?;
+        crate::worker::invocation::decode_method_input(input, agent_type, method, None).ok()
     }
 
     pub(crate) fn ensure_component_agent_ingress(
@@ -1041,14 +1066,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .any(|pending| pending.is_due(now))
     }
 
-    /// Reserved constructor key, also used to recognize initialization before inspecting files.
-    /// Uses the request-key root namespace so constructor-derived child keys keep their identity.
-    pub(in crate::worker) fn initialization_idempotency_key(&self) -> InvocationId {
-        InvocationId(Uuid::new_v5(
-            &uuid::uuid!("9c19b15a-c83d-46f7-9bc3-ead7923733f4"),
-            format!("init-{}", self.agent_id()).as_bytes(),
-        ))
-    }
     /// Reads the `PendingAgentInvocation` oplog entry referenced by `pending` and reconstructs the
     /// full invocation, downloading its payload from external storage if needed. The status record
     /// only keeps a lightweight reference, so callers that need to execute the invocation hydrate
@@ -1525,7 +1542,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let status = self.state_actor.try_status().await?;
         if super::invocation_loop::ephemeral_inspection_may_start(
             &status,
-            &self.initialization_idempotency_key(),
+            &InvocationId::constructor(self.initial_worker_metadata.fingerprint),
             Timestamp::now_utc(),
         ) {
             Ok(())

@@ -21,7 +21,7 @@ pub(all) struct Gate {
 ///|
 fn Gate::from_host(id : @types.PromiseId) -> Gate {
   {
-    agent_id: { uuid: @schema.Uuid::from_wit(id.agent_id.uuid) },
+    agent_id: { uuid: @schema.Uuid::from_wit(id.agent_id.uuid), },
     fingerprint: @schema.Uuid::from_wit(id.fingerprint),
     oplog_idx: id.oplog_idx,
   }
@@ -181,4 +181,40 @@ pub async fn FaultMatrixFixture::read_remote(
   FaultMatrixFixtureClient::scoped_upsert(target, async fn(client) {
     collect(client.produce(run, count, pause_after, gate), unbounded)
   })
+}
+
+///|
+/// The tool of the fixture contract: `produce` writes the records of `produce` to stdout, each as
+/// 4 big-endian bytes, and awaits `gate` before record `pause_after + 1`.
+#derive.tool("fault-matrix", version="1.0.0")
+struct FaultMatrix {}
+
+///|
+fn record_bytes(run : UInt32, seq : UInt32) -> Bytes {
+  let value = record(run, seq)
+  Bytes::from_array([
+    (value >> 24).to_byte(),
+    (value >> 16).to_byte(),
+    (value >> 8).to_byte(),
+    value.to_byte(),
+  ])
+}
+
+///|
+pub async fn FaultMatrix::produce(
+  run : UInt32,
+  count : UInt32,
+  pause_after : UInt32,
+  gate : Gate,
+  stdout : @tool.ProviderOutput,
+) -> UInt32 {
+  for seq = 1U; seq <= count; seq = seq + 1U {
+    if seq == pause_after + 1U {
+      let _ = @api.await_promise(gate.to_host())
+    }
+    guard (stdout.write_all_bytes(record_bytes(run, seq)) catch { _ => false }) else {
+      return seq - 1U
+    }
+  }
+  count
 }

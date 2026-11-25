@@ -896,37 +896,37 @@ run_privileged_test \
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  filesystem::sandbox::host_adapter::tree_copy::tests::managed_xfs_copy_contents_shares_extents_and_charges_no_agent_quota
+  filesystem::sandbox::host_adapter::tree_copy::tests::native::xfs::managed_xfs_copy_contents_shares_extents_and_charges_no_agent_quota
 
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  filesystem::sandbox::host_adapter::tree_copy::tests::managed_xfs_write_after_copy_contents_consumes_one_cow_extent
+  filesystem::sandbox::host_adapter::tree_copy::tests::native::xfs::managed_xfs_write_after_copy_contents_consumes_one_cow_extent
 
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  filesystem::sandbox::host_adapter::tree_copy::tests::managed_xfs_seed_charges_the_project_and_follows_the_placement
+  filesystem::sandbox::host_adapter::tree_copy::tests::native::xfs::managed_xfs_seed_charges_the_project_and_follows_the_placement
 
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  services::agent_filesystem::lifecycle::tests::managed_xfs_allocated_bytes_flow_through_resource_billing
+  services::agent_filesystem::lifecycle::tests::managed_xfs::managed_xfs_allocated_bytes_flow_through_resource_billing
 
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  services::agent_filesystem::lifecycle::tests::managed_xfs_lifecycle_installs_limits_and_deletes_verified
+  services::agent_filesystem::lifecycle::tests::managed_xfs::managed_xfs_lifecycle_installs_limits_and_deletes_verified
 
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  services::agent_filesystem_snapshots::tests::managed_xfs_a_volume_below_the_pressure_target_admits_no_periodic_upload
+  services::agent_filesystem_snapshots::tests::native_pressure::linux::managed_xfs_a_volume_below_the_pressure_target_admits_no_periodic_upload
 
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  filesystem_pressure::tests::managed_xfs_reobserves_fresh_space_after_verified_deletion
+  filesystem_pressure::tests::linux::managed_xfs_reobserves_fresh_space_after_verified_deletion
 
 run_privileged_test \
   integration \
@@ -1017,17 +1017,17 @@ run_privileged_test \
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  filesystem::sandbox::host_adapter::tree_copy::tests::an_empty_standard_seed_succeeds_after_root_retirement
+  filesystem::sandbox::host_adapter::tree_copy::tests::native::root_retirement::an_empty_standard_seed_succeeds_after_root_retirement
 
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  filesystem::sandbox::host_adapter::tree_copy::tests::linux_volume_seed_batch_uses_the_root_path_without_root_admission
+  filesystem::sandbox::host_adapter::tree_copy::tests::linux_batch::linux_volume_seed_batch_uses_the_root_path_without_root_admission
 
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  filesystem::sandbox::host_adapter::tree_copy::tests::reflink_xfs_copy_contents_and_seed_share_extents
+  filesystem::sandbox::host_adapter::tree_copy::tests::native::xfs::reflink_xfs_copy_contents_and_seed_share_extents
 
 run_unprivileged_test \
   lib \
@@ -1037,7 +1037,7 @@ run_unprivileged_test \
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  services::agent_filesystem::executor_directories::tests::reflink_xfs_a_provision_dropped_while_its_setup_is_queued_keeps_its_root_until_the_setup_ends
+  services::agent_filesystem::executor_directories::tests::linux::reflink_xfs_a_provision_dropped_while_its_setup_is_queued_keeps_its_root_until_the_setup_ends
 
 run_unprivileged_test \
   lib \
@@ -1052,7 +1052,7 @@ run_unprivileged_test \
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  services::agent_filesystem::executor_directories::tests::xfs_directory_checks::reflink_xfs_refuses_a_host_directory_with_a_project_identity
+  services::agent_filesystem::executor_directories::tests::linux::xfs_directory_checks::reflink_xfs_refuses_a_host_directory_with_a_project_identity
 
 run_unprivileged_test \
   integration \
@@ -1062,7 +1062,7 @@ run_unprivileged_test \
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  services::agent_filesystem_snapshots::tests::reflink_xfs_a_volume_below_the_pressure_target_admits_no_periodic_upload
+  services::agent_filesystem_snapshots::tests::native_pressure::linux::reflink_xfs_a_volume_below_the_pressure_target_admits_no_periodic_upload
 
 run_unprivileged_test \
   integration \

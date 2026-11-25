@@ -76,7 +76,7 @@ impl DurableStreamsHandler {
         // their readiness and read-only response precedence.
         let prepared = if metadata.is_none() {
             match self
-                .prepare_append(request, &declared_slot, None, allow)
+                .prepare_append(request, declared_slot, None, allow)
                 .await?
             {
                 Ok(prepared) => {
@@ -170,7 +170,7 @@ impl DurableStreamsHandler {
         let (producer, close, body) = match prepared {
             Some(prepared) => prepared,
             None => match self
-                .prepare_append(request, &declared_slot, Some(&metadata), allow)
+                .prepare_append(request, declared_slot, Some(&metadata), allow)
                 .await?
             {
                 Ok(prepared) => prepared,

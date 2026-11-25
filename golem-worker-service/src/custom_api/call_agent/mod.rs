@@ -939,6 +939,7 @@ mod tests {
                 idempotency_key: Some(actual_invocation),
                 oplog_index: None,
                 agent_fingerprint: None,
+                background_failure: None,
             },
             AgentConstructorSchema {
                 name: None,
@@ -1063,6 +1064,7 @@ mod tests {
                 idempotency_key: None,
                 oplog_index: None,
                 agent_fingerprint: None,
+                background_failure: None,
             },
             AgentConstructorSchema {
                 name: None,

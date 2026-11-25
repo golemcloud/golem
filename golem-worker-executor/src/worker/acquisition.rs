@@ -1057,7 +1057,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 never_started_ephemeral_admission(
                     &current_status.load(),
                     (initial_worker_metadata.owner_kind != OwnerKind::EphemeralExternalTool)
-                        .then(|| self.initialization_idempotency_key())
+                        .then(|| InvocationId::constructor(initial_worker_metadata.fingerprint))
                         .as_ref(),
                 )
             })
@@ -1294,7 +1294,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let create_request = &worker.initial_worker_metadata.create_request;
             let invocation_context = create_request.invocation_context();
             let caller = create_request.caller.clone();
-            let idempotency_key = self.initialization_idempotency_key();
+            let idempotency_key =
+                InvocationId::constructor(worker.initial_worker_metadata.fingerprint);
             let (_, entry) = self
                 .pending_invocation_entry(
                     &worker.oplog,

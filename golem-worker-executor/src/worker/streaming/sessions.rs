@@ -18,6 +18,10 @@ use golem_common::model::durable_stream::StreamInvocationId;
 
 use crate::worker::*;
 
+/// The persisted execution configuration of a stream session: the encoded `InvocationStart`
+/// without its identity fields, the sorted environment, and the stdout and stderr flags.
+type SessionExecutionConfig = (Vec<u8>, Option<Vec<(String, String)>>, bool, bool);
+
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn selected_method_preparation(
         &self,
@@ -63,13 +67,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         else {
             return Ok(None);
         };
-        let (configuration, environment, _, _): (
-            Vec<u8>,
-            Option<Vec<(String, String)>>,
-            bool,
-            bool,
-        ) = golem_common::serialization::decode(&attached.acceptance.execution_config)
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+        let (configuration, environment, _, _): SessionExecutionConfig =
+            golem_common::serialization::decode(&attached.acceptance.execution_config)
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
         let mut request =
             golem_api_grpc::proto::golem::worker::InvocationStart::decode(configuration.as_slice())
                 .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
@@ -846,12 +846,8 @@ fn same_origin_stream_authority(
         return false;
     };
     let decode = |bytes: &[u8]| {
-        let (bytes, environment, stdout, stderr): (
-            Vec<u8>,
-            Option<Vec<(String, String)>>,
-            bool,
-            bool,
-        ) = golem_common::serialization::deserialize(bytes).ok()?;
+        let (bytes, environment, stdout, stderr): SessionExecutionConfig =
+            golem_common::serialization::deserialize(bytes).ok()?;
         Some((
             InvocationStart::decode(bytes.as_slice()).ok()?,
             (environment, stdout, stderr),

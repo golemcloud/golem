@@ -149,14 +149,14 @@ struct MemoryEffects {
 
 #[async_trait::async_trait]
 impl PackageEffects for MemoryEffects {
-    fn authorize_file(&self, _: &str, _: &FilePin) -> anyhow::Result<()> {
+    fn authorize(&self, _: &str, _: &FilePin) -> anyhow::Result<()> {
         ensure!(!self.deny_source, "Source denied");
         Ok(())
     }
     async fn cached(&mut self, digest: &str, _: u64) -> anyhow::Result<Option<Vec<u8>>> {
         Ok(self.cache.get(digest).cloned())
     }
-    async fn fetch_file(&mut self, _: &FilePin, _: u64) -> anyhow::Result<Vec<u8>> {
+    async fn fetch(&mut self, _: &FilePin, _: u64) -> anyhow::Result<Vec<u8>> {
         self.source.take().context("Source is unavailable")
     }
     async fn cache(&mut self, digest: &str, bytes: &[u8]) -> anyhow::Result<()> {
@@ -289,6 +289,38 @@ async fn expansion_verifies_cache_and_materializes_ordinary_declarations() {
             .contains("Source denied")
     );
     assert!(effects.files.is_empty());
+}
+
+#[test]
+async fn expansion_refuses_a_replacement_at_the_locked_url() {
+    let (spec, mut blobs) = sample();
+    let (digest, _) = pack(&spec, &blobs).unwrap();
+    let mut replacement = spec;
+    replacement.components.values_mut().next().unwrap().wasm =
+        add_blob(&mut blobs, WASM, vec![9]).digest;
+    let (replacement_digest, bytes) = pack(&replacement, &blobs).unwrap();
+    assert_ne!(digest, replacement_digest);
+    let pins = Pins::from([(
+        "example".into(),
+        FilePin {
+            source: "https://example.com/package.tar".into(),
+            version: "1.2.3".into(),
+            digest,
+        },
+    )]);
+    let mut effects = MemoryEffects {
+        source: Some(bytes),
+        ..Default::default()
+    };
+    let error = expand(&pins, &pins, Path::new("unpack"), &mut effects)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("Package digest mismatch") && error.contains(&replacement_digest),
+        "{error}"
+    );
+    assert!(effects.cache.is_empty() && effects.files.is_empty());
 }
 
 #[test]
@@ -532,6 +564,7 @@ fn tar_with(path: &str, kind: tar::EntryType, link: &str, repeat: bool) -> Vec<u
 
 #[test]
 fn refuses_unsafe_or_duplicate_entries_and_missing_index() {
+    let digest = format!("sha256:{:x}", Sha256::digest(b"manifest"));
     for (path, kind, link, repeat) in [
         ("/escape", tar::EntryType::Regular, "", false),
         ("blobs/../escape", tar::EntryType::Regular, "", false),
@@ -542,29 +575,95 @@ fn refuses_unsafe_or_duplicate_entries_and_missing_index() {
         ("index.json", tar::EntryType::Regular, "", true),
         ("oci-layout", tar::EntryType::Regular, "", false),
     ] {
-        let name = if path == "oci-layout" {
+        let name = if repeat {
+            "Duplicate tar entry"
+        } else if path == "oci-layout" {
             "index.json"
         } else {
             path
         };
-        let error = format!(
-            "{:#}",
-            read(&tar_with(path, kind, link, repeat)[..]).unwrap_err()
-        );
+        let tar = tar_with(path, kind, link, repeat);
+        let error = format!("{:#}", read(&tar[..]).unwrap_err());
         assert!(error.contains(name), "{error}");
+        let error = verify_manifest_digest(std::io::Cursor::new(&tar), &digest).unwrap_err();
+        assert!(format!("{error:#}").contains(name));
     }
+}
+
+#[test]
+fn rejects_inconsistent_or_unreferenced_oci_layers() {
+    let (config, layers) = sample();
+    let (digest, archive) = pack(&config, &layers).unwrap();
+    let original = archive_entries(archive.as_slice()).unwrap();
+    for expected in [
+        "Unexpected package entry",
+        "Size mismatch",
+        "Layer count mismatch",
+    ] {
+        let mut entries = original.clone();
+        let mut digest = digest.clone();
+        if expected == "Unexpected package entry" {
+            let bytes = b"unreferenced";
+            entries.insert(
+                blob_path(&describe(WASM, bytes).digest).unwrap(),
+                bytes.to_vec(),
+            );
+        } else {
+            let mut index: OciIndex = parse(&entries["index.json"], "index.json").unwrap();
+            let path = blob_path(&digest).unwrap();
+            let mut manifest = parse_manifest(&entries.remove(&path).unwrap(), &path).unwrap();
+            if expected == "Size mismatch" {
+                manifest.layers[0].size += 1;
+            } else {
+                manifest.layers.pop();
+            }
+            let bytes = canonical_json(&manifest).unwrap();
+            let descriptor = describe(MANIFEST, &bytes);
+            digest.clone_from(&descriptor.digest);
+            index.manifests[0] = descriptor;
+            entries.insert(blob_path(&digest).unwrap(), bytes);
+            entries.insert("index.json".into(), canonical_json(&index).unwrap());
+        }
+        let broken = write_tar(&entries).unwrap();
+        let read_error = read(broken.as_slice()).unwrap_err();
+        let stream_error =
+            verify_manifest_digest(std::io::Cursor::new(&broken), &digest).unwrap_err();
+        for error in [read_error, stream_error] {
+            assert!(format!("{error:#}").contains(expected), "{error:#}");
+        }
+    }
+}
+
+#[test]
+fn streaming_manifest_check_hashes_the_bytes_not_just_the_index() {
+    let (config, layers) = sample();
+    let (digest, archive) = pack(&config, &layers).unwrap();
+    verify_manifest_digest(std::io::Cursor::new(&archive), &digest).unwrap();
+
+    let mut entries = archive_entries(&archive[..]).unwrap();
+    // Keep the index, the blob path, and the length unchanged.
+    entries.get_mut(&blob_path(&digest).unwrap()).unwrap()[0] ^= 1;
+    let modified = write_tar(&entries).unwrap();
+    let error = verify_manifest_digest(std::io::Cursor::new(&modified), &digest).unwrap_err();
+    assert!(format!("{error:#}").contains("Digest mismatch"));
 }
 
 #[test]
 fn refuses_a_layer_whose_bytes_do_not_match_its_digest() {
     let (config, layers) = sample();
-    let (_, archive) = pack(&config, &layers).unwrap();
+    let (digest, archive) = pack(&config, &layers).unwrap();
     let mut entries = archive_entries(&archive[..]).unwrap();
     let path = blob_path(&config.components.values().next().unwrap().wasm).unwrap();
     entries.get_mut(&path).unwrap()[0] ^= 1;
     let broken = write_tar(&entries).unwrap();
     let error = format!("{:#}", read(&broken[..]).unwrap_err());
     assert!(error.contains(&path), "{error}");
+    let error = verify_manifest_digest(std::io::Cursor::new(&broken), &digest).unwrap_err();
+    assert!(format!("{error:#}").contains(&format!("Digest mismatch for {path}")));
+    entries.remove(&path);
+    let missing = write_tar(&entries).unwrap();
+    let error = verify_manifest_digest(std::io::Cursor::new(&missing), &digest).unwrap_err();
+    assert!(format!("{error:#}").contains(&format!("Missing package entry {path}")));
 }
 
 #[test]
@@ -579,6 +678,47 @@ fn refuses_noncanonical_json_with_duplicate_keys() {
     let broken = write_tar(&entries).unwrap();
     let error = format!("{:#}", read(&broken[..]).unwrap_err());
     assert!(error.contains("oci-layout"), "{error}");
+}
+
+#[test]
+fn streaming_verifier_scans_shared_initial_files_once() {
+    struct Counted<R>(R, usize);
+    impl<R: Read> Read for Counted<R> {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            let count = self.0.read(bytes)?;
+            self.1 += count;
+            Ok(count)
+        }
+    }
+    impl<R: Seek> Seek for Counted<R> {
+        fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+            self.0.seek(position)
+        }
+    }
+    let (mut config, mut blobs) = sample();
+    let nested = write_tar(&BTreeMap::from([("00000000".into(), vec![7; 1024 * 1024])])).unwrap();
+    let digest = add_blob(&mut blobs, INITIAL_FILES, nested).digest;
+    for (name, component) in &mut config.components {
+        component.provision.files = Some(PackageInitialFiles {
+            layer: digest.clone(),
+            entries: BTreeMap::from([(
+                "00000000".into(),
+                PackageInitialFile {
+                    target: AgentFilePath::from_abs_str(&format!("/{}", name.0)).unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                },
+            )]),
+        });
+    }
+    let (manifest, archive) = pack(&config, &blobs).unwrap();
+    let mut input = Counted(std::io::Cursor::new(&archive), 0);
+    verify_manifest_digest(&mut input, &manifest).unwrap();
+    assert!(
+        input.1 < archive.len() * 5 / 2,
+        "read {} bytes from a {}-byte archive",
+        input.1,
+        archive.len()
+    );
 }
 
 #[test]
@@ -620,13 +760,15 @@ fn refuses_broken_initial_file_sets() {
                 })
                 .collect(),
         });
-        // The writer runs the reader on what it produced, including if the blob digest is intact.
-        let error = format!("{:#}", pack(&config, &blobs).unwrap_err());
+        let (digest, tar) = pack_archive(&config, &blobs).unwrap();
+        let error = format!("{:#}", read(tar.as_slice()).unwrap_err());
         assert!(error.contains(expected), "{error}");
         assert!(
             error.contains(&blob_path(&descriptor.digest).unwrap()),
             "{error}"
         );
+        let error = verify_manifest_digest(std::io::Cursor::new(&tar), &digest).unwrap_err();
+        assert!(format!("{error:#}").contains(expected));
     }
 }
 
