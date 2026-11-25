@@ -317,6 +317,7 @@ impl RunningWorker {
             error,
             &parent.owned_agent_id.agent_id,
             parent.retired_for_lost_shard(),
+            parent.never_live(),
         )
     }
     /// Performs `action` of a failed start. `Ok` means that the start runs again: a failed
@@ -1072,6 +1073,7 @@ impl RunningWorker {
                 skip_through,
                 target,
                 tail,
+                parent.never_live(),
             )
             .await
             {
@@ -1133,7 +1135,9 @@ impl RunningWorker {
                     &parent,
                     &role,
                     pending_update_ref.as_ref(),
-                    if diverged {
+                    if failure.error.is_never_live_refusal() {
+                        start_outcome::RawStartError::NeverLiveRefused(&failure.error)
+                    } else if diverged {
                         start_outcome::RawStartError::Replay {
                             error: &failure.error,
                             diverged: true,

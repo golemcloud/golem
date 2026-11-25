@@ -9856,3 +9856,64 @@ async fn template_transfer_repaired_after_its_derived_child_reuses_the_child(
     assert_eq!(installed.len(), 1);
     Ok(())
 }
+
+/// E26: a source revokes a card of its wallet through the registry. A never-live fork cut after
+/// the revoke, updated to its own revision, reproduces the recorded revoke result: the registry
+/// sees no further revoke and no card creation, and the update succeeds. Recording the revoked
+/// cards in the local card cache is allowed, since it reaches no peer.
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn a_completed_revoke_replays_on_a_never_live_fork_without_a_registry_mutation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            let positive = &mut config.initial_permissions.lower_bound.positive;
+            positive.extend(scope_card_initial_permissions());
+            positive.push(parse_polymorphic_permission("card(*) @ * : revoke : *").unwrap());
+        })
+        .store()
+        .await?;
+    let source = agent_key!("ScopeCardAgent", "never-live-revoke");
+    configure_scope_card_root(&authority, &component, &source)?;
+    let source_id = executor.start_agent(&component.id, source.clone()).await?;
+    let target_card = registry_test_card();
+    let target_card_id = target_card.card_id();
+    authority.add_card(target_card.clone());
+    executor
+        .queue_card_install(&source_id.agent_id, target_card)
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &source,
+            "revoke_card_by_id",
+            data_value!(SchemaCardId::from(target_card_id.0)),
+        )
+        .await?;
+    assert_eq!(authority.revoke_card_count(), 1);
+    let created = authority.create_card_count.load(Ordering::SeqCst);
+    let cut = crate::never_live::tip(&executor, &source_id).await?;
+
+    let fork = executor.fork_worker_never_live(&source_id, cut).await?;
+    executor
+        .auto_update_worker(&fork, component.revision, false)
+        .await?;
+    let outcomes = crate::never_live::settled_update_outcomes(&executor, &fork).await?;
+    assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+    assert!(
+        matches!(outcomes[0].entry, PublicOplogEntry::SuccessfulUpdate(_)),
+        "{outcomes:?}"
+    );
+    assert_eq!(authority.revoke_card_count(), 1);
+    assert_eq!(authority.create_card_count.load(Ordering::SeqCst), created);
+    Ok(())
+}

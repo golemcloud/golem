@@ -72,6 +72,7 @@ pub(crate) async fn start_with_local_resume(
         context,
         lose_resume_response,
         None,
+        None,
         TestExecutorOverrides::default(),
     )
     .await
@@ -83,7 +84,27 @@ pub(crate) async fn start_with_local_resume_and(
     context: &TestContext,
     overrides: TestExecutorOverrides,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_with_resume_checkpoint(deps, context, false, None, overrides).await
+    start_with_resume_checkpoint(deps, context, false, None, None, overrides).await
+}
+
+/// Starts an executor with `overrides` whose fork activation stays local, and returns the
+/// evidence that counts the remote invocation cancellations it sends.
+pub(crate) async fn start_with_local_resume_and_evidence(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    overrides: TestExecutorOverrides,
+) -> anyhow::Result<(TestWorkerExecutor, Arc<RemoteRpcEvidence>)> {
+    let evidence = Arc::new(RemoteRpcEvidence::default());
+    let executor = start_with_resume_checkpoint(
+        deps,
+        context,
+        false,
+        None,
+        Some(evidence.clone()),
+        overrides,
+    )
+    .await?;
+    Ok((executor, evidence))
 }
 
 /// Starts an executor with `snapshot_policy` as its default snapshot policy, whose fork
@@ -133,6 +154,7 @@ pub(crate) async fn fork_worker_to(
             auth_ctx: Some(executor.auth_ctx().into()),
             caller: Some(callers::anonymous().into()),
             expected_fingerprint: None,
+            never_live: false,
         })
         .await?
         .into_inner();
@@ -163,6 +185,7 @@ pub(crate) struct RemoteRpcEvidence {
     pub(crate) sessions: std::sync::atomic::AtomicUsize,
     pub(crate) joined_observer_acceptances: std::sync::atomic::AtomicUsize,
     pub(crate) resume_attach_requests: std::sync::atomic::AtomicUsize,
+    pub(crate) cancel_invocations: std::sync::atomic::AtomicUsize,
 }
 
 /// Keeps fork activation local, but forces durable streaming RPC through the executor's tonic API.
@@ -208,10 +231,11 @@ pub(crate) async fn start_with_remote_streaming_rpc(
             wrap_rpc: Some(Arc::new(move |inner| {
                 Arc::new(StreamingRemoteRpc {
                     inner,
-                    remote: RemoteInvocationRpc::new(
+                    remote: Some(RemoteInvocationRpc::new(
                         proxy.get().expect("worker proxy initialized").clone(),
                         shard.get().expect("shard service initialized").clone(),
-                    ),
+                    )),
+                    stream_controls: None,
                 })
             })),
             ..Default::default()
@@ -227,6 +251,7 @@ async fn start_with_resume_checkpoint(
     context: &TestContext,
     lose_resume_response: bool,
     checkpoint: Option<Arc<tokio::sync::Notify>>,
+    evidence: Option<Arc<RemoteRpcEvidence>>,
     overrides: TestExecutorOverrides,
 ) -> anyhow::Result<TestWorkerExecutor> {
     start_with_resume_checkpoint_and_fork_owner(
@@ -234,6 +259,7 @@ async fn start_with_resume_checkpoint(
         context,
         lose_resume_response,
         checkpoint,
+        evidence,
         overrides,
         None,
     )
@@ -247,6 +273,7 @@ async fn start_with_resume_checkpoint_and_fork_owner(
     context: &TestContext,
     lose_resume_response: bool,
     checkpoint: Option<Arc<tokio::sync::Notify>>,
+    evidence: Option<Arc<RemoteRpcEvidence>>,
     overrides: TestExecutorOverrides,
     fork_owner: Option<AccountId>,
 ) -> anyhow::Result<TestWorkerExecutor> {
@@ -264,7 +291,7 @@ async fn start_with_resume_checkpoint_and_fork_owner(
                     client: target.clone(),
                     component_owner_account_id: None,
                     fork_owner,
-                    evidence: None,
+                    evidence: evidence.clone(),
                     lose_response: lose_response.clone(),
                     checkpoint: checkpoint.clone(),
                     prepare_on_executor: false,
@@ -278,9 +305,25 @@ async fn start_with_resume_checkpoint_and_fork_owner(
     Ok(executor)
 }
 
+/// Forwards to `inner`, except durable streaming invocations, which go to `remote` when it is
+/// set. Counts the durable stream attachment controls in `stream_controls` when it is set.
 struct StreamingRemoteRpc {
     inner: Arc<dyn Rpc>,
-    remote: RemoteInvocationRpc,
+    remote: Option<RemoteInvocationRpc>,
+    stream_controls: Option<Arc<std::sync::atomic::AtomicUsize>>,
+}
+
+/// Wraps `inner` so that `stream_controls` counts every durable stream attachment control that
+/// reaches it: a prepare, cancellation or finalization sent to a stream producer.
+pub(crate) fn counting_stream_controls(
+    inner: Arc<dyn Rpc>,
+    stream_controls: Arc<std::sync::atomic::AtomicUsize>,
+) -> Arc<dyn Rpc> {
+    Arc::new(StreamingRemoteRpc {
+        inner,
+        remote: None,
+        stream_controls: Some(stream_controls),
+    })
 }
 
 #[async_trait]
@@ -441,7 +484,31 @@ impl Rpc for StreamingRemoteRpc {
         auth: &AuthCtx,
         card: Option<ScopeCard>,
     ) -> Result<DurableRpcInvocationResult, RpcError> {
-        self.remote
+        let Some(remote) = &self.remote else {
+            return self
+                .inner
+                .invoke_and_await_streaming(
+                    agent,
+                    key,
+                    method,
+                    input,
+                    mappings,
+                    fingerprint,
+                    attempt,
+                    origin,
+                    accepted,
+                    created_by,
+                    caller,
+                    env,
+                    stack,
+                    callee_caller,
+                    config,
+                    auth,
+                    card,
+                )
+                .await;
+        };
+        remote
             .invoke_and_await_streaming(
                 agent,
                 key,
@@ -469,6 +536,9 @@ impl Rpc for StreamingRemoteRpc {
         request: StreamAttachmentControlRequest,
         auth: &AuthCtx,
     ) -> Result<bool, DurableStreamRemoteError<RpcError>> {
+        if let Some(stream_controls) = &self.stream_controls {
+            stream_controls.fetch_add(1, Ordering::SeqCst);
+        }
         self.inner
             .control_durable_stream_attachment(request, auth)
             .await
@@ -927,6 +997,7 @@ impl WorkerProxy for LocalResumeProxy {
                 caller: Some(caller.into()),
                 component_owner_account_email: String::new(),
                 expected_fingerprint: None,
+                never_live: false,
             })
             .await?
             .into_inner();
@@ -971,6 +1042,9 @@ impl WorkerProxy for LocalResumeProxy {
         key: golem_common::model::InvocationId,
         auth: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
+        if let Some(evidence) = &self.evidence {
+            evidence.cancel_invocations.fetch_add(1, Ordering::SeqCst);
+        }
         self.inner.cancel_invocation(agent, key, auth).await
     }
 
@@ -2439,6 +2513,7 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
         &context,
         false,
         Some(checkpoint.clone()),
+        None,
         TestExecutorOverrides::default(),
     )
     .await?;
@@ -2590,6 +2665,7 @@ async fn fork_agent_records_the_account_and_the_forking_agent(
         deps,
         &context,
         false,
+        None,
         None,
         TestExecutorOverrides::default(),
         Some(context.account_id),

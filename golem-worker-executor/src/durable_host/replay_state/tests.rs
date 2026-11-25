@@ -235,6 +235,7 @@ async fn test_replay_state(
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
         horizon,
         None,
+        false,
     )
     .await
 }
@@ -2304,6 +2305,7 @@ async fn owner_failure_wins_when_reconstruction_barrier_is_already_empty() {
         owner_operations.clone(),
         horizon,
         None,
+        false,
     )
     .await
     .expect("failed to build replay state");
@@ -2341,6 +2343,7 @@ async fn owner_lifecycle_change_during_reconstruction_remains_an_interrupt() {
         owner_operations.clone(),
         horizon,
         None,
+        false,
     )
     .await
     .expect("failed to build replay state");
@@ -2394,6 +2397,7 @@ async fn owner_restart_interrupts_claim_and_delivery_behind_an_unconsumed_marker
             owner.clone(),
             horizon,
             None,
+            false,
         )
         .await
         .unwrap();
@@ -2481,6 +2485,7 @@ async fn owner_lifecycle_interrupts_scope_resolution_without_crossing_delivery()
                 owner.clone(),
                 horizon,
                 None,
+                false,
             )
             .await
             .unwrap();
@@ -2549,6 +2554,7 @@ async fn cancelled_owner_failure_unregister_keeps_historical_fence() {
         owner.clone(),
         horizon,
         None,
+        false,
     )
     .await
     .unwrap();
@@ -12263,6 +12269,7 @@ async fn wallet_replay_fixture(
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
         OplogIndex::from_u64(target),
         Some(wallet.clone()),
+        false,
     )
     .await
     .unwrap();
@@ -15297,6 +15304,7 @@ async fn owner_wallet_reconstructs_physical_prefixes_without_rewinding_live_stat
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
         OplogIndex::from_u64(8),
         Some(wallet.clone()),
+        false,
     )
     .await
     .unwrap();
@@ -15440,6 +15448,7 @@ async fn owner_wallet_selected_snapshot_excludes_earlier_effects_and_preserves_e
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
         OplogIndex::from_u64(6),
         Some(wallet.clone()),
+        false,
     )
     .await
     .unwrap();
@@ -15568,6 +15577,7 @@ async fn runtime_card_audits_use_physical_predecessors_independent_of_lookup_ord
             crate::durable_host::tool::operation::OwnerToolOperations::new(),
             OplogIndex::from_u64(23),
             Some(wallet.clone()),
+            false,
         )
         .await
         .unwrap();
@@ -15768,6 +15778,7 @@ async fn failed_wallet_publication_poison_is_local_and_rebuild_retains_the_entry
             crate::durable_host::tool::operation::OwnerToolOperations::new(),
             index,
             Some(replacement.clone()),
+            false,
         )
         .await
         .unwrap();
@@ -15869,6 +15880,7 @@ async fn bootstrap_cursor_over(
         OplogIndex::from_u64(skip_through),
         OplogIndex::from_u64(target),
         tail,
+        false,
     )
     .await
     .expect("failed to build bootstrap cursor")

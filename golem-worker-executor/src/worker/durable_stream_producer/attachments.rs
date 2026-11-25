@@ -63,6 +63,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         producer: &DurableStreamStore,
     ) -> bool {
+        if self.never_live() {
+            return false;
+        }
         let mut needs_retry = false;
         if !producer.deletion_started().await {
             match self.recover_durable_stream_topologies(true, None).await {

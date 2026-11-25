@@ -378,6 +378,7 @@ impl From<WorkerExecutorError> for ResponseMapResult {
             WorkerExecutorError::ShardingNotReady => ResponseMapResult::ShardingNotReady,
             WorkerExecutorError::AgentNotFound { .. }
             | WorkerExecutorError::AgentAlreadyExists { .. }
+            | WorkerExecutorError::AgentNeverLive { .. }
             | WorkerExecutorError::CreateIdempotencyKeyConflict { .. }
             | WorkerExecutorError::InvocationCancelled
             | WorkerExecutorError::CannotCancelRunningInvocation

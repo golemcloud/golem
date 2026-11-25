@@ -1899,3 +1899,99 @@ async fn direct_checkpoint_commits_are_returned_even_after_cache_pruning() {
     );
     assert!(oplog.commit(CommitLevel::Always).await.unwrap().is_empty());
 }
+
+/// A never-live owner's oplog reaches no oplog processor, whether the mark comes from the
+/// owner's status or from the `Create` entry of a new oplog. The unmarked control with the same
+/// active plugin and the same commits reaches it.
+#[test]
+async fn a_never_live_owners_oplog_reaches_no_oplog_processor() {
+    for (marked_status, marked_create, expect_sends) in [
+        (false, false, true),
+        (true, false, false),
+        (false, true, false),
+    ] {
+        let grant_id = EnvironmentPluginGrantId::new();
+        let (mut metadata, _) = test_worker_metadata(HashSet::from([grant_id]));
+        metadata.last_known_status.never_live = marked_status;
+        let status_lock = read_only_lock::arc_swap::ReadOnlyView::new(Arc::new(
+            arc_swap::ArcSwap::from_pointee(metadata.last_known_status.clone()),
+        ));
+        let recording_plugin = Arc::new(RecordingOplogProcessorPlugin::new());
+        let primary: Arc<dyn OplogService> = Arc::new(
+            crate::services::oplog::PrimaryOplogService::new(
+                Arc::new(crate::storage::indexed::memory::InMemoryIndexedStorage::new()),
+                Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new()),
+                1,
+                1,
+                100,
+                32,
+                golem_common::model::RetryConfig::default(),
+            )
+            .await,
+        );
+        let service = ForwardingOplogService::new(
+            primary,
+            recording_plugin.clone(),
+            Arc::new(FakeComponentService::with_one_oplog_processor_plugin(
+                grant_id,
+            )),
+            1,
+            Duration::from_secs(3600),
+        );
+        let owned_agent_id = OwnedAgentId::new(metadata.environment_id, &metadata.agent_id);
+        let create_entry =
+            OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+                component_id: metadata.component_id,
+                agent_type_name: metadata.agent_type_name.clone(),
+                canonical_key: metadata.canonical_key.clone(),
+                constructor_parameters: metadata.constructor_parameters.clone(),
+                agent_id: metadata.agent_id,
+                owner_kind: metadata.owner_kind,
+                agent_mode: AgentMode::Durable,
+                component_revision: ComponentRevision::INITIAL,
+                env: Vec::new(),
+                environment_id: metadata.environment_id,
+                created_by: metadata.created_by,
+                parent: None,
+                component_size: 100,
+                initial_total_linear_memory_size: 100,
+                initial_active_plugins: HashSet::from([grant_id]),
+                local_agent_config: Vec::new(),
+                instance_id: Uuid::new_v4(),
+                create_request: metadata.create_request.clone(),
+                never_live: marked_create,
+            }))
+            .rounded();
+        let oplog = service
+            .create(
+                &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
+                &owned_agent_id,
+                AgentMode::Durable,
+                create_entry,
+                metadata,
+                status_lock,
+                crate::services::oplog::tests::default_execution_status(AgentMode::Durable),
+                None,
+            )
+            .await
+            .unwrap();
+        for delta in 1..=3 {
+            oplog.add(grow_memory(delta)).await.unwrap();
+            oplog.commit(CommitLevel::Always).await.unwrap();
+        }
+
+        assert_eq!(
+            recording_plugin.send_count().await > 0,
+            expect_sends,
+            "marked by status: {marked_status}, marked by Create: {marked_create}"
+        );
+        if !expect_sends {
+            assert_eq!(
+                recording_plugin
+                    .resolve_count
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                0
+            );
+        }
+    }
+}

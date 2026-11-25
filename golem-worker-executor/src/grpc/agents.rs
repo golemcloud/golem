@@ -292,6 +292,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 request
                     .expected_fingerprint
                     .map(|fingerprint| AgentFingerprint(fingerprint.into())),
+                request.never_live,
             )
             .await?;
 

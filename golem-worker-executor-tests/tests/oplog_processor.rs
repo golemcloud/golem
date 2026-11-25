@@ -343,6 +343,7 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
             auth_ctx: Some(executor.auth_ctx().into()),
             caller: Some(callers::anonymous().into()),
             expected_fingerprint: None,
+            never_live: false,
         })
         .await?
         .into_inner();

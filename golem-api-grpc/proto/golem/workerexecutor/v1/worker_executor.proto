@@ -97,6 +97,8 @@ message ForkWorkerRequest {
   golem.component.Caller caller = 10;
   string component_owner_account_email = 8;
   optional golem.common.UUID expected_fingerprint = 9;
+  // The target is a never-live sandbox fork. A fork of a never-live source is never-live too.
+  bool never_live = 11;
 }
 
 message ForkWorkerResponse {

@@ -273,6 +273,8 @@ pub trait SocketSession {
     fn p3_tcp_addresses(&self, slot: String) -> Result<(String, String), String>;
     async fn p3_tcp_bind(&self, slot: String, port: u16) -> Result<(), String>;
     fn p3_tcp_listen(&self, slot: String) -> Result<(), String>;
+    /// Whether `listen` on the P3 TCP socket in `slot` fails, whatever its error code.
+    fn p3_tcp_listen_refused(&self, slot: String) -> Result<bool, String>;
     async fn p3_tcp_connect_existing(&self, slot: String, port: u16) -> Result<(), String>;
     async fn p3_tcp_receive_again(&self, slot: String) -> Result<(), String>;
     fn p3_tcp_bound_state(&self, slot: String) -> Result<(String, Vec<u64>), String>;
@@ -798,6 +800,13 @@ impl SocketSession for SocketSessionImpl {
                 drop(socket.listen().map_err(error)?);
                 Ok(())
             }
+            _ => Err(format!("slot {slot} holds no P3 TCP socket")),
+        })
+    }
+
+    fn p3_tcp_listen_refused(&self, slot: String) -> Result<bool, String> {
+        self.with_slot(&slot, |value| match value {
+            Slot::P3Tcp { socket, .. } => Ok(socket.listen().is_err()),
             _ => Err(format!("slot {slot} holds no P3 TCP socket")),
         })
     }

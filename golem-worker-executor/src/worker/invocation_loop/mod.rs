@@ -417,6 +417,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
                 continue;
             }
+            // ADMISSION: a never-live agent runs a generation only for a pending update. This
+            // covers every rebuild that does not pass `start_if_needed`: the restart after a
+            // failed update or a failed start, retries and memory restarts.
+            if self.parent.never_live() && self.stop_never_live_unless_update_pending().await {
+                break;
+            }
             if self.permit_state.is_none() {
                 if let Err(error) = self.parent.join_interrupt_establishment().await {
                     self.parent
@@ -1044,6 +1050,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 continue;
             }
             match final_decision {
+                None | Some(RetryDecision::None) if self.parent.never_live() => {
+                    // The recheck of pending updates and the stop are one step under the
+                    // instance lock, so an update committed meanwhile is never stranded.
+                    if self.stop_never_live_unless_update_pending().await {
+                        break;
+                    }
+                    continue;
+                }
                 None | Some(RetryDecision::None) => {
                     debug!(
                         %agent_id,
@@ -1129,7 +1143,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             }
                                             InterruptKind::Restart
                                             | InterruptKind::Jump
-                                            | InterruptKind::ShardLost => Ok(()),
+                                            | InterruptKind::ShardLost
+                                            | InterruptKind::NeverLive => Ok(()),
                                         };
                                         // Refused, the shard is lost: nothing restarts
                                         // in place.
@@ -1248,6 +1263,29 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
     fn release_concurrent_agent_permit(&mut self) {
         self.permit_state.release();
+    }
+
+    /// Stops this generation of a never-live agent unless an update is pending, and returns
+    /// whether it stopped. A pending explicit interrupt records its marker first, a control
+    /// entry; nothing else is written.
+    async fn stop_never_live_unless_update_pending(&mut self) -> bool {
+        if !self.parent.state_actor.lifecycle_is_closed()
+            && let Err(error) = self.parent.commit_pending_terminal_stop().await
+        {
+            self.release_concurrent_agent_permit();
+            self.stop_cleanup_failed(error).await;
+            return true;
+        }
+        if !self
+            .parent
+            .stop_marked_unless_update_pending(self.start_attempt)
+            .await
+        {
+            return false;
+        }
+        self.release_concurrent_agent_permit();
+        debug!(agent_id = %self.owned_agent_id.agent_id, "Never-live agent stopped: no update is pending");
+        true
     }
 }
 

@@ -77,8 +77,7 @@ pub(super) fn validate_cancellation_token_owner(
 impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
     async fn cancel(&mut self, this: Resource<CancellationToken>) -> anyhow::Result<()> {
         // Trap immediately if the invocation is restricted to read-only side effects.
-        self.check_read_only_allows("golem::rpc::cancellation-token::cancel")
-            .map_err(wasmtime::Error::from)?;
+        self.check_rpc_admission("golem::rpc::cancellation-token::cancel")?;
 
         let current_agent = self.owned_agent_id().clone();
         let entry = self.table().get(&this)?;
@@ -150,8 +149,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         function_name: &'static str,
     ) -> anyhow::Result<Result<Resource<CancellationToken>, RpcError>> {
         // Trap immediately if the invocation is restricted to read-only side effects.
-        self.check_read_only_allows("golem::rpc::wasm-rpc::schedule-cancelable-invocation")
-            .map_err(wasmtime::Error::from)?;
+        self.check_rpc_admission("golem::rpc::wasm-rpc::schedule-cancelable-invocation")?;
 
         // Deterministic local validation must happen before opening
         // durability so a guest bug (unknown method, input incompatible

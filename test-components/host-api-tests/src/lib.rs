@@ -7,6 +7,7 @@ pub mod environment;
 pub mod file_system;
 pub mod golem_host_api;
 pub mod golem_wasi_http;
+pub mod hook_effects;
 pub mod http_gc;
 pub mod invocation_context;
 pub mod io;

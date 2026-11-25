@@ -120,3 +120,13 @@ from the stopped oplog, skipping regions that earlier reverts dropped, and rejec
 stale unless it equals the authorized one. A repeated dispatch of a resolution that already
 applied (the last `Revert` drops everything after the cut, and no invocation started after it)
 succeeds without writing.
+
+## Never-live agents
+
+A never-live agent (`AgentStatusRecord::never_live`) starts only for a pending update and never
+publishes Live. Do not add a start, wake or recovery path that skips `may_start()` or
+`Worker::stop_marked_unless_update_pending`. A never-live agent executes a durable call only if
+its function type is `ReadLocal` and it is not `Custom` (`durable_host/never_live/mod.rs::admits`);
+give a new function `ReadLocal` only if it writes nothing and reaches no peer. Every new guest import or host-side effect that has no durable call is
+either a native peer boundary, which calls `refuse_native_peer_effect` before the native call,
+or has no peer effect. Mark which in the change.

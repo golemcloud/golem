@@ -462,6 +462,8 @@ impl PrivateDurableWorkerState {
         published_authority_generation: Arc<AtomicU64>,
         resolved_names: sockets::resolved_names::SharedResolvedNames,
     ) -> Result<Self, WorkerExecutorError> {
+        // The replay cursor carries the mark of the owner, also into entity Stores.
+        let never_live = replay_state.is_never_live();
         let dropped_call_events = tokio::sync::mpsc::unbounded_channel();
         let entity_replay_wallet = match (&runtime, entity_execution_mode) {
             (
@@ -601,6 +603,7 @@ impl PrivateDurableWorkerState {
             p2_timer_deadlines: HashMap::new(),
             socket_entries: sockets::SocketEntries::default(),
             snapshotting_mode: false,
+            never_live,
             last_state_change: None,
             operator_authorized_oplog_processor_invocation: Arc::new(AtomicBool::new(false)),
             component_metadata,

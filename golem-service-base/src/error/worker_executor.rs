@@ -186,6 +186,17 @@ pub enum WorkerExecutorError {
     /// A cancel request for an invocation that is running. Cancelling a running invocation is
     /// not supported yet; until it is, this typed answer replaces the spec's `202`.
     CannotCancelRunningInvocation,
+    /// The agent is a never-live sandbox fork. It runs only to replay its history for a pending
+    /// automatic update, so it refuses new work and reads that need a running instance.
+    AgentNeverLive {
+        agent_id: AgentId,
+    },
+    /// A never-live agent reached a host call or a native operation that would execute now and
+    /// can reach a peer. The boundary names the host function or the native operation. It is
+    /// raised as a trap and fails the update as not replayable.
+    NeverLiveEffectRefused {
+        boundary: String,
+    },
 }
 
 /// Why an oplog read refuses a cursor.
@@ -271,6 +282,18 @@ impl Display for ComponentRef<'_> {
 }
 
 impl WorkerExecutorError {
+    /// Whether this error is a refusal of a never-live agent: a refused peer effect, or the end
+    /// of its replay where a live continuation would begin.
+    pub fn is_never_live_refusal(&self) -> bool {
+        matches!(
+            self,
+            Self::NeverLiveEffectRefused { .. }
+                | Self::Interrupted {
+                    kind: InterruptKind::NeverLive
+                }
+        )
+    }
+
     pub fn failed_to_resume_worker(agent_id: AgentId, reason: WorkerExecutorError) -> Self {
         Self::FailedToResumeAgent {
             agent_id,
@@ -578,6 +601,16 @@ impl Display for WorkerExecutorError {
             Self::CannotCancelRunningInvocation => {
                 write!(f, "The invocation is running and cannot be cancelled yet")
             }
+            Self::AgentNeverLive { agent_id } => write!(
+                f,
+                "Agent {agent_id} is a never-live sandbox fork. It does not accept invocations, \
+                 and its files and wallet cannot be read."
+            ),
+            Self::NeverLiveEffectRefused { boundary } => write!(
+                f,
+                "A never-live agent cannot execute {boundary}: replaying its history needs an \
+                 effect on a peer"
+            ),
         }
     }
 }
@@ -631,6 +664,8 @@ impl Error for WorkerExecutorError {
             Self::StaleCursor { .. } => "Stale oplog cursor",
             Self::InvocationCancelled => "Invocation cancelled",
             Self::CannotCancelRunningInvocation => "Cannot cancel a running invocation yet",
+            Self::AgentNeverLive { .. } => "Agent is a never-live sandbox fork",
+            Self::NeverLiveEffectRefused { .. } => "A never-live agent refused a peer effect",
         }
     }
 }
@@ -676,6 +711,8 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::StaleCursor { .. } => "StaleCursor",
             Self::InvocationCancelled => "InvocationCancelled",
             Self::CannotCancelRunningInvocation => "CannotCancelRunningInvocation",
+            Self::AgentNeverLive { .. } => "AgentNeverLive",
+            Self::NeverLiveEffectRefused { .. } => "NeverLiveEffectRefused",
         }
     }
 
@@ -694,6 +731,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             | Self::StaleCursor { .. }
             | Self::InvocationCancelled
             | Self::CannotCancelRunningInvocation
+            | Self::AgentNeverLive { .. }
             | Self::ComponentNotFound { .. } => true,
             Self::InvalidRequest { .. }
             | Self::AgentCreationFailed { .. }
@@ -718,6 +756,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             | Self::FileSystemError { .. }
             | Self::ReadOnlyViolation { .. }
             | Self::PermissionDenied { .. }
+            | Self::NeverLiveEffectRefused { .. }
             | Self::OplogFailed { .. } => false,
         }
     }
@@ -781,6 +820,8 @@ impl From<WorkerExecutorError> for Status {
             | WorkerExecutorError::InvocationCancelled
             | WorkerExecutorError::CannotCancelRunningInvocation
             | WorkerExecutorError::AgentKeyCollision { .. }
+            | WorkerExecutorError::AgentNeverLive { .. }
+            | WorkerExecutorError::NeverLiveEffectRefused { .. }
             | WorkerExecutorError::AgentAlreadyExists { .. }) => {
                 let code = if matches!(error, WorkerExecutorError::AgentAlreadyExists { .. }) {
                     tonic::Code::AlreadyExists
@@ -1235,6 +1276,22 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
+            WorkerExecutorError::AgentNeverLive { agent_id } => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::AgentNeverLive(
+                        golem::worker::v1::AgentNeverLive {
+                            agent_id: Some(agent_id.into()),
+                        },
+                    ),
+                ),
+            },
+            WorkerExecutorError::NeverLiveEffectRefused { boundary } => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::NeverLiveEffectRefused(
+                        golem::worker::v1::NeverLiveEffectRefused { boundary },
+                    ),
+                ),
+            },
         }
     }
 }
@@ -1493,6 +1550,16 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
             Some(
                 golem::worker::v1::worker_execution_error::Error::CannotCancelRunningInvocation(_),
             ) => Ok(Self::CannotCancelRunningInvocation),
+            Some(golem::worker::v1::worker_execution_error::Error::AgentNeverLive(error)) => {
+                Ok(Self::AgentNeverLive {
+                    agent_id: error.agent_id.ok_or("Missing agent_id")?.try_into()?,
+                })
+            }
+            Some(golem::worker::v1::worker_execution_error::Error::NeverLiveEffectRefused(
+                error,
+            )) => Ok(Self::NeverLiveEffectRefused {
+                boundary: error.boundary,
+            }),
         }
     }
 }
@@ -1592,6 +1659,10 @@ pub enum InterruptKind {
     /// worker service to resume on the shard's owner. Never a restart in place - that would
     /// reopen the oplog with the same stale epoch.
     ShardLost,
+    /// A never-live agent reached the end of its replay, or a live continuation that it may
+    /// not make. Terminal for the generation: like `ShardLost`, the stop writes nothing to the
+    /// oplog.
+    NeverLive,
 }
 
 impl Display for InterruptKind {
@@ -1604,6 +1675,9 @@ impl Display for InterruptKind {
             InterruptKind::EntityCancellation => write!(f, "Entity invocation cancelled"),
             InterruptKind::ShardLost => {
                 write!(f, "This executor no longer owns the agent's shard")
+            }
+            InterruptKind::NeverLive => {
+                write!(f, "A never-live agent stopped at the end of its replay")
             }
         }
     }

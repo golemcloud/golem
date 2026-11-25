@@ -110,6 +110,8 @@ fn classify_worker_executor_error(err: &WorkerExecutorError) -> HostFailureKind 
         | WorkerExecutorError::AgentAlreadyExists { .. }
         | WorkerExecutorError::CreateIdempotencyKeyConflict { .. }
         | WorkerExecutorError::AgentNotFound { .. }
+        | WorkerExecutorError::AgentNeverLive { .. }
+        | WorkerExecutorError::NeverLiveEffectRefused { .. }
         | WorkerExecutorError::PromiseNotFound { .. }
         | WorkerExecutorError::PromiseDropped { .. }
         | WorkerExecutorError::PromiseAlreadyCompleted { .. }

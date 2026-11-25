@@ -282,7 +282,8 @@ fn shared_memory_target_is_refused_without_a_snapshot_fault() {
                 Some(&head),
                 RawStartError::TargetUnsupported(reason),
                 &agent_id(),
-                true
+                true,
+                false
             ),
             StartAction::ShardLost
         ));
@@ -938,7 +939,7 @@ fn decide_now(
     head: Option<&PendingUpdateRef>,
     error: RawStartError<'_>,
 ) -> StartAction {
-    decide(role, head, error, &agent_id(), false)
+    decide(role, head, error, &agent_id(), false, false)
 }
 
 fn failed_entry(action: StartAction) -> (OplogEntry, Option<OplogIndex>) {
@@ -1166,7 +1167,8 @@ fn a_retried_failure_and_a_lost_shard_write_no_failed_update() {
             Some(&head),
             RawStartError::Filesystem(&lost),
             &agent_id(),
-            true
+            true,
+            false
         ),
         StartAction::ShardLost
     ));
@@ -1387,6 +1389,7 @@ fn a_pending_manual_update_whose_restore_fails_for_good_fails_and_other_baseline
                     RawStartError::Filesystem(&errors(error)),
                     &agent_id(),
                     lost_shard,
+                    false,
                 ))
             };
             assert_eq!(
@@ -1674,12 +1677,14 @@ fn a_baseline_on_an_executor_without_snapshots_fails_a_pending_update_or_the_sta
         RawStartError::Disabled,
         &agent_id,
         false,
+        false,
     );
     let periodic = decide(
         &BaselineRole::Periodic(OplogIndex::from_u64(10)),
         None,
         RawStartError::Disabled,
         &agent_id,
+        false,
         false,
     );
     assert_eq!(
@@ -1716,6 +1721,7 @@ fn a_baseline_on_an_executor_without_snapshots_fails_a_pending_update_or_the_sta
             Some(head),
             RawStartError::Disabled,
             &agent_id,
+            false,
             false,
         ));
         let (_, details, _, attempt, fault) = entry_fields(&entry);
@@ -2065,6 +2071,7 @@ fn an_interrupted_manual_load_keeps_the_update_pending_and_an_exit_fails_it() {
                 RawStartError::ManualLoad(&ManualLoadResult::Interrupted(kind)),
                 &agent_id(),
                 lost_shard,
+                false,
             );
             assert!(
                 matches!(
@@ -2110,6 +2117,7 @@ fn an_interrupted_manual_load_keeps_the_update_pending_and_an_exit_fails_it() {
             RawStartError::ManualLoad(&ManualLoadResult::Exited),
             &agent_id(),
             true,
+            false,
         ),
         StartAction::ShardLost
     ));
@@ -2335,7 +2343,8 @@ fn the_class_of_a_failed_replay_follows_its_provenance() {
 
 /// A trap of the core initializer of the target fails a pending automatic and a pending assisted
 /// update as a target trap; a host failure of the initializer still passes for a plain automatic
-/// update, and the stage of an earlier failure decides its class.
+/// update of an ordinary agent and fails it for a never-live agent, and the stage of an earlier
+/// failure decides its class.
 #[test]
 fn the_class_of_a_failed_instance_creation_follows_its_stage_and_provenance() {
     use FailureProvenance as Provenance;
@@ -2366,6 +2375,29 @@ fn the_class_of_a_failed_instance_creation_follows_its_stage_and_provenance() {
             &BaselineRole::InitialFiles,
             Some(&automatic_head()),
             RawStartError::Instantiation(&host),
+        ),
+        StartAction::Error(_)
+    ));
+    // A never-live agent fails its update instead, so the update gets its one outcome.
+    let never_live = decide(
+        &BaselineRole::InitialFiles,
+        Some(&automatic_head()),
+        RawStartError::Instantiation(&host),
+        &agent_id(),
+        false,
+        true,
+    );
+    assert_eq!(class_and_divergence(never_live).0, Class::Operational);
+    assert!(matches!(
+        decide(
+            &BaselineRole::InitialFiles,
+            Some(&automatic_head()),
+            RawStartError::Instantiation(&creation(&WorkerExecutorError::Interrupted {
+                kind: InterruptKind::Interrupt(Timestamp::from(5)),
+            })),
+            &agent_id(),
+            false,
+            true,
         ),
         StartAction::Error(_)
     ));
@@ -2441,11 +2473,10 @@ fn the_class_of_a_target_or_restore_problem_follows_its_row() {
     assert_eq!(class, Class::Other);
 }
 
-/// In a tainted generation a divergence and a failure of the target code, also of the
-/// initializer and of the load hook, are operational failures; host failures and interruptions
-/// keep their class.
+/// A divergence and a failure of the target code, also of the initializer and of the load hook,
+/// keep their class, and so do host failures and interruptions.
 #[test]
-fn a_tainted_generation_turns_target_failures_and_divergences_into_operational_failures() {
+fn target_failures_divergences_host_failures_and_interruptions_keep_their_class() {
     use FailureProvenance as Provenance;
     use UpdateFailureClass as Class;
     let unexpected = WorkerExecutorError::unexpected_oplog_entry(
@@ -2466,50 +2497,29 @@ fn a_tainted_generation_turns_target_failures_and_divergences_into_operational_f
         provenance,
     };
     let cases = [
-        (
-            replay(&unexpected, true, None),
-            Class::Divergence,
-            Class::Operational,
-        ),
-        (
-            replay(&runtime, true, None),
-            Class::Divergence,
-            Class::Operational,
-        ),
+        (replay(&unexpected, true, None), Class::Divergence),
+        (replay(&runtime, true, None), Class::Divergence),
         (
             replay(&runtime, false, Some(Provenance::TargetReturned)),
             Class::TargetTrap,
-            Class::Operational,
         ),
         (
             replay(&runtime, false, Some(Provenance::TargetInstruction)),
             Class::TargetTrap,
-            Class::Operational,
         ),
-        (
-            RawStartError::Instantiation(&trap),
-            Class::TargetTrap,
-            Class::Operational,
-        ),
-        (
-            RawStartError::Load(&load_trap),
-            Class::TargetTrap,
-            Class::Operational,
-        ),
+        (RawStartError::Instantiation(&trap), Class::TargetTrap),
+        (RawStartError::Load(&load_trap), Class::TargetTrap),
         (
             replay(&runtime, true, Some(Provenance::Host)),
-            Class::Operational,
             Class::Operational,
         ),
         (
             replay(&runtime, false, Some(Provenance::Lifecycle)),
             Class::Interrupted,
-            Class::Interrupted,
         ),
     ];
-    for (error, untainted, tainted) in cases {
+    for (error, class) in cases {
         let problem = StartProblem::of(&error);
-        assert_eq!(failure_class(problem, &error, false), untainted);
-        assert_eq!(failure_class(problem, &error, true), tainted);
+        assert_eq!(failure_class(problem, &error), class);
     }
 }

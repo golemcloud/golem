@@ -927,6 +927,7 @@ async fn cancellation_during_capable_attachment_activation_rolls_back_the_batch(
                     operation,
                 },
                 linear_memory: crate::durable_host::tests::replay_usage_tracker(),
+                ended: false,
             }
             .finish_at(None)
             .await

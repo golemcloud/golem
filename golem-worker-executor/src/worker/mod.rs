@@ -935,6 +935,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.initial_worker_metadata.clone()
     }
 
+    /// Whether this agent is a never-live sandbox fork. The mark comes from its `Create` entry
+    /// and never changes.
+    pub(crate) fn never_live(&self) -> bool {
+        self.initial_worker_metadata.last_known_status.never_live
+    }
+
     /// This agent as a principal, under the Golem issuer.
     pub(crate) fn self_principal(
         &self,

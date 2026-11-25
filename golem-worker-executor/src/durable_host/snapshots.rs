@@ -245,6 +245,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             error,
             &self.owned_agent_id.agent_id,
             self.public_state.worker().retired_for_lost_shard(),
+            self.state.never_live(),
         )
     }
 
@@ -506,6 +507,35 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let snapshot_divergence = load_result
             .as_ref()
             .is_ok_and(InvokeResult::is_snapshot_replay_divergence);
+        // A refusal of a never-live agent in the load hook is recognized before the retry and
+        // the `Unavailable` mapping, so it fails the update as not replayable.
+        match &load_result {
+            Err(error) if error.is_never_live_refusal() => {
+                Self::emit_snapshot_recovery_event(
+                    store,
+                    snapshot_index,
+                    false,
+                    Some(error.to_string()),
+                );
+                return SnapshotRecoveryResult::Refused(error.clone());
+            }
+            Ok(InvokeResult::Interrupted {
+                interrupt_kind: InterruptKind::NeverLive,
+                ..
+            }) => {
+                let error = WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::NeverLive,
+                };
+                Self::emit_snapshot_recovery_event(
+                    store,
+                    snapshot_index,
+                    false,
+                    Some(error.to_string()),
+                );
+                return SnapshotRecoveryResult::Refused(error);
+            }
+            _ => {}
+        }
         if let Some(decision) = load_result.as_ref().ok().and_then(Self::load_retry) {
             return SnapshotRecoveryResult::Retry(decision);
         }

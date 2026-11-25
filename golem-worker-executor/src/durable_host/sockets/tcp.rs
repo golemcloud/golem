@@ -358,6 +358,10 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
                         result: Err(SerializableSocketError::from_result(Ok(code))),
                     });
                 }
+                // A connect that executes now reaches the peer: a never-live owner refuses it
+                // before the native call. A recorded connect replays its result.
+                ctx.state
+                    .refuse_native_peer_effect("sockets::tcp::start_connect")?;
                 let mut view = ctx.as_wasi_view();
                 let result = match HostTcpSocket::start_connect(
                     &mut view.sockets(),

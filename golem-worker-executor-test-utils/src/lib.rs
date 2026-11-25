@@ -2273,6 +2273,52 @@ impl TestWorkerExecutor {
         handle
     }
 
+    /// Pauses at the next update outcome append, committing the retained prefix first. In
+    /// after-append mode the outcome is committed too, so a crash at the pause keeps it; in
+    /// before-append mode it never reaches the oplog.
+    pub async fn gate_next_update_outcome_append(
+        &self,
+        agent_id: &AgentId,
+        after_append: bool,
+    ) -> AgentInitializationEnqueueGateHandle {
+        let handle = self
+            .additional_test_deps
+            .gate_next_append(*agent_id, |entry| {
+                matches!(
+                    entry,
+                    OplogEntry::SuccessfulUpdate { .. } | OplogEntry::FailedUpdate { .. }
+                )
+            })
+            .await;
+        handle
+            .gate
+            .after_append
+            .store(after_append, Ordering::SeqCst);
+        handle.gate.commit_prefix.store(true, Ordering::SeqCst);
+        handle
+    }
+
+    /// Pauses before the next remote transaction terminal append (`CommittedRemoteTransaction`
+    /// or `RolledBackRemoteTransaction`), committing the retained prefix first, so the oplog ends
+    /// with the transaction's pre-commit or pre-rollback marker and no terminal.
+    pub async fn gate_next_remote_transaction_terminal_append(
+        &self,
+        agent_id: &AgentId,
+    ) -> AgentInitializationEnqueueGateHandle {
+        let handle = self
+            .additional_test_deps
+            .gate_next_append(*agent_id, |entry| {
+                matches!(
+                    entry,
+                    OplogEntry::CommittedRemoteTransaction { .. }
+                        | OplogEntry::RolledBackRemoteTransaction { .. }
+                )
+            })
+            .await;
+        handle.gate.commit_prefix.store(true, Ordering::SeqCst);
+        handle
+    }
+
     /// Holds the next queued source-transfer payload append before it changes storage.
     pub async fn gate_next_source_transfer_queued_append(
         &self,

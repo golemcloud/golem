@@ -156,6 +156,8 @@ pub trait SnapshotUpdateTest {
     fn suffix_host_value(&self) -> u32;
     fn suffix_trap(&self) -> u32;
     fn suffix_exit(&self) -> u32;
+    /// Returns 7. In agent-updates-v2 it fails by a host error: a read from an unknown stream.
+    fn suffix_host_error(&self) -> u32;
     fn accumulated_value(&self) -> u32;
     fn revision_one_only(&self) -> u32;
     #[read_only]
@@ -222,6 +224,10 @@ impl SnapshotUpdateTest for SnapshotUpdateTestImpl {
     }
 
     fn suffix_exit(&self) -> u32 {
+        7
+    }
+
+    fn suffix_host_error(&self) -> u32 {
         7
     }
 

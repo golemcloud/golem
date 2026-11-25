@@ -1561,6 +1561,21 @@ impl TestDsl for TestWorkerExecutor {
         self.fork_worker_to(source_agent_id, &target_agent_id, oplog_index)
             .await
     }
+
+    #[tracing::instrument(level = "info", skip_all, fields(%source_agent_id))]
+    async fn fork_worker_never_live(
+        &self,
+        source_agent_id: &OwnedAgentId,
+        oplog_index: OplogIndex,
+    ) -> anyhow::Result<OwnedAgentId> {
+        let type_id = source_agent_id
+            .agent_id
+            .type_id()
+            .ok_or_else(|| anyhow!("Agent {source_agent_id} has no agent type to fork"))?;
+        let target_agent_id = AgentId::random(type_id);
+        self.fork_worker_to_with_mark(source_agent_id, &target_agent_id, oplog_index, true)
+            .await
+    }
 }
 
 impl TestWorkerExecutor {
@@ -1681,6 +1696,19 @@ impl TestWorkerExecutor {
         target_agent_id: &AgentId,
         oplog_index: OplogIndex,
     ) -> anyhow::Result<OwnedAgentId> {
+        self.fork_worker_to_with_mark(source_agent_id, target_agent_id, oplog_index, false)
+            .await
+    }
+
+    /// Forks the source into `target_agent_id`, as [`Self::fork_worker_to`] does. With
+    /// `never_live`, the target is a never-live sandbox fork.
+    pub async fn fork_worker_to_with_mark(
+        &self,
+        source_agent_id: &OwnedAgentId,
+        target_agent_id: &AgentId,
+        oplog_index: OplogIndex,
+        never_live: bool,
+    ) -> anyhow::Result<OwnedAgentId> {
         let target_agent_id = OwnedAgentId::new(source_agent_id.environment_id, target_agent_id);
         let response = self
             .client
@@ -1695,6 +1723,7 @@ impl TestWorkerExecutor {
                 auth_ctx: Some(self.auth_ctx().into()),
                 caller: Some(Caller::anonymous().into()),
                 expected_fingerprint: None,
+                never_live,
             })
             .await?
             .into_inner();
