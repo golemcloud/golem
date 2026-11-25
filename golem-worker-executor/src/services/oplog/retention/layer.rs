@@ -313,10 +313,11 @@ impl RetentionOplogService {
         } else {
             match read.await {
                 Ok(entries) => Ok(entries),
-                Err(unreadable) => Err(self
-                    .retention(owned_agent_id, agent_mode)
-                    .await?
-                    .classify_unreadable(unreadable)),
+                // A failed read of the record keeps the error of the read, which is the cause.
+                Err(unreadable) => Err(match self.retention(owned_agent_id, agent_mode).await {
+                    Ok(retention) => retention.classify_unreadable(unreadable),
+                    Err(_) => unreadable,
+                }),
             }
         }
     }
@@ -729,6 +730,11 @@ mod tests {
         let oplog = RetainedOplog::new().await;
         oplog.with_jumps(10).await;
         oplog.open().await.drop_prefix(idx(5)).await;
+        let gap = oplog.read(1, 1).await.unwrap_err();
+        assert!(
+            matches!(gap, OplogReadError::Gap { start, .. } if start == idx(1)),
+            "with the start at index 1 a missing `Create` entry stays a gap: {gap:?}"
+        );
         oplog.advance(4).await;
 
         let gap = oplog.read(4, 3).await.unwrap_err();
@@ -785,6 +791,40 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    /// A failed read of the `Create` entry alone needs the record to classify its error. When the
+    /// read of the record fails too, the error of the read stays, because it is the cause.
+    #[test]
+    async fn a_failed_record_read_keeps_the_error_of_the_read() {
+        use crate::storage::keyvalue::KeyValueStorageError;
+        use crate::storage::keyvalue::fault_injecting::{
+            FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+        };
+        use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+
+        let faults = KeyValueStorageFaults::default();
+        let oplog =
+            RetainedOplog::with_key_value_storage(Arc::new(FaultInjectingKeyValueStorage::new(
+                Arc::new(InMemoryKeyValueStorage::new()),
+                faults.clone(),
+            )))
+            .await;
+        oplog.with_jumps(10).await;
+        oplog.open().await.drop_prefix(idx(5)).await;
+        let calls = faults.calls("read_retention");
+        faults.fail(
+            "read_retention",
+            1,
+            KeyValueStorageError::Other("unavailable".to_string()),
+        );
+
+        let gap = oplog.read(1, 1).await.unwrap_err();
+        assert!(
+            matches!(gap, OplogReadError::Gap { start, .. } if start == idx(1)),
+            "{gap:?}"
+        );
+        assert_eq!(faults.calls("read_retention"), calls + 1);
     }
 
     /// A delete whose removal of the retention record fails reports the failure, so the caller
