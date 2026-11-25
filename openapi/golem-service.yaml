@@ -654,6 +654,13 @@ paths:
         Each recorded invocation shows its caller: the principal that started the chain, the
         principal that made the call, and the tokens presented at the entry point. With
         `include=claims`, the users among the callers also show their verified claims.
+
+        Reads the oplog entries from `from` to `to`, both included. Without `from`, the read starts
+        at the first entry; without `to`, it goes to the end of the oplog. A `to` after the end of
+        the oplog ends the read at the end of the oplog. The endpoint refuses a `to` before
+        `from`. With `query`, the page holds only the entries in the range that match the query.
+        Without `query`, a read with `to` is a range read: the response accounts its scan, and
+        `scanEntries` and `scanMillis` limit the scan.
       operationId: get_oplog
       parameters:
       - in: path
@@ -722,7 +729,7 @@ paths:
         style: form
       - in: query
         name: to
-        description: The inclusive last index of a range read. Requires `from` and no `query`.
+        description: The inclusive last index of the read. Without `query`, the read is a range read.
         deprecated: false
         schema:
           type: integer

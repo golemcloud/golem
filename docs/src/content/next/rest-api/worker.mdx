@@ -290,19 +290,20 @@ Reads the oplog entries from `from` to `to`, both included. Without `from`, the 
 at the first entry; without `to`, it goes to the end of the oplog. A `to` after the end of
 the oplog ends the read at the end of the oplog. The endpoint refuses a `to` before
 `from`. With `query`, the page holds only the entries in the range that match the query.
+Without `query`, a read with `to` is a range read: the response accounts its scan, and
+`scanEntries` and `scanMillis` limit the scan.
 
 **Query Parameters**
 
 Name|Type|Required|Description
 ---|---|---|---
 from|integer|No|-
-to|integer|No|-
 count|integer|Yes|-
 cursor|#/components/schemas/OplogCursor|No|-
 query|string|No|-
 include|#/components/schemas/OplogInclude|No|-
 expectedFingerprint|string|No|-
-to|integer|No|The inclusive last index of a range read. Requires `from` and no `query`.
+to|integer|No|The inclusive last index of the read. Without `query`, the read is a range read.
 scanEntries|integer|No|The remaining entry allowance of a range read. Goes with `scanMillis`.
 scanMillis|integer|No|The remaining time allowance of a range read, in milliseconds.
 
