@@ -24,6 +24,7 @@ use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_f
 use golem_common::{agent_key, data_value};
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, agent_path_segment};
+use golem_test_framework::components::rdb::DbInfo;
 use golem_test_framework::config::{
     DbType, EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
 };
@@ -479,13 +480,60 @@ async fn complete_promise_in_deleted_environment_results_in_404(
     Ok(())
 }
 
-/// Waits until the blob layer of the archive holds a chunk of the durable agent that ends at
-/// `last`, so the archive moved the whole history of the agent to the blob layer. The spawned
-/// executors keep their blobs in the local blob storage below the temporary directory.
+/// The count of the entries that the primary oplog and the compressed layer of the durable agent
+/// hold in the indexed storage of the spawned executors. The count is `None` when the read fails,
+/// for example while an executor creates the storage.
+async fn indexed_oplog_rows(rdb: &DbInfo, agent_id: &OwnedAgentId) -> Option<i64> {
+    const ROWS: &str = "SELECT COUNT(*) FROM {table} \
+         WHERE namespace IN ('durable-worker-oplog', 'durable-worker-c1-oplog') AND {key}";
+    match rdb {
+        DbInfo::Postgres(pg) => {
+            let pool = sqlx::PgPool::connect(&pg.public_connection_string())
+                .await
+                .ok()?;
+            let query = ROWS
+                .replace("{table}", "golem_worker_executor_indexed.index_storage")
+                .replace("{key}", "env = $1 AND agent = $2");
+            let rows = sqlx::query_scalar::<_, i64>(&query)
+                .bind(agent_id.environment_id.0)
+                .bind(agent_id.agent_id.as_uuid())
+                .fetch_one(&pool)
+                .await
+                .ok();
+            pool.close().await;
+            rows
+        }
+        DbInfo::Sqlite(path) => {
+            let file = path.join("golem_worker_executor-indexed.db");
+            let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}?mode=ro", file.display()))
+                .await
+                .ok()?;
+            let query = ROWS
+                .replace("{table}", "index_storage")
+                .replace("{key}", "key = ?");
+            let rows = sqlx::query_scalar::<_, i64>(&query)
+                .bind(agent_id.storage_key())
+                .fetch_one(&pool)
+                .await
+                .ok();
+            pool.close().await;
+            rows
+        }
+        DbInfo::Mysql(_) => None,
+    }
+}
+
+/// Waits until the archive moved the whole history of the durable agent to the blob layer. Then
+/// the blob layer holds a chunk of the agent that ends at `last`. The primary oplog and the
+/// compressed layer hold no entry of the agent, because the archive drops the entries of a layer
+/// only after it wrote them to the next layer. The spawned executors keep their blobs in the local
+/// blob storage below the temporary directory.
 async fn wait_until_archived_to_the_blob_layer(
+    deps: &EnvBasedTestDependencies,
     agent_id: &OwnedAgentId,
     last: u64,
 ) -> anyhow::Result<()> {
+    let rdb = &deps.rdb().info();
     let root = std::env::temp_dir().join("ittest-local-object-store/golem");
     let namespace = BlobStorageNamespace::CompressedOplog {
         environment_id: agent_id.environment_id,
@@ -495,12 +543,13 @@ async fn wait_until_archived_to_the_blob_layer(
     };
     let segment = agent_path_segment(&agent_id.agent_id);
     let archived = move || {
-        let (root, namespace, segment) = (root.clone(), namespace.clone(), segment.clone());
+        let (root, namespace, segment, rdb) =
+            (root.clone(), namespace.clone(), segment.clone(), rdb);
         async move {
             let Ok(storage) = FileSystemBlobStorage::attach_existing(&root) else {
                 return false;
             };
-            storage
+            let blob_chunk = storage
                 .list_blobs_below(
                     "integration_test",
                     "wait_until_archived",
@@ -517,10 +566,11 @@ async fn wait_until_archived_to_the_blob_layer(
                             .and_then(|index| index.parse::<u64>().ok())
                             == Some(last)
                     })
-                })
+                });
+            blob_chunk && indexed_oplog_rows(rdb, agent_id).await == Some(0)
         }
     };
-    let done = StreamExt::filter(
+    let done = StreamExt::filter_map(
         StreamExt::then(futures::stream::repeat(()), move |()| {
             let archived = archived();
             async move {
@@ -531,7 +581,7 @@ async fn wait_until_archived_to_the_blob_layer(
                 done
             }
         }),
-        |done| futures::future::ready(*done),
+        |done| futures::future::ready(done.then_some(())),
     );
     tokio::time::timeout(
         Duration::from_secs(60),
@@ -587,7 +637,7 @@ async fn oplog_range_reads_of_an_archived_agent(
             .collect::<Vec<_>>(),
         (1..=last).collect::<Vec<_>>()
     );
-    wait_until_archived_to_the_blob_layer(&agent_id, last).await?;
+    wait_until_archived_to_the_blob_layer(deps, &agent_id, last).await?;
 
     let index = OplogIndex::from_u64;
     let range = |from: u64, to: u64| OplogRange::new(Some(index(from)), Some(index(to))).unwrap();
