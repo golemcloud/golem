@@ -928,7 +928,7 @@ mod tests {
             vec![
                 OplogRead {
                     range: OplogRange::new(Some(index(3)), Some(index(9))).unwrap(),
-                    query: Some("error".to_string()),
+                    query: Some("error".into()),
                     allowance: None,
                 },
                 OplogRead {

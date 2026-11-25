@@ -518,7 +518,7 @@ struct RecordingWorkerClient {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct OplogRead {
     pub range: OplogRange,
-    pub query: Option<String>,
+    pub query: Option<Box<str>>,
     pub allowance: Option<golem_common::model::oplog::OplogScanAllowance>,
 }
 
@@ -731,7 +731,7 @@ impl WorkerClient for RecordingWorkerClient {
     ) -> Result<GetOplogResponse, crate::service::worker::WorkerServiceError> {
         self.oplog_reads.lock().unwrap().push(OplogRead {
             range,
-            query: Some(query),
+            query: Some(query.into()),
             allowance: None,
         });
         Ok(empty_oplog_page())
