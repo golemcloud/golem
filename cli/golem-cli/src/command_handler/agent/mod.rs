@@ -48,7 +48,6 @@ use crate::model::agent::action_result::{
 use crate::model::agent::files::{AgentFilesView, FileNodeView};
 use crate::model::agent::oplog::{
     AgentOplogEntryView, AgentOplogPageView, OplogExportSelection, OplogJsonlWriter,
-    check_oplog_page_scan,
 };
 use crate::model::agent::oplog_html::{
     OplogViewerDocument, OplogViewerMode, export_temporary_file, render_oplog_viewer_html,
@@ -1093,7 +1092,6 @@ impl AgentCommandHandler {
                     )
                     .await
                     .map_service_error()?;
-                check_oplog_page_scan(result.scan.as_ref(), result.next.is_some())?;
 
                 entries.extend(result.entries);
                 result.next
@@ -1244,7 +1242,6 @@ impl AgentCommandHandler {
                     )
                     .await
                     .map_service_error()?;
-                check_oplog_page_scan(page.scan.as_ref(), page.next.is_some())?;
                 Ok(Some(((page.entries, page.last_index), page.next.map(Some))))
             });
         let (writer, range_last) = futures_util::TryStreamExt::try_fold(
@@ -1338,7 +1335,6 @@ impl AgentCommandHandler {
             )
             .await
             .map_service_error()?;
-        check_oplog_page_scan(page.scan.as_ref(), page.next.is_some())?;
 
         let mut entries = Vec::with_capacity(page.entries.len());
         for entry in page.entries {

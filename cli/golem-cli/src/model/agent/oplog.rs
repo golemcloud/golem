@@ -22,11 +22,11 @@ use golem_common::model::caller::{PublicCaller, PublicPrincipal};
 use golem_common::model::oplog::public_oplog_entry::FailedUpdateParams;
 use golem_common::model::oplog::public_oplog_entry::PendingUpdateParams;
 use golem_common::model::oplog::{
-    MultipartPartData, OmittedOplogEntry, OplogIndex, OplogRange, OplogScan,
-    PluginInstallationDescription, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicEntityCallMode, PublicEntityInvocation, PublicEntityInvocationOperation,
-    PublicExternalToolResult, PublicOplogEntry, PublicOplogEntryAttribution,
-    PublicOplogEntryWithIndex, PublicSnapshotData, PublicUpdateDescription,
+    MultipartPartData, OmittedOplogEntry, OplogIndex, OplogRange, PluginInstallationDescription,
+    PublicAgentInvocation, PublicAgentInvocationResult, PublicEntityCallMode,
+    PublicEntityInvocation, PublicEntityInvocationOperation, PublicExternalToolResult,
+    PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicSnapshotData,
+    PublicUpdateDescription,
 };
 use golem_common::schema::TypedSchemaValue;
 use serde::{Deserialize, Serialize};
@@ -201,21 +201,6 @@ fn check_oplog_export_end(
         (OplogExportSelection::EveryEntry(_), None) => anyhow::bail!(
             "the oplog read returned no entry, but the range ends at index {range_last}"
         ),
-    }
-}
-
-/// Checks the scan accounting of an oplog page of a range read, a read with `--to`. When the scan
-/// allowance of the server runs out, the page has a cursor that continues the read. The exception
-/// is a page whose allowance ran out before the read found the start of the range: it has no
-/// entries and no cursor, and the read cannot continue, so the page is refused instead of read as
-/// the end of the range.
-pub fn check_oplog_page_scan(scan: Option<&OplogScan>, has_next: bool) -> anyhow::Result<()> {
-    match scan {
-        Some(scan) if scan.exhausted && !has_next => anyhow::bail!(
-            "the scan allowance of the server ran out before the oplog read found the start of \
-             the range; read with an earlier --from, or without --to"
-        ),
-        _ => Ok(()),
     }
 }
 
@@ -2032,35 +2017,6 @@ mod tests {
                 .is_ok(),
                 accepted,
                 "{selection:?}, last entry {last:?}, range ends at {range_last}"
-            )
-        });
-    }
-
-    #[test]
-    fn an_oplog_page_that_spent_its_scan_allowance_needs_a_cursor() {
-        let scan = |exhausted| OplogScan {
-            limit: golem_common::model::oplog::OplogScanAllowance {
-                entries: 10,
-                millis: 1000,
-            },
-            charged_entries: 10,
-            charged_millis: 1,
-            exhausted,
-        };
-        [
-            ((None, false), true),
-            ((None, true), true),
-            ((Some(scan(false)), false), true),
-            ((Some(scan(false)), true), true),
-            ((Some(scan(true)), true), true),
-            ((Some(scan(true)), false), false),
-        ]
-        .into_iter()
-        .for_each(|((scan, has_next), accepted)| {
-            assert_eq!(
-                check_oplog_page_scan(scan.as_ref(), has_next).is_ok(),
-                accepted,
-                "{scan:?}, cursor {has_next}"
             )
         });
     }
