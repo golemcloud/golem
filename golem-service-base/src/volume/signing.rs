@@ -32,14 +32,6 @@ pub(super) struct Signing {
     pub identity: SharedIdentityResolver,
 }
 
-fn payload_hash(bytes: Option<&[u8]>, tls: bool) -> Result<Box<str>, SigningFailure> {
-    match bytes {
-        Some(bytes) => Ok(hex::encode(Sha256::digest(bytes)).into_boxed_str()),
-        None if tls => Ok("UNSIGNED-PAYLOAD".into()),
-        None => Err(SigningFailure::InvalidRequest),
-    }
-}
-
 impl ResolveIdentity for AwsCredentials {
     fn resolve_identity<'a>(
         &'a self,
@@ -76,10 +68,20 @@ impl Sign for Signing {
         let credentials = identity
             .data::<AwsCredentials>()
             .ok_or(SigningFailure::InvalidRequest)?;
-        let hash = payload_hash(
-            request.body().bytes(),
-            request.uri().starts_with("https://"),
-        )?;
+        let mut encoded_hash = [0; 64];
+        hex::encode_to_slice(
+            Sha256::digest(
+                request
+                    .body()
+                    .bytes()
+                    .ok_or(SigningFailure::InvalidRequest)?,
+            ),
+            &mut encoded_hash,
+        )
+        .map_err(|_| SigningFailure::InvalidRequest)?;
+        let hash: Box<str> = std::str::from_utf8(&encoded_hash)
+            .map_err(|_| SigningFailure::InvalidRequest)?
+            .into();
         let original = std::mem::replace(request, HttpRequest::empty());
         let original = original
             .try_into_http1x()

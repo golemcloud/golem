@@ -57,6 +57,7 @@ humantime-serde = { workspace = true }
 hyper = { workspace = true }
 hyper-rustls = { workspace = true }
 hyper-util = { workspace = true, features = ["client-legacy"] }
+if-addrs = { workspace = true }
 include_dir = { workspace = true }
 indexmap.workspace = true
 ipnet = { workspace = true }
@@ -95,6 +96,7 @@ strum = { workspace = true }
 strum_macros = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
+time.workspace = true
 tokio = { workspace = true }
 tokio-metrics = { workspace = true }
 tokio-rustls = { workspace = true }
