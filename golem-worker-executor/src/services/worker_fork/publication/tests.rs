@@ -247,6 +247,7 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
     stage.add(OplogEntry::suspend()).await.unwrap();
     stage.commit(CommitLevel::Always).await.unwrap();
     let last = stage.current_oplog_index().await;
+    let stage_token = stage.stage_token();
     drop(stage);
     let before = existing_fork(&service, &target, cut, hash).await.unwrap();
     assert!(
@@ -254,7 +255,7 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
             .publish_staged(
                 &target,
                 AgentMode::Durable,
-                crate::services::oplog::StagePublication::for_tests(stage_id),
+                crate::services::oplog::StagePublication::for_tests(stage_id, stage_token),
                 last
             )
             .await

@@ -63,6 +63,7 @@ use crate::services::card_interest::{
 use crate::services::golem_config::{
     ActiveAgentsConfig, AgentStatusFlushConfig, FilesystemStorageConfig, MemoryConfig,
 };
+use crate::services::oplog::OplogOpenPurpose;
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::worker::entity_invocation::{
     EntityBodyOutcome, EntityInvocationHandle, RetainedEntityStore, start_entity_invocation,
@@ -564,10 +565,41 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
+        self.get_existing_for_purpose(
+            deps,
+            owned_agent_id,
+            expected_fingerprint,
+            OplogOpenPurpose::Activation,
+        )
+        .await
+    }
+
+    pub(crate) async fn get_existing_for_archive<T>(
+        &self,
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        self.get_existing_for_purpose(deps, owned_agent_id, None, OplogOpenPurpose::Archive)
+            .await
+    }
+
+    async fn get_existing_for_purpose<T>(
+        &self,
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: Option<AgentFingerprint>,
+        purpose: OplogOpenPurpose,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
         let active_agent = self.get_or_add_unresolved(deps, owned_agent_id).await?;
         let worker = active_agent.primary.clone();
         let result = worker
-            .ensure_existing_with_fingerprint(expected_fingerprint)
+            .ensure_existing_with_purpose(expected_fingerprint, purpose)
             .in_current_span()
             .await
             .and_then(|()| {

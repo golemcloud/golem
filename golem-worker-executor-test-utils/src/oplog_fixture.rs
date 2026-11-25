@@ -75,6 +75,14 @@ impl OplogService for OplogFixtureService {
         self.inner.lock_lifecycle(id).await
     }
 
+    fn set_seal_service(&self, service: Arc<golem_worker_executor::services::oplog::SealService>) {
+        self.inner.set_seal_service(service);
+    }
+
+    fn seal_service(&self) -> Option<Arc<golem_worker_executor::services::oplog::SealService>> {
+        self.inner.seal_service()
+    }
+
     fn set_stream_session_index(&self, index: Arc<StreamSessionIndexService>) {
         self.inner.set_stream_session_index(index)
     }
@@ -89,7 +97,7 @@ impl OplogService for OplogFixtureService {
         mode: AgentMode,
         stage: uuid::Uuid,
         metadata: AgentMetadata,
-    ) -> Result<Arc<dyn Oplog>, String> {
+    ) -> Result<Arc<dyn Oplog>, golem_worker_executor::services::oplog::CreateStagedError> {
         Ok(self.handle(
             id,
             self.inner.create_staged(id, mode, stage, metadata).await?,
@@ -120,8 +128,11 @@ impl OplogService for OplogFixtureService {
         id: &OwnedAgentId,
         mode: AgentMode,
         stage: uuid::Uuid,
+        stage_token: Option<i64>,
     ) -> Result<(), String> {
-        self.inner.discard_staged(id, mode, stage).await
+        self.inner
+            .discard_staged(id, mode, stage, stage_token)
+            .await
     }
 
     async fn create(

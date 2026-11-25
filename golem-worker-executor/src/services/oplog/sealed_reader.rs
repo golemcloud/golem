@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::reader::{OplogRead, OplogReadError, OplogReadSource};
+use super::reader::{OplogRead, OplogReadError, OplogReadSource, checked_range_end};
 use super::seal::SealRecord;
 use super::{CompressedOplogChunk, OplogArchiveError};
 use golem_common::model::OwnedAgentId;
@@ -23,6 +23,55 @@ use golem_service_base::storage::blob::{
 };
 use std::collections::BTreeMap;
 use std::path::Path;
+
+/// Reads the physically present suffix ending at the requested end. A range beyond the end of
+/// history has no such suffix. The exact reader still validates every entry inside the suffix.
+pub(crate) async fn read_sealed_source(
+    storage: &dyn BlobStorage,
+    owned_agent_id: &OwnedAgentId,
+    record: &SealRecord,
+    start: OplogIndex,
+    count: u64,
+) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+    let Some(end) = checked_range_end(start, count)? else {
+        return Ok(BTreeMap::new());
+    };
+    if end > record.last_index {
+        return Ok(BTreeMap::new());
+    }
+    let mut first = None;
+    for (&level, manifest) in &record.manifest {
+        if let Some((&last, chunk)) = manifest.first_key_value() {
+            let beginning = chunk
+                .count
+                .checked_sub(1)
+                .and_then(|span| last.as_u64().checked_sub(span))
+                .map(OplogIndex::from_u64)
+                .ok_or_else(|| {
+                    OplogReadError::corruption(
+                        OplogReadSource::Archive(level),
+                        "invalid sealed chunk range",
+                    )
+                })?;
+            first = Some(first.map_or(beginning, |first: OplogIndex| first.min(beginning)));
+        }
+    }
+    let Some(first) = first else {
+        return Ok(BTreeMap::new());
+    };
+    let start = start.max(first);
+    if start > end {
+        return Ok(BTreeMap::new());
+    }
+    read_sealed(
+        storage,
+        owned_agent_id,
+        record,
+        start,
+        end.as_u64() - start.as_u64() + 1,
+    )
+    .await
+}
 
 /// Reads a frozen manifest without opening an indexed stream or recording an epoch. The exact
 /// range merger is the same one used for resident multi-layer oplogs.

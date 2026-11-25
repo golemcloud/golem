@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::{
-    AgentIndexedState, FencedTxError, IndexedStorage, IndexedStorageError,
+    AgentDataObservation, AgentIndexedState, FencedTxError, IndexedStorage, IndexedStorageError,
     IndexedStorageMetaNamespace, IndexedStorageNamespace, ReleaseAgentResult, ScanResume,
     UnsealAgentResult,
 };
@@ -806,6 +806,17 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         false
     }
 
+    async fn observe_agent(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _owned_agent_id: &OwnedAgentId,
+    ) -> Result<AgentDataObservation, IndexedStorageError> {
+        Err(IndexedStorageError::Other(
+            "multi-SQLite agent observation is unsupported".into(),
+        ))
+    }
+
     async fn mark_sealed(
         &self,
         _svc_name: &'static str,
@@ -1040,6 +1051,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         id: u64,
         value: Vec<u8>,
         expected_epoch: Option<ShardEpoch>,
+        stage_token: Option<i64>,
     ) -> Result<(), IndexedStorageError> {
         let db = Self::namespace_to_db(&namespace);
         let key = key.to_string();
@@ -1053,6 +1065,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
                 id,
                 value,
                 expected_epoch,
+                stage_token,
             )
             .await
         })
@@ -1069,6 +1082,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
         expected_epoch: Option<ShardEpoch>,
+        stage_token: Option<i64>,
     ) -> Result<(), IndexedStorageError> {
         if pairs.is_empty() {
             return Ok(());
@@ -1085,6 +1099,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
                 &key,
                 pairs,
                 expected_epoch,
+                stage_token,
             )
             .await
         })
@@ -1100,6 +1115,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         target_namespace: IndexedStorageNamespace,
         target_key: &str,
         expected_last_id: u64,
+        stage_token: Option<i64>,
     ) -> Result<bool, IndexedStorageError> {
         let source_db = Self::namespace_to_db(&source_namespace);
         let target_db = Self::namespace_to_db(&target_namespace);
@@ -1119,6 +1135,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
                 target_namespace,
                 &target_key,
                 expected_last_id,
+                stage_token,
             )
             .await
         })

@@ -531,6 +531,55 @@ impl IndexedStorage for FixedPages {
         self.inner.supports_release()
     }
 
+    async fn reserve_stage(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        owned_agent_id: &OwnedAgentId,
+        stage_id: uuid::Uuid,
+        epoch: Option<ShardEpoch>,
+    ) -> Result<Option<i64>, IndexedStorageError> {
+        self.inner
+            .reserve_stage(svc_name, api_name, owned_agent_id, stage_id, epoch)
+            .await
+    }
+
+    async fn remove_stage_reservation(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        owned_agent_id: &OwnedAgentId,
+        token: Option<i64>,
+    ) -> Result<bool, IndexedStorageError> {
+        self.inner
+            .remove_stage_reservation(svc_name, api_name, owned_agent_id, token)
+            .await
+    }
+
+    async fn discard_stage(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        stage_token: Option<i64>,
+    ) -> Result<(), IndexedStorageError> {
+        self.inner
+            .discard_stage(svc_name, api_name, namespace, key, stage_token)
+            .await
+    }
+
+    async fn observe_agent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<crate::storage::indexed::AgentDataObservation, IndexedStorageError> {
+        self.inner
+            .observe_agent(svc_name, api_name, owned_agent_id)
+            .await
+    }
+
     async fn mark_sealed(
         &self,
         svc_name: &'static str,
@@ -663,6 +712,7 @@ impl IndexedStorage for FixedPages {
         id: u64,
         value: Vec<u8>,
         expected_epoch: Option<golem_common::model::ShardEpoch>,
+        stage_token: Option<i64>,
     ) -> Result<(), IndexedStorageError> {
         self.inner
             .append(
@@ -674,6 +724,7 @@ impl IndexedStorage for FixedPages {
                 id,
                 value,
                 expected_epoch,
+                stage_token,
             )
             .await
     }
@@ -687,6 +738,7 @@ impl IndexedStorage for FixedPages {
         key: &str,
         pairs: Arc<[(u64, bytes::Bytes)]>,
         expected_epoch: Option<golem_common::model::ShardEpoch>,
+        stage_token: Option<i64>,
     ) -> Result<(), IndexedStorageError> {
         self.inner
             .append_many(
@@ -697,6 +749,32 @@ impl IndexedStorage for FixedPages {
                 key,
                 pairs,
                 expected_epoch,
+                stage_token,
+            )
+            .await
+    }
+
+    async fn move_if_absent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        source_namespace: IndexedStorageNamespace,
+        source_key: &str,
+        target_namespace: IndexedStorageNamespace,
+        target_key: &str,
+        expected_last_id: u64,
+        stage_token: Option<i64>,
+    ) -> Result<bool, IndexedStorageError> {
+        self.inner
+            .move_if_absent(
+                svc_name,
+                api_name,
+                source_namespace,
+                source_key,
+                target_namespace,
+                target_key,
+                expected_last_id,
+                stage_token,
             )
             .await
     }

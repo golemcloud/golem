@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::{
-    AgentIndexedState, FencedTxError, IndexedStorage, IndexedStorageError,
+    AgentDataObservation, AgentIndexedState, FencedTxError, IndexedStorage, IndexedStorageError,
     IndexedStorageMetaNamespace, IndexedStorageNamespace, ReleaseAgentResult, ScanResume,
     UnsealAgentResult,
 };
@@ -23,7 +23,8 @@ use futures::FutureExt;
 use golem_common::SafeDisplay;
 use golem_common::config::DbSqliteConfig;
 use golem_common::metrics::db::record_db_serialized_size;
-use golem_common::model::ShardEpoch;
+use golem_common::model::agent::AgentMode;
+use golem_common::model::{OwnedAgentId, ShardEpoch};
 use golem_service_base::db::sqlite::{SqliteLabelledTransaction, SqlitePool};
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
@@ -34,6 +35,11 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const DB_TYPE: &str = "sqlite";
+const OBSERVE_AGENT_QUERY: &str = "SELECT EXISTS(SELECT 1 FROM index_storage WHERE key = ?1 OR (key >= ?2 || '#' AND key < ?3 || '$')), (SELECT value FROM index_storage WHERE namespace = 'durable-worker-sealed-present' AND key = ?1 AND id = 0), (SELECT value FROM index_storage WHERE namespace = 'ephemeral-worker-sealed-present' AND key = ?1 AND id = 0);";
+const AGENT_HAS_DATA_QUERY: &str = "SELECT EXISTS(SELECT 1 FROM index_storage WHERE key = ? OR (key >= ? || '#' AND key < ? || '$'));";
+const AGENT_ROWS_QUERY: &str = "SELECT namespace, key, id, value FROM index_storage WHERE key = ? OR (key >= ? || '#' AND key < ? || '$');";
+const DELETE_AGENT_ROWS_QUERY: &str =
+    "DELETE FROM index_storage WHERE key = ? OR (key >= ? || '#' AND key < ? || '$');";
 const SCAN_INCLUSIVE_BOUNDED_QUERY: &str = "SELECT key FROM index_storage WHERE namespace = ? AND key >= ? AND key < ? UNION SELECT key FROM index_storage WHERE namespace = ? AND key >= ? AND key < ? ORDER BY key LIMIT ?;";
 const SCAN_EXCLUSIVE_BOUNDED_QUERY: &str = "SELECT key FROM index_storage WHERE namespace = ? AND key > ? AND key < ? UNION SELECT key FROM index_storage WHERE namespace = ? AND key > ? AND key < ? ORDER BY key LIMIT ?;";
 const SCAN_INCLUSIVE_UNBOUNDED_QUERY: &str = "SELECT key FROM index_storage WHERE namespace = ? AND key >= ? UNION SELECT key FROM index_storage WHERE namespace = ? AND key >= ? ORDER BY key LIMIT ?;";
@@ -41,9 +47,28 @@ const SCAN_EXCLUSIVE_UNBOUNDED_QUERY: &str = "SELECT key FROM index_storage WHER
 
 static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration/indexed");
 
+#[derive(Debug)]
+enum UnsealTxError {
+    Storage(FencedTxError),
+    Expired,
+}
+
+impl From<RepoError> for UnsealTxError {
+    fn from(error: RepoError) -> Self {
+        Self::Storage(error.into())
+    }
+}
+
+impl From<FencedTxError> for UnsealTxError {
+    fn from(error: FencedTxError) -> Self {
+        Self::Storage(error)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SqliteIndexedStorage {
     pool: SqlitePool,
+    require_stage_reservation: bool,
 }
 
 impl SqliteIndexedStorage {
@@ -64,7 +89,10 @@ impl SqliteIndexedStorage {
                     error,
                 )
             })?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            require_stage_reservation: false,
+        })
     }
 
     pub async fn configured(config: &DbSqliteConfig) -> Result<Self, IndexedStorageError> {
@@ -77,7 +105,10 @@ impl SqliteIndexedStorage {
             )
         })?;
 
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            require_stage_reservation: true,
+        })
     }
 
     /// Apply the indexed storage migrations on the given sqlite config without
@@ -95,7 +126,10 @@ impl SqliteIndexedStorage {
     }
 
     pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            require_stage_reservation: true,
+        }
     }
 
     pub(super) async fn close(&self) {
@@ -322,7 +356,7 @@ impl SqliteIndexedStorage {
         expected: ShardEpoch,
     ) -> Result<(), FencedTxError> {
         let rows: Vec<(String, i64)> = tx.fetch_all_as(sqlx::query_as(
-            "SELECT key, epoch FROM indexed_key_epoch WHERE key = ? OR substr(key, 1, length(?) + 1) = ? || '#';",
+            "SELECT key, epoch FROM indexed_key_epoch WHERE (namespace GLOB 'durable-worker-*' OR namespace GLOB 'ephemeral-worker-*') AND (key = ? OR substr(key, 1, length(?) + 1) = ? || '#');",
         ).bind(key).bind(key).bind(key)).await?;
         for (key, stored) in rows {
             if stored < 0 || u64::try_from(stored).is_ok_and(|value| value > expected.0) {
@@ -337,13 +371,18 @@ impl SqliteIndexedStorage {
         Ok(())
     }
 
-    async fn agent_has_data(
+    async fn agent_has_data_in_tx(
         tx: &mut SqliteLabelledTransaction,
         key: &str,
     ) -> Result<bool, RepoError> {
-        let (present,): (bool,) = tx.fetch_one_as(sqlx::query_as(
-            "SELECT EXISTS(SELECT 1 FROM index_storage WHERE key = ? OR substr(key, 1, length(?) + 1) = ? || '#');",
-        ).bind(key).bind(key).bind(key)).await?;
+        let (present,): (bool,) = tx
+            .fetch_one_as(
+                sqlx::query_as(AGENT_HAS_DATA_QUERY)
+                    .bind(key)
+                    .bind(key)
+                    .bind(key),
+            )
+            .await?;
         Ok(present)
     }
 
@@ -391,6 +430,80 @@ impl IndexedStorage for SqliteIndexedStorage {
         true
     }
 
+    async fn reserve_stage(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        owned_agent_id: &OwnedAgentId,
+        _stage_id: uuid::Uuid,
+        epoch: Option<ShardEpoch>,
+    ) -> Result<Option<i64>, IndexedStorageError> {
+        let key = owned_agent_id.storage_key();
+        let primary = Self::namespace(IndexedStorageNamespace::OpLog {
+            owned_agent_id: owned_agent_id.clone(),
+            agent_mode: AgentMode::Durable,
+        });
+        let token = super::fresh_stage_token();
+        let stored_epoch = epoch
+            .map(|epoch| Self::to_i64(epoch.0, "epoch"))
+            .transpose()?;
+        self.pool.with_tx_err::<Option<i64>, FencedTxError, _>(svc_name, api_name, |tx| {
+            Box::pin(async move {
+                if let Some(stored_epoch) = stored_epoch {
+                    let result = tx.execute(sqlx::query(
+                        "INSERT INTO indexed_key_epoch (namespace, key, epoch) VALUES (?, ?, ?) ON CONFLICT(namespace, key) DO UPDATE SET epoch = excluded.epoch WHERE epoch <= excluded.epoch;"
+                    ).bind(&primary).bind(&key).bind(stored_epoch)).await?;
+                    if result.rows_affected() == 0 {
+                        Self::check_epoch(tx, &primary, &key, epoch.unwrap()).await?;
+                    }
+                }
+                if Self::agent_has_data_in_tx(tx, &key).await? {
+                    return Ok(None);
+                }
+                tx.execute(sqlx::query("INSERT INTO indexed_key_epoch (namespace, key, epoch) VALUES (?, ?, ?) ON CONFLICT(namespace, key) DO UPDATE SET epoch = excluded.epoch;")
+                    .bind(super::STAGE_RESERVATION_NAMESPACE).bind(&key).bind(token)).await?;
+                Ok(Some(token))
+            })
+        }).await.map_err(|err| err.into_indexed_storage_error(Self::classify_repo_error))
+    }
+
+    async fn remove_stage_reservation(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        owned_agent_id: &OwnedAgentId,
+        token: Option<i64>,
+    ) -> Result<bool, IndexedStorageError> {
+        let key = owned_agent_id.storage_key();
+        self.pool.with_tx(svc_name, api_name, |tx| Box::pin(async move {
+            let result = tx.execute(sqlx::query("DELETE FROM indexed_key_epoch WHERE namespace = ? AND key = ? AND (? IS NULL OR epoch = ?);")
+                .bind(super::STAGE_RESERVATION_NAMESPACE).bind(key).bind(token).bind(token)).await?;
+            Ok(result.rows_affected() > 0)
+        })).await.map_err(Self::classify_repo_error)
+    }
+
+    async fn observe_agent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<AgentDataObservation, IndexedStorageError> {
+        let key = owned_agent_id.storage_key();
+        self.pool
+            .with_ro(svc_name, api_name)
+            .fetch_one_as(
+                sqlx::query_as::<_, (bool, Option<Vec<u8>>, Option<Vec<u8>>)>(OBSERVE_AGENT_QUERY)
+                    .bind(&key)
+                    .bind(&key)
+                    .bind(&key),
+            )
+            .await
+            .map_err(Self::classify_repo_error)
+            .and_then(|(has_data, durable, ephemeral)| {
+                AgentDataObservation::from_raw(has_data, durable, ephemeral)
+            })
+    }
+
     async fn mark_sealed(
         &self,
         svc_name: &'static str,
@@ -404,8 +517,12 @@ impl IndexedStorage for SqliteIndexedStorage {
         self.pool.with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
             Box::pin(async move {
                 Self::check_epoch(tx, &fence, &key, epoch).await?;
-                tx.execute(sqlx::query("INSERT INTO index_storage (namespace, key, id, value) VALUES (?, ?, 0, x'') ON CONFLICT DO NOTHING;")
-                    .bind(marker).bind(key)).await?;
+                tx.execute(sqlx::query("INSERT INTO index_storage (namespace, key, id, value) VALUES (?, ?, 0, ?) ON CONFLICT DO NOTHING;")
+                    .bind(&marker).bind(&key).bind(uuid::Uuid::new_v4().as_bytes().as_slice())).await?;
+                let (value,): (Vec<u8>,) = tx.fetch_one_as(sqlx::query_as(
+                    "SELECT value FROM index_storage WHERE namespace = ? AND key = ? AND id = 0;",
+                ).bind(marker).bind(key)).await?;
+                super::marker_generation(&value).map_err(FencedTxError::Corrupt)?;
                 Ok(())
             })
         }).await.map_err(|err| err.into_indexed_storage_error(Self::classify_repo_error))
@@ -435,20 +552,24 @@ impl IndexedStorage for SqliteIndexedStorage {
         }
         self.pool.with_tx_err::<_, FencedTxError, _>(svc_name, api_name, |tx| {
             Box::pin(async move {
-                if !Self::agent_has_data(tx, &key).await? {
+                if !Self::agent_has_data_in_tx(tx, &key).await? {
                     let (has_epochs,): (bool,) = tx.fetch_one_as(sqlx::query_as(
-                        "SELECT EXISTS(SELECT 1 FROM indexed_key_epoch WHERE key = ? OR substr(key, 1, length(?) + 1) = ? || '#');",
+                        "SELECT EXISTS(SELECT 1 FROM indexed_key_epoch WHERE (namespace GLOB 'durable-worker-*' OR namespace GLOB 'ephemeral-worker-*') AND (key = ? OR substr(key, 1, length(?) + 1) = ? || '#'));",
                     ).bind(&key).bind(&key).bind(&key)).await?;
                     if !has_epochs {
+                        tx.execute(sqlx::query("DELETE FROM indexed_key_epoch WHERE namespace = ? AND key = ?;").bind(super::STAGE_RESERVATION_NAMESPACE).bind(&key)).await?;
                         return Ok(ReleaseAgentResult::Released);
                     }
                 }
                 Self::check_epoch(tx, &fence, &key, epoch).await?;
                 Self::agent_epochs(tx, &key, epoch).await?;
                 let rows: Vec<(String, String, i64, Vec<u8>)> = tx.fetch_all_as(sqlx::query_as(
-                    "SELECT namespace, key, id, value FROM index_storage WHERE key = ? OR substr(key, 1, length(?) + 1) = ? || '#';",
+                    AGENT_ROWS_QUERY,
                 ).bind(&key).bind(&key).bind(&key)).await?;
                 for (namespace, row_key, id, value) in rows {
+                    if namespace == "durable-worker-sealed-present" || namespace == "ephemeral-worker-sealed-present" {
+                        super::marker_generation(&value).map_err(FencedTxError::Corrupt)?;
+                    }
                     if namespace.ends_with("-worker-staged-oplog") || namespace.ends_with("-present") {
                         continue;
                     }
@@ -459,10 +580,11 @@ impl IndexedStorage for SqliteIndexedStorage {
                 if !expected.is_empty() {
                     return Ok(ReleaseAgentResult::NotReleased);
                 }
-                tx.execute(sqlx::query("DELETE FROM index_storage WHERE key = ? OR substr(key, 1, length(?) + 1) = ? || '#';")
+                tx.execute(sqlx::query(DELETE_AGENT_ROWS_QUERY)
                     .bind(&key).bind(&key).bind(&key)).await?;
-                tx.execute(sqlx::query("DELETE FROM indexed_key_epoch WHERE key = ? OR substr(key, 1, length(?) + 1) = ? || '#';")
+                tx.execute(sqlx::query("DELETE FROM indexed_key_epoch WHERE (namespace GLOB 'durable-worker-*' OR namespace GLOB 'ephemeral-worker-*') AND (key = ? OR substr(key, 1, length(?) + 1) = ? || '#');")
                     .bind(&key).bind(&key).bind(&key)).await?;
+                tx.execute(sqlx::query("DELETE FROM indexed_key_epoch WHERE namespace = ? AND key = ?;").bind(super::STAGE_RESERVATION_NAMESPACE).bind(&key)).await?;
                 Ok(ReleaseAgentResult::Released)
             })
         }).await.map_err(|err| err.into_indexed_storage_error(Self::classify_repo_error))
@@ -486,13 +608,11 @@ impl IndexedStorage for SqliteIndexedStorage {
             });
         }
         let epoch_value = Self::to_i64(epoch.0, "epoch")?;
-        let Some(deadline) = valid_until
+        let write_epoch = Self::to_i64(epoch.max(record_epoch).0, "epoch")?;
+        let deadline = valid_until
             .duration_since(UNIX_EPOCH)
             .ok()
-            .and_then(|duration| i64::try_from(duration.as_millis()).ok())
-        else {
-            return Ok(UnsealAgentResult::Expired);
-        };
+            .and_then(|duration| i64::try_from(duration.as_millis()).ok());
         let fence = Self::namespace(state.fence_namespace());
         let primary = Self::namespace(state.primary_namespace());
         let marker = Self::namespace(state.marker_namespace());
@@ -511,25 +631,33 @@ impl IndexedStorage for SqliteIndexedStorage {
                 ));
             }
         }
-        self.pool.with_tx_err::<_, FencedTxError, _>(svc_name, api_name, |tx| {
+        let result = self.pool.with_tx_err::<_, UnsealTxError, _>(svc_name, api_name, |tx| {
             Box::pin(async move {
                 Self::agent_epochs(tx, &key, epoch).await?;
-                if Self::agent_has_data(tx, &key).await? {
+                let epochs: Vec<(String, String, i64)> = tx.fetch_all_as(sqlx::query_as(
+                    "SELECT namespace, key, epoch FROM indexed_key_epoch WHERE (namespace GLOB 'durable-worker-*' OR namespace GLOB 'ephemeral-worker-*') AND (key = ? OR substr(key, 1, length(?) + 1) = ? || '#');",
+                ).bind(&key).bind(&key).bind(&key)).await?;
+                if Self::agent_has_data_in_tx(tx, &key).await? {
                     let rows: Vec<(String, String, i64, Vec<u8>)> = tx.fetch_all_as(sqlx::query_as(
-                        "SELECT namespace, key, id, value FROM index_storage WHERE key = ? OR substr(key, 1, length(?) + 1) = ? || '#';",
+                        AGENT_ROWS_QUERY,
                     ).bind(&key).bind(&key).bind(&key)).await?;
                     let mut expected: BTreeMap<_, _> = manifests.iter().map(|(namespace, id, value)| {
                         ((namespace.clone(), *id), value.to_vec())
                     }).collect();
                     expected.insert((format!("{primary}-present"), 0), Vec::new());
                     expected.insert((marker.clone(), 0), Vec::new());
+                    for (namespace, row_key, id, value) in &rows {
+                        if namespace == "durable-worker-sealed-present" || namespace == "ephemeral-worker-sealed-present" {
+                            super::marker_generation(value).map_err(FencedTxError::Corrupt)?;
+                            if namespace == &marker && row_key == &key && *id == 0 {
+                                expected.insert((marker.clone(), 0), value.clone());
+                            }
+                        }
+                    }
                     let exact_rows = rows.len() == expected.len() && rows.into_iter().all(|(namespace, row_key, id, value)| {
                         row_key == key && expected.get(&(namespace, id)) == Some(&value)
                     });
                     if exact_rows {
-                        let epochs: Vec<(String, String, i64)> = tx.fetch_all_as(sqlx::query_as(
-                            "SELECT namespace, key, epoch FROM indexed_key_epoch WHERE key = ? OR substr(key, 1, length(?) + 1) = ? || '#';",
-                        ).bind(&key).bind(&key).bind(&key)).await?;
                         let mut required: BTreeSet<_> = namespaces.iter().cloned().collect();
                         required.insert(fence.clone());
                         let exact_epochs = epochs.into_iter().all(|(namespace, row_key, stored)| {
@@ -539,36 +667,63 @@ impl IndexedStorage for SqliteIndexedStorage {
                             stored == epoch_value
                         });
                         if exact_epochs && required.is_empty() {
+                            tx.execute(sqlx::query("DELETE FROM indexed_key_epoch WHERE namespace = ? AND key = ?;").bind(super::STAGE_RESERVATION_NAMESPACE).bind(&key)).await?;
                             return Ok(UnsealAgentResult::Unsealed);
                         }
                     }
                     return Ok(UnsealAgentResult::AlreadyPresent);
                 }
+                let Some(deadline) = deadline else {
+                    return Ok(UnsealAgentResult::Expired);
+                };
                 // SQLite's clock has millisecond precision. Compare its next millisecond to
                 // the floored deadline so rounding cannot admit a write after expiry.
-                let inserted = tx.execute(sqlx::query(
-                    "INSERT INTO indexed_key_epoch (namespace, key, epoch) SELECT ?, ?, ? WHERE CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER) + 1 <= ? ON CONFLICT(namespace, key) DO UPDATE SET epoch = excluded.epoch;",
-                ).bind(fence).bind(&key).bind(epoch_value).bind(deadline)).await?;
-                if inserted.rows_affected() == 0 {
-                    return Ok(UnsealAgentResult::Expired);
+                for (namespace, row_key, _) in &epochs {
+                    let updated = tx.execute(sqlx::query(
+                        "UPDATE indexed_key_epoch SET epoch = ? WHERE namespace = ? AND key = ? AND CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER) + 1 <= ?;",
+                    ).bind(write_epoch).bind(namespace).bind(row_key).bind(deadline)).await?;
+                    if updated.rows_affected() != 1 {
+                        return Err(UnsealTxError::Expired);
+                    }
                 }
-                tx.execute(sqlx::query("UPDATE indexed_key_epoch SET epoch = ? WHERE key = ? OR substr(key, 1, length(?) + 1) = ? || '#';")
-                    .bind(epoch_value).bind(&key).bind(&key).bind(&key)).await?;
-                for namespace in namespaces {
-                    tx.execute(sqlx::query("INSERT INTO indexed_key_epoch (namespace, key, epoch) VALUES (?, ?, ?) ON CONFLICT(namespace, key) DO UPDATE SET epoch = excluded.epoch;")
-                        .bind(namespace).bind(&key).bind(epoch_value)).await?;
+                let mut required: BTreeSet<_> = namespaces.into_iter().collect();
+                required.insert(fence);
+                for namespace in required {
+                    if epochs.iter().any(|(stored_namespace, row_key, _)| stored_namespace == &namespace && row_key == &key) {
+                        continue;
+                    }
+                    let inserted = tx.execute(sqlx::query(
+                        "INSERT INTO indexed_key_epoch (namespace, key, epoch) SELECT ?, ?, ? WHERE CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER) + 1 <= ?;",
+                    ).bind(namespace).bind(&key).bind(write_epoch).bind(deadline)).await?;
+                    if inserted.rows_affected() != 1 {
+                        return Err(UnsealTxError::Expired);
+                    }
                 }
                 for (namespace, id, value) in manifests {
                     tx.execute(sqlx::query("INSERT INTO index_storage (namespace, key, id, value) VALUES (?, ?, ?, ?);")
                         .bind(namespace).bind(&key).bind(id).bind(value.as_ref())).await?;
                 }
-                for namespace in [format!("{primary}-present"), marker] {
-                    tx.execute(sqlx::query("INSERT INTO index_storage (namespace, key, id, value) VALUES (?, ?, 0, x'');")
-                        .bind(namespace).bind(&key)).await?;
+                for (namespace, value) in [(format!("{primary}-present"), Vec::new()), (marker, uuid::Uuid::new_v4().as_bytes().to_vec())] {
+                    tx.execute(sqlx::query("INSERT INTO index_storage (namespace, key, id, value) VALUES (?, ?, 0, ?);")
+                        .bind(namespace).bind(&key).bind(value)).await?;
+                }
+                tx.execute(sqlx::query("DELETE FROM indexed_key_epoch WHERE namespace = ? AND key = ?;").bind(super::STAGE_RESERVATION_NAMESPACE).bind(&key)).await?;
+                let (in_time,): (bool,) = tx.fetch_one_as(sqlx::query_as(
+                    "SELECT CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER) + 1 <= ?;",
+                ).bind(deadline)).await?;
+                if !in_time {
+                    return Err(UnsealTxError::Expired);
                 }
                 Ok(UnsealAgentResult::Unsealed)
             })
-        }).await.map_err(|err| err.into_indexed_storage_error(Self::classify_repo_error))
+        }).await;
+        match result {
+            Ok(result) => Ok(result),
+            Err(UnsealTxError::Expired) => Ok(UnsealAgentResult::Expired),
+            Err(UnsealTxError::Storage(error)) => {
+                Err(error.into_indexed_storage_error(Self::classify_repo_error))
+            }
+        }
     }
 
     async fn remove_key_epoch_if_empty(
@@ -586,7 +741,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         self.pool.with_tx(svc_name, api_name, |tx| {
             Box::pin(async move {
                 let removed = tx.execute(sqlx::query(
-                    "DELETE FROM indexed_key_epoch WHERE namespace = ? AND key = ? AND epoch = ? AND NOT EXISTS(SELECT 1 FROM index_storage WHERE key = ? OR substr(key, 1, length(?) + 1) = ? || '#');",
+                    "DELETE FROM indexed_key_epoch WHERE namespace = ? AND key = ? AND epoch = ? AND NOT EXISTS(SELECT 1 FROM index_storage WHERE key = ? OR (key >= ? || '#' AND key < ? || '$'));",
                 ).bind(namespace).bind(key).bind(epoch).bind(&agent_key).bind(&agent_key).bind(&agent_key)).await?;
                 Ok(removed.rows_affected() > 0)
             })
@@ -700,6 +855,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         id: u64,
         value: Vec<u8>,
         expected_epoch: Option<ShardEpoch>,
+        stage_token: Option<i64>,
     ) -> Result<(), IndexedStorageError> {
         self.append_many(
             svc_name,
@@ -709,6 +865,7 @@ impl IndexedStorage for SqliteIndexedStorage {
             key,
             vec![(id, Bytes::from(value))].into(),
             expected_epoch,
+            stage_token,
         )
         .await
     }
@@ -722,8 +879,14 @@ impl IndexedStorage for SqliteIndexedStorage {
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
         expected_epoch: Option<ShardEpoch>,
+        stage_token: Option<i64>,
     ) -> Result<(), IndexedStorageError> {
-        if pairs.is_empty() {
+        let staged = self.require_stage_reservation
+            && matches!(namespace, IndexedStorageNamespace::StagedOpLog { .. });
+        let initial = self.require_stage_reservation
+            && matches!(namespace, IndexedStorageNamespace::OpLog { .. })
+            && pairs.iter().any(|(id, _)| *id == 1);
+        if pairs.is_empty() && !staged {
             return Ok(());
         }
 
@@ -750,6 +913,10 @@ impl IndexedStorage for SqliteIndexedStorage {
                     // `BEGIN IMMEDIATE` (golem-service-base db/sqlite.rs). The reservation covers
                     // this epoch check and insert atomically, including when another process uses
                     // the same SQLite file; a competing writer waits via SQLite's busy timeout.
+                    if staged {
+                        let stored = Self::stored_epoch(tx, super::STAGE_RESERVATION_NAMESPACE, key.split('#').next().unwrap_or(&key)).await?;
+                        FencedTxError::check_stage_token(&key, stage_token, stored)?;
+                    }
                     if let Some(expected) = expected_epoch {
                         Self::check_epoch(tx, &namespace, &key, expected).await?;
                     }
@@ -767,6 +934,10 @@ impl IndexedStorage for SqliteIndexedStorage {
                         .await?;
                     }
 
+                    if initial {
+                        tx.execute(sqlx::query("DELETE FROM indexed_key_epoch WHERE namespace = ? AND key = ?;")
+                            .bind(super::STAGE_RESERVATION_NAMESPACE).bind(&key)).await?;
+                    }
                     Ok(())
                 })
             })
@@ -983,6 +1154,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         target_namespace: IndexedStorageNamespace,
         target_key: &str,
         expected_last_id: u64,
+        stage_token: Option<i64>,
     ) -> Result<bool, IndexedStorageError> {
         if expected_last_id == 0 {
             return Err(IndexedStorageError::Other(
@@ -992,15 +1164,24 @@ impl IndexedStorage for SqliteIndexedStorage {
         let expected = i64::try_from(expected_last_id).map_err(|_| {
             IndexedStorageError::Other("source index tip exceeds storage range".into())
         })?;
+        let staged = self.require_stage_reservation
+            && matches!(
+                &source_namespace,
+                IndexedStorageNamespace::StagedOpLog { .. }
+            );
         let source_namespace = Self::namespace(source_namespace);
         let target_namespace = Self::namespace(target_namespace);
         let source_key = source_key.to_string();
         let target_key = target_key.to_string();
         let result = self.pool
-            .with_tx(svc_name, api_name, |tx| {
+            .with_tx_err::<bool, FencedTxError, _>(svc_name, api_name, |tx| {
                 async move {
                     // Acquire the write lock before reading the source. A read-first
                     // transaction cannot upgrade its snapshot after a concurrent write.
+                    if staged {
+                        let stored = Self::stored_epoch(tx, super::STAGE_RESERVATION_NAMESPACE, source_key.split('#').next().unwrap_or(&source_key)).await?;
+                        FencedTxError::check_stage_token(&source_key, stage_token, stored)?;
+                    }
                     let claimed = tx
                         .execute(
                             sqlx::query("INSERT INTO index_storage (namespace, key, id, value) SELECT ?, ?, 0, x'' WHERE NOT EXISTS(SELECT 1 FROM index_storage WHERE namespace IN (?, ?) AND key = ?);")
@@ -1022,7 +1203,7 @@ impl IndexedStorage for SqliteIndexedStorage {
                         )
                         .await?;
                     if source != (expected, Some(1), Some(expected)) {
-                        return Err(RepoError::InternalError(anyhow::anyhow!("source index is missing, empty, gapped, or has an unexpected tip")));
+                        return Err(FencedTxError::Corrupt("source index is missing, empty, gapped, or has an unexpected tip".into()));
                     }
                     tx.execute(
                         sqlx::query("UPDATE index_storage SET namespace = ?, key = ? WHERE namespace = ? AND key = ?;")
@@ -1031,15 +1212,21 @@ impl IndexedStorage for SqliteIndexedStorage {
                             .bind(&source_namespace)
                             .bind(&source_key),
                     ).await?;
-                    tx.execute(sqlx::query("DELETE FROM index_storage WHERE namespace = ? AND key = ?;")
-                        .bind(format!("{source_namespace}-present")).bind(&source_key)).await?;
+                    tx.execute(sqlx::query("DELETE FROM index_storage WHERE namespace IN (?, ?) AND key = ?;")
+                        .bind(&source_namespace).bind(format!("{source_namespace}-present")).bind(&source_key)).await?;
+                    if staged {
+                        tx.execute(sqlx::query("DELETE FROM indexed_key_epoch WHERE namespace = ? AND key = ?;")
+                            .bind(super::STAGE_RESERVATION_NAMESPACE).bind(source_key.split('#').next().unwrap_or(&source_key))).await?;
+                    }
                     Ok(true)
                 }.boxed()
             })
             .await;
         match result {
-            Err(err) if err.is_unique_violation() => Ok(false),
-            result => result.map_err(Self::classify_repo_error_primary_oplog_insert),
+            Err(FencedTxError::Repo(err)) if err.is_unique_violation() => Ok(false),
+            result => result.map_err(|err| {
+                err.into_indexed_storage_error(Self::classify_repo_error_primary_oplog_insert)
+            }),
         }
     }
 
@@ -1064,6 +1251,52 @@ impl IndexedStorage for SqliteIndexedStorage {
             .map_err(Self::classify_repo_error)
     }
 
+    async fn discard_stage(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        stage_token: Option<i64>,
+    ) -> Result<(), IndexedStorageError> {
+        if !self.require_stage_reservation {
+            return self.delete(svc_name, api_name, namespace, key).await;
+        }
+        let namespace = Self::namespace(namespace);
+        let key = key.to_string();
+        self.pool
+            .with_tx(svc_name, api_name, |tx| {
+                Box::pin(async move {
+                    let agent_key = key.split('#').next().unwrap_or(&key);
+                    let stored =
+                        Self::stored_epoch(tx, super::STAGE_RESERVATION_NAMESPACE, agent_key)
+                            .await?;
+                    if stage_token.is_some() && stored == stage_token {
+                        tx.execute(
+                            sqlx::query(
+                                "DELETE FROM index_storage WHERE namespace IN (?, ?) AND key = ?;",
+                            )
+                            .bind(format!("{namespace}-present"))
+                            .bind(namespace)
+                            .bind(&key),
+                        )
+                        .await?;
+                        tx.execute(
+                            sqlx::query(
+                                "DELETE FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
+                            )
+                            .bind(super::STAGE_RESERVATION_NAMESPACE)
+                            .bind(agent_key),
+                        )
+                        .await?;
+                    }
+                    Ok(())
+                })
+            })
+            .await
+            .map_err(Self::classify_repo_error)
+    }
+
     async fn delete(
         &self,
         svc_name: &'static str,
@@ -1071,7 +1304,30 @@ impl IndexedStorage for SqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<(), IndexedStorageError> {
+        let staged = self.require_stage_reservation
+            && matches!(&namespace, IndexedStorageNamespace::StagedOpLog { .. });
         let namespace = Self::namespace(namespace);
+        if staged {
+            let key = key.to_string();
+            return self
+                .pool
+                .with_tx(svc_name, api_name, |tx| {
+                    Box::pin(async move {
+                        tx.execute(
+                            sqlx::query(
+                                "DELETE FROM index_storage WHERE namespace IN (?, ?) AND key = ?;",
+                            )
+                            .bind(format!("{namespace}-present"))
+                            .bind(&namespace)
+                            .bind(&key),
+                        )
+                        .await?;
+                        Ok(())
+                    })
+                })
+                .await
+                .map_err(Self::classify_repo_error);
+        }
         let query = sqlx::query("DELETE FROM index_storage WHERE namespace IN (?, ?) AND key = ?;")
             .bind(format!("{namespace}-present"))
             .bind(namespace)
@@ -1302,6 +1558,203 @@ mod tests {
     }
 
     #[test]
+    async fn agent_lookup_plans_use_agent_index_for_present_and_absent_rows() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let storage = sqlite_storage(
+            tempdir
+                .path()
+                .join("agent-plan.db")
+                .to_string_lossy()
+                .into(),
+        )
+        .await;
+        storage.pool.with_rw("test", "seed_plan").execute(sqlx::query(
+            "WITH RECURSIVE agents(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM agents WHERE n < 2048), namespaces(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM namespaces WHERE n < 16) INSERT INTO index_storage (namespace, key, id, value) SELECT 'unconfigured-' || namespaces.n, 'other-agent-' || agents.n, 1, x'01' FROM agents CROSS JOIN namespaces;",
+        )).await.unwrap();
+        let state = sealed_state(AgentMode::Durable);
+        let key = state.owned_agent_id.storage_key();
+        // Neither a staged-only row nor an unconfigured namespace may be hidden by the lookup.
+        for (namespace, row_key, present) in [
+            ("unconfigured-level", key.clone(), true),
+            (
+                "durable-worker-staged-oplog",
+                format!("{key}#00000000-0000-0000-0000-000000000001"),
+                true,
+            ),
+            ("unconfigured-level", format!("{key}$neighbor"), false),
+        ] {
+            storage.pool.with_rw("test", "seed_target").execute(sqlx::query(
+                "INSERT INTO index_storage (namespace, key, id, value) VALUES (?, ?, 1, x'01');",
+            ).bind(namespace).bind(&row_key)).await.unwrap();
+            storage
+                .pool
+                .with_rw("test", "analyze")
+                .execute(sqlx::query("ANALYZE index_storage;"))
+                .await
+                .unwrap();
+            for (lookup, expected) in [(key.as_str(), present), ("absent-agent", false)] {
+                let (found, durable, ephemeral): (bool, Option<Vec<u8>>, Option<Vec<u8>>) = storage
+                    .pool
+                    .with_ro("test", "presence")
+                    .fetch_one_as(
+                        sqlx::query_as(OBSERVE_AGENT_QUERY)
+                            .bind(lookup)
+                            .bind(lookup)
+                            .bind(lookup),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(found, expected);
+                assert_eq!(durable, None);
+                assert_eq!(ephemeral, None);
+                for query in [
+                    OBSERVE_AGENT_QUERY,
+                    AGENT_ROWS_QUERY,
+                    DELETE_AGENT_ROWS_QUERY,
+                ] {
+                    let explain = format!("EXPLAIN QUERY PLAN {query}");
+                    let plan: Vec<(i64, i64, i64, String)> = storage
+                        .pool
+                        .with_ro("test", "agent_plan")
+                        .fetch_all_as(
+                            sqlx::query_as(&explain)
+                                .bind(lookup)
+                                .bind(lookup)
+                                .bind(lookup),
+                        )
+                        .await
+                        .unwrap();
+                    let details = plan
+                        .iter()
+                        .map(|row| row.3.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    assert!(
+                        details.contains("idx_index_storage_agent"),
+                        "{query}: {details}"
+                    );
+                    assert!(
+                        !details.contains("SCAN index_storage"),
+                        "{query}: {details}"
+                    );
+                    assert_eq!(
+                        details.matches("idx_index_storage_agent").count(),
+                        2,
+                        "both the exact key and staged range must use the index: {details}"
+                    );
+                }
+            }
+            assert_eq!(
+                storage
+                    .observe_agent("test", "public_presence", &state.owned_agent_id)
+                    .await
+                    .unwrap()
+                    .has_data,
+                present
+            );
+            let rows: Vec<(String, String, i64, Vec<u8>)> = storage
+                .pool
+                .with_ro("test", "unseal_rows")
+                .fetch_all_as(
+                    sqlx::query_as(AGENT_ROWS_QUERY)
+                        .bind(&key)
+                        .bind(&key)
+                        .bind(&key),
+                )
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), usize::from(present));
+            let deleted = storage
+                .pool
+                .with_rw("test", "release_delete")
+                .execute(
+                    sqlx::query(DELETE_AGENT_ROWS_QUERY)
+                        .bind(&key)
+                        .bind(&key)
+                        .bind(&key),
+                )
+                .await
+                .unwrap();
+            assert_eq!(deleted.rows_affected(), u64::from(present));
+            storage
+                .pool
+                .with_rw("test", "cleanup_target")
+                .execute(sqlx::query("DELETE FROM index_storage WHERE key = ?;").bind(row_key))
+                .await
+                .unwrap();
+        }
+    }
+
+    #[test]
+    async fn committed_unseal_retry_preserves_generation_without_writes_after_deadline() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let storage = sqlite_storage(
+            tempdir
+                .path()
+                .join("read-only-retry.db")
+                .to_string_lossy()
+                .into(),
+        )
+        .await;
+        let state = sealed_state(AgentMode::Durable);
+        assert_eq!(
+            storage
+                .unseal_agent(
+                    "test",
+                    "restore",
+                    &state,
+                    ShardEpoch(7),
+                    ShardEpoch(6),
+                    SystemTime::now() + Duration::from_secs(30)
+                )
+                .await
+                .unwrap(),
+            UnsealAgentResult::Unsealed
+        );
+        let before = storage
+            .observe_agent("test", "before", &state.owned_agent_id)
+            .await
+            .unwrap();
+        assert!(before.has_data && before.durable_generation.is_some());
+        for table in ["index_storage", "indexed_key_epoch"] {
+            for operation in ["INSERT", "UPDATE", "DELETE"] {
+                let sql = format!(
+                    "CREATE TRIGGER reject_{table}_{operation} BEFORE {operation} ON {table} BEGIN SELECT RAISE(ABORT, 'committed retry must not write'); END;"
+                );
+                storage
+                    .pool
+                    .with_rw("test", "reject_writes")
+                    .execute(sqlx::query(&sql))
+                    .await
+                    .unwrap();
+            }
+        }
+        for deadline in [UNIX_EPOCH, UNIX_EPOCH - Duration::from_secs(1)] {
+            assert_eq!(
+                storage
+                    .unseal_agent(
+                        "test",
+                        "retry",
+                        &state,
+                        ShardEpoch(7),
+                        ShardEpoch(6),
+                        deadline
+                    )
+                    .await
+                    .unwrap(),
+                UnsealAgentResult::Unsealed
+            );
+            assert_eq!(
+                storage
+                    .observe_agent("test", "after", &state.owned_agent_id)
+                    .await
+                    .unwrap(),
+                before
+            );
+        }
+    }
+
+    #[test]
     async fn release_checks_all_modes_and_levels_and_removes_crash_left_stages() {
         let tempdir = tempfile::tempdir().unwrap();
         let storage =
@@ -1309,15 +1762,40 @@ mod tests {
         let state = sealed_state(AgentMode::Durable);
         let key = state.owned_agent_id.storage_key();
         let epoch = ShardEpoch(5);
-        storage
-            .unseal_agent(
+        let stage_token = storage
+            .reserve_stage(
                 "test",
-                "restore",
-                &state,
-                epoch,
-                epoch,
-                SystemTime::now() + Duration::from_secs(60),
+                "reserve",
+                &state.owned_agent_id,
+                uuid::Uuid::from_u128(55),
+                Some(epoch),
             )
+            .await
+            .unwrap()
+            .unwrap();
+        for namespace in state.epoch_namespaces() {
+            storage
+                .set_key_epoch("test", "seed", namespace, &key, epoch, &[], false)
+                .await
+                .unwrap();
+        }
+        for (level, entries) in &state.manifests {
+            storage
+                .append_many(
+                    "test",
+                    "seed",
+                    "manifest",
+                    &state.manifest_namespace(*level),
+                    &key,
+                    entries.clone(),
+                    Some(epoch),
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+        storage
+            .mark_sealed("test", "seed", &state, epoch)
             .await
             .unwrap();
         let extra = IndexedStorageNamespace::CompressedOpLog {
@@ -1373,6 +1851,7 @@ mod tests {
                 1,
                 vec![1],
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1399,6 +1878,7 @@ mod tests {
                 &key,
                 9,
                 b"manifest".to_vec(),
+                None,
                 None,
             )
             .await
@@ -1442,6 +1922,7 @@ mod tests {
                 1,
                 vec![1],
                 Some(ShardEpoch(4)),
+                Some(stage_token),
             )
             .await
             .unwrap();
@@ -1737,7 +2218,17 @@ mod tests {
         for same_target in [true, false] {
             let mut requests = Vec::new();
             for (index, store) in stores.iter().enumerate() {
-                let stage = format!("stage-{same_target}-{index}");
+                let owned = OwnedAgentId::new(
+                    EnvironmentId(uuid::Uuid::new_v4()),
+                    &AgentId::from_parts(7, 1),
+                );
+                let stage_id = uuid::Uuid::new_v4();
+                let token = store
+                    .reserve_stage("test", "reserve", &owned, stage_id, None)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let stage = format!("{}#{stage_id}", owned.storage_key());
                 let target = format!(
                     "target-{same_target}-{}",
                     if same_target { 0 } else { index }
@@ -1752,13 +2243,14 @@ mod tests {
                         1,
                         vec![index as u8],
                         None,
+                        Some(token),
                     )
                     .await
                     .unwrap();
-                requests.push((store, stage, target));
+                requests.push((store, stage, target, token));
             }
             let results =
-                futures::future::join_all(requests.iter().map(|(store, stage, target)| {
+                futures::future::join_all(requests.iter().map(|(store, stage, target, token)| {
                     store.move_if_absent(
                         "test",
                         "publish",
@@ -1767,11 +2259,12 @@ mod tests {
                         visible.clone(),
                         target,
                         1,
+                        Some(*token),
                     )
                 }))
                 .await;
             let mut winners = 0;
-            for (index, (result, (store, stage, target))) in
+            for (index, (result, (store, stage, target, _))) in
                 results.into_iter().zip(&requests).enumerate()
             {
                 if result.unwrap() {
@@ -1823,6 +2316,7 @@ mod tests {
                 ]
                 .into(),
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1861,6 +2355,7 @@ mod tests {
                 2,
                 b"existing".to_vec(),
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1877,6 +2372,7 @@ mod tests {
                     (2, Bytes::from_static(b"conflict")),
                 ]
                 .into(),
+                None,
                 None,
             )
             .await;
@@ -1945,6 +2441,7 @@ mod tests {
                 key,
                 1,
                 vec![1],
+                None,
                 None,
             )
             .await
@@ -2041,6 +2538,7 @@ mod tests {
                 1,
                 vec![1],
                 Some(ShardEpoch(5)),
+                None,
             )
             .await
             .unwrap();
@@ -2254,6 +2752,7 @@ mod tests {
 
     mod agent_transition_contracts {
         use super::*;
+        use crate::storage::indexed::IndexedStorageLabelledApi;
         use crate::storage::indexed::memory::InMemoryIndexedStorage;
         use test_r::test;
 
@@ -2269,6 +2768,143 @@ mod tests {
                 ),
                 ("memory", Box::new(InMemoryIndexedStorage::new())),
             ]
+        }
+
+        #[test]
+        async fn agent_observation_ignores_epochs_and_covers_all_agent_data() {
+            let tempdir = tempfile::tempdir().unwrap();
+            for (backend, storage) in backends(tempdir.path()).await {
+                let state = sealed_state(AgentMode::Ephemeral);
+                let agent = &state.owned_agent_id;
+                let key = agent.storage_key();
+                let lookup = storage.with("test", "authority_lookup");
+                assert!(
+                    !lookup.observe_agent(agent).await.unwrap().has_data,
+                    "{backend}"
+                );
+
+                let other = OwnedAgentId::new(agent.environment_id, &AgentId::from_parts(7, 2));
+                storage
+                    .append(
+                        "test",
+                        "other_agent",
+                        "entry",
+                        IndexedStorageNamespace::OpLog {
+                            owned_agent_id: other.clone(),
+                            agent_mode: AgentMode::Durable,
+                        },
+                        &other.storage_key(),
+                        1,
+                        vec![1],
+                        None,
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                assert!(
+                    lookup.observe_agent(&other).await.unwrap().has_data,
+                    "{backend}"
+                );
+                assert!(
+                    !lookup.observe_agent(agent).await.unwrap().has_data,
+                    "{backend}"
+                );
+
+                let staged = IndexedStorageNamespace::StagedOpLog {
+                    owned_agent_id: agent.clone(),
+                    agent_mode: AgentMode::Durable,
+                };
+                let stage_key = format!("{key}#{}", uuid::Uuid::from_u128(42));
+                for (namespace, epoch_key) in [
+                    (state.fence_namespace(), key.as_str()),
+                    (staged.clone(), stage_key.as_str()),
+                ] {
+                    storage
+                        .set_key_epoch(
+                            "test",
+                            "bare_epoch",
+                            namespace,
+                            epoch_key,
+                            ShardEpoch(5),
+                            &[],
+                            false,
+                        )
+                        .await
+                        .unwrap();
+                }
+                assert!(
+                    !lookup.observe_agent(agent).await.unwrap().has_data,
+                    "{backend}: bare epochs"
+                );
+
+                let token = storage
+                    .reserve_stage("test", "reserve", agent, uuid::Uuid::from_u128(42), None)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                storage
+                    .append(
+                        "test",
+                        "staged_row",
+                        "entry",
+                        staged.clone(),
+                        &stage_key,
+                        1,
+                        vec![1],
+                        Some(ShardEpoch(5)),
+                        Some(token),
+                    )
+                    .await
+                    .unwrap();
+                assert!(
+                    lookup.observe_agent(agent).await.unwrap().has_data,
+                    "{backend}: staged row in other mode"
+                );
+                storage
+                    .discard_stage("test", "remove_stage", staged, &stage_key, Some(token))
+                    .await
+                    .unwrap();
+                assert!(
+                    !lookup.observe_agent(agent).await.unwrap().has_data,
+                    "{backend}"
+                );
+
+                storage
+                    .mark_sealed("test", "seal", &state, ShardEpoch(5))
+                    .await
+                    .unwrap();
+                assert!(
+                    lookup.observe_agent(agent).await.unwrap().has_data,
+                    "{backend}: seal marker alone"
+                );
+                storage
+                    .delete("test", "remove_marker", state.marker_namespace(), &key)
+                    .await
+                    .unwrap();
+                assert!(
+                    !lookup.observe_agent(agent).await.unwrap().has_data,
+                    "{backend}"
+                );
+
+                storage
+                    .append(
+                        "test",
+                        "unconfigured_level",
+                        "entry",
+                        state.manifest_namespace(99),
+                        &key,
+                        1,
+                        vec![1],
+                        None,
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                assert!(
+                    lookup.observe_agent(agent).await.unwrap().has_data,
+                    "{backend}: unconfigured namespace"
+                );
+            }
         }
 
         #[test]
@@ -2305,6 +2941,7 @@ mod tests {
                         1,
                         vec![1],
                         Some(ShardEpoch(5)),
+                        None,
                     )
                     .await
                     .unwrap();
@@ -2377,6 +3014,7 @@ mod tests {
                         1,
                         vec![1],
                         Some(ShardEpoch(5)),
+                        None,
                     )
                     .await
                     .unwrap();
@@ -2446,6 +3084,7 @@ mod tests {
                         &key,
                         1,
                         vec![7],
+                        None,
                         None,
                     )
                     .await

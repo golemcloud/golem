@@ -8,7 +8,9 @@
 
 use super::ForkCallOwner;
 use crate::services::agent_filesystem_snapshots::PublishFound;
-use crate::services::oplog::{Oplog, OplogOps, OplogService, OplogServiceOps, UnreadableOplog};
+use crate::services::oplog::{
+    Oplog, OplogError, OplogOps, OplogService, OplogServiceOps, UnreadableOplog,
+};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::durable_stream::{StreamId, StreamOffset, StreamSessionRecord};
 use golem_common::model::oplog::host_functions::GolemApiFork;
@@ -207,7 +209,7 @@ pub(crate) async fn write_guest_result(
     oplog: &dyn Oplog,
     owner: ForkCallOwner,
     forked_agent_id: &AgentId,
-) -> Result<(), WorkerExecutorError> {
+) -> Result<(), OplogError> {
     let request = HostRequest::NoInput(HostRequestNoInput {});
     let response = HostResponse::GolemApiFork(HostResponseGolemApiFork {
         forked_agent_id: Some(*forked_agent_id),
@@ -216,11 +218,11 @@ pub(crate) async fn write_guest_result(
     let request_payload = oplog
         .upload_payload(&request)
         .await
-        .map_err(WorkerExecutorError::runtime)?;
+        .map_err(OplogError::Payload)?;
     let response_payload = oplog
         .upload_payload(&response)
         .await
-        .map_err(WorkerExecutorError::runtime)?;
+        .map_err(OplogError::Payload)?;
     let now = Timestamp::now_utc();
     oplog
         .add_pair(

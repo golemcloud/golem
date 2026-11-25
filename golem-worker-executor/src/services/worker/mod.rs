@@ -68,6 +68,17 @@ pub(crate) const DERIVED_CACHE_EXPIRY: std::time::Duration =
 const INVOCATION_RESULT_INDEX_METADATA_FIELD: &str = "metadata";
 const INVOCATION_RESULT_INDEX_FIELD_PREFIX: &str = "ir:";
 
+pub(crate) fn seal_status_is_eligible(status: &AgentStatusRecord) -> bool {
+    !matches!(
+        status.status,
+        AgentStatus::Running | AgentStatus::Retrying | AgentStatus::Interrupted
+    ) && status.pending_updates.is_empty()
+        && !status
+            .pending_invocations
+            .iter()
+            .any(|pending| pending.is_due(golem_common::model::Timestamp::now_utc()))
+}
+
 /// The rejected automatic snapshot entries to store: `current` and `new` together, as
 /// [`kept_rejections`] keeps them for `status`, in index order. `None` when they equal `current`,
 /// so nothing needs a write.
@@ -250,6 +261,17 @@ pub trait WorkerService: Send + Sync {
         agent_id: &AgentId,
         operation: BoxFuture<'a, Result<bool, WorkerExecutorError>>,
     ) -> Result<bool, WorkerExecutorError>;
+
+    /// Retires one worker generation and seals its drained state while excluding local metadata
+    /// readers and promise writers. `false` leaves archival scheduled for another attempt.
+    async fn seal_generation<'a>(
+        &self,
+        _metadata: AgentMetadata,
+        _epoch: ShardEpoch,
+        _retire: BoxFuture<'a, Result<AgentMetadata, WorkerExecutorError>>,
+    ) -> Result<bool, WorkerExecutorError> {
+        Ok(false)
+    }
 
     /// Deletes every cached status blob for the worker (live cache, clean checkpoint, the legacy
     /// key and the dedicated `agent_mode` key), leaving the oplog untouched.

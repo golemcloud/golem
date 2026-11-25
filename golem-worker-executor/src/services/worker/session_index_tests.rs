@@ -4958,6 +4958,7 @@ async fn store_archived_chunk(
         last_idx,
         chunk,
         None,
+        None,
     )
     .await
     .unwrap();

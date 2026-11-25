@@ -66,6 +66,7 @@ impl PrimaryOplogService {
             retry_config,
             oplogs: OpenOplogs::new("primary oplog"),
             stream_session_index: Arc::new(std::sync::OnceLock::new()),
+            seal_service: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
@@ -125,6 +126,7 @@ impl PrimaryOplogService {
             &key,
             SerializedOplogAppend::Entry((1, value)),
             shard_epoch,
+            None,
         )
         .await
         .unwrap_or_else(|err| {
@@ -166,6 +168,7 @@ impl PrimaryOplogService {
                     shard_epoch,
                     epoch_record,
                     self.indexed_storage.clone(),
+                    self.seal_service(),
                     self.blob_storage.clone(),
                     self.replicas,
                     max_operations_before_commit,
@@ -332,6 +335,17 @@ impl OplogService for PrimaryOplogService {
         self.oplogs.lock_lifecycle(agent_id).await
     }
 
+    fn set_seal_service(&self, service: Arc<super::super::SealService>) {
+        assert!(
+            self.seal_service.set(service).is_ok(),
+            "seal service is already installed"
+        );
+    }
+
+    fn seal_service(&self) -> Option<Arc<super::super::SealService>> {
+        self.seal_service.get().cloned()
+    }
+
     fn set_stream_session_index(
         &self,
         index: Arc<crate::services::oplog::StreamSessionIndexService>,
@@ -354,18 +368,40 @@ impl OplogService for PrimaryOplogService {
         agent_mode: AgentMode,
         stage_id: uuid::Uuid,
         initial_worker_metadata: AgentMetadata,
-    ) -> Result<Arc<dyn Oplog>, String> {
+    ) -> Result<Arc<dyn Oplog>, crate::services::oplog::CreateStagedError> {
         record_oplog_call("create_staged");
         if agent_mode != AgentMode::Durable {
-            return Err("Only durable agents can have staged oplogs".into());
+            return Err(crate::services::oplog::CreateStagedError::Storage(
+                "Only durable agents can have staged oplogs".into(),
+            ));
         }
+        let stage_token =
+            if let Some(service) = self.seal_service().filter(|service| service.enabled()) {
+                let mut lifecycle = self.lock_lifecycle(&owned_agent_id.agent_id).await;
+                Some(
+                    service
+                        .admit_stage(&mut lifecycle, owned_agent_id, stage_id)
+                        .await?,
+                )
+            } else {
+                Some(
+                    self.indexed_storage
+                        .reserve_stage("oplog", "reserve_stage", owned_agent_id, stage_id, None)
+                        .await
+                        .map_err(|error| {
+                            crate::services::oplog::CreateStagedError::Storage(error.to_string())
+                        })?
+                        .ok_or(crate::services::oplog::CreateStagedError::TargetPresent)?,
+                )
+            };
         let key = Self::staged_oplog_key(owned_agent_id, stage_id);
         let namespace = Self::staged_namespace(owned_agent_id, agent_mode);
         Ok(Arc::new(PrimaryOplog::new(
-            // A stage is hidden and has exactly one writer, so it asserts no epoch and can never
-            // be fenced: it is published into the target only once it is fully committed.
+            // The stage's reservation, not an epoch, admits its one writer. Publication moves
+            // only committed entries; release or discard invalidates subsequent writes.
             None,
             None,
+            stage_token,
             self.indexed_storage.clone(),
             self.blob_storage.clone(),
             self.replicas,
@@ -408,11 +444,27 @@ impl OplogService for PrimaryOplogService {
     ) -> Result<bool, String> {
         record_oplog_call("publish_staged");
         let stage_id = publication.stage_id();
+        let stage_token = publication.stage_token();
         if agent_mode != AgentMode::Durable {
             return Err("Only durable agents can publish staged oplogs".into());
         }
         let stage_key = Self::staged_oplog_key(owned_agent_id, stage_id);
         let target_key = Self::oplog_key(owned_agent_id);
+        if let Some(service) = self.seal_service().filter(|service| service.enabled()) {
+            match service.check_target(owned_agent_id).await {
+                Ok(()) => {}
+                Err(
+                    crate::services::oplog::CreateStagedError::TargetPresent
+                    | crate::services::oplog::CreateStagedError::TargetSealed,
+                ) => return Ok(false),
+                Err(
+                    crate::services::oplog::CreateStagedError::Storage(error)
+                    | crate::services::oplog::CreateStagedError::Retryable(error),
+                ) => {
+                    return Err(error);
+                }
+            }
+        }
         self.indexed_storage
             .with("oplog", "publish_staged")
             .move_if_absent(
@@ -427,9 +479,15 @@ impl OplogService for PrimaryOplogService {
                 },
                 &target_key,
                 expected_last_index.into(),
+                stage_token,
             )
             .await
-            .map_err(|error| format!("Failed publishing staged oplog {stage_key}: {error}"))
+            .or_else(|error| match error {
+                crate::storage::indexed::IndexedStorageError::StageInvalidated { .. } => Ok(false),
+                error => Err(format!(
+                    "Failed publishing staged oplog {stage_key}: {error}"
+                )),
+            })
     }
 
     async fn discard_staged(
@@ -437,12 +495,17 @@ impl OplogService for PrimaryOplogService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         stage_id: uuid::Uuid,
+        stage_token: Option<i64>,
     ) -> Result<(), String> {
         record_oplog_call("discard_staged");
         let key = Self::staged_oplog_key(owned_agent_id, stage_id);
         self.indexed_storage
             .with("oplog", "discard_staged")
-            .delete(Self::staged_namespace(owned_agent_id, agent_mode), &key)
+            .discard_stage(
+                Self::staged_namespace(owned_agent_id, agent_mode),
+                &key,
+                stage_token,
+            )
             .await
             .map_err(|error| format!("Failed discarding staged oplog {key}: {error}"))
     }
@@ -484,6 +547,19 @@ impl OplogService for PrimaryOplogService {
         };
 
         if fence_at_create.is_none() {
+            if let Some(service) = self.seal_service().filter(|service| service.enabled())
+                && matches!(
+                    service
+                        .state(owned_agent_id)
+                        .await
+                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?,
+                    super::super::seal::AgentSealState::Present
+                )
+            {
+                return Err(WorkerExecutorError::AgentAlreadyExists {
+                    agent_id: owned_agent_id.agent_id,
+                });
+            }
             let already_exists: bool = {
                 let is = self.indexed_storage.clone();
                 let ns_owner = owned_agent_id.clone();
@@ -502,6 +578,21 @@ impl OplogService for PrimaryOplogService {
 
             if already_exists {
                 panic!("oplog for worker {owned_agent_id} already exists in indexed storage")
+            }
+
+            if let Some(service) = self.seal_service().filter(|service| service.enabled())
+                && service
+                    .record(owned_agent_id)
+                    .await
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                    .is_some()
+            {
+                if let Some(epoch) = shard_epoch {
+                    service.remove_claim(owned_agent_id, epoch).await?;
+                }
+                return Err(WorkerExecutorError::AgentAlreadyExists {
+                    agent_id: owned_agent_id.agent_id,
+                });
             }
 
             self.append_initial_entry(

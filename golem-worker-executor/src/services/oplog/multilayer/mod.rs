@@ -91,6 +91,7 @@ impl OplogArchiveError {
             IndexedStorageError::Conflict(_)
             | IndexedStorageError::InvalidResume(_)
             | IndexedStorageError::Other(_)
+            | IndexedStorageError::StageInvalidated { .. }
             | IndexedStorageError::Fenced { .. } => Self::Failed(details.into()),
         }
     }

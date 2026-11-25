@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use crate::storage::indexed::{
-    AgentIndexedState, IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace,
-    IndexedStorageNamespace, ReleaseAgentResult, ScanResume, UnsealAgentResult,
+    AgentDataObservation, AgentIndexedState, IndexedStorage, IndexedStorageError,
+    IndexedStorageMetaNamespace, IndexedStorageNamespace, ReleaseAgentResult, ScanResume,
+    UnsealAgentResult,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -23,7 +24,7 @@ use fred::prelude::{Key, Value};
 use fred::types::config::Options;
 use fred::types::streams::XCapKind;
 use golem_common::metrics::redis::{record_redis_deserialized_size, record_redis_serialized_size};
-use golem_common::model::ShardEpoch;
+use golem_common::model::{OwnedAgentId, ShardEpoch};
 use golem_common::redis::{RedisError, RedisPool};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -490,6 +491,17 @@ impl IndexedStorage for RedisIndexedStorage {
         false
     }
 
+    async fn observe_agent(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _owned_agent_id: &OwnedAgentId,
+    ) -> Result<AgentDataObservation, IndexedStorageError> {
+        Err(IndexedStorageError::Other(
+            "Redis agent observation is unsupported".into(),
+        ))
+    }
+
     async fn mark_sealed(
         &self,
         _svc_name: &'static str,
@@ -626,6 +638,7 @@ impl IndexedStorage for RedisIndexedStorage {
         id: u64,
         value: Vec<u8>,
         expected_epoch: Option<ShardEpoch>,
+        _stage_token: Option<i64>,
     ) -> Result<(), IndexedStorageError> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
         let classify = Self::append_error_classifier(&namespace);
@@ -671,6 +684,7 @@ impl IndexedStorage for RedisIndexedStorage {
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
         expected_epoch: Option<ShardEpoch>,
+        _stage_token: Option<i64>,
     ) -> Result<(), IndexedStorageError> {
         if !pairs.is_empty() {
             let classify = Self::append_error_classifier(namespace);
@@ -833,6 +847,7 @@ impl IndexedStorage for RedisIndexedStorage {
         target_namespace: IndexedStorageNamespace,
         target_key: &str,
         expected_last_id: u64,
+        _stage_token: Option<i64>,
     ) -> Result<bool, IndexedStorageError> {
         let source = Self::composite_key(source_namespace, source_key);
         let target = Self::composite_key(target_namespace, target_key);
@@ -1282,6 +1297,7 @@ mod tests {
                 1,
                 vec![1],
                 Some(ShardEpoch(5)),
+                None,
             ),
         )
         .await
@@ -1311,6 +1327,7 @@ mod tests {
                 "key",
                 vec![(1, Bytes::from_static(b"a")), (2, Bytes::from_static(b"b"))].into(),
                 Some(ShardEpoch(5)),
+                None,
             ),
         )
         .await

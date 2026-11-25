@@ -3300,6 +3300,7 @@ pub async fn truncate_archived_oplog_chunk(
                 *id,
                 value,
                 None,
+                None,
             )
             .await?;
     }
@@ -3352,6 +3353,7 @@ pub async fn copy_create_entry_to(
             id,
             golem_common::serialization::serialize(&entry).map_err(|err| anyhow!(err))?,
             None,
+            None,
         )
         .await?;
     Ok(())
@@ -3402,6 +3404,7 @@ pub async fn copy_agent_oplog_to(
                 &target.storage_key(),
                 id,
                 value,
+                None,
                 None,
             )
             .await?;

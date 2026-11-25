@@ -27,6 +27,10 @@ use std::path::{Path, PathBuf};
 use tracing::warn;
 use uuid::Uuid;
 
+mod service;
+pub(crate) use service::AgentSealState;
+pub use service::SealService;
+
 /// The manifest codec is shared with the PostgreSQL-backed blob archive.
 pub(crate) type SealManifest = BTreeMap<usize, BTreeMap<OplogIndex, BlobChunkRef>>;
 

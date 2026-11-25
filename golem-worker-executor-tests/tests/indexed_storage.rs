@@ -80,6 +80,7 @@ async fn absent_lifecycle_claim_removes_epoch(
             1,
             vec![9],
             Some(ShardEpoch(8)),
+            None,
         )
         .await;
     assert!(
@@ -110,6 +111,7 @@ async fn lifecycle_claim_reports_explicit_namespace_presence(
             &key,
             1,
             vec![9],
+            None,
             None,
         )
         .await
@@ -526,6 +528,1001 @@ async fn read_records(
         .unwrap()
 }
 
+async fn reserve_test_stage(storage: &dyn IndexedStorage) -> (String, i64) {
+    let owned = crate::fresh_owned_agent_id();
+    let stage = Uuid::new_v4();
+    let token = storage
+        .reserve_stage("test", "reserve", &owned, stage, None)
+        .await
+        .unwrap()
+        .unwrap();
+    (format!("{}#{stage}", owned.storage_key()), token)
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn stage_reservation_admits_only_an_agent_without_any_data(
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    let storage = is.get_indexed_storage().await;
+    if !storage.supports_release() {
+        return;
+    }
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        for family in 0..4 {
+            let owned = crate::fresh_owned_agent_id();
+            let key = owned.storage_key();
+            let namespace = match family {
+                0 => IndexedStorageNamespace::OpLog {
+                    owned_agent_id: owned.clone(),
+                    agent_mode: mode,
+                },
+                1 => IndexedStorageNamespace::CompressedOpLog {
+                    owned_agent_id: owned.clone(),
+                    agent_mode: mode,
+                    level: 99,
+                },
+                2 => IndexedStorageNamespace::BlobOplogManifest {
+                    owned_agent_id: owned.clone(),
+                    agent_mode: mode,
+                    level: 99,
+                },
+                _ => IndexedStorageNamespace::SealedPresent {
+                    owned_agent_id: owned.clone(),
+                    agent_mode: mode,
+                },
+            };
+            let id = if family == 3 { 0 } else { 17 };
+            storage
+                .append(
+                    "test",
+                    "seed_presence",
+                    "entry",
+                    namespace.clone(),
+                    &key,
+                    id,
+                    vec![71],
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            let stage_id = Uuid::new_v4();
+            assert!(
+                storage
+                    .reserve_stage("test", "refuse", &owned, stage_id, Some(ShardEpoch(8)))
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            let staged = IndexedStorageNamespace::StagedOpLog {
+                owned_agent_id: owned.clone(),
+                agent_mode: AgentMode::Durable,
+            };
+            let stage_key = format!("{key}#{stage_id}");
+            assert!(
+                !storage
+                    .exists("test", "no_reservation", staged, &stage_key)
+                    .await
+                    .unwrap()
+            );
+            assert_eq!(
+                storage
+                    .read(
+                        "test",
+                        "unchanged",
+                        "entry",
+                        namespace.clone(),
+                        &key,
+                        id,
+                        id
+                    )
+                    .await
+                    .unwrap(),
+                vec![(id, vec![71])]
+            );
+            // Even refused admission claims the primary epoch. Lower epochs cannot erase it.
+            assert!(matches!(
+                storage
+                    .reserve_stage("test", "stale", &owned, stage_id, Some(ShardEpoch(7)))
+                    .await,
+                Err(IndexedStorageError::Fenced {
+                    actual: Some(ShardEpoch(8)),
+                    ..
+                })
+            ));
+            storage
+                .delete("test", "clear", namespace, &key)
+                .await
+                .unwrap();
+            assert!(
+                storage
+                    .reserve_stage("test", "admit", &owned, stage_id, Some(ShardEpoch(8)))
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+        }
+    }
+
+    let owned = crate::fresh_owned_agent_id();
+    let first = Uuid::new_v4();
+    let second = Uuid::new_v4();
+    let (a, b) = tokio::join!(
+        storage.reserve_stage("test", "race", &owned, first, None),
+        storage.reserve_stage("test", "race", &owned, second, None),
+    );
+    let a = a.unwrap().unwrap();
+    let b = b.unwrap().unwrap();
+    assert_ne!(a, b);
+    let staged = IndexedStorageNamespace::StagedOpLog {
+        owned_agent_id: owned.clone(),
+        agent_mode: AgentMode::Durable,
+    };
+    let stage_key = format!("{}#{first}", owned.storage_key());
+    assert_eq!(
+        storage
+            .read(
+                "test",
+                "reservation",
+                "entry",
+                staged.clone(),
+                &stage_key,
+                0,
+                99
+            )
+            .await
+            .unwrap(),
+        vec![]
+    );
+    assert!(
+        !storage
+            .observe_agent("test", "presence", &owned)
+            .await
+            .unwrap()
+            .has_data
+    );
+    assert!(
+        storage
+            .reserve_stage("test", "repeat", &owned, first, None)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    // None must not claim a primary epoch. Tokens are not indexed data.
+    let primary = IndexedStorageNamespace::OpLog {
+        owned_agent_id: owned.clone(),
+        agent_mode: AgentMode::Durable,
+    };
+    assert!(matches!(
+        storage
+            .append(
+                "test",
+                "no_epoch",
+                "entry",
+                primary,
+                &owned.storage_key(),
+                1,
+                vec![1],
+                Some(ShardEpoch(0)),
+                None
+            )
+            .await,
+        Err(IndexedStorageError::Fenced { actual: None, .. })
+    ));
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn discarded_and_published_stages_cannot_be_recreated_by_old_writers(
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    let storage = is.get_indexed_storage().await;
+    if !storage.supports_release() {
+        return;
+    }
+    for publish in [false, true] {
+        let owned = crate::fresh_owned_agent_id();
+        let stage_id = Uuid::new_v4();
+        let key = owned.storage_key();
+        let stage_key = format!("{key}#{stage_id}");
+        let staged = IndexedStorageNamespace::StagedOpLog {
+            owned_agent_id: owned.clone(),
+            agent_mode: AgentMode::Durable,
+        };
+        let primary = IndexedStorageNamespace::OpLog {
+            owned_agent_id: owned.clone(),
+            agent_mode: AgentMode::Durable,
+        };
+        assert!(matches!(
+            storage
+                .append(
+                    "test",
+                    "unreserved",
+                    "entry",
+                    staged.clone(),
+                    &stage_key,
+                    1,
+                    vec![1],
+                    None,
+                    None
+                )
+                .await,
+            Err(IndexedStorageError::StageInvalidated { .. })
+        ));
+        let token = storage
+            .reserve_stage("test", "reserve", &owned, stage_id, Some(ShardEpoch(8)))
+            .await
+            .unwrap()
+            .unwrap();
+        storage
+            .append(
+                "test",
+                "stage",
+                "entry",
+                staged.clone(),
+                &stage_key,
+                1,
+                vec![71],
+                None,
+                Some(token),
+            )
+            .await
+            .unwrap();
+        if publish {
+            assert!(
+                storage
+                    .move_if_absent(
+                        "test",
+                        "publish",
+                        staged.clone(),
+                        &stage_key,
+                        primary.clone(),
+                        &key,
+                        1,
+                        Some(token)
+                    )
+                    .await
+                    .unwrap()
+            );
+            assert_eq!(
+                storage
+                    .read("test", "published", "entry", primary.clone(), &key, 0, 99)
+                    .await
+                    .unwrap(),
+                vec![(1, vec![71])]
+            );
+        } else {
+            storage
+                .discard_stage("test", "discard", staged.clone(), &stage_key, Some(token))
+                .await
+                .unwrap();
+        }
+        for epoch in [None, Some(ShardEpoch(8))] {
+            assert!(
+                matches!(storage.append("test", "late_append", "entry", staged.clone(), &stage_key, 2, vec![99], epoch, Some(token)).await,
+                Err(IndexedStorageError::StageInvalidated { key: invalidated }) if invalidated == stage_key)
+            );
+            let batches: [Arc<[(u64, Bytes)]>; 2] = [
+                Arc::from([]),
+                Arc::from([
+                    (2, Bytes::from_static(b"late")),
+                    (3, Bytes::from_static(b"batch")),
+                ]),
+            ];
+            for pairs in batches {
+                assert!(matches!(
+                    storage
+                        .append_many(
+                            "test",
+                            "late_batch",
+                            "entry",
+                            &staged,
+                            &stage_key,
+                            pairs,
+                            epoch,
+                            Some(token)
+                        )
+                        .await,
+                    Err(IndexedStorageError::StageInvalidated { .. })
+                ));
+            }
+        }
+        assert!(matches!(
+            storage
+                .move_if_absent(
+                    "test",
+                    "late_publish",
+                    staged.clone(),
+                    &stage_key,
+                    primary,
+                    &key,
+                    1,
+                    Some(token)
+                )
+                .await,
+            Err(IndexedStorageError::StageInvalidated { .. })
+        ));
+        assert!(
+            !storage
+                .exists("test", "not_recreated", staged, &stage_key)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            storage
+                .observe_agent("test", "remaining_presence", &owned)
+                .await
+                .unwrap()
+                .has_data,
+            publish
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn stage_discard_only_mutates_the_current_admission(
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    let storage = is.get_indexed_storage().await;
+    if !storage.supports_release() {
+        let owned = crate::fresh_owned_agent_id();
+        let staged = IndexedStorageNamespace::StagedOpLog {
+            owned_agent_id: owned.clone(),
+            agent_mode: AgentMode::Durable,
+        };
+        let key = format!("{}#{}", owned.storage_key(), Uuid::new_v4());
+        storage
+            .append(
+                "test",
+                "stage",
+                "entry",
+                staged.clone(),
+                &key,
+                1,
+                vec![1],
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        storage
+            .discard_stage("test", "discard", staged.clone(), &key, None)
+            .await
+            .unwrap();
+        assert!(
+            !storage
+                .exists("test", "discarded", staged, &key)
+                .await
+                .unwrap()
+        );
+        return;
+    }
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let owned = crate::fresh_owned_agent_id();
+        let key = owned.storage_key();
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        let a_key = format!("{key}#{a}");
+        let b_key = format!("{key}#{b}");
+        let staged = IndexedStorageNamespace::StagedOpLog {
+            owned_agent_id: owned.clone(),
+            agent_mode: mode,
+        };
+        let primary = IndexedStorageNamespace::OpLog {
+            owned_agent_id: owned.clone(),
+            agent_mode: mode,
+        };
+        let a_token = storage
+            .reserve_stage("test", "admit_a", &owned, a, None)
+            .await
+            .unwrap()
+            .unwrap();
+        storage
+            .append(
+                "test",
+                "a_commit",
+                "entry",
+                staged.clone(),
+                &a_key,
+                1,
+                vec![71],
+                None,
+                Some(a_token),
+            )
+            .await
+            .unwrap();
+        assert!(
+            storage
+                .reserve_stage("test", "refuse_b", &owned, b, None)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        storage
+            .delete("test", "generic_delete_keeps_token", staged.clone(), &b_key)
+            .await
+            .unwrap();
+        // Unadmitted cleanup owns neither the token nor rows, even if it reuses A's UUID.
+        for cleanup_key in [&b_key, &a_key] {
+            storage
+                .with("test", "unadmitted_cleanup")
+                .discard_stage(staged.clone(), cleanup_key, None)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            storage
+                .read("test", "a_preserved", "entry", staged.clone(), &a_key, 0, 9)
+                .await
+                .unwrap(),
+            vec![(1, vec![71])]
+        );
+        storage
+            .append(
+                "test",
+                "a_still_writable",
+                "entry",
+                staged.clone(),
+                &a_key,
+                2,
+                vec![72],
+                None,
+                Some(a_token),
+            )
+            .await
+            .unwrap();
+        assert!(
+            storage
+                .move_if_absent(
+                    "test",
+                    "a_publishes",
+                    staged,
+                    &a_key,
+                    primary.clone(),
+                    &key,
+                    2,
+                    Some(a_token)
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            storage
+                .read("test", "published", "entry", primary, &key, 0, 9)
+                .await
+                .unwrap(),
+            vec![(1, vec![71]), (2, vec![72])]
+        );
+
+        let owned = crate::fresh_owned_agent_id();
+        let key = owned.storage_key();
+        let stage = Uuid::new_v4();
+        let stage_key = format!("{key}#{stage}");
+        let staged = IndexedStorageNamespace::StagedOpLog {
+            owned_agent_id: owned.clone(),
+            agent_mode: mode,
+        };
+        let a_token = storage
+            .reserve_stage("test", "empty_a", &owned, stage, None)
+            .await
+            .unwrap()
+            .unwrap();
+        let b_token = storage
+            .reserve_stage("test", "replacement_b", &owned, stage, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(a_token, b_token);
+        storage
+            .append(
+                "test",
+                "b_commit",
+                "entry",
+                staged.clone(),
+                &stage_key,
+                1,
+                vec![81],
+                None,
+                Some(b_token),
+            )
+            .await
+            .unwrap();
+        storage
+            .discard_stage(
+                "test",
+                "stale_a_cleanup",
+                staged.clone(),
+                &stage_key,
+                Some(a_token),
+            )
+            .await
+            .unwrap();
+        storage
+            .append(
+                "test",
+                "b_still_writable",
+                "entry",
+                staged.clone(),
+                &stage_key,
+                2,
+                vec![82],
+                None,
+                Some(b_token),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .read(
+                    "test",
+                    "replacement_rows_preserved",
+                    "entry",
+                    staged.clone(),
+                    &stage_key,
+                    0,
+                    9
+                )
+                .await
+                .unwrap(),
+            vec![(1, vec![81]), (2, vec![82])]
+        );
+        storage
+            .discard_stage(
+                "test",
+                "current_b_cleanup",
+                staged.clone(),
+                &stage_key,
+                Some(b_token),
+            )
+            .await
+            .unwrap();
+        assert!(
+            !storage
+                .exists("test", "b_discarded", staged.clone(), &stage_key)
+                .await
+                .unwrap()
+        );
+        assert!(matches!(
+            storage
+                .append(
+                    "test",
+                    "b_invalidated",
+                    "entry",
+                    staged,
+                    &stage_key,
+                    3,
+                    vec![83],
+                    None,
+                    Some(b_token)
+                )
+                .await,
+            Err(IndexedStorageError::StageInvalidated { .. })
+        ));
+    }
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn stage_tokens_replace_bare_admissions_and_require_exact_matches(
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    let storage = is.get_indexed_storage().await;
+    if !storage.supports_release() {
+        return;
+    }
+    let owned = crate::fresh_owned_agent_id();
+    let key = owned.storage_key();
+    let stage_id = Uuid::new_v4();
+    let stage_key = format!("{key}#{stage_id}");
+    let staged = IndexedStorageNamespace::StagedOpLog {
+        owned_agent_id: owned.clone(),
+        agent_mode: AgentMode::Ephemeral,
+    };
+    let primary = IndexedStorageNamespace::OpLog {
+        owned_agent_id: owned.clone(),
+        agent_mode: AgentMode::Durable,
+    };
+    let first = storage
+        .reserve_stage("test", "first", &owned, stage_id, None)
+        .await
+        .unwrap()
+        .unwrap();
+    storage
+        .append_many(
+            "test",
+            "empty",
+            "entry",
+            &staged,
+            &stage_key,
+            Arc::from([]),
+            None,
+            Some(first),
+        )
+        .await
+        .unwrap();
+    assert!(
+        !storage
+            .observe_agent("test", "token_not_data", &owned)
+            .await
+            .unwrap()
+            .has_data
+    );
+    // The same stage UUID gets a fresh token; it cannot identify the admission by itself.
+    let second = storage
+        .reserve_stage("test", "replace", &owned, stage_id, None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(first >= 0 && second >= 0);
+    assert_ne!(first, second);
+    assert!(
+        !storage
+            .remove_stage_reservation("test", "old_cleanup", &owned, Some(first))
+            .await
+            .unwrap()
+    );
+    for token in [None, Some(first)] {
+        assert!(matches!(
+            storage
+                .append(
+                    "test",
+                    "stale",
+                    "entry",
+                    staged.clone(),
+                    &stage_key,
+                    1,
+                    vec![1],
+                    None,
+                    token
+                )
+                .await,
+            Err(IndexedStorageError::StageInvalidated { .. })
+        ));
+        assert!(matches!(
+            storage
+                .append_many(
+                    "test",
+                    "stale_empty",
+                    "entry",
+                    &staged,
+                    &stage_key,
+                    Arc::from([]),
+                    None,
+                    token
+                )
+                .await,
+            Err(IndexedStorageError::StageInvalidated { .. })
+        ));
+        assert!(matches!(
+            storage
+                .move_if_absent(
+                    "test",
+                    "stale_publish",
+                    staged.clone(),
+                    &stage_key,
+                    primary.clone(),
+                    &key,
+                    1,
+                    token
+                )
+                .await,
+            Err(IndexedStorageError::StageInvalidated { .. })
+        ));
+    }
+    storage
+        .append(
+            "test",
+            "current",
+            "entry",
+            staged.clone(),
+            &stage_key,
+            1,
+            vec![71],
+            None,
+            Some(second),
+        )
+        .await
+        .unwrap();
+    assert!(
+        storage
+            .reserve_stage("test", "staged_data_refuses", &owned, Uuid::new_v4(), None)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        storage
+            .move_if_absent(
+                "test",
+                "publish",
+                staged.clone(),
+                &stage_key,
+                primary.clone(),
+                &key,
+                1,
+                Some(second)
+            )
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        storage
+            .read(
+                "test",
+                "no_token_row",
+                "entry",
+                primary.clone(),
+                &key,
+                0,
+                99
+            )
+            .await
+            .unwrap(),
+        vec![(1, vec![71])]
+    );
+    assert!(
+        !storage
+            .remove_stage_reservation("test", "already_published", &owned, Some(second))
+            .await
+            .unwrap()
+    );
+    assert!(matches!(
+        storage
+            .move_if_absent(
+                "test",
+                "late_publish",
+                staged.clone(),
+                &stage_key,
+                primary,
+                &key,
+                1,
+                Some(second)
+            )
+            .await,
+        Err(IndexedStorageError::StageInvalidated { .. })
+    ));
+
+    let owned = crate::fresh_owned_agent_id();
+    let stage_key = format!("{}#{stage_id}", owned.storage_key());
+    let token = storage
+        .reserve_stage("test", "cleanup", &owned, stage_id, None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        storage
+            .with("test", "cleanup")
+            .remove_stage_reservation(&owned, Some(token))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !storage
+            .remove_stage_reservation("test", "cleanup_retry", &owned, None)
+            .await
+            .unwrap()
+    );
+    assert!(matches!(
+        storage
+            .append(
+                "test",
+                "cleaned_writer",
+                "entry",
+                staged,
+                &stage_key,
+                1,
+                vec![1],
+                None,
+                Some(token)
+            )
+            .await,
+        Err(IndexedStorageError::StageInvalidated { .. })
+    ));
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn initial_append_invalidates_the_stage_token_atomically(
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    let storage = is.get_indexed_storage().await;
+    if !storage.supports_release() {
+        return;
+    }
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        for epoch in [None, Some(ShardEpoch(8))] {
+            for batch in [false, true] {
+                let owned = crate::fresh_owned_agent_id();
+                let key = owned.storage_key();
+                let stage_id = Uuid::new_v4();
+                let stage_key = format!("{key}#{stage_id}");
+                let staged = IndexedStorageNamespace::StagedOpLog {
+                    owned_agent_id: owned.clone(),
+                    agent_mode: AgentMode::Durable,
+                };
+                let primary = IndexedStorageNamespace::OpLog {
+                    owned_agent_id: owned.clone(),
+                    agent_mode: mode,
+                };
+                let token = storage
+                    .reserve_stage("test", "reserve", &owned, stage_id, epoch)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                if let Some(epoch) = epoch {
+                    storage
+                        .set_key_epoch("test", "claim", primary.clone(), &key, epoch, &[], false)
+                        .await
+                        .unwrap();
+                }
+                if batch {
+                    storage
+                        .append_many(
+                            "test",
+                            "initial_batch",
+                            "entry",
+                            &primary,
+                            &key,
+                            Arc::from([
+                                (1, Bytes::from_static(b"initial")),
+                                (2, Bytes::from_static(b"next")),
+                            ]),
+                            epoch,
+                            None,
+                        )
+                        .await
+                        .unwrap();
+                } else {
+                    storage
+                        .append(
+                            "test",
+                            "initial",
+                            "entry",
+                            primary.clone(),
+                            &key,
+                            1,
+                            b"initial".to_vec(),
+                            epoch,
+                            None,
+                        )
+                        .await
+                        .unwrap();
+                }
+                assert!(
+                    !storage
+                        .remove_stage_reservation("test", "invalidated", &owned, Some(token))
+                        .await
+                        .unwrap()
+                );
+                assert!(matches!(
+                    storage
+                        .append(
+                            "test",
+                            "late_stage",
+                            "entry",
+                            staged.clone(),
+                            &stage_key,
+                            1,
+                            vec![1],
+                            None,
+                            Some(token)
+                        )
+                        .await,
+                    Err(IndexedStorageError::StageInvalidated { .. })
+                ));
+                assert!(matches!(
+                    storage
+                        .move_if_absent(
+                            "test",
+                            "late_publish",
+                            staged,
+                            &stage_key,
+                            primary,
+                            &key,
+                            1,
+                            Some(token)
+                        )
+                        .await,
+                    Err(IndexedStorageError::StageInvalidated { .. })
+                ));
+            }
+        }
+    }
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn stranded_stage_tokens_are_not_shard_epochs_or_transition_presence(
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    use golem_worker_executor::storage::indexed::{ReleaseAgentResult, UnsealAgentResult};
+    use std::time::{Duration, SystemTime};
+    let storage = is.get_indexed_storage().await;
+    if !storage.supports_release() {
+        return;
+    }
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let state = sealed_index_state(mode);
+        let owned = &state.owned_agent_id;
+        let stage_id = Uuid::new_v4();
+        let token = storage
+            .reserve_stage("test", "stranded", owned, stage_id, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            !storage
+                .observe_agent("test", "absent", owned)
+                .await
+                .unwrap()
+                .has_data
+        );
+        assert_eq!(
+            storage
+                .release_agent("test", "empty_release", &state, ShardEpoch(6))
+                .await
+                .unwrap(),
+            ReleaseAgentResult::Released
+        );
+        assert!(
+            !storage
+                .remove_stage_reservation("test", "removed_by_release", owned, Some(token))
+                .await
+                .unwrap()
+        );
+
+        let token = storage
+            .reserve_stage("test", "stranded_again", owned, stage_id, None)
+            .await
+            .unwrap()
+            .unwrap();
+        let deadline = SystemTime::now() + Duration::from_secs(30);
+        assert_eq!(
+            storage
+                .unseal_agent(
+                    "test",
+                    "unseal",
+                    &state,
+                    ShardEpoch(8),
+                    ShardEpoch(6),
+                    deadline
+                )
+                .await
+                .unwrap(),
+            UnsealAgentResult::Unsealed
+        );
+        assert!(
+            !storage
+                .remove_stage_reservation("test", "removed_by_unseal", owned, Some(token))
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            storage
+                .unseal_agent(
+                    "test",
+                    "retry",
+                    &state,
+                    ShardEpoch(8),
+                    ShardEpoch(6),
+                    deadline
+                )
+                .await
+                .unwrap(),
+            UnsealAgentResult::Unsealed
+        );
+        assert_eq!(
+            storage
+                .release_agent("test", "release", &state, ShardEpoch(8))
+                .await
+                .unwrap(),
+            ReleaseAgentResult::Released
+        );
+    }
+}
+
 async fn append_record(
     storage: &dyn IndexedStorage,
     namespace: &IndexedStorageNamespace,
@@ -533,6 +1530,7 @@ async fn append_record(
     id: u64,
     value: &[u8],
     epoch: Option<ShardEpoch>,
+    stage_token: Option<i64>,
 ) -> Result<(), IndexedStorageError> {
     storage
         .append(
@@ -544,6 +1542,7 @@ async fn append_record(
             id,
             value.to_vec(),
             epoch,
+            stage_token,
         )
         .await
 }
@@ -555,6 +1554,7 @@ async fn publish_staged_records(
     visible: &IndexedStorageNamespace,
     target_key: &str,
     last_id: u64,
+    stage_token: Option<i64>,
 ) -> bool {
     storage
         .with("test", "publish")
@@ -564,6 +1564,7 @@ async fn publish_staged_records(
             visible.clone(),
             target_key,
             last_id,
+            stage_token,
         )
         .await
         .unwrap()
@@ -593,12 +1594,14 @@ async fn committed_oplog_records_survive_cold_reopen(
     };
     let first = OplogEntry::suspend().rounded();
     let second = OplogEntry::restart().rounded();
+    let stage_token;
     {
         let service = primary_oplog_service(open().await).await;
         let writer = service
             .create_staged(&owned, AgentMode::Durable, stage_id, metadata)
             .await
             .unwrap();
+        stage_token = writer.stage_token();
         writer.add(first.clone()).await.unwrap();
         writer.add(second.clone()).await.unwrap();
         assert_eq!(writer.commit(CommitLevel::Always).await.unwrap().len(), 2);
@@ -627,7 +1630,7 @@ async fn committed_oplog_records_survive_cold_reopen(
 
     // Independent clients race to publish different complete stages into the same target.
     let competitor = open().await;
-    let competitor_key = format!("{target_key}#{}", Uuid::new_v4());
+    let (competitor_key, competitor_token) = reserve_test_stage(competitor.as_ref()).await;
     append_record(
         competitor.as_ref(),
         &staged,
@@ -635,18 +1638,28 @@ async fn committed_oplog_records_survive_cold_reopen(
         1,
         b"other",
         None,
+        Some(competitor_token),
     )
     .await
     .unwrap();
     let (published, other) = tokio::join!(
-        publish_staged_records(storage.as_ref(), &staged, &key, &visible, &target_key, 2),
+        publish_staged_records(
+            storage.as_ref(),
+            &staged,
+            &key,
+            &visible,
+            &target_key,
+            2,
+            stage_token
+        ),
         publish_staged_records(
             competitor.as_ref(),
             &staged,
             &competitor_key,
             &visible,
             &target_key,
-            1
+            1,
+            Some(competitor_token)
         ),
     );
     assert_ne!(published, other, "exactly one publication must win");
@@ -655,10 +1668,10 @@ async fn committed_oplog_records_survive_cold_reopen(
     } else {
         vec![(1, b"other".to_vec())]
     };
-    let (loser, tip) = if published {
-        (competitor_key.as_str(), 1)
+    let (loser, tip, loser_token) = if published {
+        (competitor_key.as_str(), 1, Some(competitor_token))
     } else {
-        (key.as_str(), 2)
+        (key.as_str(), 2, stage_token)
     };
     assert!(
         !publish_staged_records(
@@ -667,7 +1680,8 @@ async fn committed_oplog_records_survive_cold_reopen(
             loser,
             &visible,
             &target_key,
-            tip
+            tip,
+            loser_token
         )
         .await
     );
@@ -709,6 +1723,7 @@ async fn committed_oplog_records_survive_cold_reopen(
             3,
             b"stale",
             Some(ShardEpoch(7)),
+            None,
         )
         .await,
         7,
@@ -730,6 +1745,7 @@ async fn committed_oplog_records_survive_cold_reopen(
             3,
             b"stale",
             Some(ShardEpoch(7)),
+            None,
         )
         .await,
         7,
@@ -742,6 +1758,7 @@ async fn committed_oplog_records_survive_cold_reopen(
         3,
         b"current",
         Some(ShardEpoch(8)),
+        None,
     )
     .await
     .unwrap();
@@ -776,8 +1793,9 @@ async fn staged_publication_preserves_atomic_visibility(
         ("wrong-tip", vec![1, 2, 3], 2),
         ("zero-tip", vec![1], 0),
     ] {
-        let key = crate::fresh_owned_agent_id().storage_key();
+        let (key, token) = reserve_test_stage(storage.as_ref()).await;
         let key = key.as_str();
+        let target = crate::fresh_owned_agent_id().storage_key();
         for id in ids {
             storage
                 .append(
@@ -789,6 +1807,7 @@ async fn staged_publication_preserves_atomic_visibility(
                     id,
                     vec![id as u8],
                     None,
+                    Some(token),
                 )
                 .await
                 .unwrap();
@@ -801,22 +1820,26 @@ async fn staged_publication_preserves_atomic_visibility(
                     staged.clone(),
                     key,
                     visible.clone(),
-                    key,
+                    &target,
                     expected,
+                    Some(token),
                 )
                 .await
                 .is_err()
         );
         assert!(
             !storage
-                .exists("test", "visible", visible.clone(), key)
+                .exists("test", "visible", visible.clone(), &target)
                 .await
                 .unwrap()
         );
     }
-    let first_stage = format!("{KEY1}#{}", Uuid::new_v4());
-    let second_stage = format!("{KEY1}#{}", Uuid::new_v4());
-    for (key, value) in [(first_stage.as_str(), 17u8), (second_stage.as_str(), 39)] {
+    let (first_stage, first_token) = reserve_test_stage(storage.as_ref()).await;
+    let (second_stage, second_token) = reserve_test_stage(storage.as_ref()).await;
+    for (key, token, value) in [
+        (first_stage.as_str(), first_token, 17u8),
+        (second_stage.as_str(), second_token, 39),
+    ] {
         storage
             .append_many(
                 "test",
@@ -829,6 +1852,7 @@ async fn staged_publication_preserves_atomic_visibility(
                     .collect::<Vec<_>>()
                     .into(),
                 None,
+                Some(token),
             )
             .await
             .unwrap();
@@ -857,6 +1881,7 @@ async fn staged_publication_preserves_atomic_visibility(
             visible.clone(),
             KEY1,
             3,
+            Some(first_token),
         ),
         storage.move_if_absent(
             "test",
@@ -866,19 +1891,25 @@ async fn staged_publication_preserves_atomic_visibility(
             visible.clone(),
             KEY1,
             3,
+            Some(second_token),
         ),
     );
     let first = first.unwrap();
     assert_ne!(first, second.unwrap());
-    let (winner, loser, value) = if first {
-        (first_stage.as_str(), second_stage.as_str(), 17)
+    let (winner, loser, loser_token, value) = if first {
+        (
+            first_stage.as_str(),
+            second_stage.as_str(),
+            second_token,
+            17,
+        )
     } else {
-        (second_stage.as_str(), first_stage.as_str(), 39)
+        (second_stage.as_str(), first_stage.as_str(), first_token, 39)
     };
     let expected: Vec<_> = (1..=3).map(|id| (id, vec![value, id as u8])).collect();
     assert_eq!(
         storage
-            .read("test", "read", "entry", visible.clone(), KEY1, 1, 3)
+            .read("test", "read", "entry", visible.clone(), KEY1, 0, 3)
             .await
             .unwrap(),
         expected
@@ -905,12 +1936,13 @@ async fn staged_publication_preserves_atomic_visibility(
                 visible.clone(),
                 KEY1,
                 3,
+                Some(loser_token),
             )
             .await
             .unwrap()
     );
     storage
-        .delete("test", "discard", staged.clone(), loser)
+        .discard_stage("test", "discard", staged.clone(), loser, Some(loser_token))
         .await
         .unwrap();
     assert_eq!(
@@ -922,6 +1954,7 @@ async fn staged_publication_preserves_atomic_visibility(
     );
 
     for (key, first_id) in [(KEY2, 1), (KEY3, 17)] {
+        let (stage, token) = reserve_test_stage(storage.as_ref()).await;
         storage
             .append(
                 "test",
@@ -931,6 +1964,7 @@ async fn staged_publication_preserves_atomic_visibility(
                 key,
                 first_id,
                 vec![61],
+                None,
                 None,
             )
             .await
@@ -972,10 +2006,11 @@ async fn staged_publication_preserves_atomic_visibility(
                 "stage",
                 "entry",
                 staged.clone(),
-                key,
+                &stage,
                 1,
                 vec![23],
                 None,
+                Some(token),
             )
             .await
             .unwrap();
@@ -985,10 +2020,11 @@ async fn staged_publication_preserves_atomic_visibility(
                     "test",
                     "publish",
                     staged.clone(),
-                    key,
+                    &stage,
                     visible.clone(),
                     key,
                     1,
+                    Some(token),
                 )
                 .await
                 .unwrap()
@@ -1009,10 +2045,11 @@ async fn staged_publication_preserves_atomic_visibility(
                     "test",
                     "publish",
                     staged.clone(),
-                    key,
+                    &stage,
                     visible.clone(),
                     key,
                     1,
+                    Some(token),
                 )
                 .await
                 .unwrap()
@@ -1037,7 +2074,7 @@ async fn staged_publication_preserves_atomic_visibility(
             .unwrap()
     );
 
-    let race = crate::fresh_owned_agent_id().storage_key();
+    let (race, token) = reserve_test_stage(storage.as_ref()).await;
     let ordinary_key = crate::fresh_owned_agent_id().storage_key();
     storage
         .append(
@@ -1049,6 +2086,7 @@ async fn staged_publication_preserves_atomic_visibility(
             1,
             vec![51],
             None,
+            Some(token),
         )
         .await
         .unwrap();
@@ -1061,6 +2099,7 @@ async fn staged_publication_preserves_atomic_visibility(
             visible.clone(),
             &ordinary_key,
             1,
+            Some(token),
         ),
         storage.append(
             "test",
@@ -1070,6 +2109,7 @@ async fn staged_publication_preserves_atomic_visibility(
             &ordinary_key,
             1,
             vec![77],
+            None,
             None,
         ),
     );
@@ -1112,6 +2152,7 @@ async fn postgres_singleton_append_many_preserves_storage_contract(
                     key,
                     Arc::from([]),
                     shard_epoch,
+                    None,
                 )
                 .await
                 .unwrap();
@@ -1130,6 +2171,7 @@ async fn postgres_singleton_append_many_preserves_storage_contract(
                     key,
                     Arc::from([(17, value.clone())]),
                     shard_epoch,
+                    None,
                 )
                 .await
                 .unwrap();
@@ -1169,6 +2211,7 @@ async fn postgres_singleton_append_many_preserves_storage_contract(
                         key,
                         Arc::from([(u64::MAX, value.clone())]),
                         shard_epoch,
+                        None,
                     )
                     .await,
                 Err(IndexedStorageError::Other(_))
@@ -1191,6 +2234,7 @@ async fn postgres_singleton_append_many_preserves_storage_contract(
                     key,
                     Arc::from([(17, Bytes::from_static(b"replacement"))]),
                     shard_epoch,
+                    None,
                 )
                 .await,
             Err(IndexedStorageError::Conflict(_))
@@ -1230,6 +2274,7 @@ async fn postgres_append_many_rolls_back_across_statement_chunks(
                     count,
                     b"original".to_vec(),
                     epoch,
+                    None,
                 )
                 .await
                 .unwrap();
@@ -1239,7 +2284,7 @@ async fn postgres_append_many_rolls_back_across_statement_chunks(
                 .into();
             assert!(matches!(
                 storage
-                    .append_many("svc", "api", "entity", &ns.ns, &key, pairs, epoch)
+                    .append_many("svc", "api", "entity", &ns.ns, &key, pairs, epoch, None)
                     .await,
                 Err(IndexedStorageError::Conflict(_))
             ));
@@ -1286,6 +2331,7 @@ async fn postgres_fenced_append_observes_locked_epoch_and_commit_errors(
                     1,
                     vec![17],
                     Some(ShardEpoch(u64::MAX)),
+                    None,
                 )
                 .await,
             u64::MAX,
@@ -1322,6 +2368,7 @@ async fn postgres_fenced_append_observes_locked_epoch_and_commit_errors(
                     1,
                     vec![23],
                     Some(ShardEpoch(7)),
+                    None,
                 )
                 .await
         });
@@ -1380,7 +2427,8 @@ async fn postgres_fenced_append_observes_locked_epoch_and_commit_errors(
                 &commit_error_key,
                 1,
                 vec![31],
-                Some(ShardEpoch(7))
+                Some(ShardEpoch(7)),
+                None
             )
             .await,
         Err(IndexedStorageError::Conflict(_))
@@ -1408,9 +2456,19 @@ async fn exists_append(
     let value1 = "value1".as_bytes().to_vec();
 
     let result1 = is.exists("svc", "api", ns.ns.clone(), key1).await.unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1, None)
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        1,
+        value1,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     let result2 = is.exists("svc", "api", ns.ns.clone(), key1).await.unwrap();
 
     assert_eq!(result1, false);
@@ -1438,6 +2496,7 @@ async fn namespaces_are_separate(
         key1,
         1,
         value1,
+        None,
         None,
     )
     .await
@@ -1471,6 +2530,7 @@ async fn can_append_and_get(
         1,
         value1.clone(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -1483,6 +2543,7 @@ async fn can_append_and_get(
         2,
         value2.clone(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -1494,6 +2555,7 @@ async fn can_append_and_get(
         key1,
         3,
         value3.clone(),
+        None,
         None,
     )
     .await
@@ -1521,11 +2583,31 @@ async fn append_cannot_overwrite(
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1, None)
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        1,
+        value1,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     let result1 = is
-        .append("svc", "api", "entity", ns.ns.clone(), key1, 1, value2, None)
+        .append(
+            "svc",
+            "api",
+            "entity",
+            ns.ns.clone(),
+            key1,
+            1,
+            value2,
+            None,
+            None,
+        )
         .await;
 
     assert!(result1.is_err());
@@ -1554,6 +2636,7 @@ async fn append_can_skip(
         4,
         value1.clone(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -1565,6 +2648,7 @@ async fn append_can_skip(
         key1,
         8,
         value2.clone(),
+        None,
         None,
     )
     .await
@@ -1593,13 +2677,33 @@ async fn length(
     let value2 = "value2".as_bytes().to_vec();
 
     let result1 = is.length("svc", "api", ns.ns.clone(), key1).await.unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 4, value1, None)
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        4,
+        value1,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     let result2 = is.length("svc", "api", ns.ns.clone(), key1).await.unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 8, value2, None)
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        8,
+        value2,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     let result3 = is.length("svc", "api", ns.ns.clone(), key1).await.unwrap();
 
     assert_eq!(result1, 0);
@@ -1649,12 +2753,32 @@ async fn scan_with_no_pattern_single_paged(
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1, None)
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key2, 1, value2, None)
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        1,
+        value1,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key2,
+        1,
+        value2,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
 
     let mut result: Vec<String> = Vec::new();
     let mut resume = None;
@@ -1701,6 +2825,7 @@ async fn scan_with_no_pattern_paginated(
         1,
         value1.clone(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -1712,6 +2837,7 @@ async fn scan_with_no_pattern_paginated(
         key1,
         2,
         value2.clone(),
+        None,
         None,
     )
     .await
@@ -1725,6 +2851,7 @@ async fn scan_with_no_pattern_paginated(
         1,
         value2.clone(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -1736,6 +2863,7 @@ async fn scan_with_no_pattern_paginated(
         key3,
         3,
         value3.clone(),
+        None,
         None,
     )
     .await
@@ -1842,6 +2970,7 @@ async fn scan_stable_resumes_past_deleted_keys(
             1,
             b"v".to_vec(),
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1853,6 +2982,7 @@ async fn scan_stable_resumes_past_deleted_keys(
             key,
             1,
             b"v".to_vec(),
+            None,
             None,
         )
         .await
@@ -1957,6 +3087,7 @@ async fn multi_sqlite_scan_stable_does_not_reopen_drained_files() {
             1,
             b"v".to_vec(),
             None,
+            None,
         )
         .await
         .unwrap();
@@ -2033,6 +3164,7 @@ async fn multi_sqlite_scan_stable_sees_files_created_after_a_walk() {
             1,
             b"v".to_vec(),
             None,
+            None,
         )
         .await
         .unwrap();
@@ -2089,6 +3221,7 @@ async fn last_id_matches_last_without_the_value(
             id,
             format!("value-{id}").into_bytes(),
             None,
+            None,
         )
         .await
         .unwrap();
@@ -2125,15 +3258,45 @@ async fn scan_with_prefix_pattern_single_paged(
     let value2 = "value2".as_bytes().to_vec();
     let value3 = "value3".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1, None)
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key2, 1, value2, None)
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key3, 1, value3, None)
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        1,
+        value1,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key2,
+        1,
+        value2,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key3,
+        1,
+        value3,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
 
     let mut result: Vec<String> = Vec::new();
     let mut resume = None;
@@ -2179,7 +3342,17 @@ async fn sql_scan_prefix_is_literal_bounded_and_deletion_safe(
     ];
     for key in keys {
         storage
-            .append("svc", "api", "entity", ns.ns.clone(), key, 1, vec![1], None)
+            .append(
+                "svc",
+                "api",
+                "entity",
+                ns.ns.clone(),
+                key,
+                1,
+                vec![1],
+                None,
+                None,
+            )
             .await
             .unwrap();
     }
@@ -2192,6 +3365,7 @@ async fn sql_scan_prefix_is_literal_bounded_and_deletion_safe(
             "aa",
             2,
             vec![2],
+            None,
             None,
         )
         .await
@@ -2496,8 +3670,16 @@ async fn postgres_rejects_noncanonical_keys_and_isolates_staged_epochs(
         owned_agent_id: crate::fresh_owned_agent_id(),
         agent_mode: AgentMode::Durable,
     };
-    let first = format!("{KEY1}#{}", Uuid::new_v4());
-    let second = format!("{KEY1}#{}", Uuid::new_v4());
+    let owned = crate::fresh_owned_agent_id();
+    let first_id = Uuid::new_v4();
+    let second_id = Uuid::new_v4();
+    let first = format!("{}#{first_id}", owned.storage_key());
+    let second = format!("{}#{second_id}", owned.storage_key());
+    let first_token = storage
+        .reserve_stage("test", "reserve", &owned, first_id, None)
+        .await
+        .unwrap()
+        .unwrap();
     storage
         .set_key_epoch(
             "svc",
@@ -2522,14 +3704,17 @@ async fn postgres_rejects_noncanonical_keys_and_isolates_staged_epochs(
         )
         .await
         .unwrap();
-    append_fenced(&storage, &staged, &first, &[1], Some(ShardEpoch(7)))
-        .await
-        .unwrap();
-    assert_fenced(
-        append_fenced(&storage, &staged, &second, &[1], Some(ShardEpoch(7))).await,
-        7,
-        Some(11),
-    );
+    append_record(
+        storage.as_ref(),
+        &staged,
+        &first,
+        1,
+        b"1",
+        Some(ShardEpoch(7)),
+        Some(first_token),
+    )
+    .await
+    .unwrap();
     storage
         .delete_with_epoch(
             "svc",
@@ -2541,9 +3726,36 @@ async fn postgres_rejects_noncanonical_keys_and_isolates_staged_epochs(
         )
         .await
         .unwrap();
-    append_fenced(&storage, &staged, &second, &[1], Some(ShardEpoch(11)))
+    let second_token = storage
+        .reserve_stage("test", "reserve", &owned, second_id, None)
         .await
+        .unwrap()
         .unwrap();
+    assert_fenced(
+        append_record(
+            storage.as_ref(),
+            &staged,
+            &second,
+            1,
+            b"1",
+            Some(ShardEpoch(7)),
+            Some(second_token),
+        )
+        .await,
+        7,
+        Some(11),
+    );
+    append_record(
+        storage.as_ref(),
+        &staged,
+        &second,
+        1,
+        b"1",
+        Some(ShardEpoch(11)),
+        Some(second_token),
+    )
+    .await
+    .unwrap();
 }
 
 #[test]
@@ -2563,15 +3775,45 @@ async fn scan_with_prefix_pattern_paginated(
     let value2 = "value2".as_bytes().to_vec();
     let value3 = "value3".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1, None)
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key2, 1, value2, None)
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key3, 1, value3, None)
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        1,
+        value1,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key2,
+        1,
+        value2,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key3,
+        1,
+        value3,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
 
     let mut r1: Vec<String> = Vec::new();
     let mut resume = None;
@@ -2628,9 +3870,19 @@ async fn exists_append_delete(
     let value1 = "value1".as_bytes().to_vec();
 
     let result1 = is.exists("svc", "api", ns.ns.clone(), key1).await.unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1, None)
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        1,
+        value1,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     is.delete("svc", "api", ns.ns.clone(), key1).await.unwrap();
     let result2 = is.exists("svc", "api", ns.ns.clone(), key1).await.unwrap();
 
@@ -2659,6 +3911,7 @@ async fn delete_is_per_namespace(
         key1,
         1,
         value1,
+        None,
         None,
     )
     .await
@@ -2713,6 +3966,7 @@ async fn first(
         5,
         value1.clone(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -2724,6 +3978,7 @@ async fn first(
         key1,
         7,
         value2.clone(),
+        None,
         None,
     )
     .await
@@ -2764,6 +4019,7 @@ async fn last(
         5,
         value1.clone(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -2775,6 +4031,7 @@ async fn last(
         key1,
         7,
         value2.clone(),
+        None,
         None,
     )
     .await
@@ -2815,6 +4072,7 @@ async fn closest_low(
         5,
         value1.clone(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -2826,6 +4084,7 @@ async fn closest_low(
         key1,
         7,
         value2.clone(),
+        None,
         None,
     )
     .await
@@ -2866,6 +4125,7 @@ async fn closest_match(
         5,
         value1.clone(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -2877,6 +4137,7 @@ async fn closest_match(
         key1,
         7,
         value2.clone(),
+        None,
         None,
     )
     .await
@@ -2917,6 +4178,7 @@ async fn closest_mid(
         5,
         value1.clone(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -2928,6 +4190,7 @@ async fn closest_mid(
         key1,
         7,
         value2.clone(),
+        None,
         None,
     )
     .await
@@ -2959,12 +4222,32 @@ async fn closest_high(
         .closest("svc", "api", "entity", ns.ns.clone(), key1, 10)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 5, value1, None)
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 7, value2, None)
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        5,
+        value1,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        7,
+        value2,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     let result2 = is
         .closest("svc", "api", "entity", ns.ns.clone(), key1, 10)
         .await
@@ -2998,6 +4281,7 @@ async fn drop_prefix_no_match(
         10,
         value1.clone(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -3010,6 +4294,7 @@ async fn drop_prefix_no_match(
         11,
         value2.clone(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -3021,6 +4306,7 @@ async fn drop_prefix_no_match(
         key1,
         12,
         value3.clone(),
+        None,
         None,
     )
     .await
@@ -3061,6 +4347,7 @@ async fn drop_prefix_partial(
         10,
         value1.clone(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -3073,6 +4360,7 @@ async fn drop_prefix_partial(
         11,
         value2.clone(),
         None,
+        None,
     )
     .await
     .unwrap();
@@ -3084,6 +4372,7 @@ async fn drop_prefix_partial(
         key1,
         12,
         value3.clone(),
+        None,
         None,
     )
     .await
@@ -3124,6 +4413,7 @@ async fn drop_prefix_full(
         10,
         value1,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -3136,6 +4426,7 @@ async fn drop_prefix_full(
         11,
         value2,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -3147,6 +4438,7 @@ async fn drop_prefix_full(
         key1,
         12,
         value3,
+        None,
         None,
     )
     .await
@@ -3211,6 +4503,7 @@ async fn append_with_the_recorded_epoch_is_accepted(
             (3, Bytes::from_static(b"c")),
         ]),
         Some(ShardEpoch(7)),
+        None,
     )
     .await
     .unwrap();
@@ -3247,6 +4540,7 @@ async fn a_stale_epoch_append_is_refused_and_writes_nothing(
                 (3, Bytes::from_static(b"c")),
             ]),
             Some(ShardEpoch(7)),
+            None,
         )
         .await;
 
@@ -3282,6 +4576,7 @@ async fn an_owner_re_opens_at_the_epoch_it_holds(
         key,
         Arc::from([(1, Bytes::from_static(b"a"))]),
         Some(ShardEpoch(4)),
+        None,
     )
     .await
     .unwrap();
@@ -3316,6 +4611,7 @@ async fn a_higher_epoch_takes_the_oplog_over(
             key,
             Arc::from([(1, Bytes::from_static(b"a"))]),
             Some(ShardEpoch(5)),
+            None,
         )
         .await
         .unwrap();
@@ -3329,6 +4625,7 @@ async fn a_higher_epoch_takes_the_oplog_over(
             key,
             Arc::from([(2, Bytes::from_static(b"b"))]),
             Some(ShardEpoch(4)),
+            None,
         )
         .await;
     match refused {
@@ -3369,6 +4666,7 @@ async fn an_append_ahead_of_the_recorded_epoch_is_refused(
                 (3, Bytes::from_static(b"c")),
             ]),
             Some(ShardEpoch(6)),
+            None,
         )
         .await;
     let batch_length = is.length("svc", "api", ns.ns.clone(), key).await.unwrap();
@@ -3382,6 +4680,7 @@ async fn an_append_ahead_of_the_recorded_epoch_is_refused(
             4,
             b"d".to_vec(),
             Some(ShardEpoch(6)),
+            None,
         )
         .await;
     let length = is.length("svc", "api", ns.ns.clone(), key).await.unwrap();
@@ -3417,6 +4716,7 @@ async fn an_append_without_a_recorded_epoch_is_refused(
             1,
             b"a".to_vec(),
             Some(ShardEpoch(0)),
+            None,
         )
         .await;
 
@@ -3447,6 +4747,7 @@ async fn an_unfenced_append_ignores_the_recorded_epoch(
         key,
         1,
         b"a".to_vec(),
+        None,
         None,
     )
     .await
@@ -3496,6 +4797,7 @@ async fn the_recorded_epoch_only_ever_climbs(
         1,
         b"a".to_vec(),
         Some(ShardEpoch(9)),
+        None,
     )
     .await
     .unwrap();
@@ -3509,6 +4811,7 @@ async fn the_recorded_epoch_only_ever_climbs(
             2,
             b"b".to_vec(),
             Some(ShardEpoch(8)),
+            None,
         )
         .await,
         8,
@@ -3547,6 +4850,7 @@ async fn deleting_the_recorded_epoch_fences_later_writes(
             1,
             b"a".to_vec(),
             Some(ShardEpoch(3)),
+            None,
         )
         .await;
 
@@ -3585,6 +4889,7 @@ async fn a_deleted_record_does_not_remember_its_epoch(
         1,
         b"a".to_vec(),
         Some(ShardEpoch(8)),
+        None,
     )
     .await
     .unwrap();
@@ -3606,8 +4911,17 @@ async fn append_fenced(
         .iter()
         .map(|id| (*id, Bytes::from(id.to_string())))
         .collect();
-    is.append_many("svc", "api", "entity", ns, key, Arc::from(pairs), epoch)
-        .await
+    is.append_many(
+        "svc",
+        "api",
+        "entity",
+        ns,
+        key,
+        Arc::from(pairs),
+        epoch,
+        None,
+    )
+    .await
 }
 
 #[test]
@@ -3834,15 +5148,37 @@ async fn a_repeated_id_in_a_staged_batch_is_a_conflict(
         owned_agent_id: crate::fresh_owned_agent_id(),
         agent_mode: AgentMode::Durable,
     };
-    let key = KEY1;
+    let (key, token) = reserve_test_stage(is.as_ref()).await;
+    let key = key.as_str();
 
-    append_fenced(&is, &staged, key, &[1, 2], None)
-        .await
-        .unwrap();
+    is.append_many(
+        "svc",
+        "api",
+        "entity",
+        &staged,
+        key,
+        Arc::from([(1, Bytes::from_static(b"1")), (2, Bytes::from_static(b"2"))]),
+        None,
+        Some(token),
+    )
+    .await
+    .unwrap();
 
     // Only the classification is asserted: an unfenced Redis batch is a pipeline, and its callers
     // reconcile a partial one by reading it back.
-    match append_fenced(&is, &staged, key, &[2, 3], None).await {
+    match is
+        .append_many(
+            "svc",
+            "api",
+            "entity",
+            &staged,
+            key,
+            Arc::from([(2, Bytes::from_static(b"2")), (3, Bytes::from_static(b"3"))]),
+            None,
+            Some(token),
+        )
+        .await
+    {
         Err(IndexedStorageError::Conflict(_)) => {}
         other => panic!("expected a Conflict, got {other:?}"),
     }
@@ -3891,6 +5227,7 @@ async fn a_held_index_in_the_blob_manifest_is_a_conflict(
                 1,
                 b"again".to_vec(),
                 epoch,
+                None,
             )
             .await;
         assert!(
@@ -3934,6 +5271,7 @@ async fn a_failed_batch_leaves_no_partial_write(
         key,
         Arc::from([(1, Bytes::from_static(b"a")), (2, Bytes::from_static(b"b"))]),
         Some(ShardEpoch(1)),
+        None,
     )
     .await
     .unwrap();
@@ -3952,6 +5290,7 @@ async fn a_failed_batch_leaves_no_partial_write(
                 (4, Bytes::from_static(b"d")),
             ]),
             Some(ShardEpoch(1)),
+            None,
         )
         .await;
 
@@ -3981,6 +5320,7 @@ async fn append_three_fenced(
             (3, Bytes::from_static(b"c")),
         ]),
         Some(ShardEpoch(epoch)),
+        None,
     )
     .await
     .unwrap();
@@ -4066,6 +5406,7 @@ async fn a_trim_asserting_an_epoch_on_a_key_without_a_record_is_refused(
             id,
             value.to_vec(),
             None,
+            None,
         )
         .await
         .unwrap();
@@ -4142,6 +5483,7 @@ async fn deleting_an_emptied_key_keeps_its_recorded_epoch(
         4,
         b"d".to_vec(),
         Some(ShardEpoch(7)),
+        None,
     )
     .await
     .unwrap();
@@ -4155,6 +5497,7 @@ async fn deleting_an_emptied_key_keeps_its_recorded_epoch(
             5,
             b"e".to_vec(),
             Some(ShardEpoch(6)),
+            None,
         )
         .await;
     assert_fenced(stale, 6, Some(7));
@@ -4404,6 +5747,7 @@ async fn seed_sealed_index(
                 &key,
                 entries.clone(),
                 Some(ShardEpoch(epoch)),
+                None,
             )
             .await
             .unwrap();
@@ -4412,6 +5756,233 @@ async fn seed_sealed_index(
         .mark_sealed("test", "seed", state, ShardEpoch(epoch))
         .await
         .unwrap();
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn indexed_agent_observation_tracks_read_generations(
+    _deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    use golem_worker_executor::storage::indexed::{
+        AgentDataObservation, ReleaseAgentResult, UnsealAgentResult,
+    };
+    use std::time::{Duration, SystemTime};
+
+    let storage = is.get_indexed_storage().await;
+    if !storage.supports_release() {
+        let id = crate::fresh_owned_agent_id();
+        assert!(
+            storage
+                .observe_agent("test", "unsupported", &id)
+                .await
+                .is_err()
+        );
+        return;
+    }
+    let absent = AgentDataObservation {
+        has_data: false,
+        durable_generation: None,
+        ephemeral_generation: None,
+    };
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let state = sealed_index_state(mode);
+        let id = &state.owned_agent_id;
+        let key = id.storage_key();
+        let observation = storage.with("test", "generation");
+        assert_eq!(observation.observe_agent(id).await.unwrap(), absent);
+        storage
+            .set_key_epoch(
+                "test",
+                "bare_epoch",
+                state.fence_namespace(),
+                &key,
+                ShardEpoch(6),
+                &[],
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(observation.observe_agent(id).await.unwrap(), absent);
+        seed_sealed_index(&storage, &state, 6).await;
+        let marked = observation.observe_agent(id).await.unwrap();
+        assert!(marked.has_data);
+        let generation = match mode {
+            AgentMode::Durable => {
+                assert_eq!(marked.ephemeral_generation, None);
+                marked.durable_generation.unwrap()
+            }
+            AgentMode::Ephemeral => {
+                assert_eq!(marked.durable_generation, None);
+                marked.ephemeral_generation.unwrap()
+            }
+        };
+        storage
+            .mark_sealed("test", "repeat_mark", &state, ShardEpoch(6))
+            .await
+            .unwrap();
+        assert_eq!(observation.observe_agent(id).await.unwrap(), marked);
+        assert_eq!(
+            storage
+                .release_agent("test", "release", &state, ShardEpoch(6))
+                .await
+                .unwrap(),
+            ReleaseAgentResult::Released
+        );
+        assert_eq!(observation.observe_agent(id).await.unwrap(), absent);
+        assert_eq!(
+            storage
+                .unseal_agent(
+                    "test",
+                    "restore",
+                    &state,
+                    ShardEpoch(7),
+                    ShardEpoch(6),
+                    SystemTime::now() + Duration::from_secs(30)
+                )
+                .await
+                .unwrap(),
+            UnsealAgentResult::Unsealed
+        );
+        let restored = observation.observe_agent(id).await.unwrap();
+        let restored_generation = match mode {
+            AgentMode::Durable => restored.durable_generation.unwrap(),
+            AgentMode::Ephemeral => restored.ephemeral_generation.unwrap(),
+        };
+        assert_ne!(restored_generation, generation);
+        let mut wrong = state.clone();
+        wrong
+            .manifests
+            .insert(2, Arc::from([(13, Bytes::from_static(b"wrong-manifest"))]));
+        for (retry_state, epoch) in [(&wrong, ShardEpoch(7)), (&state, ShardEpoch(8))] {
+            assert_eq!(
+                storage
+                    .unseal_agent(
+                        "test",
+                        "non_exact_retry",
+                        retry_state,
+                        epoch,
+                        ShardEpoch(6),
+                        SystemTime::UNIX_EPOCH
+                    )
+                    .await
+                    .unwrap(),
+                UnsealAgentResult::AlreadyPresent
+            );
+            assert_eq!(observation.observe_agent(id).await.unwrap(), restored);
+        }
+        assert_eq!(
+            storage
+                .unseal_agent(
+                    "test",
+                    "expired_retry",
+                    &state,
+                    ShardEpoch(7),
+                    ShardEpoch(6),
+                    SystemTime::UNIX_EPOCH
+                )
+                .await
+                .unwrap(),
+            UnsealAgentResult::Unsealed
+        );
+        assert_eq!(observation.observe_agent(id).await.unwrap(), restored);
+        storage
+            .mark_sealed("test", "restored_mark", &state, ShardEpoch(7))
+            .await
+            .unwrap();
+        assert_eq!(observation.observe_agent(id).await.unwrap(), restored);
+
+        let mut opposite = state.clone();
+        opposite.agent_mode = match mode {
+            AgentMode::Durable => AgentMode::Ephemeral,
+            AgentMode::Ephemeral => AgentMode::Durable,
+        };
+        storage
+            .set_key_epoch(
+                "test",
+                "other_mode",
+                opposite.fence_namespace(),
+                &key,
+                ShardEpoch(7),
+                &[],
+                false,
+            )
+            .await
+            .unwrap();
+        storage
+            .mark_sealed("test", "other_mode", &opposite, ShardEpoch(7))
+            .await
+            .unwrap();
+        let both = observation.observe_agent(id).await.unwrap();
+        assert!(both.has_data);
+        assert!(both.durable_generation.is_some() && both.ephemeral_generation.is_some());
+        assert_ne!(both.durable_generation, both.ephemeral_generation);
+        match mode {
+            AgentMode::Durable => assert_eq!(both.durable_generation, restored.durable_generation),
+            AgentMode::Ephemeral => {
+                assert_eq!(both.ephemeral_generation, restored.ephemeral_generation)
+            }
+        }
+        assert_eq!(
+            storage
+                .release_agent("test", "release_both", &state, ShardEpoch(7))
+                .await
+                .unwrap(),
+            ReleaseAgentResult::Released
+        );
+        assert_eq!(observation.observe_agent(id).await.unwrap(), absent);
+
+        // A malformed marker is a data error, not a missing generation or an old format.
+        storage
+            .set_key_epoch(
+                "test",
+                "corrupt_fence",
+                state.fence_namespace(),
+                &key,
+                ShardEpoch(8),
+                &[],
+                false,
+            )
+            .await
+            .unwrap();
+        storage
+            .append(
+                "test",
+                "corrupt_marker",
+                "marker",
+                state.marker_namespace(),
+                &key,
+                0,
+                vec![1, 2, 3],
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            observation.observe_agent(id).await,
+            Err(IndexedStorageError::Other(_))
+        ));
+        assert!(matches!(
+            storage
+                .mark_sealed("test", "corrupt_repeat", &state, ShardEpoch(8))
+                .await,
+            Err(IndexedStorageError::Other(_))
+        ));
+        assert!(matches!(
+            storage
+                .unseal_agent(
+                    "test",
+                    "corrupt_retry",
+                    &state,
+                    ShardEpoch(8),
+                    ShardEpoch(6),
+                    SystemTime::UNIX_EPOCH
+                )
+                .await,
+            Err(IndexedStorageError::Other(_))
+        ));
+    }
 }
 
 #[test]
@@ -4429,12 +6000,24 @@ async fn indexed_agent_transitions_round_trip_and_lost_reply_retries(
     for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
         let state = sealed_index_state(mode);
         let key = state.owned_agent_id.storage_key();
+        let stage_id = Uuid::new_v4();
+        let stage_token = storage
+            .reserve_stage(
+                "test",
+                "reserve",
+                &state.owned_agent_id,
+                stage_id,
+                Some(ShardEpoch(6)),
+            )
+            .await
+            .unwrap()
+            .unwrap();
         seed_sealed_index(&storage, &state, 6).await;
         let stage = IndexedStorageNamespace::StagedOpLog {
             owned_agent_id: state.owned_agent_id.clone(),
-            agent_mode: AgentMode::Ephemeral,
+            agent_mode: AgentMode::Durable,
         };
-        let stage_key = format!("{key}#{}", Uuid::new_v4());
+        let stage_key = format!("{key}#{stage_id}");
         storage
             .append(
                 "test",
@@ -4445,6 +6028,7 @@ async fn indexed_agent_transitions_round_trip_and_lost_reply_retries(
                 1,
                 vec![71],
                 None,
+                Some(stage_token),
             )
             .await
             .unwrap();
@@ -4465,7 +6049,7 @@ async fn indexed_agent_transitions_round_trip_and_lost_reply_retries(
         for namespace in state
             .epoch_namespaces()
             .into_iter()
-            .chain([state.marker_namespace(), stage.clone()])
+            .chain([state.marker_namespace()])
         {
             assert!(
                 !storage
@@ -4484,6 +6068,7 @@ async fn indexed_agent_transitions_round_trip_and_lost_reply_retries(
                         45,
                         vec![99],
                         Some(ShardEpoch(6)),
+                        None,
                     )
                     .await,
                 6,
@@ -4492,10 +6077,26 @@ async fn indexed_agent_transitions_round_trip_and_lost_reply_retries(
         }
         assert!(
             !storage
-                .exists("test", "stage_absent", stage, &stage_key)
+                .exists("test", "stage_absent", stage.clone(), &stage_key)
                 .await
                 .unwrap()
         );
+        assert!(matches!(
+            storage
+                .append(
+                    "test",
+                    "old_stage",
+                    "entry",
+                    stage,
+                    &stage_key,
+                    2,
+                    vec![99],
+                    None,
+                    Some(stage_token)
+                )
+                .await,
+            Err(IndexedStorageError::StageInvalidated { .. })
+        ));
         assert_fenced(
             storage
                 .unseal_agent(
@@ -4652,6 +6253,7 @@ async fn indexed_agent_transitions_round_trip_and_lost_reply_retries(
                     1,
                     vec![1],
                     Some(ShardEpoch(8)),
+                    None,
                 )
                 .await,
             8,
@@ -4769,6 +6371,7 @@ async fn indexed_agent_transitions_refuse_without_removing_history(
                 3,
                 vec![19],
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -4825,6 +6428,273 @@ async fn indexed_agent_transitions_refuse_without_removing_history(
 
 #[test]
 #[test_r::timeout("120s")]
+async fn indexed_unseal_restores_over_retained_bare_epochs(
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    use golem_worker_executor::storage::indexed::UnsealAgentResult;
+    use std::time::{Duration, SystemTime};
+
+    let storage = is.get_indexed_storage().await;
+    if !storage.supports_release() {
+        return;
+    }
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        for retained in [ShardEpoch(6), ShardEpoch(7), ShardEpoch(8)] {
+            for retain_all in [false, true] {
+                let state = sealed_index_state(mode);
+                let key = state.owned_agent_id.storage_key();
+                let extra = IndexedStorageNamespace::CompressedOpLog {
+                    owned_agent_id: state.owned_agent_id.clone(),
+                    agent_mode: if mode == AgentMode::Durable {
+                        AgentMode::Ephemeral
+                    } else {
+                        AgentMode::Durable
+                    },
+                    level: 99,
+                };
+                let configured = state.epoch_namespaces();
+                let retained_namespaces: Vec<_> = configured
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| retain_all || index % 2 == 0)
+                    .map(|(_, namespace)| namespace.clone())
+                    .chain([extra.clone()])
+                    .collect();
+                for namespace in &retained_namespaces {
+                    storage
+                        .delete_with_epoch(
+                            "test",
+                            "retain_bare",
+                            namespace.clone(),
+                            &key,
+                            Some(retained),
+                            true,
+                        )
+                        .await
+                        .unwrap();
+                }
+                assert!(
+                    !storage
+                        .observe_agent("test", "bare_is_absent", &state.owned_agent_id)
+                        .await
+                        .unwrap()
+                        .has_data
+                );
+                let result = storage
+                    .unseal_agent(
+                        "test",
+                        "restore_retained",
+                        &state,
+                        ShardEpoch(7),
+                        ShardEpoch(6),
+                        SystemTime::now() + Duration::from_secs(30),
+                    )
+                    .await;
+                if retained > ShardEpoch(7) {
+                    assert_fenced(result.map(|_| ()), 7, Some(8));
+                    assert!(
+                        !storage
+                            .observe_agent("test", "refused_without_data", &state.owned_agent_id)
+                            .await
+                            .unwrap()
+                            .has_data
+                    );
+                    for namespace in retained_namespaces {
+                        assert_fenced(
+                            storage
+                                .set_key_epoch(
+                                    "test",
+                                    "retained_unchanged",
+                                    namespace,
+                                    &key,
+                                    ShardEpoch(7),
+                                    &[],
+                                    false,
+                                )
+                                .await
+                                .map(|_| ()),
+                            7,
+                            Some(8),
+                        );
+                    }
+                    continue;
+                }
+                assert_eq!(result.unwrap(), UnsealAgentResult::Unsealed);
+                for (level, entries) in &state.manifests {
+                    assert_eq!(
+                        storage
+                            .read(
+                                "test",
+                                "restored_history",
+                                "manifest",
+                                state.manifest_namespace(*level),
+                                &key,
+                                0,
+                                99
+                            )
+                            .await
+                            .unwrap(),
+                        entries
+                            .iter()
+                            .map(|(id, bytes)| (*id, bytes.to_vec()))
+                            .collect::<Vec<_>>()
+                    );
+                }
+                let restored = storage
+                    .observe_agent("test", "restored", &state.owned_agent_id)
+                    .await
+                    .unwrap();
+                assert!(restored.has_data);
+                assert!(
+                    restored.durable_generation.is_some()
+                        || restored.ephemeral_generation.is_some()
+                );
+                assert_eq!(
+                    storage
+                        .unseal_agent(
+                            "test",
+                            "committed_retry",
+                            &state,
+                            ShardEpoch(7),
+                            ShardEpoch(6),
+                            SystemTime::UNIX_EPOCH
+                        )
+                        .await
+                        .unwrap(),
+                    UnsealAgentResult::Unsealed
+                );
+                assert_eq!(
+                    storage
+                        .observe_agent("test", "same_generation", &state.owned_agent_id)
+                        .await
+                        .unwrap(),
+                    restored
+                );
+                // Both previously retained rows and newly inserted configured rows now fence at 7.
+                for namespace in configured.into_iter().chain([extra]) {
+                    assert_fenced(
+                        storage
+                            .set_key_epoch(
+                                "test",
+                                "raised_or_inserted",
+                                namespace,
+                                &key,
+                                ShardEpoch(6),
+                                &[],
+                                false,
+                            )
+                            .await
+                            .map(|_| ()),
+                        6,
+                        Some(7),
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn postgres_unseal_updates_locked_epochs_and_aborts_missing_row_conflicts() {
+    use golem_worker_executor::storage::indexed::UnsealAgentResult;
+    use std::time::{Duration, SystemTime};
+
+    let wrapper = PostgresIndexedStorageWrapper {
+        postgres: DockerPostgresRdb::new(&Uuid::new_v4().to_string(), false).await,
+    };
+    let config = wrapper.fresh_database().await;
+    let storage = PostgresIndexedStorage::configured(&config).await.unwrap();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect_with(config.postgres.connect_options())
+        .await
+        .unwrap();
+    let state = sealed_index_state(AgentMode::Durable);
+    let key = state.owned_agent_id.storage_key();
+    storage
+        .delete_with_epoch(
+            "test",
+            "retain",
+            state.primary_namespace(),
+            &key,
+            Some(ShardEpoch(6)),
+            true,
+        )
+        .await
+        .unwrap();
+    sqlx::raw_sql(&format!(
+        "CREATE FUNCTION reject_retained_epoch_replacement() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+         IF OLD.agent = '{}'::uuid AND OLD.namespace = 'durable-worker-oplog' THEN
+         RAISE EXCEPTION 'retained epoch must be updated in place'; END IF; RETURN OLD; END $$;
+         CREATE TRIGGER reject_retained_epoch_replacement BEFORE DELETE ON indexed_key_epoch FOR EACH ROW EXECUTE FUNCTION reject_retained_epoch_replacement();",
+        state.owned_agent_id.agent_id.as_uuid()
+    )).execute(&pool).await.unwrap();
+    assert_eq!(
+        storage
+            .unseal_agent(
+                "test",
+                "update_retained",
+                &state,
+                ShardEpoch(7),
+                ShardEpoch(6),
+                SystemTime::now() + Duration::from_secs(30)
+            )
+            .await
+            .unwrap(),
+        UnsealAgentResult::Unsealed
+    );
+
+    let state = sealed_index_state(AgentMode::Durable);
+    let key = state.owned_agent_id.storage_key();
+    let env = state.owned_agent_id.environment_id.0;
+    let agent = state.owned_agent_id.agent_id.as_uuid();
+    storage
+        .delete_with_epoch(
+            "test",
+            "retain_for_conflict",
+            state.primary_namespace(),
+            &key,
+            Some(ShardEpoch(6)),
+            true,
+        )
+        .await
+        .unwrap();
+    // Inject a configured namespace absent from the locked snapshot while raising a retained row.
+    sqlx::raw_sql(&format!(
+        "CREATE FUNCTION insert_missing_epoch_during_raise() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+         IF NEW.agent = '{}'::uuid AND NEW.namespace = 'durable-worker-oplog' THEN
+         INSERT INTO indexed_key_epoch(namespace, env, agent, epoch) VALUES ('durable-worker-c1-oplog', NEW.env, NEW.agent, 9);
+         END IF; RETURN NEW; END $$;
+         CREATE TRIGGER insert_missing_epoch_during_raise BEFORE UPDATE ON indexed_key_epoch FOR EACH ROW EXECUTE FUNCTION insert_missing_epoch_during_raise();",
+        agent
+    )).execute(&pool).await.unwrap();
+    assert!(
+        storage
+            .unseal_agent(
+                "test",
+                "missing_conflict",
+                &state,
+                ShardEpoch(7),
+                ShardEpoch(6),
+                SystemTime::now() + Duration::from_secs(30)
+            )
+            .await
+            .is_err()
+    );
+    let epochs: Vec<(String, i64)> = sqlx::query_as("SELECT namespace, epoch FROM indexed_key_epoch WHERE env = $1 AND agent = $2 ORDER BY namespace;")
+        .bind(env).bind(agent).fetch_all(&pool).await.unwrap();
+    assert_eq!(epochs, vec![("durable-worker-oplog".to_string(), 6)]);
+    assert!(
+        !storage
+            .observe_agent("test", "rolled_back", &state.owned_agent_id)
+            .await
+            .unwrap()
+            .has_data
+    );
+}
+
+#[test]
+#[test_r::timeout("120s")]
 async fn indexed_agent_transitions_retained_deletion_and_conditional_collection(
     _deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
@@ -4855,6 +6725,7 @@ async fn indexed_agent_transitions_retained_deletion_and_conditional_collection(
             1,
             vec![81],
             Some(ShardEpoch(12)),
+            None,
         )
         .await
         .unwrap();
@@ -4908,6 +6779,7 @@ async fn indexed_agent_transitions_retained_deletion_and_conditional_collection(
                 1,
                 vec![82],
                 Some(ShardEpoch(11)),
+                None,
             )
             .await,
         11,
@@ -4961,12 +6833,165 @@ async fn indexed_agent_transitions_retained_deletion_and_conditional_collection(
                     1,
                     vec![83],
                     Some(ShardEpoch(12)),
+                    None,
                 )
                 .await,
             12,
             None,
         );
     }
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn postgres_agent_lookup_plans_use_agent_index_for_present_and_absent_rows() {
+    let wrapper = PostgresIndexedStorageWrapper {
+        postgres: DockerPostgresRdb::new(&Uuid::new_v4().to_string(), false).await,
+    };
+    let config = wrapper.fresh_database().await;
+    let storage = PostgresIndexedStorage::configured(&config).await.unwrap();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .connect_with(config.postgres.connect_options())
+        .await
+        .unwrap();
+    let state = sealed_index_state(AgentMode::Durable);
+    let env = state.owned_agent_id.environment_id.0;
+    let agent = state.owned_agent_id.agent_id.as_uuid();
+    sqlx::query(
+        "INSERT INTO index_storage (namespace, env, agent, id, value) SELECT 'unconfigured-' || ns, CASE WHEN a % 2 = 0 THEN $1 ELSE md5('environment-' || (a % 4))::uuid END, md5('agent-' || a)::uuid, 1, decode('01', 'hex') FROM generate_series(1, 2048) a CROSS JOIN generate_series(1, 16) ns;",
+    ).bind(env).execute(&pool).await.unwrap();
+    // The environment is part of identity, even when another environment has the same agent.
+    sqlx::query("INSERT INTO index_storage (namespace, env, agent, id, value) VALUES ('other-environment', $1, $2, 1, decode('01', 'hex'));")
+        .bind(Uuid::new_v4()).bind(agent).execute(&pool).await.unwrap();
+    let absent_agent = Uuid::new_v4();
+    for namespace in ["unconfigured-level", "durable-worker-staged-oplog"] {
+        sqlx::query("INSERT INTO index_storage (namespace, env, agent, id, value) VALUES ($1, $2, $3, 1, decode('01', 'hex'));")
+            .bind(namespace).bind(env).bind(agent).execute(&pool).await.unwrap();
+        sqlx::query("ANALYZE index_storage;")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for (lookup, expected) in [(agent, true), (absent_agent, false)] {
+            let (present, durable, ephemeral): (bool, Option<Vec<u8>>, Option<Vec<u8>>) =
+                sqlx::query_as(PostgresIndexedStorage::OBSERVE_AGENT_QUERY)
+                    .bind(env)
+                    .bind(lookup)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(present, expected);
+            assert_eq!(durable, None);
+            assert_eq!(ephemeral, None);
+            for query in [
+                PostgresIndexedStorage::OBSERVE_AGENT_QUERY,
+                PostgresIndexedStorage::AGENT_ROWS_QUERY,
+                PostgresIndexedStorage::DELETE_AGENT_ROWS_QUERY,
+            ] {
+                let mut tx = pool.begin().await.unwrap();
+                let explain = format!("EXPLAIN (ANALYZE, BUFFERS) {query}");
+                let plan: Vec<(String,)> = sqlx::query_as(&explain)
+                    .bind(env)
+                    .bind(lookup)
+                    .fetch_all(&mut *tx)
+                    .await
+                    .unwrap();
+                let details = plan
+                    .iter()
+                    .map(|row| row.0.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(
+                    details.contains("idx_index_storage_agent"),
+                    "{query}: {details}"
+                );
+                assert!(
+                    !details.contains("Seq Scan on index_storage"),
+                    "{query}: {details}"
+                );
+                assert!(
+                    details.contains("Index Cond:")
+                        && details.contains("env =")
+                        && details.contains("agent ="),
+                    "{query}: {details}"
+                );
+                tx.rollback().await.unwrap();
+            }
+        }
+        assert!(
+            storage
+                .observe_agent("test", "public_presence", &state.owned_agent_id)
+                .await
+                .unwrap()
+                .has_data
+        );
+        let rows: Vec<(String, i64, Vec<u8>)> =
+            sqlx::query_as(PostgresIndexedStorage::AGENT_ROWS_QUERY)
+                .bind(env)
+                .bind(agent)
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(rows, vec![(namespace.to_string(), 1, vec![1])]);
+        let deleted = sqlx::query(PostgresIndexedStorage::DELETE_AGENT_ROWS_QUERY)
+            .bind(env)
+            .bind(agent)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(deleted.rows_affected(), 1);
+        assert!(
+            !storage
+                .observe_agent("test", "absent_after_release", &state.owned_agent_id)
+                .await
+                .unwrap()
+                .has_data
+        );
+    }
+
+    // A committed retry must not issue writes to either table, even with an expired deadline.
+    storage
+        .unseal_agent(
+            "test",
+            "restore_for_retry",
+            &state,
+            ShardEpoch(7),
+            ShardEpoch(6),
+            std::time::SystemTime::now() + std::time::Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+    let before = storage
+        .observe_agent("test", "before_retry", &state.owned_agent_id)
+        .await
+        .unwrap();
+    assert!(before.durable_generation.is_some());
+    sqlx::raw_sql(
+        "CREATE FUNCTION reject_committed_retry_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'committed retry must not write'; END $$;
+         CREATE TRIGGER reject_index_retry_write BEFORE INSERT OR UPDATE OR DELETE ON index_storage FOR EACH STATEMENT EXECUTE FUNCTION reject_committed_retry_write();
+         CREATE TRIGGER reject_epoch_retry_write BEFORE INSERT OR UPDATE OR DELETE ON indexed_key_epoch FOR EACH STATEMENT EXECUTE FUNCTION reject_committed_retry_write();",
+    ).execute(&pool).await.unwrap();
+    assert_eq!(
+        storage
+            .unseal_agent(
+                "test",
+                "read_only_retry",
+                &state,
+                ShardEpoch(7),
+                ShardEpoch(6),
+                std::time::SystemTime::UNIX_EPOCH
+            )
+            .await
+            .unwrap(),
+        golem_worker_executor::storage::indexed::UnsealAgentResult::Unsealed
+    );
+    assert_eq!(
+        storage
+            .observe_agent("test", "after_retry", &state.owned_agent_id)
+            .await
+            .unwrap(),
+        before
+    );
 }
 
 async fn wait_for_indexed_sql_wait(pool: &sqlx::PgPool, query_fragment: &str) {
@@ -5026,9 +7051,10 @@ async fn postgres_agent_transitions_serialize_fenced_writes_without_blocking_oth
                 "entry",
                 ns,
                 &append_key,
-                1,
+                2,
                 vec![42],
                 Some(ShardEpoch(6)),
+                None,
             )
             .await
     });
@@ -5063,12 +7089,12 @@ async fn postgres_agent_transitions_serialize_fenced_writes_without_blocking_oth
                 "entry",
                 state.primary_namespace(),
                 &key,
-                1,
-                1
+                2,
+                2
             )
             .await
             .unwrap(),
-        vec![(1, vec![42])]
+        vec![(2, vec![42])]
     );
     storage
         .drop_prefix(
@@ -5076,17 +7102,17 @@ async fn postgres_agent_transitions_serialize_fenced_writes_without_blocking_oth
             "archive",
             state.primary_namespace(),
             &key,
-            1,
+            2,
             Some(ShardEpoch(6)),
         )
         .await
         .unwrap();
 
     // Lock the last namespace so release locks the primary first, then pauses.
-    sqlx::query("INSERT INTO indexed_key_epoch (namespace, env, agent, epoch) VALUES ('zz-test-gate', $1, $2, 6)")
+    sqlx::query("INSERT INTO indexed_key_epoch (namespace, env, agent, epoch) VALUES ('ephemeral-worker-zz-test-gate', $1, $2, 6)")
         .bind(state.owned_agent_id.environment_id.0).bind(state.owned_agent_id.agent_id.as_uuid()).execute(&pool).await.unwrap();
     let mut gate = pool.begin().await.unwrap();
-    sqlx::query("SELECT epoch FROM indexed_key_epoch WHERE namespace = 'zz-test-gate' AND env = $1 AND agent = $2 FOR UPDATE")
+    sqlx::query("SELECT epoch FROM indexed_key_epoch WHERE namespace = 'ephemeral-worker-zz-test-gate' AND env = $1 AND agent = $2 FOR UPDATE")
         .bind(state.owned_agent_id.environment_id.0).bind(state.owned_agent_id.agent_id.as_uuid()).execute(&mut *gate).await.unwrap();
     let releaser = storage.clone();
     let release_state = state.clone();
@@ -5110,6 +7136,7 @@ async fn postgres_agent_transitions_serialize_fenced_writes_without_blocking_oth
                 2,
                 vec![43],
                 Some(ShardEpoch(6)),
+                None,
             )
             .await
     });

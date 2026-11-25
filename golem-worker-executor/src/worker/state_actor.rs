@@ -93,6 +93,8 @@ pub(super) struct WorkerStateActor<Ctx: WorkerCtx> {
     lifecycle_jobs: mpsc::UnboundedSender<LifecycleJob<Ctx>>,
     stop: Arc<WorkerStateActorStop>,
     owned_agent_id: OwnedAgentId,
+    retired_for_seal: Arc<AtomicBool>,
+    published_status: Arc<ArcSwap<AgentStatusRecord>>,
 }
 
 /// Cold shutdown control retained until both actors have actually exited. Oplog generations
@@ -399,6 +401,9 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         lifecycle: Arc<Mutex<WorkerLifecycle>>,
     ) -> Self {
         let task_owner = oplog.task_owner().cloned();
+        let retired_for_seal = Arc::new(AtomicBool::new(false));
+        let status_retired_for_seal = retired_for_seal.clone();
+        let published_status = last_known_status.clone();
         let (status_jobs, mut status_rx) = mpsc::unbounded_channel::<StatusJob>();
         // Coalesces the auto commits that happen while a fold job is queued into that one job.
         let auto_commit_queued = Arc::new(AtomicBool::new(false));
@@ -486,6 +491,9 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     } => {
                         let mut publication_failed = false;
                         let result = async {
+                            if status_retired_for_seal.load(Ordering::Acquire) {
+                                return Err(WorkerExecutorError::ShardingNotReady);
+                            }
                             if let Some(wallet) = &wallet_commit {
                                 wallet.validate_before_append()?;
                             }
@@ -534,6 +542,9 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     } => {
                         complete_status_job(
                             async {
+                                if status_retired_for_seal.load(Ordering::Acquire) {
+                                    return Err(WorkerExecutorError::ShardingNotReady);
+                                }
                                 // A detached status is not a fold of the oplog, so the key is
                                 // checked only against a repaired one.
                                 if state.detached.load(Ordering::Acquire) {
@@ -783,6 +794,8 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             lifecycle_jobs,
             stop,
             owned_agent_id,
+            retired_for_seal,
+            published_status,
         };
         if let Some(task_owner) = task_owner {
             task_owner.register_actor(&actor.stop_handle());
@@ -792,6 +805,25 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
 
     pub fn stop_handle(&self) -> Arc<WorkerStateActorStop> {
         self.stop.clone()
+    }
+
+    pub(super) fn retired_for_seal(&self) -> bool {
+        self.retired_for_seal.load(Ordering::Acquire)
+    }
+
+    pub(super) fn retire_for_seal(&self) {
+        self.retired_for_seal.store(true, Ordering::Release);
+    }
+
+    fn missing_reply<T>(&self) -> Result<T, WorkerExecutorError> {
+        if self.retired_for_seal() {
+            Err(WorkerExecutorError::ShardingNotReady)
+        } else {
+            panic!(
+                "Worker state actor for {} stopped without replying",
+                self.owned_agent_id
+            )
+        }
     }
 
     /// Commits the oplog and folds the new entries into the published status. Returns the
@@ -860,9 +892,12 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         instance_guard: OwnedMutexGuard<WorkerLifecycle>,
         card_event_boundary_guard: Option<OwnedMutexGuard<()>>,
     ) -> Result<(), WorkerExecutorError> {
+        if self.retired_for_seal() {
+            return Err(WorkerExecutorError::ShardingNotReady);
+        }
         let worker_keepalive: Arc<dyn Any + Send + Sync> = worker;
         self.commit
-            .run_status_job(|done| StatusJob::AppendAndCommitAttached {
+            .try_run_status_job(|done| StatusJob::AppendAndCommitAttached {
                 entry: Box::new(entry),
                 _worker_keepalive: worker_keepalive,
                 _instance_guard: Some(instance_guard),
@@ -872,6 +907,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                 done,
             })
             .await
+            .unwrap_or_else(|| self.missing_reply())
     }
 
     pub(crate) async fn append_and_commit_wallet(
@@ -879,6 +915,9 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         worker: Arc<Worker<Ctx>>,
         wallet_commit: WalletCommit,
     ) -> Result<(), WorkerExecutorError> {
+        if self.retired_for_seal() {
+            return Err(WorkerExecutorError::ShardingNotReady);
+        }
         let recovery_worker = worker.clone();
         let lifecycle_jobs = self.lifecycle_jobs.clone();
         let wallet_recovery = Box::new(move || {
@@ -894,7 +933,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         });
         let worker_keepalive: Arc<dyn Any + Send + Sync> = worker;
         self.commit
-            .run_status_job(|done| StatusJob::AppendAndCommitAttached {
+            .try_run_status_job(|done| StatusJob::AppendAndCommitAttached {
                 entry: Box::new(wallet_commit.entry()),
                 _worker_keepalive: worker_keepalive,
                 _instance_guard: None,
@@ -904,6 +943,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                 done,
             })
             .await
+            .unwrap_or_else(|| self.missing_reply())
     }
 
     pub(crate) fn recover_wallet_generation(&self, worker: Arc<Worker<Ctx>>) {
@@ -927,8 +967,11 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         expected_revert_generation: u64,
         instance_guard: OwnedMutexGuard<WorkerLifecycle>,
     ) -> Result<bool, WorkerExecutorError> {
+        if self.retired_for_seal() {
+            return Err(WorkerExecutorError::ShardingNotReady);
+        }
         self.commit
-            .run_status_job(|done| StatusJob::AppendInvocationIfVersion {
+            .try_run_status_job(|done| StatusJob::AppendInvocationIfVersion {
                 entry: Box::new(entry),
                 attachment: attachment.map(Box::new),
                 idempotency_key,
@@ -938,19 +981,39 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                 done,
             })
             .await
+            .unwrap_or_else(|| self.missing_reply())
     }
 
     pub async fn status(&self) -> Arc<AgentStatusRecord> {
+        if self.retired_for_seal() {
+            return self.published_status.load_full();
+        }
         self.commit
-            .run_status_job(|done| StatusJob::Status { done })
+            .try_run_status_job(|done| StatusJob::Status { done })
             .await
+            .unwrap_or_else(|| {
+                assert!(
+                    self.retired_for_seal(),
+                    "Worker status actor stopped without replying"
+                );
+                self.published_status.load_full()
+            })
     }
 
     /// The published status, rebuilt first when an earlier rebuild left it detached. Gives the
     /// refusal of that rebuild instead of the detached status, so a caller that chooses work from
     /// the status never chooses it from one that is not a fold of the oplog.
     pub async fn repaired_status(&self) -> Result<Arc<AgentStatusRecord>, OplogRefusal> {
-        self.commit.repaired_status().await
+        self.commit
+            .try_run_status_job(|done| StatusJob::RepairedStatus { done })
+            .await
+            .unwrap_or_else(|| {
+                assert!(
+                    self.retired_for_seal(),
+                    "Worker status actor stopped without replying"
+                );
+                Ok(self.published_status.load_full())
+            })
     }
 
     /// Observational reads can race retirement. A closed queue or dropped reply means the
@@ -992,6 +1055,9 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     }
 
     pub async fn try_status(&self) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
+        if self.retired_for_seal() {
+            return Err(WorkerExecutorError::ShardingNotReady);
+        }
         self.observe_status()
             .await?
             .ok_or_else(|| WorkerExecutorError::runtime("Worker status actor stopped"))
@@ -1614,7 +1680,10 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         if old_status.status != new_status.status
             && matches!(
                 new_status.status,
-                AgentStatus::Idle | AgentStatus::Failed | AgentStatus::Exited
+                AgentStatus::Idle
+                    | AgentStatus::Suspended
+                    | AgentStatus::Failed
+                    | AgentStatus::Exited
             )
         {
             let archive_interval = self.deps.config().oplog.archive_interval;
@@ -1794,6 +1863,10 @@ mod tests {
                     lifecycle_jobs,
                     stop,
                     owned_agent_id,
+                    retired_for_seal: Arc::default(),
+                    published_status: Arc::new(arc_swap::ArcSwap::from_pointee(
+                        AgentStatusRecord::default(),
+                    )),
                 });
                 if pause_stage == 2 {
                     // No explicit stop: dropping the old shell must initiate the same drain.
@@ -2065,6 +2138,59 @@ mod tests {
 
     #[test]
     #[timeout("10s")]
+    async fn a_generation_retired_for_seal_refuses_admission_after_its_actor_stops() {
+        let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 4));
+        let (status_jobs, status_rx) = mpsc::unbounded_channel();
+        let (lifecycle_jobs, _lifecycle_rx) = mpsc::unbounded_channel();
+        let stop = WorkerStateActorStop::new(
+            || {},
+            tokio::spawn(async {}),
+            status_jobs.clone(),
+            tokio::spawn(async {}),
+            async {},
+        );
+        let actor = WorkerStateActor::<Context> {
+            commit: Arc::new(OwnerCommitController {
+                status_jobs,
+                owned_agent_id: owned_agent_id.clone(),
+            }),
+            lifecycle_jobs,
+            stop,
+            owned_agent_id,
+            retired_for_seal: Arc::default(),
+            published_status: Arc::new(arc_swap::ArcSwap::from_pointee(
+                AgentStatusRecord::default(),
+            )),
+        };
+        actor.retire_for_seal();
+        drop(status_rx);
+        actor.stop_handle().stop_and_wait().await.unwrap();
+        let guard = Arc::new(tokio::sync::Mutex::new(super::WorkerLifecycle::unresolved()))
+            .lock_owned()
+            .await;
+        let result = actor
+            .append_invocation_if_version(
+                OplogEntry::suspend(),
+                None,
+                InvocationId(Uuid::new_v4()),
+                0,
+                0,
+                guard,
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(golem_service_base::error::worker_executor::WorkerExecutorError::ShardingNotReady)
+        ));
+        assert!(matches!(
+            actor.try_status().await,
+            Err(golem_service_base::error::worker_executor::WorkerExecutorError::ShardingNotReady)
+        ));
+        assert_eq!(actor.status().await.as_ref(), &AgentStatusRecord::default());
+    }
+
+    #[test]
+    #[timeout("10s")]
     async fn a_confirmation_to_a_stopped_status_task_is_deferred_and_does_not_panic() {
         use super::{ConfirmOutcome, WorkerLifecycle};
         use golem_common::model::oplog::FilesystemSnapshotName;
@@ -2086,6 +2212,10 @@ mod tests {
             lifecycle_jobs,
             stop,
             owned_agent_id,
+            retired_for_seal: Arc::default(),
+            published_status: Arc::new(arc_swap::ArcSwap::from_pointee(
+                AgentStatusRecord::default(),
+            )),
         };
         drop(status_rx);
         let guard = Arc::new(tokio::sync::Mutex::new(WorkerLifecycle::unresolved()))
@@ -2122,6 +2252,10 @@ mod tests {
             lifecycle_jobs,
             stop,
             owned_agent_id,
+            retired_for_seal: Arc::default(),
+            published_status: Arc::new(arc_swap::ArcSwap::from_pointee(
+                AgentStatusRecord::default(),
+            )),
         };
         let status_task = tokio::spawn(async move {
             if let Some(StatusJob::ConfirmFilesystemSnapshot { done, .. }) = status_rx.recv().await

@@ -54,6 +54,7 @@ async fn cancelled_warm_read_poisons_before_exclusive_admission() {
             3,
             vec![37],
             None,
+            None,
         )
         .await
         .unwrap();
@@ -113,6 +114,7 @@ async fn cancelled_warm_read_poisons_before_exclusive_admission() {
             5,
             vec![53],
             None,
+            None,
         )
         .await
         .unwrap();
@@ -151,6 +153,7 @@ async fn cancelling_read_before_admission_does_not_poison() {
             "key",
             7,
             vec![71],
+            None,
             None,
         )
         .await
@@ -273,6 +276,7 @@ async fn retirement_wait_includes_earlier_evicted_generation() {
                 3,
                 vec![37],
                 Some(ShardEpoch(11)),
+                None,
             )
             .await
             .unwrap();
@@ -357,7 +361,8 @@ async fn retirement_wait_includes_earlier_evicted_generation() {
                         "key",
                         4,
                         vec![8],
-                        Some(ShardEpoch(11))
+                        Some(ShardEpoch(11)),
+                        None
                     )
                     .await,
                 Err(IndexedStorageError::Fenced {
@@ -583,6 +588,7 @@ async fn append_many_preserves_per_agent_database_routing() {
             "shared-key",
             vec![(1, Bytes::from_static(b"first-agent-value"))].into(),
             None,
+            None,
         )
         .await
         .unwrap();
@@ -594,6 +600,7 @@ async fn append_many_preserves_per_agent_database_routing() {
             &second_namespace,
             "shared-key",
             vec![(1, Bytes::from_static(b"second-agent-value"))].into(),
+            None,
             None,
         )
         .await
@@ -649,12 +656,22 @@ async fn staging_publication_and_fencing_survive_reclamation() {
             1,
             vec![1],
             None,
+            None,
         )
         .await
         .unwrap();
     assert!(
         storage
-            .move_if_absent("test", "publish", stage, "stage", visible.clone(), "key", 1)
+            .move_if_absent(
+                "test",
+                "publish",
+                stage,
+                "stage",
+                visible.clone(),
+                "key",
+                1,
+                None
+            )
             .await
             .unwrap()
     );
@@ -680,7 +697,8 @@ async fn staging_publication_and_fencing_survive_reclamation() {
                 "key",
                 2,
                 vec![2],
-                Some(ShardEpoch(6))
+                Some(ShardEpoch(6)),
+                None
             )
             .await,
         Err(IndexedStorageError::Fenced { .. })
@@ -723,6 +741,7 @@ async fn failed_staging_move_rolls_back_and_later_drain_reclaims() {
                     id,
                     vec![id as u8],
                     None,
+                    None,
                 )
                 .await
                 .unwrap();
@@ -742,7 +761,8 @@ async fn failed_staging_move_rolls_back_and_later_drain_reclaims() {
                     "source",
                     visible.clone(),
                     "target",
-                    3
+                    3,
+                    None
                 )
                 .await,
             Err(IndexedStorageError::Other(_))
@@ -763,7 +783,7 @@ async fn failed_staging_move_rolls_back_and_later_drain_reclaims() {
             vec![(1, vec![1]), (3, vec![3])]
         );
         storage
-            .delete("test", "drain", stage, "source")
+            .discard_stage("test", "drain", stage, "source", None)
             .await
             .unwrap();
         for suffix in ["", "-wal", "-shm", "-journal"] {
@@ -811,6 +831,7 @@ async fn reclamation_churn_does_not_retain_empty_epoch_snapshots() {
                 1,
                 vec![37],
                 epoch,
+                None,
             )
             .await
             .unwrap();
@@ -872,6 +893,7 @@ async fn deleting_last_snapshot_epoch_cleans_residual_files_before_metadata() {
                 "key",
                 1,
                 vec![53],
+                None,
                 None,
             )
             .await
@@ -940,6 +962,7 @@ async fn trailing_read_cleans_empty_snapshot_after_interrupted_unlink_handoff() 
                     1,
                     vec![97],
                     None,
+                    None,
                 )
                 .await
                 .unwrap();
@@ -973,7 +996,17 @@ async fn scan_counts_empty_files_and_reads_each_file_whole() {
     let ns = oplog_namespace("scan");
     for key in ["a", "b", "c"] {
         storage
-            .append("test", "append", "entry", ns.clone(), key, 1, vec![1], None)
+            .append(
+                "test",
+                "append",
+                "entry",
+                ns.clone(),
+                key,
+                1,
+                vec![1],
+                None,
+                None,
+            )
             .await
             .unwrap();
     }
@@ -1050,6 +1083,7 @@ async fn reclamation_drains_pools_and_preserves_all_epochs_for_recreation() {
             1,
             vec![9],
             Some(ShardEpoch(31)),
+            None,
         )
         .await
         .unwrap();
@@ -1165,7 +1199,8 @@ async fn reclamation_drains_pools_and_preserves_all_epochs_for_recreation() {
                 "visible",
                 1,
                 vec![3],
-                Some(ShardEpoch(31))
+                Some(ShardEpoch(31)),
+                None
             )
             .await,
         Err(IndexedStorageError::Fenced {
@@ -1183,6 +1218,7 @@ async fn reclamation_drains_pools_and_preserves_all_epochs_for_recreation() {
             1,
             vec![4],
             Some(ShardEpoch(41)),
+            None,
         )
         .await
         .unwrap();
@@ -1196,7 +1232,8 @@ async fn reclamation_drains_pools_and_preserves_all_epochs_for_recreation() {
                 "unrelated",
                 1,
                 vec![8],
-                Some(ShardEpoch(41))
+                Some(ShardEpoch(41)),
+                None
             )
             .await,
         Err(IndexedStorageError::Fenced {
@@ -1254,7 +1291,9 @@ async fn staged_rows_other_keys_and_presence_markers_prevent_reclamation() {
         (ns.clone(), "other", vec![11]),
     ] {
         storage
-            .append("test", "append", "entry", namespace, key, 1, bytes, None)
+            .append(
+                "test", "append", "entry", namespace, key, 1, bytes, None, None,
+            )
             .await
             .unwrap();
     }
@@ -1266,7 +1305,7 @@ async fn staged_rows_other_keys_and_presence_markers_prevent_reclamation() {
         .unwrap();
     assert!(path.exists());
     storage
-        .delete("test", "delete", stage, "stage")
+        .discard_stage("test", "delete", stage, "stage", None)
         .await
         .unwrap();
     assert!(path.exists());
@@ -1328,6 +1367,7 @@ async fn compressed_prefix_reclaims_and_retains_writer_epoch() {
             5,
             vec![99],
             Some(ShardEpoch(17)),
+            None,
         )
         .await
         .unwrap();
@@ -1376,6 +1416,7 @@ async fn compressed_prefix_reclaims_and_retains_writer_epoch() {
             6,
             vec![101],
             Some(ShardEpoch(17)),
+            None,
         )
         .await
         .unwrap();
@@ -1410,6 +1451,7 @@ async fn snapshots_are_authoritative_over_leftovers_including_empty_and_partial_
                 "leftover",
                 1,
                 vec![6],
+                None,
                 None,
             )
             .await
@@ -1446,6 +1488,7 @@ async fn snapshots_are_authoritative_over_leftovers_including_empty_and_partial_
                 "new",
                 1,
                 vec![12],
+                None,
                 None,
             )
             .await
@@ -1582,7 +1625,8 @@ async fn absent_destructive_access_never_materializes_and_validates_snapshot_epo
                 "source",
                 ns.clone(),
                 "target",
-                1
+                1,
+                None
             )
             .await
             .is_err()
@@ -1694,6 +1738,7 @@ async fn committed_snapshot_save_error_evicts_cache_and_keeps_snapshot_authority
             1,
             vec![15],
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1731,6 +1776,7 @@ async fn committed_snapshot_save_error_evicts_cache_and_keeps_snapshot_authority
             "key",
             2,
             vec![91],
+            None,
             None,
         )
         .await
@@ -1788,7 +1834,8 @@ async fn restored_snapshot_delete_failures_do_not_publish_or_append() {
                     "key",
                     1,
                     vec![3],
-                    Some(ShardEpoch(67))
+                    Some(ShardEpoch(67)),
+                    None
                 )
                 .await
                 .is_err()
@@ -1824,7 +1871,8 @@ async fn restored_snapshot_delete_failures_do_not_publish_or_append() {
                         "key",
                         2,
                         vec![4],
-                        Some(ShardEpoch(67))
+                        Some(ShardEpoch(67)),
+                        None
                     )
                     .await
                     .is_err()
@@ -1843,7 +1891,8 @@ async fn restored_snapshot_delete_failures_do_not_publish_or_append() {
                         "key",
                         2,
                         vec![4],
-                        Some(ShardEpoch(66))
+                        Some(ShardEpoch(66)),
+                        None
                     )
                     .await,
                 Err(IndexedStorageError::Fenced {
@@ -1861,6 +1910,7 @@ async fn restored_snapshot_delete_failures_do_not_publish_or_append() {
                     2,
                     vec![5],
                     Some(ShardEpoch(67)),
+                    None,
                 )
                 .await
                 .unwrap();
@@ -1889,6 +1939,7 @@ async fn metadata_save_failure_evicts_before_poison_and_never_unlinks() {
             "key",
             1,
             vec![15],
+            None,
             None,
         )
         .await
@@ -1930,6 +1981,7 @@ async fn restoration_failure_keeps_snapshot_and_registered_unpublished_pools() {
                 "key",
                 1,
                 vec![3],
+                None,
                 None
             )
             .await
@@ -1950,7 +2002,7 @@ async fn restoration_failure_keeps_snapshot_and_registered_unpublished_pools() {
     );
     assert!(
         storage
-            .append("test", "append", "entry", ns, "key", 1, vec![4], None)
+            .append("test", "append", "entry", ns, "key", 1, vec![4], None, None)
             .await
             .is_err()
     );
@@ -1965,7 +2017,7 @@ async fn deletion_dirty_listing_is_stable_for_resume_and_refreshes_next_walk() {
     let second = oplog_namespace("listing-second");
     for (ns, key) in [(first.clone(), "alpha"), (second.clone(), "zeta")] {
         storage
-            .append("test", "append", "entry", ns, key, 1, vec![1], None)
+            .append("test", "append", "entry", ns, key, 1, vec![1], None, None)
             .await
             .unwrap();
     }

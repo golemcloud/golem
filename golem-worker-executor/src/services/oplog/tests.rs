@@ -684,6 +684,7 @@ struct HeldAppend {
     id: u64,
     value: Vec<u8>,
     shard_epoch: Option<ShardEpoch>,
+    stage_token: Option<i64>,
 }
 
 impl InjectedAppendFailure {
@@ -729,6 +730,14 @@ impl InjectedAppendFailure {
     }
 }
 
+#[derive(Debug)]
+struct PausedIndexedRead {
+    namespace: IndexedStorageNamespace,
+    after: bool,
+    started: oneshot::Sender<()>,
+    release: oneshot::Receiver<()>,
+}
+
 /// `IndexedStorage` decorator counting read-type operations, used to prove at
 /// the storage level that fresh oplog construction performs no reads before
 /// its first append.
@@ -736,6 +745,7 @@ impl InjectedAppendFailure {
 pub(crate) struct ReadCountingIndexedStorage {
     inner: InMemoryIndexedStorage,
     reads: AtomicUsize,
+    paused_read: StdMutex<Option<PausedIndexedRead>>,
     discard_compressed_appends: bool,
     read_error: Option<IndexedStorageError>,
     read_failures: StdMutex<VecDeque<IndexedStorageError>>,
@@ -763,6 +773,42 @@ pub(crate) struct ReadCountingIndexedStorage {
 impl ReadCountingIndexedStorage {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn pause_next_read(
+        &self,
+        namespace: IndexedStorageNamespace,
+        after: bool,
+    ) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+        let (started, waiting) = oneshot::channel();
+        let (release, resume) = oneshot::channel();
+        let mut slot = self.paused_read.lock().unwrap();
+        assert!(slot.is_none());
+        *slot = Some(PausedIndexedRead {
+            namespace,
+            after,
+            started,
+            release: resume,
+        });
+        (waiting, release)
+    }
+
+    async fn wait_for_read(&self, namespace: &IndexedStorageNamespace, after: bool) {
+        let pause = {
+            let mut slot = self.paused_read.lock().unwrap();
+            if slot
+                .as_ref()
+                .is_some_and(|pause| pause.namespace == *namespace && pause.after == after)
+            {
+                slot.take()
+            } else {
+                None
+            }
+        };
+        if let Some(pause) = pause {
+            let _ = pause.started.send(());
+            let _ = pause.release.await;
+        }
     }
 
     fn discarding_compressed_appends() -> Self {
@@ -829,6 +875,7 @@ impl ReadCountingIndexedStorage {
                     append.id,
                     append.value,
                     append.shard_epoch,
+                    append.stage_token,
                 )
                 .await?;
         }
@@ -875,6 +922,55 @@ impl ReadCountingIndexedStorage {
 impl IndexedStorage for ReadCountingIndexedStorage {
     fn supports_release(&self) -> bool {
         self.inner.supports_release()
+    }
+
+    async fn reserve_stage(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        owned_agent_id: &OwnedAgentId,
+        stage_id: uuid::Uuid,
+        epoch: Option<ShardEpoch>,
+    ) -> Result<Option<i64>, IndexedStorageError> {
+        self.inner
+            .reserve_stage(svc_name, api_name, owned_agent_id, stage_id, epoch)
+            .await
+    }
+
+    async fn remove_stage_reservation(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        owned_agent_id: &OwnedAgentId,
+        token: Option<i64>,
+    ) -> Result<bool, IndexedStorageError> {
+        self.inner
+            .remove_stage_reservation(svc_name, api_name, owned_agent_id, token)
+            .await
+    }
+
+    async fn discard_stage(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        stage_token: Option<i64>,
+    ) -> Result<(), IndexedStorageError> {
+        self.inner
+            .discard_stage(svc_name, api_name, namespace, key, stage_token)
+            .await
+    }
+
+    async fn observe_agent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<crate::storage::indexed::AgentDataObservation, IndexedStorageError> {
+        self.inner
+            .observe_agent(svc_name, api_name, owned_agent_id)
+            .await
     }
 
     async fn mark_sealed(
@@ -1014,12 +1110,18 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         key: &str,
     ) -> Result<bool, IndexedStorageError> {
         self.count_read();
+        self.wait_for_read(&namespace, false).await;
         if self.fail_exists_once.swap(false, Ordering::Relaxed) {
             return Err(IndexedStorageError::Other(
                 "injected indexed exists failure".to_string(),
             ));
         }
-        self.inner.exists(svc_name, api_name, namespace, key).await
+        let result = self
+            .inner
+            .exists(svc_name, api_name, namespace.clone(), key)
+            .await;
+        self.wait_for_read(&namespace, true).await;
+        result
     }
 
     async fn scan_stable(
@@ -1048,6 +1150,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         id: u64,
         mut value: Vec<u8>,
         shard_epoch: Option<ShardEpoch>,
+        stage_token: Option<i64>,
     ) -> Result<(), IndexedStorageError> {
         self.append_attempts.fetch_add(1, Ordering::Relaxed);
         if self.discard_compressed_appends
@@ -1077,6 +1180,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
                         id,
                         value.clone(),
                         shard_epoch,
+                        stage_token,
                     )
                     .await?;
                 self.inner
@@ -1101,6 +1205,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
                         id,
                         value,
                         shard_epoch,
+                        stage_token,
                     )
                     .await;
             }
@@ -1111,6 +1216,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
                     id,
                     value,
                     shard_epoch,
+                    stage_token,
                 });
                 return Err(IndexedStorageError::Indeterminate(
                     "injected connection loss".to_string(),
@@ -1134,6 +1240,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
                 id,
                 value,
                 shard_epoch,
+                stage_token,
             )
             .await?;
         failure.after_write_result()
@@ -1148,6 +1255,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
         shard_epoch: Option<ShardEpoch>,
+        stage_token: Option<i64>,
     ) -> Result<(), IndexedStorageError> {
         self.append_many_attempts.fetch_add(1, Ordering::Relaxed);
         if self.discard_compressed_appends
@@ -1201,9 +1309,35 @@ impl IndexedStorage for ReadCountingIndexedStorage {
                 key,
                 pairs,
                 shard_epoch,
+                stage_token,
             )
             .await?;
         failure.after_write_result()
+    }
+
+    async fn move_if_absent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        source_namespace: IndexedStorageNamespace,
+        source_key: &str,
+        target_namespace: IndexedStorageNamespace,
+        target_key: &str,
+        expected_last_id: u64,
+        stage_token: Option<i64>,
+    ) -> Result<bool, IndexedStorageError> {
+        self.inner
+            .move_if_absent(
+                svc_name,
+                api_name,
+                source_namespace,
+                source_key,
+                target_namespace,
+                target_key,
+                expected_last_id,
+                stage_token,
+            )
+            .await
     }
 
     async fn length(
@@ -1253,6 +1387,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         end_id: u64,
     ) -> Result<Vec<(u64, Vec<u8>)>, IndexedStorageError> {
         self.count_read();
+        self.wait_for_read(&namespace, false).await;
         if let Some(error) = &self.read_error {
             return Err(error.clone());
         }
@@ -1266,17 +1401,20 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         {
             return Ok(Vec::new());
         }
-        self.inner
+        let result = self
+            .inner
             .read(
                 svc_name,
                 api_name,
                 entity_name,
-                namespace,
+                namespace.clone(),
                 key,
                 start_id,
                 end_id,
             )
-            .await
+            .await;
+        self.wait_for_read(&namespace, true).await;
+        result
     }
 
     async fn first(
@@ -1316,14 +1454,18 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         key: &str,
     ) -> Result<Option<u64>, IndexedStorageError> {
         self.count_read();
+        self.wait_for_read(&namespace, false).await;
         if let (Some(error), IndexedStorageNamespace::CompressedOpLog { .. }) =
             (&self.archive_last_id_error, &namespace)
         {
             return Err(error.clone());
         }
-        self.inner
-            .last_id(svc_name, api_name, entity_name, namespace, key)
-            .await
+        let result = self
+            .inner
+            .last_id(svc_name, api_name, entity_name, namespace.clone(), key)
+            .await;
+        self.wait_for_read(&namespace, true).await;
+        result
     }
 
     async fn closest(
@@ -1336,6 +1478,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         id: u64,
     ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
         self.count_read();
+        self.wait_for_read(&namespace, false).await;
         if let Some(error) = &self.read_error {
             return Err(error.clone());
         }
@@ -1345,9 +1488,12 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         if self.miss_closest_once.swap(false, Ordering::Relaxed) {
             return Ok(None);
         }
-        self.inner
-            .closest(svc_name, api_name, entity_name, namespace, key, id)
-            .await
+        let result = self
+            .inner
+            .closest(svc_name, api_name, entity_name, namespace.clone(), key, id)
+            .await;
+        self.wait_for_read(&namespace, true).await;
+        result
     }
 
     async fn drop_prefix(
@@ -1395,6 +1541,8 @@ impl IndexedStorage for ReadCountingIndexedStorage {
 pub(crate) struct ReadCountingBlobStorage<B = InMemoryBlobStorage> {
     inner: B,
     reads: AtomicUsize,
+    fail_read_once: AtomicBool,
+    fail_seal_list_once: AtomicBool,
     puts: AtomicUsize,
     fail_put: Option<usize>,
     fail_delete_after: AtomicUsize,
@@ -1406,8 +1554,16 @@ pub(crate) struct ReadCountingBlobStorage<B = InMemoryBlobStorage> {
             tokio::sync::oneshot::Receiver<()>,
         )>,
     >,
+    pause_seal_list: std::sync::Mutex<
+        Option<(
+            usize,
+            tokio::sync::oneshot::Sender<()>,
+            tokio::sync::oneshot::Receiver<()>,
+        )>,
+    >,
     pause_read: std::sync::Mutex<
         Option<(
+            Option<BlobStorageNamespace>,
             tokio::sync::oneshot::Sender<()>,
             tokio::sync::oneshot::Receiver<()>,
         )>,
@@ -1433,12 +1589,15 @@ impl<B> ReadCountingBlobStorage<B> {
         Self {
             inner,
             reads: AtomicUsize::new(0),
+            fail_read_once: AtomicBool::new(false),
+            fail_seal_list_once: AtomicBool::new(false),
             puts: AtomicUsize::new(0),
             fail_put: None,
             fail_delete_after: AtomicUsize::new(0),
             fail_delete_after_commit: AtomicUsize::new(0),
             fail_delete_dir_once: AtomicBool::new(false),
             pause_put: std::sync::Mutex::new(None),
+            pause_seal_list: std::sync::Mutex::new(None),
             pause_read: std::sync::Mutex::new(None),
         }
     }
@@ -1452,6 +1611,16 @@ impl<B> ReadCountingBlobStorage<B> {
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = tokio::sync::oneshot::channel();
         *self.pause_put.lock().unwrap() = Some((started_tx, release_rx));
+        (started_rx, release_tx)
+    }
+
+    pub(crate) fn pause_seal_list_after(
+        &self,
+        preceding_lists: usize,
+    ) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+        let (started_tx, started_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        *self.pause_seal_list.lock().unwrap() = Some((preceding_lists, started_tx, release_rx));
         (started_rx, release_tx)
     }
 
@@ -1476,8 +1645,25 @@ impl<B> ReadCountingBlobStorage<B> {
     ) {
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = tokio::sync::oneshot::channel();
-        *self.pause_read.lock().unwrap() = Some((started_tx, release_rx));
+        *self.pause_read.lock().unwrap() = Some((None, started_tx, release_rx));
         (started_rx, release_tx)
+    }
+
+    pub(crate) fn pause_next_read_in(
+        &self,
+        namespace: BlobStorageNamespace,
+    ) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+        let (waiting, resume) = self.pause_next_read();
+        self.pause_read.lock().unwrap().as_mut().unwrap().0 = Some(namespace);
+        (waiting, resume)
+    }
+
+    pub(crate) fn fail_next_read(&self) {
+        self.fail_read_once.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn fail_next_seal_list(&self) {
+        self.fail_seal_list_once.store(true, Ordering::Relaxed);
     }
 
     pub(crate) fn reads(&self) -> usize {
@@ -1506,6 +1692,28 @@ impl<B: BlobStorageBackend> BlobStorageBackend for ReadCountingBlobStorage<B> {
         max_keys: u32,
     ) -> anyhow::Result<Vec<golem_service_base::storage::blob::BlobPageEntry>> {
         self.count_read();
+        let pause = if matches!(&namespace, BlobStorageNamespace::SealRecords { .. }) {
+            let mut pause = self.pause_seal_list.lock().unwrap();
+            match pause.as_mut() {
+                Some((0, _, _)) => pause.take(),
+                Some((remaining, _, _)) => {
+                    *remaining -= 1;
+                    None
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+        if let Some((_, started, resume)) = pause {
+            let _ = started.send(());
+            let _ = resume.await;
+        }
+        if matches!(&namespace, BlobStorageNamespace::SealRecords { .. })
+            && self.fail_seal_list_once.swap(false, Ordering::Relaxed)
+        {
+            anyhow::bail!("injected seal LIST failure");
+        }
         self.inner
             .list_page_at(
                 target_label,
@@ -1561,10 +1769,22 @@ impl<B: BlobStorageBackend> BlobStorageBackend for ReadCountingBlobStorage<B> {
         path: &NormalizedBlobPath<'_>,
     ) -> Result<Option<Vec<u8>>, anyhow::Error> {
         self.count_read();
-        let pause = self.pause_read.lock().unwrap().take();
-        if let Some((started, release)) = pause {
+        let pause = {
+            let mut slot = self.pause_read.lock().unwrap();
+            if slot.as_ref().is_some_and(|(filter, _, _)| {
+                filter.as_ref().is_none_or(|filter| *filter == namespace)
+            }) {
+                slot.take()
+            } else {
+                None
+            }
+        };
+        if let Some((_, started, release)) = pause {
             let _ = started.send(());
             let _ = release.await;
+        }
+        if self.fail_read_once.swap(false, Ordering::Relaxed) {
+            return Err(anyhow::anyhow!("injected blob read failure"));
         }
         self.inner
             .get_raw_at(target_label, op_label, namespace, path)
@@ -2151,7 +2371,7 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
             .publish_staged(
                 &owned,
                 AgentMode::Ephemeral,
-                StagePublication::for_tests(stage_id),
+                StagePublication::for_tests(stage_id, None),
                 OplogIndex::INITIAL
             )
             .await
@@ -2167,20 +2387,7 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
             .await
             .unwrap()
     );
-    // A crashed attempt leaves its committed stage behind. A fresh attempt must neither
-    // enumerate it as an agent nor reuse its contents when publishing the same target.
     let orphan_id = Uuid::new_v4();
-    let orphan = service
-        .create_staged(&owned, AgentMode::Durable, orphan_id, metadata.clone())
-        .await
-        .unwrap();
-    orphan.add(create.clone()).await.unwrap();
-    orphan
-        .add(OplogEntry::recovery_succeeded().rounded())
-        .await
-        .unwrap();
-    orphan.commit(CommitLevel::Always).await.unwrap();
-    drop(orphan);
     let entries = [
         create.clone(),
         OplogEntry::suspend().rounded(),
@@ -2218,6 +2425,13 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
                 .is_empty()
         );
     }
+    // Real staged entries, unlike the reservation token, exclude another admission.
+    assert!(matches!(
+        service
+            .create_staged(&owned, AgentMode::Durable, orphan_id, metadata.clone())
+            .await,
+        Err(CreateStagedError::TargetPresent)
+    ));
     assert_eq!(
         stage
             .read_exact(OplogIndex::INITIAL, 3)
@@ -2235,13 +2449,14 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
     else {
         panic!("expected external payload")
     };
+    let stage_token = stage.stage_token();
     drop(stage);
     assert!(
         service
             .publish_staged(
                 &owned,
                 AgentMode::Durable,
-                StagePublication::for_tests(stage_id),
+                StagePublication::for_tests(stage_id, stage_token),
                 OplogIndex::from_u64(3)
             )
             .await
@@ -2263,7 +2478,7 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
         entries
     );
     service
-        .discard_staged(&owned, AgentMode::Durable, orphan_id)
+        .discard_staged(&owned, AgentMode::Durable, orphan_id, None)
         .await
         .unwrap();
     let reopened = service
@@ -2292,24 +2507,22 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
     );
 
     let losing_id = Uuid::new_v4();
-    let losing = service
-        .create_staged(&owned, AgentMode::Durable, losing_id, metadata)
-        .await
-        .unwrap();
-    losing.add(create).await.unwrap();
-    losing.commit(CommitLevel::Always).await.unwrap();
-    assert_eq!(losing.current_oplog_index().await, OplogIndex::INITIAL);
+    assert!(matches!(
+        service
+            .create_staged(&owned, AgentMode::Durable, losing_id, metadata)
+            .await,
+        Err(CreateStagedError::TargetPresent)
+    ));
     assert_eq!(
         reopened.current_oplog_index().await,
         OplogIndex::from_u64(3)
     );
-    drop(losing);
     assert!(
         !service
             .publish_staged(
                 &owned,
                 AgentMode::Durable,
-                StagePublication::for_tests(losing_id),
+                StagePublication::for_tests(losing_id, None),
                 OplogIndex::INITIAL
             )
             .await
@@ -2330,14 +2543,14 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
             .publish_staged(
                 &owned,
                 AgentMode::Durable,
-                StagePublication::for_tests(losing_id),
+                StagePublication::for_tests(losing_id, None),
                 OplogIndex::INITIAL
             )
             .await
             .unwrap()
     );
     service
-        .discard_staged(&owned, AgentMode::Durable, losing_id)
+        .discard_staged(&owned, AgentMode::Durable, losing_id, None)
         .await
         .unwrap();
     assert_eq!(
@@ -9271,6 +9484,7 @@ async fn store_truncated_compressed_chunk(
         last_idx.into(),
         &chunk,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -9388,6 +9602,7 @@ async fn invalid_archive_serialization_versions_are_corruption(_tracing: &Tracin
                     2,
                     raw,
                     None,
+                    None,
                 )
                 .await
                 .unwrap();
@@ -9429,7 +9644,7 @@ async fn invalid_blob_manifest_versions_are_corruption(_tracing: &Tracing) {
         let key = owned_agent_id.storage_key();
         storage
             .with_entity("test", "append", "manifest_entry")
-            .append_raw(namespace.clone(), &key, 2, bytes.clone(), None)
+            .append_raw(namespace.clone(), &key, 2, bytes.clone(), None, None)
             .await
             .unwrap();
         let service = blob_archive(storage.clone(), Arc::new(InMemoryBlobStorage::new()), 1);
@@ -14062,11 +14277,10 @@ async fn wait_for_replicas_does_not_report_a_fenced_flush_as_durable(_tracing: &
     );
 }
 
-// A fork stage is hidden and has one writer, so it asserts no epoch and its commit can never be
-// refused - even while the target agent's oplog is held at a newer epoch by another executor. The
-// fork's stream-store load commits through the stage and expects that commit to succeed.
+// A fork stage asserts its reservation rather than a shard epoch. A newer bare epoch claim
+// does not invalidate it; a competing INITIAL insertion does.
 #[test]
-async fn a_staged_oplog_asserts_no_epoch_and_its_commit_is_never_fenced(_tracing: &Tracing) {
+async fn a_staged_oplog_asserts_its_reservation_not_the_shard_epoch(_tracing: &Tracing) {
     let tempdir = tempfile::TempDir::new().unwrap();
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
@@ -14075,6 +14289,15 @@ async fn a_staged_oplog_asserts_no_epoch_and_its_commit_is_never_fenced(_tracing
     let forking_executor = fencing_oplog_service(&tempdir, "staged-fence").await;
     let owning_executor = fencing_oplog_service(&tempdir, "staged-fence").await;
 
+    let stage = forking_executor
+        .create_staged(
+            &owned_agent_id,
+            AgentMode::Durable,
+            Uuid::new_v4(),
+            make_agent_metadata(agent_id, account_id, environment_id),
+        )
+        .await
+        .unwrap();
     let owner = owning_executor
         .open(
             &mut owning_executor
@@ -14090,18 +14313,6 @@ async fn a_staged_oplog_asserts_no_epoch_and_its_commit_is_never_fenced(_tracing
         )
         .await
         .unwrap();
-    owner.add(OplogEntry::suspend().rounded()).await.unwrap();
-    owner.commit(CommitLevel::Always).await.unwrap();
-
-    let stage = forking_executor
-        .create_staged(
-            &owned_agent_id,
-            AgentMode::Durable,
-            Uuid::new_v4(),
-            make_agent_metadata(agent_id, account_id, environment_id),
-        )
-        .await
-        .unwrap();
     assert_eq!(stage.shard_epoch(), None, "a stage must assert no epoch");
     stage.add(OplogEntry::suspend().rounded()).await.unwrap();
     stage
@@ -14109,6 +14320,7 @@ async fn a_staged_oplog_asserts_no_epoch_and_its_commit_is_never_fenced(_tracing
         .await
         .expect("a stage's commit must never be fenced");
     assert!(stage.fence().is_none(), "a stage must never latch a fence");
+    drop(owner);
 }
 
 #[test]
@@ -15836,6 +16048,7 @@ fn a_read_that_outlives_the_blocking_pool_parks_instead_of_failing() {
                     idx,
                     value,
                     None,
+                    None,
                 )
                 .await
                 .unwrap();
@@ -15887,4 +16100,105 @@ fn a_read_that_outlives_the_blocking_pool_parks_instead_of_failing() {
 
 fn test_invocation_id(value: String) -> InvocationId {
     InvocationId(Uuid::new_v5(&Uuid::NAMESPACE_OID, value.as_bytes()))
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn indeterminate_stage_commit_preserves_reservation_refusals() {
+    for reuse_stage_id in [false, true] {
+        let indexed = Arc::new(ReadCountingIndexedStorage::new());
+        let service = append_reconciliation_service(indexed.clone()).await;
+        let metadata = make_agent_metadata(
+            AgentId::from_parts(7, 2255),
+            AccountId::new(),
+            EnvironmentId::new(),
+        );
+        let id = metadata.owned_agent_id();
+        let stage_id = Uuid::new_v4();
+        let old = service
+            .create_staged(&id, AgentMode::Durable, stage_id, metadata.clone())
+            .await
+            .unwrap();
+        // Empty commits still validate ownership, and a lost reply to that check is retryable.
+        indexed.inject_append_many_failure(InjectedAppendFailure::IndeterminateBeforeWrite);
+        old.commit(CommitLevel::Always).await.unwrap();
+        let namespace = IndexedStorageNamespace::StagedOpLog {
+            owned_agent_id: id.clone(),
+            agent_mode: AgentMode::Durable,
+        };
+        let (waiting, resume) = indexed.pause_next_read(namespace, false);
+        indexed.inject_append_many_failure(InjectedAppendFailure::IndeterminateBeforeWrite);
+        old.add(OplogEntry::suspend()).await.unwrap();
+        let committing = tokio::spawn(async move { old.commit(CommitLevel::Always).await });
+        waiting.await.unwrap();
+        let replacement = service
+            .create_staged(
+                &id,
+                AgentMode::Durable,
+                if reuse_stage_id {
+                    stage_id
+                } else {
+                    Uuid::new_v4()
+                },
+                metadata,
+            )
+            .await
+            .unwrap();
+        replacement.add(OplogEntry::exited()).await.unwrap();
+        replacement.commit(CommitLevel::Always).await.unwrap();
+        resume.send(()).unwrap();
+        let actual = committing.await.unwrap();
+        assert!(
+            matches!(actual, Err(OplogError::StageInvalidated { .. })),
+            "a superseded stage must return its typed refusal: {actual:?}"
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn discarded_stage_report_returns_invalidation_instead_of_a_gap_panic() {
+    let indexed = Arc::new(ReadCountingIndexedStorage::new());
+    let service = PrimaryOplogService::new(
+        indexed.clone(),
+        Arc::new(InMemoryBlobStorage::new()),
+        1,
+        1,
+        100,
+        0,
+        append_reconciliation_retry_config(),
+    )
+    .await;
+    let metadata = make_agent_metadata(
+        AgentId::from_parts(7, 2256),
+        AccountId::new(),
+        EnvironmentId::new(),
+    );
+    let id = metadata.owned_agent_id();
+    let stage_id = Uuid::new_v4();
+    let stage = service
+        .create_staged(&id, AgentMode::Durable, stage_id, metadata)
+        .await
+        .unwrap();
+    let token = stage.stage_token();
+    stage.add(OplogEntry::suspend()).await.unwrap();
+    stage.add(OplogEntry::exited()).await.unwrap();
+    let (reading, resume) = indexed.pause_next_read(
+        IndexedStorageNamespace::StagedOpLog {
+            owned_agent_id: id.clone(),
+            agent_mode: AgentMode::Durable,
+        },
+        false,
+    );
+    let reporting = tokio::spawn(async move { stage.commit(CommitLevel::ReportOnly).await });
+    reading.await.unwrap();
+    service
+        .discard_staged(&id, AgentMode::Durable, stage_id, token)
+        .await
+        .unwrap();
+    resume.send(()).unwrap();
+    assert!(matches!(
+        reporting.await.unwrap(),
+        Err(OplogError::StageInvalidated { .. })
+    ));
 }

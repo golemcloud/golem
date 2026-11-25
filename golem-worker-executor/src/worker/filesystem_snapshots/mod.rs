@@ -553,6 +553,7 @@ pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
                     error @ (OplogError::Payload(_)
                     | OplogError::Maintenance(_)
                     | OplogError::ArchiveWrite(_)
+                    | OplogError::StageInvalidated { .. }
                     | OplogError::Unreadable(_)),
                 ) => {
                     tracing::warn!(error = %error, "Failed to append the periodic snapshot record")

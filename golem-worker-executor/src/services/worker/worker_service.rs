@@ -86,134 +86,141 @@ impl WorkerService for DefaultWorkerService {
         let lifecycle_gate = self.lifecycle_gate(&owned_agent_id.agent_id);
         let _lifecycle_guard = lifecycle_gate.gate.read().await;
         record_worker_call("get");
+        let seal = self
+            .oplog_service
+            .seal_service()
+            .filter(|seal| seal.enabled());
 
-        let Some(identity) = self.resolve_agent_identity(owned_agent_id).await? else {
-            return Ok(None);
-        };
-        let agent_mode = identity.agent_mode;
-        let resolved_fingerprint = identity.fingerprint;
-        let initial_oplog_entry = Some((OplogIndex::INITIAL, identity.create_entry));
+        let present = || async {
+            let Some(identity) = self.resolve_present_agent_identity(owned_agent_id).await? else {
+                return Ok(None);
+            };
+            let agent_mode = identity.agent_mode;
+            let resolved_fingerprint = identity.fingerprint;
+            let initial_oplog_entry = Some((OplogIndex::INITIAL, identity.create_entry));
 
-        debug!("Found initial oplog entry for worker: {initial_oplog_entry:?}");
+            debug!("Found initial oplog entry for worker: {initial_oplog_entry:?}");
 
-        match initial_oplog_entry {
-            None => Ok(None),
-            Some((
-                _,
-                OplogEntry::Create {
-                    timestamp,
-                    parameters,
-                },
-            )) => {
-                let golem_common::model::oplog::CreateParameters {
-                    agent_id,
-                    component_id,
-                    agent_type_name,
-                    canonical_key,
-                    constructor_parameters,
-                    owner_kind,
-                    agent_mode: persisted_agent_mode,
-                    component_revision,
-                    env,
-                    environment_id,
-                    created_by,
-                    parent,
-                    component_size,
-                    initial_total_linear_memory_size,
-                    initial_active_plugins,
-                    local_agent_config,
-                    instance_id,
-                    create_request,
-                    never_live,
-                    standalone_tool,
-                } = *parameters;
-                debug_assert_eq!(persisted_agent_mode, agent_mode);
-                debug_assert_eq!(AgentFingerprint(instance_id), resolved_fingerprint);
-                let agent_mode = persisted_agent_mode;
-                let component_metadata = self
-                    .component_service
-                    .get_metadata(component_id, Some(component_revision))
-                    .await
-                    .map_or_else(
-                        |e| match e {
-                            WorkerExecutorError::ComponentNotFound { .. } => Ok(None),
-                            other => Err(other),
-                        },
-                        |v| Ok(Some(v)),
-                    )
-                    .unwrap_or_else(|err| {
-                        panic!("failed to get component metadata for {owned_agent_id}: {err}")
-                    });
-                let Some(component_metadata) = component_metadata else {
-                    return Ok(None);
-                };
-                let config = local_agent_config
-                    .into_iter()
-                    .map(|lac| {
-                        lac.enrich_with_type(
-                            &component_metadata.metadata,
-                            owner_kind,
-                            agent_type_name.as_ref(),
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-                    .unwrap_or_else(|err| {
-                        panic!("failed enriching local agent config for {owned_agent_id}: {err}")
-                    });
-
-                let initial_worker_metadata = AgentMetadata {
-                    agent_id,
-                    component_id,
-                    agent_type_name,
-                    canonical_key,
-                    constructor_parameters,
-                    owner_kind,
-                    env,
-                    config,
-                    environment_id,
-                    created_by,
-                    created_by_email: component_metadata.account_email,
-                    created_at: timestamp,
-                    parent,
-                    last_known_status: AgentStatusRecord {
-                        component_revision,
-                        component_revision_for_replay: component_revision,
-                        component_size,
-                        total_linear_memory_size: initial_total_linear_memory_size,
-                        active_plugins: initial_active_plugins,
-                        invocation_results: self.config.invocation_results.membership(),
-                        export_fork_admissions: golem_common::model::ExportForkAdmissions {
-                            owner_fingerprint: Some(AgentFingerprint(instance_id)),
-                            ..Default::default()
-                        },
-                        agent_mode,
-                        never_live,
-                        ..AgentStatusRecord::default()
+            match initial_oplog_entry {
+                None => Ok(None),
+                Some((
+                    _,
+                    OplogEntry::Create {
+                        timestamp,
+                        parameters,
                     },
-                    fingerprint: AgentFingerprint(instance_id),
-                    agent_mode,
-                    create_request,
-                    standalone_tool,
-                };
+                )) => {
+                    let golem_common::model::oplog::CreateParameters {
+                        agent_id,
+                        component_id,
+                        agent_type_name,
+                        canonical_key,
+                        constructor_parameters,
+                        owner_kind,
+                        agent_mode: persisted_agent_mode,
+                        component_revision,
+                        env,
+                        environment_id,
+                        created_by,
+                        parent,
+                        component_size,
+                        initial_total_linear_memory_size,
+                        initial_active_plugins,
+                        local_agent_config,
+                        instance_id,
+                        create_request,
+                        never_live,
+                        standalone_tool,
+                    } = *parameters;
+                    debug_assert_eq!(persisted_agent_mode, agent_mode);
+                    debug_assert_eq!(AgentFingerprint(instance_id), resolved_fingerprint);
+                    let agent_mode = persisted_agent_mode;
+                    let component_metadata = self
+                        .component_service
+                        .get_metadata(component_id, Some(component_revision))
+                        .await
+                        .map_or_else(
+                            |e| match e {
+                                WorkerExecutorError::ComponentNotFound { .. } => Ok(None),
+                                other => Err(other),
+                            },
+                            |v| Ok(Some(v)),
+                        )
+                        .unwrap_or_else(|err| {
+                            panic!("failed to get component metadata for {owned_agent_id}: {err}")
+                        });
+                    let Some(component_metadata) = component_metadata else {
+                        return Ok(None);
+                    };
+                    let config = local_agent_config
+                        .into_iter()
+                        .map(|lac| {
+                            lac.enrich_with_type(
+                                &component_metadata.metadata,
+                                owner_kind,
+                                agent_type_name.as_ref(),
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                        .unwrap_or_else(|err| {
+                            panic!(
+                                "failed enriching local agent config for {owned_agent_id}: {err}"
+                            )
+                        });
 
-                let fingerprint = AgentFingerprint(instance_id);
-                let last_known_status = match self
-                    .read_cached_status(owned_agent_id, fingerprint)
-                    .await?
-                {
-                    Some(mut status) => {
-                        // `agent_mode` is `#[transient]` and therefore not part of the status
-                        // blob; restore it from the authoritative value resolved above so the
-                        // returned record carries the correct mode instead of the `Durable`
-                        // deserialization default.
-                        status.agent_mode = agent_mode;
-                        Some(status)
-                    }
-                    // No cached status (cache miss, missing for ephemeral workers, or stale
-                    // format) -> recompute from oplog, preferring to fold forward from the clean
-                    // checkpoint (if any) over a full re-read.
-                    None => {
-                        let last_known_status = calculate_last_known_status_with_checkpoint_reader(
+                    let initial_worker_metadata = AgentMetadata {
+                        agent_id,
+                        component_id,
+                        agent_type_name,
+                        canonical_key,
+                        constructor_parameters,
+                        owner_kind,
+                        env,
+                        config,
+                        environment_id,
+                        created_by,
+                        created_by_email: component_metadata.account_email,
+                        created_at: timestamp,
+                        parent,
+                        last_known_status: AgentStatusRecord {
+                            component_revision,
+                            component_revision_for_replay: component_revision,
+                            component_size,
+                            total_linear_memory_size: initial_total_linear_memory_size,
+                            active_plugins: initial_active_plugins,
+                            invocation_results: self.config.invocation_results.membership(),
+                            export_fork_admissions: golem_common::model::ExportForkAdmissions {
+                                owner_fingerprint: Some(AgentFingerprint(instance_id)),
+                                ..Default::default()
+                            },
+                            agent_mode,
+                            never_live,
+                            ..AgentStatusRecord::default()
+                        },
+                        fingerprint: AgentFingerprint(instance_id),
+                        agent_mode,
+                        create_request,
+                        standalone_tool,
+                    };
+
+                    let fingerprint = AgentFingerprint(instance_id);
+                    let last_known_status = match self
+                        .read_cached_status(owned_agent_id, fingerprint)
+                        .await?
+                    {
+                        Some(mut status) => {
+                            // `agent_mode` is `#[transient]` and therefore not part of the status
+                            // blob; restore it from the authoritative value resolved above so the
+                            // returned record carries the correct mode instead of the `Durable`
+                            // deserialization default.
+                            status.agent_mode = agent_mode;
+                            Some(status)
+                        }
+                        // No cached status (cache miss, missing for ephemeral workers, or stale
+                        // format) -> recompute from oplog, preferring to fold forward from the clean
+                        // checkpoint (if any) over a full re-read.
+                        None => {
+                            let last_known_status = calculate_last_known_status_with_checkpoint_reader(
                             self,
                             owned_agent_id,
                             agent_mode,
@@ -235,52 +242,71 @@ impl WorkerService for DefaultWorkerService {
                         )
                         .await;
 
-                        let last_known_status = match last_known_status {
-                            Ok(Some(status)) => status,
-                            Ok(None) => return Ok(None),
-                            Err(error) => {
-                                tracing::error!(
-                                    agent_id = %owned_agent_id,
-                                    %error,
-                                    "Failed to recompute cold worker status"
-                                );
-                                // The Create entry still proves the worker exists. Leave status
-                                // unresolved so typed reconstruction callers report the failure,
-                                // rather than treating a corrupt status payload as a missing worker.
-                                return Ok(Some(GetWorkerMetadataResult {
-                                    initial_worker_metadata,
-                                    last_known_status: None,
-                                }));
-                            }
-                        };
+                            let last_known_status = match last_known_status {
+                                Ok(Some(status)) => status,
+                                Ok(None) => return Ok(None),
+                                Err(error) => {
+                                    tracing::error!(
+                                        agent_id = %owned_agent_id,
+                                        %error,
+                                        "Failed to recompute cold worker status"
+                                    );
+                                    // The Create entry still proves the worker exists. Leave status
+                                    // unresolved so typed reconstruction callers report the failure,
+                                    // rather than treating a corrupt status payload as a missing worker.
+                                    return Ok(Some(GetWorkerMetadataResult {
+                                        initial_worker_metadata,
+                                        last_known_status: None,
+                                    }));
+                                }
+                            };
 
-                        // Cold path: no in-memory previous, reconcile against stored fields.
-                        // The persisted result index is a cache of the same oplog, so it goes
-                        // with the status it was caught up to and is rebuilt from the oplog.
-                        // Ephemeral agents have no persisted index.
-                        if agent_mode != AgentMode::Ephemeral {
-                            self.clear_invocation_result_index(owned_agent_id, fingerprint)
+                            // Enabled sealing leaves cache publication to the live status actor:
+                            // a cold reader's dispatched writes could outlive seal cleanup.
+                            if seal.is_none() {
+                                if agent_mode != AgentMode::Ephemeral {
+                                    self.clear_invocation_result_index(owned_agent_id, fingerprint)
+                                        .await?;
+                                }
+                                self.write_cached_status(
+                                    owned_agent_id,
+                                    fingerprint,
+                                    None,
+                                    last_known_status.clone(),
+                                )
                                 .await?;
+                            }
+
+                            Some(last_known_status)
                         }
-                        self.write_cached_status(
-                            owned_agent_id,
-                            fingerprint,
-                            None,
-                            last_known_status.clone(),
-                        )
-                        .await?;
+                    };
 
-                        Some(last_known_status)
-                    }
-                };
-
-                Ok(Some(GetWorkerMetadataResult {
-                    initial_worker_metadata,
-                    last_known_status,
-                }))
+                    Ok(Some(GetWorkerMetadataResult {
+                        initial_worker_metadata,
+                        last_known_status,
+                    }))
+                }
+                Some(_) => panic!("Encountered malformed oplog without create oplog entry"),
             }
-            Some(_) => panic!("Encountered malformed oplog without create oplog entry"),
+        };
+        if let Some(seal) = &seal {
+            return seal
+                .read_with_authority(
+                    owned_agent_id,
+                    present,
+                    |record| async move {
+                        let metadata = record.metadata;
+                        Ok(Some(GetWorkerMetadataResult {
+                            last_known_status: Some(metadata.last_known_status.clone()),
+                            initial_worker_metadata: metadata,
+                        }))
+                    },
+                    || Ok(None),
+                    |error| Self::seal_read_error(owned_agent_id, error),
+                )
+                .await;
         }
+        present().await
     }
 
     async fn get_running_workers_in_shards(
@@ -413,6 +439,59 @@ impl WorkerService for DefaultWorkerService {
         operation.await
     }
 
+    async fn seal_generation<'a>(
+        &self,
+        metadata: AgentMetadata,
+        epoch: ShardEpoch,
+        retire: BoxFuture<'a, Result<AgentMetadata, WorkerExecutorError>>,
+    ) -> Result<bool, WorkerExecutorError> {
+        let id = metadata.owned_agent_id();
+        let lifecycle_gate = self.lifecycle_gate(&id.agent_id);
+        let _lifecycle_guard = lifecycle_gate.gate.write().await;
+        let Some(seal) = self
+            .oplog_service
+            .seal_service()
+            .filter(|seal| seal.enabled())
+        else {
+            return Ok(false);
+        };
+        if metadata.agent_mode != AgentMode::Durable || seal.deadline(&id, epoch).is_none() {
+            return Ok(false);
+        }
+        let assignment = self.shard_service.current_assignment()?;
+        let shard_id = ShardId::from_agent_id(&id.agent_id, assignment.number_of_shards);
+        let has_running_member = || async {
+            let members: Vec<RunningWorker> = self
+                .key_value_storage
+                .with_entity("worker", "seal_running_workers", "agent_id")
+                .members_of_set(
+                    KeyValueStorageNamespace::RunningWorkers,
+                    &Self::running_in_shard_key(&shard_id),
+                )
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            Ok::<_, WorkerExecutorError>(members.iter().any(|member| member.owned_agent_id == id))
+        };
+        if has_running_member().await? {
+            return Ok(false);
+        }
+        let metadata = retire.await?;
+        if !seal_status_is_eligible(&metadata.last_known_status) || has_running_member().await? {
+            return Ok(false);
+        }
+        let Some(pending) = seal.prepare(metadata, epoch).await? else {
+            return Ok(false);
+        };
+        self.remove_cached_status(&id, pending.record.fingerprint)
+            .await?;
+        self.stream_session_index
+            .clear(&id, pending.record.fingerprint)
+            .await
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+        seal.remove_moved_copies(&pending).await?;
+        seal.release(&pending).await
+    }
+
     async fn remove_cached_status(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -452,10 +531,14 @@ impl WorkerService for DefaultWorkerService {
             )
             .await
             .map_err(WorkerExecutorError::runtime)?;
-        value
+        let mut indexes: HashSet<OplogIndex> = value
             .transpose()
             .map(|indexes| indexes.into_iter().flatten().collect())
-            .map_err(WorkerExecutorError::runtime)
+            .map_err(WorkerExecutorError::runtime)?;
+        if let Some(seal) = self.oplog_service.seal_service() {
+            indexes.extend(seal.rejected_snapshots(owned_agent_id, fingerprint).await?);
+        }
+        Ok(indexes)
     }
 
     async fn reject_periodic_snapshots(
@@ -927,57 +1010,11 @@ impl WorkerService for DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
     ) -> Result<Option<ResolvedAgentIdentity>, WorkerExecutorError> {
+        let lifecycle_gate = self.lifecycle_gate(&owned_agent_id.agent_id);
+        let _lifecycle_guard = lifecycle_gate.gate.read().await;
         record_worker_call("resolve_agent_identity");
-        let hint = self.read_cached_agent_mode(owned_agent_id).await?;
-        record_agent_identity_resolution(if hint.is_some() { "hint" } else { "no_hint" });
-        let first_mode = hint
-            .as_ref()
-            .map_or(AgentMode::Durable, |hint| hint.agent_mode);
-        let second_mode = match first_mode {
-            AgentMode::Durable => AgentMode::Ephemeral,
-            AgentMode::Ephemeral => AgentMode::Durable,
-        };
-        let resolved = match self
-            .read_agent_identity_in_mode(owned_agent_id, first_mode)
-            .await?
-        {
-            Some(identity) => Some(identity),
-            None => {
-                record_agent_identity_resolution("alternate_mode_fallback");
-                self.read_agent_identity_in_mode(owned_agent_id, second_mode)
-                    .await?
-            }
-        };
-
-        match &resolved {
-            Some(identity) if identity.agent_mode == AgentMode::Durable => {
-                let actual = CachedAgentMode {
-                    agent_mode: identity.agent_mode,
-                    fingerprint: identity.fingerprint,
-                };
-                if hint.as_ref() != Some(&actual) {
-                    match self.write_cached_agent_mode(owned_agent_id, &actual).await {
-                        Ok(()) if hint.is_some() => {
-                            record_agent_identity_resolution("stale_hint_replacement");
-                        }
-                        Ok(()) => {}
-                        Err(err) => {
-                            error!("Failed to cache the agent mode for {owned_agent_id}: {err}");
-                        }
-                    }
-                }
-            }
-            Some(_) if hint.is_some() => {
-                match self.remove_cached_agent_mode(owned_agent_id).await {
-                    Ok(()) => record_agent_identity_resolution("stale_hint_replacement"),
-                    Err(err) => {
-                        error!("Failed to remove stale agent mode for {owned_agent_id}: {err}");
-                    }
-                }
-            }
-            _ => {}
-        }
-        Ok(resolved)
+        self.resolve_agent_identity_with_authority(owned_agent_id)
+            .await
     }
 
     async fn write_cached_status(

@@ -18,6 +18,7 @@ use uuid::Uuid;
 use golem_common::model::IdempotencyKey;
 use golem_common::model::InvocationId;
 
+use crate::services::oplog::OplogOpenPurpose;
 use crate::worker::*;
 
 #[derive(Clone, Debug)]
@@ -666,6 +667,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 ) if !started => continue,
                 result => result.map_err(WorkerExecutorError::from)?,
             };
+            if self.retired_for_seal() {
+                return Err(self.retirement_error());
+            }
             if self.initial_worker_metadata.owner_kind != creation_mode.owner_kind() {
                 return Err(WorkerExecutorError::invalid_request(
                     "execution owner kind does not match the requested creation mode",
@@ -824,14 +828,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         )
     }
 
-    pub(crate) async fn ensure_existing_with_fingerprint(
+    pub(crate) async fn ensure_existing_with_purpose(
         self: &Arc<Self>,
         expected_fingerprint: Option<AgentFingerprint>,
+        purpose: OplogOpenPurpose,
     ) -> Result<(), WorkerExecutorError> {
         // Existing-only acquisition resolves identity, not execution readiness. Deletion
         // must still reach the retained cleanup owner after a failed unload.
+        let archive = matches!(purpose, OplogOpenPurpose::Archive);
         loop {
             if self.is_resolved() {
+                if self.retired_for_seal() {
+                    return Err(self.retirement_error());
+                }
                 return Ok(());
             }
             let worker = self.clone();
@@ -842,12 +851,32 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .oplog_service()
                     .lock_lifecycle(&worker.owned_agent_id.agent_id)
                     .await;
+                lifecycle.set_open_purpose(if archive {
+                    OplogOpenPurpose::Archive
+                } else {
+                    OplogOpenPurpose::Activation
+                });
                 // The epoch is read first, as in `get_or_create_worker_metadata`: a worker whose
                 // shard has already left the assignment is refused without touching storage, and
                 // the oplog opened below asserts the epoch this executor holds.
                 let metadata =
                     match owned_shard_epoch(&worker.deps, &worker.owned_agent_id.agent_id) {
                         Ok(shard_epoch) => {
+                            if archive
+                                && let Some(seal) = worker.oplog_service().seal_service()
+                                && !matches!(
+                                    seal.state(&worker.owned_agent_id).await.map_err(|error| {
+                                        WorkerExecutorError::runtime(error.to_string())
+                                    })?,
+                                    crate::services::oplog::seal::AgentSealState::Present
+                                )
+                            {
+                                return Err(ConstructionError::RequestRejected(
+                                    WorkerExecutorError::worker_not_found(
+                                        worker.owned_agent_id.agent_id(),
+                                    ),
+                                ));
+                            }
                             Self::get_existing_worker_metadata(
                                 &worker.deps,
                                 &mut lifecycle,
@@ -871,8 +900,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .boxed();
             let (started, result) = self.initialize_with(build).await;
             match result {
-                // A load another caller started answers that caller's expected fingerprint,
-                // not this one's, so this caller loads again with its own.
+                // A shared refusal answers the initiating caller's fingerprint and open purpose.
+                // Followers retry with their own, so an archive miss cannot refuse activation.
                 Err(
                     ConstructionError::RequestRejected(_)
                     | ConstructionError::Failed(WorkerExecutorError::AgentNotFound { .. }),

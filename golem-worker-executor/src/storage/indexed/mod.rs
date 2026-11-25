@@ -24,12 +24,19 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::{OwnedAgentId, ShardEpoch};
 use golem_common::serialization::{DecodeError, decode, serialize};
 use golem_service_base::repo::{RepoError, is_transient_sqlx_error};
+use uuid::Uuid;
 
 pub mod memory;
 pub mod multi_sqlite;
 pub mod postgres;
 pub mod redis;
 pub mod sqlite;
+
+pub(crate) const STAGE_RESERVATION_NAMESPACE: &str = "stage-reservation";
+
+fn fresh_stage_token() -> i64 {
+    rand::random::<i64>() & i64::MAX
+}
 
 /// Typed error for [`IndexedStorage`] operations.
 ///
@@ -47,6 +54,8 @@ pub enum IndexedStorageError {
     InvalidResume(String),
     /// Permanent error — data issue or schema error. Caller should not retry.
     Other(String),
+    /// The stage reservation is missing or replaced; this writer must not recreate the stage.
+    StageInvalidated { key: String },
     /// The write was refused because the epoch it asserted is not the one recorded for the key.
     Fenced {
         key: String,
@@ -86,6 +95,9 @@ impl Display for IndexedStorageError {
             IndexedStorageError::Conflict(msg) => write!(f, "Storage conflict: {msg}"),
             IndexedStorageError::InvalidResume(msg) => write!(f, "Invalid scan resume: {msg}"),
             IndexedStorageError::Other(msg) => write!(f, "Storage error: {msg}"),
+            IndexedStorageError::StageInvalidated { key } => {
+                write!(f, "Stage reservation invalidated for key {key}")
+            }
             IndexedStorageError::Fenced {
                 key,
                 expected,
@@ -118,6 +130,9 @@ impl From<String> for IndexedStorageError {
 #[derive(Debug)]
 pub(crate) enum FencedTxError {
     Repo(RepoError),
+    StageInvalidated {
+        key: String,
+    },
     Fenced {
         key: String,
         expected: ShardEpoch,
@@ -135,6 +150,20 @@ impl From<RepoError> for FencedTxError {
 }
 
 impl FencedTxError {
+    fn check_stage_token(
+        key: &str,
+        expected: Option<i64>,
+        stored: Option<i64>,
+    ) -> Result<(), Self> {
+        if expected.is_none() || expected != stored {
+            Err(Self::StageInvalidated {
+                key: key.to_string(),
+            })
+        } else {
+            Ok(())
+        }
+    }
+
     pub(crate) fn check_record(
         key: &str,
         expected: ShardEpoch,
@@ -165,6 +194,9 @@ impl FencedTxError {
     ) -> IndexedStorageError {
         match self {
             FencedTxError::Repo(err) => classify(err),
+            FencedTxError::StageInvalidated { key } => {
+                IndexedStorageError::StageInvalidated { key }
+            }
             FencedTxError::Fenced {
                 key,
                 expected,
@@ -269,6 +301,41 @@ fn scan_prefix_upper_bound(prefix: &str) -> Option<String> {
     None
 }
 
+/// One read-only snapshot of agent-wide data presence and both seal marker generations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentDataObservation {
+    pub has_data: bool,
+    pub durable_generation: Option<Uuid>,
+    pub ephemeral_generation: Option<Uuid>,
+}
+
+impl AgentDataObservation {
+    fn from_raw(
+        has_data: bool,
+        durable: Option<Vec<u8>>,
+        ephemeral: Option<Vec<u8>>,
+    ) -> Result<Self, IndexedStorageError> {
+        Ok(Self {
+            has_data,
+            durable_generation: durable
+                .as_deref()
+                .map(marker_generation)
+                .transpose()
+                .map_err(IndexedStorageError::Other)?,
+            ephemeral_generation: ephemeral
+                .as_deref()
+                .map(marker_generation)
+                .transpose()
+                .map_err(IndexedStorageError::Other)?,
+        })
+    }
+}
+
+fn marker_generation(value: &[u8]) -> Result<Uuid, String> {
+    Uuid::from_slice(value)
+        .map_err(|error| format!("Invalid indexed seal marker generation: {error}"))
+}
+
 /// The indexed part of a seal record, with the configured compressed levels needed on unseal.
 #[derive(Debug, Clone)]
 pub struct AgentIndexedState {
@@ -369,7 +436,56 @@ pub trait IndexedStorage: Debug + Sync {
     /// Whether whole-agent transitions are atomic on this backend. Callers skip seal otherwise.
     fn supports_release(&self) -> bool;
 
+    /// Claims the optional primary shard epoch and replaces the agent's stage token if no data
+    /// exists. Tokens are not data presence or shard epochs. Refused admission returns `None`.
+    /// Backends without release support return `Some(0)` without writing a reservation.
+    async fn reserve_stage(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _owned_agent_id: &OwnedAgentId,
+        _stage_id: Uuid,
+        _epoch: Option<ShardEpoch>,
+    ) -> Result<Option<i64>, IndexedStorageError> {
+        if self.supports_release() {
+            Err(IndexedStorageError::Other(
+                "stage reservations are unsupported".into(),
+            ))
+        } else {
+            Ok(Some(0))
+        }
+    }
+
+    /// Removes a reservation under the agent lock, conditionally when `token` is supplied.
+    async fn remove_stage_reservation(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _owned_agent_id: &OwnedAgentId,
+        _token: Option<i64>,
+    ) -> Result<bool, IndexedStorageError> {
+        if self.supports_release() {
+            Err(IndexedStorageError::Other(
+                "stage reservation removal is unsupported".into(),
+            ))
+        } else {
+            Ok(true)
+        }
+    }
+
+    /// Atomically observes data presence and both mode marker UUIDs, without writes.
+    /// The presence lookup covers all namespaces, modes and staged keys.
+    /// Any data row is presence, including a seal marker; bare epoch rows are not presence.
+    /// Malformed marker payloads and backends without release support return an error.
+    async fn observe_agent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<AgentDataObservation, IndexedStorageError>;
+
     /// Inserts the marker while atomically checking the agent's fence key at exactly `epoch`.
+    /// The first mark stores a fresh UUID; repeated marks preserve that generation.
     async fn mark_sealed(
         &self,
         svc_name: &'static str,
@@ -395,7 +511,8 @@ pub trait IndexedStorage: Debug + Sync {
     /// Any data row is presence; epoch rows alone are fences and may be raised. A higher epoch
     /// or an epoch below `record_epoch` returns `Fenced`, without mutation. The server checks
     /// `valid_until` in the epoch insertion statement, under a short statement timeout.
-    /// An exact retry of an already committed restoration returns `Unsealed`.
+    /// A restoration stores a fresh marker UUID. An exact committed retry returns `Unsealed`
+    /// without writes and preserves that UUID, even after the deadline.
     async fn unseal_agent(
         &self,
         svc_name: &'static str,
@@ -472,9 +589,12 @@ pub trait IndexedStorage: Debug + Sync {
         id: u64,
         value: Vec<u8>,
         expected_epoch: Option<ShardEpoch>,
+        stage_token: Option<i64>,
     ) -> Result<(), IndexedStorageError>;
 
     /// Appends multiple entries to the given key with the given ids, all or nothing.
+    /// Staged appends on capable backends require the exact reservation token in the same atomic
+    /// step as the insert. A missing or replaced token returns `StageInvalidated`.
     async fn append_many(
         &self,
         svc_name: &'static str,
@@ -484,11 +604,12 @@ pub trait IndexedStorage: Debug + Sync {
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
         expected_epoch: Option<ShardEpoch>,
+        stage_token: Option<i64>,
     ) -> Result<(), IndexedStorageError>;
 
     /// Atomically moves a stopped source index to a previously absent target index. The source
-    /// must contain exactly ids 1..=expected_last_id. Returns false without mutation if the target
-    /// exists. An invalid source remains unchanged.
+    /// must contain exactly ids 1..=expected_last_id. Staged publication checks the token and
+    /// removes its reservation. Returns false without mutation if the target exists.
     /// An indeterminate result must be reconciled against the target, not blindly retried.
     async fn move_if_absent(
         &self,
@@ -499,6 +620,7 @@ pub trait IndexedStorage: Debug + Sync {
         _target_namespace: IndexedStorageNamespace,
         _target_key: &str,
         _expected_last_id: u64,
+        _stage_token: Option<i64>,
     ) -> Result<bool, IndexedStorageError> {
         Err(IndexedStorageError::Other(
             "atomic index moves are unsupported".to_string(),
@@ -514,7 +636,27 @@ pub trait IndexedStorage: Debug + Sync {
         key: &str,
     ) -> Result<u64, IndexedStorageError>;
 
+    /// Discards a stage only if its exact reservation token is still current. A missing or
+    /// replaced token is a no-op. Backends without release support delete without a token check.
+    async fn discard_stage(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        _stage_token: Option<i64>,
+    ) -> Result<(), IndexedStorageError> {
+        if self.supports_release() {
+            Err(IndexedStorageError::Other(
+                "stage discard is unsupported".into(),
+            ))
+        } else {
+            self.delete(svc_name, api_name, namespace, key).await
+        }
+    }
+
     /// Deletes the index and its key existence, allowing the name to be reused.
+    /// Does not remove stage reservations; stage owners must use `discard_stage` instead.
     async fn delete(
         &self,
         svc_name: &'static str,
@@ -708,6 +850,45 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         }
     }
 
+    pub async fn reserve_stage(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        stage_id: Uuid,
+        epoch: Option<ShardEpoch>,
+    ) -> Result<Option<i64>, IndexedStorageError> {
+        self.record("reserve_stage");
+        self.storage
+            .reserve_stage(
+                self.svc_name,
+                self.api_name,
+                owned_agent_id,
+                stage_id,
+                epoch,
+            )
+            .await
+    }
+
+    pub async fn remove_stage_reservation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        token: Option<i64>,
+    ) -> Result<bool, IndexedStorageError> {
+        self.record("remove_stage_reservation");
+        self.storage
+            .remove_stage_reservation(self.svc_name, self.api_name, owned_agent_id, token)
+            .await
+    }
+
+    pub async fn observe_agent(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<AgentDataObservation, IndexedStorageError> {
+        self.record("observe_agent");
+        self.storage
+            .observe_agent(self.svc_name, self.api_name, owned_agent_id)
+            .await
+    }
+
     pub async fn number_of_replicas(&self) -> Result<u8, IndexedStorageError> {
         self.record("number_of_replicas");
         self.storage
@@ -744,6 +925,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         target_namespace: IndexedStorageNamespace,
         target_key: &str,
         expected_last_id: u64,
+        stage_token: Option<i64>,
     ) -> Result<bool, IndexedStorageError> {
         self.record("move_if_absent");
         self.storage
@@ -755,6 +937,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
                 target_namespace,
                 target_key,
                 expected_last_id,
+                stage_token,
             )
             .await
     }
@@ -787,6 +970,18 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         self.record("length");
         self.storage
             .length(self.svc_name, self.api_name, namespace, key)
+            .await
+    }
+
+    pub async fn discard_stage(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        stage_token: Option<i64>,
+    ) -> Result<(), IndexedStorageError> {
+        self.record("discard_stage");
+        self.storage
+            .discard_stage(self.svc_name, self.api_name, namespace, key, stage_token)
             .await
     }
 
@@ -894,6 +1089,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         id: u64,
         value: &V,
         expected_epoch: Option<ShardEpoch>,
+        stage_token: Option<i64>,
     ) -> Result<(), IndexedStorageError> {
         self.record("append");
         self.storage
@@ -906,6 +1102,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 id,
                 serialize(value).map_err(IndexedStorageError::Other)?,
                 expected_epoch,
+                stage_token,
             )
             .await
     }
@@ -918,6 +1115,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         id: u64,
         value: Vec<u8>,
         expected_epoch: Option<ShardEpoch>,
+        stage_token: Option<i64>,
     ) -> Result<(), IndexedStorageError> {
         self.record("append");
         self.storage
@@ -930,6 +1128,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 id,
                 value,
                 expected_epoch,
+                stage_token,
             )
             .await
     }
@@ -942,6 +1141,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         key: &str,
         pairs: &[(u64, &V)],
         expected_epoch: Option<ShardEpoch>,
+        stage_token: Option<i64>,
     ) -> Result<u64, IndexedStorageError> {
         let mut serialized_pairs = Vec::with_capacity(pairs.len());
         let mut total_bytes = 0u64;
@@ -950,8 +1150,14 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
             total_bytes += bytes.len() as u64;
             serialized_pairs.push((*id, Bytes::from(bytes)));
         }
-        self.append_many_raw(namespace, key, serialized_pairs.into(), expected_epoch)
-            .await?;
+        self.append_many_raw(
+            namespace,
+            key,
+            serialized_pairs.into(),
+            expected_epoch,
+            stage_token,
+        )
+        .await?;
         Ok(total_bytes)
     }
 
@@ -962,6 +1168,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
         expected_epoch: Option<ShardEpoch>,
+        stage_token: Option<i64>,
     ) -> Result<(), IndexedStorageError> {
         self.record("append_many");
         self.storage
@@ -973,6 +1180,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 key,
                 pairs,
                 expected_epoch,
+                stage_token,
             )
             .await
     }
@@ -1274,6 +1482,30 @@ mod tests {
     test_r::enable!();
 
     #[test]
+    fn agent_observation_rejects_malformed_marker_generations() {
+        let durable = uuid::Uuid::new_v4();
+        let ephemeral = uuid::Uuid::new_v4();
+        let observation = super::AgentDataObservation::from_raw(
+            true,
+            Some(durable.as_bytes().to_vec()),
+            Some(ephemeral.as_bytes().to_vec()),
+        )
+        .unwrap();
+        assert_eq!(observation.durable_generation, Some(durable));
+        assert_eq!(observation.ephemeral_generation, Some(ephemeral));
+        for malformed in [Vec::new(), vec![0; 15], vec![0; 17]] {
+            assert!(matches!(
+                super::AgentDataObservation::from_raw(true, Some(malformed.clone()), None),
+                Err(IndexedStorageError::Other(_))
+            ));
+            assert!(matches!(
+                super::AgentDataObservation::from_raw(true, None, Some(malformed)),
+                Err(IndexedStorageError::Other(_))
+            ));
+        }
+    }
+
+    #[test]
     async fn indexed_reads_expose_decode_errors_without_panicking() {
         let storage = InMemoryIndexedStorage::new();
         let labelled = storage.with_entity("test", "decode", "entry");
@@ -1295,7 +1527,7 @@ mod tests {
             ),
         ] {
             labelled
-                .append_raw(namespace.clone(), key, 7, bytes, None)
+                .append_raw(namespace.clone(), key, 7, bytes, None, None)
                 .await
                 .unwrap();
             assert_eq!(
@@ -1350,7 +1582,7 @@ mod tests {
             );
         }
         labelled
-            .append_raw(namespace.clone(), "malformed", 7, vec![3], None)
+            .append_raw(namespace.clone(), "malformed", 7, vec![3], None, None)
             .await
             .unwrap();
         assert!(matches!(

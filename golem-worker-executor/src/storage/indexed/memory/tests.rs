@@ -44,9 +44,21 @@ fn primary_namespace() -> IndexedStorageNamespace {
     }
 }
 
+async fn reserve(storage: &super::InMemoryIndexedStorage) -> (String, i64) {
+    let owned = OwnedAgentId::new(EnvironmentId(Uuid::new_v4()), &AgentId::from_parts(7, 1));
+    let stage = Uuid::new_v4();
+    let token = storage
+        .reserve_stage("test", "reserve", &owned, stage, None)
+        .await
+        .unwrap()
+        .unwrap();
+    (format!("{}#{stage}", owned.storage_key()), token)
+}
+
 #[test]
 async fn staged_publication_is_atomic_validated_and_hidden() {
     let storage = super::InMemoryIndexedStorage::new();
+    let (stage, token) = reserve(&storage).await;
     for (id, value) in [(1, b"one"), (2, b"two")] {
         storage
             .append(
@@ -54,10 +66,11 @@ async fn staged_publication_is_atomic_validated_and_hidden() {
                 "append",
                 "entry",
                 staged_namespace(),
-                "stage",
+                &stage,
                 id,
                 value.to_vec(),
                 None,
+                Some(token),
             )
             .await
             .unwrap();
@@ -85,10 +98,11 @@ async fn staged_publication_is_atomic_validated_and_hidden() {
                 "test",
                 "publish",
                 staged_namespace(),
-                "stage",
+                &stage,
                 primary_namespace(),
                 "target",
-                2
+                2,
+                Some(token),
             )
             .await
             .unwrap()
@@ -104,7 +118,7 @@ async fn staged_publication_is_atomic_validated_and_hidden() {
                     agent_mode: golem_common::model::agent::AgentMode::Durable
                 },
                 "target",
-                1,
+                0,
                 2
             )
             .await
@@ -113,7 +127,7 @@ async fn staged_publication_is_atomic_validated_and_hidden() {
     );
     assert!(
         !storage
-            .exists("test", "exists", staged_namespace(), "stage")
+            .exists("test", "exists", staged_namespace(), &stage)
             .await
             .unwrap()
     );
@@ -123,6 +137,7 @@ async fn staged_publication_is_atomic_validated_and_hidden() {
         ("gap", vec![(1, b"one".to_vec()), (3, b"three".to_vec())], 3),
         ("tip", vec![(1, b"one".to_vec())], 2),
     ] {
+        let (stage, token) = reserve(&storage).await;
         for (id, value) in pairs {
             storage
                 .append(
@@ -130,10 +145,11 @@ async fn staged_publication_is_atomic_validated_and_hidden() {
                     "append",
                     "entry",
                     staged_namespace(),
-                    key,
+                    &stage,
                     id,
                     value,
                     None,
+                    Some(token),
                 )
                 .await
                 .unwrap();
@@ -144,10 +160,11 @@ async fn staged_publication_is_atomic_validated_and_hidden() {
                     "test",
                     "publish",
                     staged_namespace(),
-                    key,
+                    &stage,
                     primary_namespace(),
                     key,
-                    tip
+                    tip,
+                    Some(token),
                 )
                 .await
                 .is_err()
@@ -172,7 +189,12 @@ async fn staged_publication_is_atomic_validated_and_hidden() {
 #[test]
 async fn staged_publication_never_overwrites_and_has_one_concurrent_winner() {
     let storage = std::sync::Arc::new(super::InMemoryIndexedStorage::new());
-    for stage in ["first", "second"] {
+    let (first, first_token) = reserve(&storage).await;
+    let (second, second_token) = reserve(&storage).await;
+    for (stage, value, token) in [
+        (&first, "first", first_token),
+        (&second, "second", second_token),
+    ] {
         storage
             .append(
                 "test",
@@ -181,24 +203,27 @@ async fn staged_publication_never_overwrites_and_has_one_concurrent_winner() {
                 staged_namespace(),
                 stage,
                 1,
-                stage.as_bytes().to_vec(),
+                value.as_bytes().to_vec(),
                 None,
+                Some(token),
             )
             .await
             .unwrap();
     }
     let a = {
         let storage = storage.clone();
+        let first = first.clone();
         tokio::spawn(async move {
             storage
                 .move_if_absent(
                     "test",
                     "publish",
                     staged_namespace(),
-                    "first",
+                    &first,
                     primary_namespace(),
                     "target",
                     1,
+                    Some(first_token),
                 )
                 .await
                 .unwrap()
@@ -206,16 +231,18 @@ async fn staged_publication_never_overwrites_and_has_one_concurrent_winner() {
     };
     let b = {
         let storage = storage.clone();
+        let second = second.clone();
         tokio::spawn(async move {
             storage
                 .move_if_absent(
                     "test",
                     "publish",
                     staged_namespace(),
-                    "second",
+                    &second,
                     primary_namespace(),
                     "target",
                     1,
+                    Some(second_token),
                 )
                 .await
                 .unwrap()
@@ -244,13 +271,18 @@ async fn staged_publication_never_overwrites_and_has_one_concurrent_winner() {
                 "publish",
                 staged_namespace(),
                 if before[0].1 == b"first" {
-                    "second"
+                    &second
                 } else {
-                    "first"
+                    &first
                 },
                 primary_namespace(),
                 "target",
-                1
+                1,
+                Some(if before[0].1 == b"first" {
+                    second_token
+                } else {
+                    first_token
+                }),
             )
             .await
             .unwrap()
@@ -274,16 +306,18 @@ async fn staged_publication_never_overwrites_and_has_one_concurrent_winner() {
         before
     );
 
+    let (third, third_token) = reserve(&storage).await;
     storage
         .append(
             "test",
             "append",
             "entry",
             staged_namespace(),
-            "third",
+            &third,
             1,
             b"staged".to_vec(),
             None,
+            Some(third_token),
         )
         .await
         .unwrap();
@@ -295,10 +329,11 @@ async fn staged_publication_never_overwrites_and_has_one_concurrent_winner() {
                     "test",
                     "publish",
                     staged_namespace(),
-                    "third",
+                    &third,
                     primary_namespace(),
                     "ordinary-race",
                     1,
+                    Some(third_token),
                 )
                 .await
                 .unwrap()
@@ -319,6 +354,7 @@ async fn staged_publication_never_overwrites_and_has_one_concurrent_winner() {
                     "ordinary-race",
                     1,
                     b"ordinary".to_vec(),
+                    None,
                     None,
                 )
                 .await
@@ -343,6 +379,7 @@ async fn scan_stable_pages_in_order_and_hands_a_key_back_once() {
             key,
             1,
             &100,
+            None,
             None,
         )
         .await
@@ -401,6 +438,7 @@ async fn a_scan_of_a_type_prefix_gives_the_storage_key_of_its_agent() {
         1,
         &100,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -413,6 +451,7 @@ async fn a_scan_of_a_type_prefix_gives_the_storage_key_of_its_agent() {
         &key,
         1,
         &100,
+        None,
         None,
     )
     .await
@@ -477,6 +516,7 @@ async fn closest_exact_match() {
         1,
         &100,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -488,6 +528,7 @@ async fn closest_exact_match() {
         key,
         2,
         &200,
+        None,
         None,
     )
     .await
@@ -501,6 +542,7 @@ async fn closest_exact_match() {
         3,
         &300,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -512,6 +554,7 @@ async fn closest_exact_match() {
         key,
         4,
         &400,
+        None,
         None,
     )
     .await
@@ -547,6 +590,7 @@ async fn closest_no_match() {
         1,
         &100,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -558,6 +602,7 @@ async fn closest_no_match() {
         key,
         2,
         &200,
+        None,
         None,
     )
     .await
@@ -571,6 +616,7 @@ async fn closest_no_match() {
         3,
         &300,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -582,6 +628,7 @@ async fn closest_no_match() {
         key,
         4,
         &400,
+        None,
         None,
     )
     .await
@@ -617,6 +664,7 @@ async fn closest_match() {
         10,
         &100,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -628,6 +676,7 @@ async fn closest_match() {
         key,
         20,
         &200,
+        None,
         None,
     )
     .await
@@ -641,6 +690,7 @@ async fn closest_match() {
         30,
         &300,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -652,6 +702,7 @@ async fn closest_match() {
         key,
         40,
         &400,
+        None,
         None,
     )
     .await
@@ -687,6 +738,7 @@ async fn read() {
         10,
         &100,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -698,6 +750,7 @@ async fn read() {
         key,
         20,
         &200,
+        None,
         None,
     )
     .await
@@ -711,6 +764,7 @@ async fn read() {
         30,
         &300,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -722,6 +776,7 @@ async fn read() {
         key,
         40,
         &400,
+        None,
         None,
     )
     .await
@@ -758,6 +813,7 @@ async fn read_wider() {
         10,
         &100,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -769,6 +825,7 @@ async fn read_wider() {
         key,
         20,
         &200,
+        None,
         None,
     )
     .await
@@ -782,6 +839,7 @@ async fn read_wider() {
         30,
         &300,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -793,6 +851,7 @@ async fn read_wider() {
         key,
         40,
         &400,
+        None,
         None,
     )
     .await
@@ -829,6 +888,7 @@ async fn first() {
         10,
         &100,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -840,6 +900,7 @@ async fn first() {
         key,
         20,
         &200,
+        None,
         None,
     )
     .await
@@ -874,6 +935,7 @@ async fn last() {
         10,
         &100,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -885,6 +947,7 @@ async fn last() {
         key,
         20,
         &200,
+        None,
         None,
     )
     .await
@@ -919,6 +982,7 @@ async fn drop_prefix() {
         1,
         &100,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -930,6 +994,7 @@ async fn drop_prefix() {
         key,
         2,
         &200,
+        None,
         None,
     )
     .await
@@ -943,6 +1008,7 @@ async fn drop_prefix() {
         3,
         &300,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -954,6 +1020,7 @@ async fn drop_prefix() {
         key,
         4,
         &400,
+        None,
         None,
     )
     .await
@@ -1012,6 +1079,7 @@ fn an_unfenced_append_racing_delete_empty_is_never_lost() {
                     1,
                     b"one".to_vec(),
                     None,
+                    None,
                 )
                 .await
                 .unwrap();
@@ -1033,6 +1101,7 @@ fn an_unfenced_append_racing_delete_empty_is_never_lost() {
                             &key,
                             2,
                             b"two".to_vec(),
+                            None,
                             None,
                         )
                         .await

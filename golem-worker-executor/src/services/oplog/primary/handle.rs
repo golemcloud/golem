@@ -28,6 +28,7 @@ impl PrimaryOplog {
     pub(super) fn new(
         shard_epoch: Option<ShardEpoch>,
         fence: Option<OplogFence>,
+        stage_token: Option<i64>,
         indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         replicas: u8,
@@ -51,6 +52,7 @@ impl PrimaryOplog {
         let auto_commit_listener = AutoCommitListener::default();
         let mut state = PrimaryOplogState {
             shard_epoch,
+            stage_token,
             fence: fence.clone(),
             indexed_storage,
             blob_storage,
@@ -249,27 +251,27 @@ impl PrimaryOplog {
                             level => state.commit(level).await,
                         };
                         let result = match committed {
-                            Ok(committed) => Ok(state
-                                .committed_since_last_report(
-                                    previously_committed_through,
-                                    committed,
-                                )
-                                .await),
+                            Ok(committed) => {
+                                state
+                                    .committed_since_last_report(
+                                        previously_committed_through,
+                                        committed,
+                                    )
+                                    .await
+                            }
                             Err(error) => Err(error),
                         };
                         let _ = done.send(result);
                     }
                     OplogJob::Flush { done } => {
-                        // The job has no error to reply with. A fence is latched on the state,
-                        // where `wait_for_replicas` reads it after this job, so a fenced flush is
-                        // reported as not durable rather than lost; every subsequent write fails on
-                        // it without asking the storage again. A transient storage failure is fatal
-                        // here as everywhere else.
-                        match state.auto_commit().await {
-                            Ok(()) | Err(OplogError::Fenced(_)) => {}
+                        let result = match state.auto_commit().await {
+                            result @ (Ok(())
+                            | Err(
+                                OplogError::Fenced(_) | OplogError::StageInvalidated { .. },
+                            )) => result,
                             Err(error) => panic!("oplog write: {error}"),
-                        }
-                        let _ = done.send(());
+                        };
+                        let _ = done.send(result);
                     }
                     OplogJob::DropPrefix {
                         last_dropped_id,
@@ -366,6 +368,7 @@ impl PrimaryOplog {
             agent_mode,
             fingerprint,
             shard_epoch,
+            stage_token,
             max_payload_size,
             fence,
             stream_session_index,
@@ -568,7 +571,7 @@ impl Oplog for PrimaryOplog {
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> Result<bool, OplogError> {
         record_oplog_call("wait_for_replicas");
 
-        self.run_job(|done| OplogJob::Flush { done }).await;
+        self.run_job(|done| OplogJob::Flush { done }).await?;
         // A refused flush reached no replica. The storage would still answer with its replica
         // count, and passing that on would tell the caller that entries it turned away are durable.
         if let Some(fence) = self.fence.get() {
@@ -720,6 +723,10 @@ impl Oplog for PrimaryOplog {
 
     fn shard_epoch(&self) -> Option<ShardEpoch> {
         self.shard_epoch
+    }
+
+    fn stage_token(&self) -> Option<i64> {
+        self.stage_token
     }
 
     fn fence(&self) -> Option<OplogFence> {

@@ -1636,6 +1636,7 @@ async fn create_oplog_service_with_presence(
             1,
             vec![],
             None,
+            None,
         )
         .await
         .unwrap();
@@ -2086,6 +2087,7 @@ async fn retention_registration_rechecks_authority_after_recreation_and_repairs_
                 1,
                 serialize(&create(a)).unwrap(),
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -2139,6 +2141,7 @@ async fn retention_registration_rechecks_authority_after_recreation_and_repairs_
                 &owner.storage_key(),
                 1,
                 serialize(&create(b)).unwrap(),
+                None,
                 None,
             )
             .await

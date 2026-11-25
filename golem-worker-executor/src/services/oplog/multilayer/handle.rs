@@ -455,6 +455,7 @@ impl Oplog for MultiLayerOplog {
 
     fn retire(&self) {
         self.retired.store(true, Ordering::Release);
+        self.primary.retire();
         self.multi_layer_oplog_service
             .unregister_transfer(&self.owned_agent_id.agent_id, &self.transfer_fiber);
         self.multi_layer_oplog_service

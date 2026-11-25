@@ -430,6 +430,9 @@ pub enum StreamStoreError {
     DeletionBlocked(Vec<StreamAttachmentKey>),
     CorruptHistory(String),
     Fenced(OplogFence),
+    StageInvalidated {
+        key: String,
+    },
     Oplog(String),
     /// The oplog of the agent does not read: the agent fails, not the stream operation alone.
     Unreadable(UnreadableOplog),
@@ -444,11 +447,48 @@ impl From<OplogError> for StreamStoreError {
     fn from(error: OplogError) -> Self {
         match error {
             OplogError::Fenced(fence) => Self::Fenced(fence),
+            OplogError::StageInvalidated { key } => Self::StageInvalidated { key },
             OplogError::Unreadable(unreadable) => Self::Unreadable(unreadable),
             error @ (OplogError::Payload(_)
             | OplogError::Maintenance(_)
             | OplogError::ArchiveWrite(_)) => Self::Oplog(error.to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod stage_error_tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn stage_invalidation_survives_append_and_commit_refusal_boundaries() {
+        let invalidated = OplogError::StageInvalidated {
+            key: "stage-key".into(),
+        };
+        assert_eq!(
+            StreamStoreError::from(invalidated.clone()),
+            StreamStoreError::StageInvalidated {
+                key: "stage-key".into()
+            },
+        );
+        let commit_refusal = invalidated.into_refusal().unwrap();
+        assert_eq!(
+            StreamStoreError::from(OplogError::from(commit_refusal)),
+            StreamStoreError::StageInvalidated {
+                key: "stage-key".into()
+            },
+        );
+        assert!(matches!(
+            StreamStoreError::from(OplogError::Maintenance("backend failure".into())),
+            StreamStoreError::Oplog(_),
+        ));
+        assert_ne!(
+            StreamStoreError::RecoveryRequired,
+            StreamStoreError::StageInvalidated {
+                key: "stage-key".into()
+            }
+        );
     }
 }
 
@@ -554,6 +594,7 @@ impl From<OplogError> for SessionError {
             OplogError::Unreadable(unreadable) => Self::Unreadable(unreadable),
             error @ (OplogError::Payload(_)
             | OplogError::Maintenance(_)
+            | OplogError::StageInvalidated { .. }
             | OplogError::ArchiveWrite(_)) => Self::Failed(error.to_string()),
         }
     }

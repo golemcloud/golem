@@ -240,7 +240,7 @@ impl FencedIndexedStream {
                 let key = self.key.clone();
                 async move {
                     is.with_entity(labels.svc, "append", labels.entity)
-                        .append(ns, &key, id, value, shard_epoch)
+                        .append(ns, &key, id, value, shard_epoch, None)
                         .await
                 }
             },

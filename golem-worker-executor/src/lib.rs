@@ -1153,6 +1153,17 @@ async fn create_worker_executor_impl<
         shutdown_token.clone(),
     );
 
+    let seal_scheduler: Arc<dyn services::scheduler::SchedulerService> = scheduler_service.clone();
+    oplog_service.set_seal_service(Arc::new(services::oplog::SealService::new(
+        indexed_storage.clone(),
+        blob_storage.clone(),
+        key_value_storage.clone(),
+        shard_service.clone(),
+        Arc::downgrade(&seal_scheduler),
+        golem_config.oplog.clone(),
+        golem_config.indexed_storage_retry.clone(),
+    )));
+
     // Tracked by `shutdown` rather than the join set, so on termination the sweeper gets
     // `SHUTDOWN_GRACE` to finish the archive step it is in before the join set is aborted.
     let oplog_sweeper = OplogSweeper::over_layers(

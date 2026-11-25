@@ -198,6 +198,14 @@ impl OplogService for ForwardingOplogService {
         self.inner.lock_lifecycle(agent_id).await
     }
 
+    fn set_seal_service(&self, service: Arc<super::super::SealService>) {
+        self.inner.set_seal_service(service);
+    }
+
+    fn seal_service(&self) -> Option<Arc<super::super::SealService>> {
+        self.inner.seal_service()
+    }
+
     fn set_stream_session_index(&self, index: Arc<super::super::StreamSessionIndexService>) {
         self.inner.set_stream_session_index(index);
     }
@@ -212,7 +220,7 @@ impl OplogService for ForwardingOplogService {
         agent_mode: AgentMode,
         stage_id: uuid::Uuid,
         initial_worker_metadata: AgentMetadata,
-    ) -> Result<Arc<dyn Oplog>, String> {
+    ) -> Result<Arc<dyn Oplog>, crate::services::oplog::CreateStagedError> {
         self.inner
             .create_staged(
                 owned_agent_id,
@@ -251,9 +259,10 @@ impl OplogService for ForwardingOplogService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         stage_id: uuid::Uuid,
+        stage_token: Option<i64>,
     ) -> Result<(), String> {
         self.inner
-            .discard_staged(owned_agent_id, agent_mode, stage_id)
+            .discard_staged(owned_agent_id, agent_mode, stage_id, stage_token)
             .await
     }
 
