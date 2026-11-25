@@ -503,6 +503,229 @@ fn runtime_card_provenance() -> CardManagedByRuntimeDerived {
     }
 }
 
+fn package_test_config(wasm: String) -> golem_package::PackageConfig {
+    use golem_common::model::agent::extraction::ExtractedComponentMetadata;
+    use golem_common::model::component::ComponentName;
+    use golem_package::{PackageComponent, PackageConfig, PackageIdentity};
+
+    PackageConfig {
+        application: "test".into(),
+        package: PackageIdentity {
+            name: "my-package".into(),
+            version: "2.4.1".into(),
+            calls: Default::default(),
+        },
+        components: [(
+            ComponentName("example".into()),
+            PackageComponent {
+                wasm,
+                metadata: ExtractedComponentMetadata {
+                    agent_types: vec![],
+                    tools: vec![],
+                    tool_middlewares: vec![],
+                },
+                config_schema: Default::default(),
+                provision: Default::default(),
+                agents: Default::default(),
+                tools: Default::default(),
+                tool_middlewares: Default::default(),
+            },
+        )]
+        .into(),
+    }
+}
+
+pub async fn package_version_repository_contract(deps: &Deps) {
+    use futures::StreamExt;
+    use golem_registry_service::repo::package::{
+        DbPackageRepo, InsertPackageVersionError, NewPackageVersion, PackageRepo,
+        StoredPackageArchive,
+    };
+    use sha2::{Digest, Sha256};
+
+    deps.setup().await;
+    let publisher = deps.create_account().await.revision.account_id;
+    let other = deps.create_account().await.revision.account_id;
+    let repo: Box<dyn PackageRepo> = match &deps.test_db {
+        TestDb::Postgres(pool) => Box::new(DbPackageRepo::new(pool.clone())),
+        TestDb::Sqlite(pool) => Box::new(DbPackageRepo::new(pool.clone())),
+    };
+    let mut layers = std::collections::BTreeMap::new();
+    let wasm = golem_package::add_blob(&mut layers, golem_package::WASM, vec![1, 2, 3]);
+    let config = package_test_config(wasm.digest);
+    let (manifest_digest, bytes) = golem_package::pack(&config, &layers).unwrap();
+    let bytes = bytes::Bytes::from(bytes);
+    let archive_digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+    let input = || futures::stream::iter([Ok(bytes.clone())]).boxed();
+    let storage = deps.blob_storage.as_ref();
+    assert!(
+        StoredPackageArchive::store(storage, &archive_digest, &archive_digest, input())
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .read_published_blob(&archive_digest)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let archive = StoredPackageArchive::store(storage, &archive_digest, &manifest_digest, input())
+        .await
+        .unwrap();
+    let mut version = NewPackageVersion {
+        package_path: format!("/test-{publisher}/my-package"),
+        publisher_account_id: publisher,
+        version: "2.4.1".to_string(),
+        description: Some("Example package".to_string()),
+        callables: vec!["first".to_string(), "second".to_string()],
+    };
+    assert!(
+        repo.get_version(&version.package_path, &version.version)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    repo.insert_version(&version, &archive).await.unwrap();
+    let stored = repo
+        .get_version(&version.package_path, &version.version)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.publisher_account_id, publisher);
+    assert_eq!(stored.manifest_digest, manifest_digest);
+    assert_eq!(stored.archive_digest, archive_digest);
+    assert_eq!(stored.description, version.description);
+    assert_eq!(stored.callables.0, version.callables);
+    assert_eq!(stored.lifecycle, 0);
+
+    version.description = None;
+    let duplicate = repo.insert_version(&version, &archive).await.unwrap_err();
+    assert!(matches!(duplicate, InsertPackageVersionError::Repo(err) if err.is_unique_violation()));
+    assert_eq!(
+        repo.get_version(&version.package_path, &version.version)
+            .await
+            .unwrap(),
+        Some(stored)
+    );
+    version.version = "2.5.0".to_string();
+    version.publisher_account_id = other;
+    assert!(matches!(
+        repo.insert_version(&version, &archive).await,
+        Err(InsertPackageVersionError::PublisherMismatch)
+    ));
+    assert!(
+        repo.get_version(&version.package_path, &version.version)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    version.publisher_account_id = publisher;
+    repo.insert_version(&version, &archive).await.unwrap();
+}
+
+#[test_r::test]
+async fn published_package_streams_large_oci_archive() {
+    use futures::{StreamExt, TryStreamExt};
+    use golem_registry_service::repo::package::StoredPackageArchive;
+    use golem_service_base::storage::blob::{BLOB_STREAM_CHUNK_SIZE, BlobStorage, fs};
+    use serde_json::json;
+    use sha2::{Digest, Sha256};
+    use std::io::{Read, Seek};
+    use tokio_util::io::ReaderStream;
+
+    fn append(archive: &mut tar::Builder<std::fs::File>, path: &str, size: u64, data: impl Read) {
+        let mut header = tar::Header::new_ustar();
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_mode(0o644);
+        header.set_size(size);
+        archive.append_data(&mut header, path, data).unwrap();
+    }
+
+    fn descriptor(media_type: &str, digest: &str, size: u64) -> serde_json::Value {
+        json!({"mediaType": media_type, "digest": digest, "size": size})
+    }
+
+    fn blob_path(digest: &str) -> String {
+        format!("blobs/sha256/{}", digest.strip_prefix("sha256:").unwrap())
+    }
+
+    fn canonical_bytes(mut value: serde_json::Value) -> Vec<u8> {
+        value.sort_all_objects();
+        serde_json::to_vec(&value).unwrap()
+    }
+
+    const PAYLOAD_SIZE: u64 = 256 * 1024 * 1024;
+    // An empty Wasm module with one custom section named `x` and a 256 MiB payload.
+    let wasm_header = b"\0asm\x01\0\0\0\0\x82\x80\x80\x80\x01\x01x";
+    let wasm = || {
+        wasm_header
+            .as_slice()
+            .chain(std::io::repeat(b'J').take(PAYLOAD_SIZE))
+    };
+    let mut hash = Sha256::new();
+    let wasm_size = std::io::copy(&mut wasm(), &mut hash).unwrap();
+    let wasm_digest = format!("sha256:{:x}", hash.finalize());
+
+    let config = canonical_bytes(json!(package_test_config(wasm_digest.clone())));
+    let config_digest = format!("sha256:{:x}", Sha256::digest(&config));
+    let manifest_type = "application/vnd.oci.image.manifest.v1+json";
+    let manifest = canonical_bytes(json!({
+        "schemaVersion": 2,
+        "mediaType": manifest_type,
+        "artifactType": "application/vnd.golem.package.v1",
+        "config": descriptor("application/vnd.golem.package.config.v1+json", &config_digest, config.len() as u64),
+        "layers": [descriptor(golem_package::WASM, &wasm_digest, wasm_size)],
+    }));
+    let manifest_digest = format!("sha256:{:x}", Sha256::digest(&manifest));
+    let index = canonical_bytes(json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "manifests": [descriptor(manifest_type, &manifest_digest, manifest.len() as u64)],
+    }));
+
+    let root = tempfile::tempdir().unwrap();
+    let mut fixture = tar::Builder::new(tempfile::tempfile_in(root.path()).unwrap());
+    append(&mut fixture, &blob_path(&wasm_digest), wasm_size, wasm());
+    for (path, contents) in [
+        (blob_path(&config_digest), config.as_slice()),
+        (blob_path(&manifest_digest), manifest.as_slice()),
+        ("index.json".into(), index.as_slice()),
+        (
+            "oci-layout".into(),
+            br#"{"imageLayoutVersion":"1.0.0"}"#.as_slice(),
+        ),
+    ] {
+        append(&mut fixture, &path, contents.len() as u64, contents);
+    }
+    let mut fixture = fixture.into_inner().unwrap();
+    fixture.rewind().unwrap();
+    let mut hash = Sha256::new();
+    std::io::copy(&mut fixture, &mut hash).unwrap();
+    let archive_digest = format!("sha256:{:x}", hash.finalize());
+    fixture.rewind().unwrap();
+
+    let storage = fs::FileSystemBlobStorage::new(root.path()).await.unwrap();
+    let input =
+        ReaderStream::with_capacity(tokio::fs::File::from_std(fixture), BLOB_STREAM_CHUNK_SIZE)
+            .map_err(anyhow::Error::from)
+            .boxed();
+    StoredPackageArchive::store(&storage, &archive_digest, &manifest_digest, input)
+        .await
+        .unwrap();
+    let mut output = storage
+        .read_published_blob(&archive_digest)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut hash = Sha256::new();
+    while let Some(chunk) = output.try_next().await.unwrap() {
+        assert!(chunk.len() <= BLOB_STREAM_CHUNK_SIZE);
+        hash.update(chunk);
+    }
+    assert_eq!(format!("sha256:{:x}", hash.finalize()), archive_digest);
+}
+
 pub async fn test_runtime_card_creation_is_idempotent_and_rejects_conflicts(deps: &Deps) {
     let services = environment_service_deps(deps);
     let parent_ids = vec![CardId::new(), CardId::new()];

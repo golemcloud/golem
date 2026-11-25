@@ -46,6 +46,11 @@ use tracing::info;
 
 inherit_test_dep!(Tracing);
 
+#[test]
+async fn package_version_repository(deps: &Deps) {
+    crate::repo::common::package_version_repository_contract(deps).await;
+}
+
 // Deps setup --------------------------------------------------------------------------------------
 
 pub struct SqliteDb {
