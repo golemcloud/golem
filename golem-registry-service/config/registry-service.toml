@@ -6,6 +6,9 @@ http_port = 8081
 runtime_metrics_sampling_interval = "5s"
 workspace = "release"
 
+[audit]
+retry_after = "5s"
+
 [blob_storage]
 type = "LocalFileSystem"
 

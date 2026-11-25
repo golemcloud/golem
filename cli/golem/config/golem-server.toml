@@ -53,6 +53,9 @@ environment = "dev"
 runtime_metrics_sampling_interval = "5s"
 workspace = "release"
 
+[registry_service.audit]
+retry_after = "5s"
+
 [registry_service.blob_storage]
 type = "LocalFileSystem"
 
@@ -737,6 +740,9 @@ eviction_period = "1m"
 max_capacity = 10000
 ttl = "1h"
 
+[worker_service.audit]
+retry_after = "5s"
+
 [worker_service.auth_service]
 auth_ctx_cache_eviction_period = "1m"
 auth_ctx_cache_max_capacity = 1024
@@ -1003,6 +1009,9 @@ type = "Disabled"
 # environment = "dev"
 # runtime_metrics_sampling_interval = "5s"
 # workspace = "release"
+#
+# [registry_service.audit]
+# retry_after = "5s"
 #
 # [registry_service.blob_storage]
 # type = "S3"
@@ -1749,6 +1758,9 @@ type = "Disabled"
 # eviction_period = "1m"
 # max_capacity = 10000
 # ttl = "1h"
+#
+# [worker_service.audit]
+# retry_after = "5s"
 #
 # [worker_service.auth_service]
 # auth_ctx_cache_eviction_period = "1m"

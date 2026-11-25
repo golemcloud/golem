@@ -127,6 +127,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -195,6 +207,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -275,6 +299,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -350,6 +386,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -417,6 +465,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -485,6 +545,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -558,6 +630,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -629,6 +713,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -706,6 +802,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -789,6 +897,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -870,6 +990,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -946,6 +1078,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -1025,6 +1169,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -1099,6 +1255,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -1166,6 +1334,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -1240,6 +1420,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -1307,6 +1499,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -1391,6 +1595,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -1465,6 +1681,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -1540,6 +1768,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -1608,6 +1848,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -1686,6 +1938,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -1754,6 +2018,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -1827,6 +2103,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -1903,6 +2191,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -1978,6 +2278,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -2046,6 +2358,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -2122,6 +2446,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -2190,6 +2526,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -2263,6 +2611,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -2334,6 +2694,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -2433,6 +2805,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -2502,6 +2886,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -2570,6 +2966,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -2658,6 +3066,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -2726,6 +3146,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -2802,6 +3234,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -2880,6 +3324,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -2965,6 +3421,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -3033,6 +3501,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -3118,6 +3598,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -3189,6 +3681,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -3265,6 +3769,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -3342,6 +3858,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -3417,6 +3945,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -3485,6 +4025,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -3561,6 +4113,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -3629,6 +4193,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -3692,6 +4268,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -3772,6 +4360,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -3847,6 +4447,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -3915,6 +4527,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -3984,6 +4608,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -4048,6 +4684,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -4123,6 +4771,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -4191,6 +4851,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -4266,6 +4938,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -4335,6 +5019,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -4405,6 +5101,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -4474,6 +5182,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -4549,6 +5269,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -4617,6 +5349,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -4692,6 +5436,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -4761,6 +5517,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -4831,6 +5599,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -4900,6 +5680,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -4980,6 +5772,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -5055,6 +5859,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -5123,6 +5939,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -5199,6 +6027,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -5267,6 +6107,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -5340,6 +6192,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -5411,6 +6275,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -5479,6 +6355,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -5554,6 +6442,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -5630,6 +6530,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -5704,6 +6616,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -5780,6 +6704,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -5856,6 +6792,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -5939,6 +6887,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -6015,6 +6975,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -6098,6 +7070,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -6174,6 +7158,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -6257,6 +7253,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -6332,6 +7340,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -6400,6 +7420,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -6468,6 +7500,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -6541,6 +7585,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -6612,6 +7668,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -6688,6 +7756,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -6764,6 +7844,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -6849,6 +7941,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -6927,6 +8031,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -7010,6 +8126,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       operationId: login_oauth2
   /v1/login/oauth2/web/authorize:
     post:
@@ -7082,6 +8210,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       operationId: start_oauth2_webflow
   /v1/login/oauth2/web/callback:
     get:
@@ -7165,6 +8305,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       operationId: submit_oauth2_webflow_callback
   /v1/login/oauth2/web/poll:
     get:
@@ -7240,6 +8392,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       operationId: poll_oauth2_webflow
   /v1/me/token:
     get:
@@ -7298,6 +8462,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -7379,6 +8555,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -7454,6 +8642,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -7522,6 +8722,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -7598,6 +8810,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -7666,6 +8890,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -7739,6 +8975,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -7810,6 +9058,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -7886,6 +9146,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -7971,6 +9243,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -8049,6 +9333,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -8122,6 +9418,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -8195,6 +9503,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -8268,6 +9588,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -8341,6 +9673,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -8425,6 +9769,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -8515,6 +9871,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -8599,6 +9967,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -8682,6 +10062,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -8755,6 +10147,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -8844,6 +10248,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -8932,6 +10348,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -9007,6 +10435,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -9075,6 +10515,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -9144,6 +10596,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -9212,6 +10676,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -9285,6 +10761,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -9360,6 +10848,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -9436,6 +10936,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -9511,6 +11023,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -9579,6 +11103,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -9662,6 +11198,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -9748,6 +11296,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -9816,6 +11376,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -9883,6 +11455,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -9941,6 +11525,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -9999,6 +11595,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -10074,6 +11682,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -10142,6 +11762,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -10218,6 +11850,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -10286,6 +11930,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -10359,6 +12015,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -10430,6 +12098,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -10506,6 +12186,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -10581,6 +12273,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -10649,6 +12353,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -10725,6 +12441,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -10793,6 +12521,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -10866,6 +12606,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -10941,6 +12693,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -11016,6 +12780,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -11084,6 +12860,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -11160,6 +12948,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -11228,6 +13028,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -11301,6 +13113,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -11376,6 +13200,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -11444,6 +13280,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -11512,6 +13360,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -11581,6 +13441,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -11649,6 +13521,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -11716,6 +13600,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -11784,6 +13680,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -11853,6 +13761,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -11921,6 +13841,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -11988,6 +13920,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
@@ -12056,6 +14000,18 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: The audit record of the operation cannot be written; the operation did not run.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+          headers:
+            RETRY-AFTER:
+              required: true
+              deprecated: false
+              schema:
+                type: string
       security:
       - Cookie: []
       - Token: []
