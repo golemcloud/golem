@@ -477,25 +477,22 @@ async fn complete_promise_in_deleted_environment_results_in_404(
     Ok(())
 }
 
-/// Moves the retained start of the oplog of `owned_agent_id` forward to `retained_start`, in the
-/// key-value storage that the worker executors read it from. Call it while no executor runs.
-async fn force_oplog_retained_start(
+/// The key-value storage that the worker executors of `deps` keep their records in.
+async fn executor_key_value_storage(
     deps: &EnvBasedTestDependencies,
-    owned_agent_id: &OwnedAgentId,
-    retained_start: OplogIndex,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Arc<dyn golem_worker_executor::storage::keyvalue::KeyValueStorage + Send + Sync>>
+{
     use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
     use golem_test_framework::components::rdb::DbInfo;
     use golem_worker_executor::services::golem_config::KeyValueStoragePostgresConfig;
-    use golem_worker_executor::services::oplog::retention::advance_oplog_retention;
     use golem_worker_executor::storage::keyvalue::postgres::PostgresKeyValueStorage;
     use golem_worker_executor::storage::keyvalue::sqlite::SqliteKeyValueStorage;
 
     // The schema and the database name that the test framework gives the worker executors.
     const NAMESPACE: &str = "golem_worker_executor";
     match deps.rdb().info() {
-        DbInfo::Sqlite(path) => {
-            let storage = SqliteKeyValueStorage::configured(&DbSqliteConfig {
+        DbInfo::Sqlite(path) => Ok(Arc::new(
+            SqliteKeyValueStorage::configured(&DbSqliteConfig {
                 database: path
                     .join(format!("{NAMESPACE}.db"))
                     .to_string_lossy()
@@ -504,12 +501,10 @@ async fn force_oplog_retained_start(
                 foreign_keys: true,
             })
             .await
-            .map_err(|error| anyhow!(error))?;
-            advance_oplog_retention(&storage, owned_agent_id, AgentMode::Durable, retained_start)
-                .await?;
-        }
-        DbInfo::Postgres(postgres) => {
-            let storage = PostgresKeyValueStorage::configured(&KeyValueStoragePostgresConfig {
+            .map_err(|error| anyhow!(error))?,
+        )),
+        DbInfo::Postgres(postgres) => Ok(Arc::new(
+            PostgresKeyValueStorage::configured(&KeyValueStoragePostgresConfig {
                 postgres: DbPostgresConfig {
                     host: postgres.public_host.clone(),
                     database: postgres.database_name.clone(),
@@ -522,26 +517,115 @@ async fn force_oplog_retained_start(
                 },
             })
             .await
-            .map_err(|error| anyhow!(error))?;
-            advance_oplog_retention(&storage, owned_agent_id, AgentMode::Durable, retained_start)
-                .await?;
-        }
+            .map_err(|error| anyhow!(error))?,
+        )),
         DbInfo::Mysql(_) => anyhow::bail!("worker executors do not store key-values in MySQL"),
     }
-    Ok(())
 }
 
-/// `GET .../oplog` on an agent whose retained start is above 1 returns the entries from the
-/// start with their original indexes, and a `from` before the start returns the
-/// `OPLOG_EXPIRED` error body that names the start. The test stops and starts the worker
-/// executors, so it runs in this binary, whose dependencies own the executor processes.
+/// The last index of the status that the worker executors stored for the agent incarnation
+/// `fingerprint`, or `None` when they stored no status.
+async fn stored_status_index(
+    storage: Arc<dyn golem_worker_executor::storage::keyvalue::KeyValueStorage + Send + Sync>,
+    owned_agent_id: OwnedAgentId,
+    fingerprint: golem_common::model::AgentFingerprint,
+) -> anyhow::Result<Option<OplogIndex>> {
+    use golem_worker_executor::storage::keyvalue::KeyValueStorageNamespace;
+
+    // The field of the stored status that holds its last index.
+    const CORE_FIELD: &str = "core";
+    storage
+        .get_all(
+            "test",
+            "stored_status_index",
+            "agent_status",
+            KeyValueStorageNamespace::AgentStatus {
+                owned_agent_id,
+                fingerprint,
+            },
+        )
+        .await?
+        .into_iter()
+        .find(|(name, _)| name == CORE_FIELD)
+        .map(|(_, bytes)| {
+            golem_common::serialization::deserialize::<golem_common::model::AgentStatusRecord>(
+                &bytes,
+            )
+            .map(|status| status.oplog_idx)
+            .map_err(|error| anyhow!(error))
+        })
+        .transpose()
+}
+
+/// Waits until the status that the worker executors stored for the agent incarnation
+/// `fingerprint` covers `last`, the last index of its oplog. The executors store the status in
+/// the background, and a fold after a restart continues from the stored status. The wait reads the
+/// stored status up to `attempts` times, 100 ms apart. The future is boxed because the wait calls
+/// itself for the next attempt.
+fn wait_for_stored_status(
+    storage: Arc<dyn golem_worker_executor::storage::keyvalue::KeyValueStorage + Send + Sync>,
+    owned_agent_id: OwnedAgentId,
+    fingerprint: golem_common::model::AgentFingerprint,
+    last: OplogIndex,
+    attempts: u32,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>> {
+    Box::pin(async move {
+        match stored_status_index(storage.clone(), owned_agent_id.clone(), fingerprint).await? {
+            Some(index) if index >= last => Ok(()),
+            stored if attempts <= 1 => Err(anyhow!(
+                "the stored status of {owned_agent_id} did not reach {last}: {stored:?}"
+            )),
+            _ => {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                wait_for_stored_status(storage, owned_agent_id, fingerprint, last, attempts - 1)
+                    .await
+            }
+        }
+    })
+}
+
+/// The first page of up to 100 entries of the oplog of `owned_agent_id` through the REST API, from
+/// `from`, or without a `from`.
+async fn oplog_page(
+    client: &golem_client::api::WorkerClientLive,
+    owned_agent_id: &OwnedAgentId,
+    from: Option<OplogIndex>,
+) -> Result<golem_client::model::GetOplogResponse, golem_client::Error<WorkerError>> {
+    client
+        .get_oplog(
+            &owned_agent_id.environment_id.0,
+            &owned_agent_id.agent_id.0,
+            from.map(|from| from.as_u64()),
+            100,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+}
+
+/// Whether `text` names `retained_start` as the start of an expired oplog. A start with more
+/// digits, such as 30 for 3, does not match.
+fn names_expired_start(text: &str, retained_start: OplogIndex) -> bool {
+    let needle = format!("starts at index {retained_start}");
+    text.match_indices(needle.as_str())
+        .any(|(at, _)| !text[at + needle.len()..].starts_with(|c: char| c.is_ascii_digit()))
+}
+
+/// `GET .../oplog` on an agent whose retained start is 3 returns the entries from the start with
+/// their original indexes, also without a `from`. A `from` of 1 or 2, before the start, returns
+/// the `OPLOG_EXPIRED` error body that names the start. A page without a `from` of an agent whose
+/// start is 1 starts at index 1. The test stops and starts the worker executors, so it runs in
+/// this binary, whose dependencies own the executor processes.
 ///
 /// The worker service reads the metadata of the agent before it reads the oplog, and the
-/// executor folds the status of the agent from its stored status. The executor stores the status
-/// of a new agent at the `Create` entry when it creates the agent, and stores later statuses in
-/// the background, so a stop can leave the stored status at index 1. The fold from it reads from
-/// index 2, so the start is 2: a higher start makes the fold, and with it the oplog read,
-/// expired.
+/// executor folds the status of the agent forward from its stored status. Before the stop, the
+/// test waits until the stored status covers the last entry of the oplog, so the fold reads no
+/// entry below the start.
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
@@ -557,8 +641,12 @@ async fn get_oplog_starts_at_the_retained_start(
         .store()
         .await?;
     let parsed_agent_id = agent_key!("GolemHostApi", "oplog-retained-start");
+    let parsed_control_id = agent_key!("GolemHostApi", "oplog-start-at-1");
     let agent_id = user
         .start_agent(&component.id, parsed_agent_id.clone())
+        .await?;
+    let control_id = user
+        .start_agent(&component.id, parsed_control_id.clone())
         .await?;
     user.invoke_and_await_agent(
         &component,
@@ -567,17 +655,38 @@ async fn get_oplog_starts_at_the_retained_start(
         data_value!(),
     )
     .await?;
+    user.invoke_and_await_agent(
+        &component,
+        &parsed_control_id,
+        "generate_idempotency_keys",
+        data_value!(),
+    )
+    .await?;
     let history = user.get_oplog(&agent_id, OplogIndex::INITIAL).await?;
-    let retained_start = OplogIndex::from_u64(2);
+    let retained_start = OplogIndex::from_u64(3);
+    let last = history
+        .last()
+        .map(|entry| entry.oplog_index)
+        .unwrap_or(OplogIndex::NONE);
     assert!(
-        history.len() > 2,
+        last > retained_start,
         "the oplog has entries after the start: {history:?}"
     );
 
+    let storage = executor_key_value_storage(deps).await?;
+    let fingerprint = user.get_worker_metadata(&agent_id).await?.fingerprint;
+    wait_for_stored_status(storage.clone(), agent_id.clone(), fingerprint, last, 300).await?;
     let cluster = deps.worker_executor_cluster();
     let started = cluster.started_indices().await;
     futures::future::join_all(started.iter().map(|index| cluster.stop(*index))).await;
-    force_oplog_retained_start(deps, &agent_id, retained_start).await?;
+    golem_worker_executor::services::oplog::retention::advance_oplog_retention(
+        storage.as_ref(),
+        &agent_id,
+        AgentMode::Durable,
+        retained_start,
+    )
+    .await?;
+    drop(storage);
     futures::future::join_all(started.iter().map(|index| cluster.start(*index))).await;
 
     let client = user
@@ -585,22 +694,15 @@ async fn get_oplog_starts_at_the_retained_start(
         .worker_service()
         .worker_http_client(&user.token)
         .await;
-    let page = client
-        .get_oplog(
-            &agent_id.environment_id.0,
-            &agent_id.agent_id.0,
-            None,
-            100,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await?;
+    let page = oplog_page(&client, &agent_id, None).await?;
     assert_eq!(page.first_index_in_chunk, retained_start.as_u64());
+    let page = oplog_page(&client, &control_id, None).await?;
+    assert_eq!(
+        page.first_index_in_chunk,
+        OplogIndex::INITIAL.as_u64(),
+        "a page without a `from` of an agent whose start is 1 starts at index 1"
+    );
+
     let page = user.get_oplog(&agent_id, retained_start).await?;
     let retained = history
         .iter()
@@ -613,22 +715,13 @@ async fn get_oplog_starts_at_the_retained_start(
         "the entries keep their original indexes"
     );
 
-    match client
-        .get_oplog(
-            &agent_id.environment_id.0,
-            &agent_id.agent_id.0,
-            Some(OplogIndex::INITIAL.as_u64()),
-            100,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await
-    {
+    let expired = futures::future::join_all(
+        [OplogIndex::INITIAL, retained_start.previous()]
+            .into_iter()
+            .map(|from| oplog_page(&client, &agent_id, Some(from))),
+    )
+    .await;
+    expired.into_iter().for_each(|result| match result {
         Err(golem_client::Error::Item(WorkerError::Error400(body))) => {
             assert_eq!(
                 body.code,
@@ -637,11 +730,11 @@ async fn get_oplog_starts_at_the_retained_start(
             assert!(
                 body.errors
                     .iter()
-                    .any(|error| error.contains(&format!("starts at index {retained_start}"))),
+                    .any(|error| names_expired_start(error, retained_start)),
                 "{body:?}"
             );
         }
         other => panic!("expected the OPLOG_EXPIRED error body, got {other:?}"),
-    }
+    });
     Ok(())
 }
