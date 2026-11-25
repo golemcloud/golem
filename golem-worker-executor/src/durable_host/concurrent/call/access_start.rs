@@ -200,7 +200,8 @@ where
                     | InterruptKind::Restart
                     | InterruptKind::Suspend(_)
                     | InterruptKind::Jump
-                    | InterruptKind::ShardLost => ctx.begin_stream_runtime_teardown(),
+                    | InterruptKind::ShardLost
+                    | InterruptKind::NeverLive => ctx.begin_stream_runtime_teardown(),
                 }
             });
             let error = WorkerExecutorError::from(interruption);

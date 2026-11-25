@@ -109,8 +109,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWasmRpcWithStore<U> for HasSelf<Dura
         } = options;
         let span_started = accessor.with(|mut access| {
             let ctx = access.get();
-            ctx.check_read_only_allows("golem::rpc::wasm-rpc::create")
-                .map_err(wasmtime::Error::from)?;
+            ctx.check_rpc_admission("golem::rpc::wasm-rpc::create")?;
             Ok::<_, anyhow::Error>(SpanStarted {
                 span_id: SpanId::generate(),
                 trace_id: ctx

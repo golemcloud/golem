@@ -1,0 +1,36 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/2.0.0-dev.1/golem.schema.json
+# Schema for vscode-yaml:
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/2.0.0-dev.1/golem.schema.json
+
+manifestVersion: 2.0.0
+
+app: agent-initializer
+
+includes:
+- ../golem-test-components-common.yaml
+
+# The component's core initializer depends on INITIALIZER_VARIANT at compile time. The base build
+# gives it_agent_initializer_release.wasm; each variant is a later revision of it.
+componentTemplates:
+  initializer-variants:
+    templates: rust, rust-test-component
+    presets:
+      release:
+        customCommands:
+          copy:
+          - command: cp "{{ cargoTarget }}/wasm32-wasip2/release/it_agent_initializer.wasm" ../it_agent_initializer_release.wasm
+          - command: sh -c 'for variant in key-value panic; do INITIALIZER_VARIANT=$variant cargo build --target wasm32-wasip2 --release && cp "{{ cargoTarget }}/wasm32-wasip2/release/it_agent_initializer.wasm" "../it_agent_initializer_${variant}_release.wasm" || exit 1; done && cargo build --target wasm32-wasip2 --release'
+
+components:
+  it:agent-initializer:
+    dir: "."
+    templates: initializer-variants
+
+environments:
+  local:
+    server: local
+    componentPresets: release
+  cloud:
+    server: cloud
+    componentPresets: release

@@ -517,6 +517,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     FinishReplayToLive::Live | FinishReplayToLive::AttachmentAdmissionRejected => {
                         Ok(ReconstructionReplayOutcome::Incomplete(self))
                     }
+                    // A never-live owner leaves the `Start` incomplete: reconstruction must not
+                    // continue, and no `Cancelled` is recorded.
+                    FinishReplayToLive::Ended => {
+                        self.abandon_for_trap();
+                        Err(crate::durable_host::never_live_ended_error())
+                    }
                 }
             }
         }
@@ -1119,14 +1125,20 @@ impl
                         return Err(error);
                     }
                 };
-                Ok(match transition {
+                match transition {
                     FinishReplayToLive::Cancelled => {
-                        ReconstructionReplayOutcome::LiveAdmissionCancelled(self)
+                        Ok(ReconstructionReplayOutcome::LiveAdmissionCancelled(self))
                     }
                     FinishReplayToLive::Live | FinishReplayToLive::AttachmentAdmissionRejected => {
-                        ReconstructionReplayOutcome::Incomplete(self)
+                        Ok(ReconstructionReplayOutcome::Incomplete(self))
                     }
-                })
+                    // A never-live owner leaves the `Start` incomplete: reconstruction must not
+                    // continue, and no `Cancelled` is recorded.
+                    FinishReplayToLive::Ended => {
+                        self.abandon_for_trap();
+                        Err(crate::durable_host::never_live_ended_error())
+                    }
+                }
             }
         }
     }

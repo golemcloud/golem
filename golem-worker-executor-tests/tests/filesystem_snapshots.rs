@@ -65,6 +65,14 @@ inherit_test_dep!(
     #[tagged_as("snapshot_sqlite_effect")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("agent_update_v1")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_sdk_moonbit")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 /// The agent type of the test component that takes snapshots.
@@ -3551,6 +3559,27 @@ pub(crate) async fn newest_snapshot_confirmed(
     .map(|_| ())
 }
 
+/// Waits until the oplog holds a snapshot record after the last finished invocation of
+/// `worker_id`. An agent that holds only its initial files writes a record with no filesystem
+/// snapshot, so there is nothing to confirm.
+async fn newest_snapshot_recorded(
+    executor: &TestWorkerExecutor,
+    worker_id: &OwnedAgentId,
+) -> anyhow::Result<()> {
+    eventually(Duration::from_secs(30), || async {
+        let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+        let after_last_invocation = oplog
+            .iter()
+            .rposition(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .map_or(&oplog[..], |last| &oplog[last..]);
+        Ok(after_last_invocation
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+            .then_some(()))
+    })
+    .await
+}
+
 /// The state that `getState` of `SqliteSnapshotAgent` gives.
 async fn sqlite_state(
     executor: &TestWorkerExecutor,
@@ -3561,6 +3590,25 @@ async fn sqlite_state(
         .invoke_and_await_agent(component, agent, "getState", data_value!())
         .await?
         .into_typed::<String>()?;
+    Ok(serde_json::from_str(&state)?)
+}
+
+/// [`sqlite_state`] of the agent with ID `agent_id`.
+async fn sqlite_state_by_id(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    agent_id: &OwnedAgentId,
+) -> anyhow::Result<serde_json::Value> {
+    let state = crate::agent::invoke_and_await_agent_by_id(
+        executor,
+        component,
+        agent_id,
+        None,
+        "getState",
+        data_value!(),
+    )
+    .await?
+    .into_typed::<String>()?;
     Ok(serde_json::from_str(&state)?)
 }
 
@@ -6709,3 +6757,294 @@ mod native;
 
 #[cfg(target_os = "macos")]
 mod macos;
+/// Forks `source_id` at `cut` twice, with the never-live mark and without it, and updates both
+/// forks to `target_revision`. The marked fork must replay the update from the snapshot record
+/// with one `SuccessfulUpdate` that names the same baseline as the twin's. Returns the unmarked
+/// twin, whose state the caller reads.
+async fn a_marked_snapshot_assisted_replay_matches_its_unmarked_twin(
+    executor: &TestWorkerExecutor,
+    source_id: &OwnedAgentId,
+    cut: OplogIndex,
+    target_revision: ComponentRevision,
+) -> anyhow::Result<OwnedAgentId> {
+    let marked = executor.fork_worker_never_live(source_id, cut).await?;
+    executor
+        .auto_update_worker(&marked, target_revision, false)
+        .await?;
+    let outcomes = crate::never_live::settled_update_outcomes(executor, &marked).await?;
+    assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+    let PublicOplogEntry::SuccessfulUpdate(marked_update) = &outcomes[0].entry else {
+        return Err(anyhow!("the marked update did not succeed: {outcomes:?}"));
+    };
+    let marked_baseline = marked_update
+        .snapshot_assisted_details
+        .as_ref()
+        .ok_or_else(|| anyhow!("the marked update used no snapshot: {marked_update:?}"))?
+        .snapshot_index;
+
+    let twin = executor.fork_worker(source_id, cut).await?;
+    executor
+        .auto_update_worker(&twin, target_revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(&twin, target_revision, Duration::from_secs(60))
+        .await?;
+    let twin_baseline = executor
+        .get_oplog(&twin, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .find_map(|entry| match entry.entry {
+            PublicOplogEntry::SuccessfulUpdate(update) => update
+                .snapshot_assisted_details
+                .map(|details| details.snapshot_index),
+            _ => None,
+        })
+        .ok_or_else(|| anyhow!("the twin's update used no snapshot"))?;
+    assert_eq!(marked_baseline, twin_baseline);
+    Ok(twin)
+}
+
+/// The load hooks of the SDK snapshot fixtures make only local reads: a never-live
+/// fork cut after a periodic snapshot record replays an update to a newer revision with the same
+/// code from that record. The loaded state is read on an unmarked twin of the same cut.
+#[test]
+#[timeout("6m")]
+async fn ts_sqlite_load_hook_replays_on_a_never_live_fork(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor = crate::fork::start_with_local_resume_and(
+            deps,
+            &context,
+            snapshotting(&store, Duration::from_secs(30), None),
+        )
+        .await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, constructor_parameter_echo)
+            .store()
+            .await?;
+        let agent = agent_key!("SqliteSnapshotAgent", "sqlite-never-live");
+        let source_id = executor.start_agent(&component.id, agent.clone()).await?;
+        executor
+            .invoke_and_await_agent(&component, &agent, "addItem", data_value!("apple"))
+            .await?;
+        executor
+            .invoke_and_await_agent(&component, &agent, "addLog", data_value!("started"))
+            .await?;
+        executor
+            .invoke_and_await_agent(&component, &agent, "setLabel", data_value!("forked"))
+            .await?;
+        newest_snapshot_confirmed(&executor, &source_id).await?;
+        let cut = crate::never_live::tip(&executor, &source_id).await?;
+        let source_state = sqlite_state(&executor, &component, &agent).await?;
+        let target = executor
+            .update_component(&component.id, "golem_it_constructor_parameter_echo")
+            .await?;
+
+        let twin = a_marked_snapshot_assisted_replay_matches_its_unmarked_twin(
+            &executor,
+            &source_id,
+            cut,
+            target.revision,
+        )
+        .await?;
+        assert_eq!(
+            sqlite_state_by_id(&executor, &target, &twin).await?,
+            source_state
+        );
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("8m")]
+async fn effect_sqlite_load_hooks_replay_on_a_never_live_fork(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("snapshot_sqlite_effect")] snapshot_sqlite_effect: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for agent_type in ["SimpleSqlite", "MultipartSqlite"] {
+        let context = TestContext::new(last_unique_id);
+        with_snapshot_store(|store| async move {
+            let executor = crate::fork::start_with_local_resume_and(
+                deps,
+                &context,
+                snapshotting(&store, Duration::from_secs(30), None),
+            )
+            .await?;
+            let component = executor
+                .component_dep(&context.default_environment_id, snapshot_sqlite_effect)
+                .store()
+                .await?;
+            let agent = agent_key!(agent_type, "effect-never-live");
+            let source_id = executor.start_agent(&component.id, agent.clone()).await?;
+            executor
+                .invoke_and_await_agent(&component, &agent, "append", data_value!(17.0f64))
+                .await?;
+            newest_snapshot_confirmed(&executor, &source_id).await?;
+            let cut = crate::never_live::tip(&executor, &source_id).await?;
+            let source_state = executor
+                .invoke_and_await_agent(&component, &agent, "inspect", data_value!())
+                .await?
+                .into_typed::<String>()?;
+            let target = executor
+                .update_component(&component.id, "golem_it_snapshot_sqlite_effect")
+                .await?;
+
+            let twin = a_marked_snapshot_assisted_replay_matches_its_unmarked_twin(
+                &executor,
+                &source_id,
+                cut,
+                target.revision,
+            )
+            .await?;
+            let twin_state = crate::agent::invoke_and_await_agent_by_id(
+                &executor,
+                &target,
+                &twin,
+                None,
+                "inspect",
+                data_value!(),
+            )
+            .await?
+            .into_typed::<String>()?;
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&twin_state)?,
+                serde_json::from_str::<serde_json::Value>(&source_state)?
+            );
+            Ok(())
+        })
+        .await?;
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("6m")]
+async fn rust_load_hook_replays_on_a_never_live_fork(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor = crate::fork::start_with_local_resume_and(
+            deps,
+            &context,
+            snapshotting(&store, Duration::from_secs(30), None),
+        )
+        .await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_update_v1)
+            .store()
+            .await?;
+        let agent = agent_key!("SnapshotUpdateTest");
+        let source_id = executor.start_agent(&component.id, agent.clone()).await?;
+        executor
+            .invoke_and_await_agent(&component, &agent, "pre_snapshot_value", data_value!())
+            .await?;
+        executor
+            .invoke_and_await_agent(&component, &agent, "stable_value", data_value!())
+            .await?;
+        newest_snapshot_recorded(&executor, &source_id).await?;
+        let cut = crate::never_live::tip(&executor, &source_id).await?;
+        let target = executor
+            .update_component(&component.id, "it_agent_update_v1_release")
+            .await?;
+
+        let twin = a_marked_snapshot_assisted_replay_matches_its_unmarked_twin(
+            &executor,
+            &source_id,
+            cut,
+            target.revision,
+        )
+        .await?;
+        let read = |method: &'static str| {
+            let executor = &executor;
+            let target = &target;
+            let twin = &twin;
+            async move {
+                crate::agent::invoke_and_await_agent_by_id(
+                    executor,
+                    target,
+                    twin,
+                    None,
+                    method,
+                    data_value!(),
+                )
+                .await?
+                .into_typed::<u32>()
+            }
+        };
+        assert_eq!(read("loaded_snapshot_revision").await?, 1);
+        assert_eq!(read("accumulated_value").await?, 11);
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("6m")]
+async fn moonbit_load_hook_replays_on_a_never_live_fork(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_moonbit")] agent_sdk_moonbit: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor = crate::fork::start_with_local_resume_and(
+            deps,
+            &context,
+            snapshotting(&store, Duration::from_secs(30), None),
+        )
+        .await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_sdk_moonbit)
+            .store()
+            .await?;
+        let agent = agent_key!("SnapshotCounter", "moonbit-never-live");
+        let source_id = executor.start_agent(&component.id, agent.clone()).await?;
+        executor
+            .invoke_and_await_agent(&component, &agent, "add", data_value!(5u64))
+            .await?;
+        executor
+            .invoke_and_await_agent(&component, &agent, "add", data_value!(7u64))
+            .await?;
+        newest_snapshot_recorded(&executor, &source_id).await?;
+        let cut = crate::never_live::tip(&executor, &source_id).await?;
+        let target = executor
+            .update_component(&component.id, "golem_it_agent_sdk_moonbit")
+            .await?;
+
+        let twin = a_marked_snapshot_assisted_replay_matches_its_unmarked_twin(
+            &executor,
+            &source_id,
+            cut,
+            target.revision,
+        )
+        .await?;
+        assert_eq!(
+            crate::agent::invoke_and_await_agent_by_id(
+                &executor,
+                &target,
+                &twin,
+                None,
+                "get_value",
+                data_value!(),
+            )
+            .await?
+            .into_typed::<u64>()?,
+            12
+        );
+        Ok(())
+    })
+    .await
+}

@@ -94,3 +94,42 @@ impl EphemeralDbKvCompletion for EphemeralDbKvCompletionImpl {
         execute_twice(address);
     }
 }
+
+/// Takes snapshots with the executor's default policy, so a transaction committed after `touch`
+/// lies after a snapshot.
+#[agent_definition(snapshotting = "enabled")]
+pub trait SnapshotDbCommit {
+    fn new(name: String) -> Self;
+    fn touch(&mut self) -> u32;
+    fn commit(&self, address: String);
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct SnapshotDbCommitImpl {
+    touched: u32,
+}
+
+#[agent_implementation]
+impl SnapshotDbCommit for SnapshotDbCommitImpl {
+    fn new(_name: String) -> Self {
+        Self { touched: 0 }
+    }
+    fn touch(&mut self) -> u32 {
+        self.touched += 1;
+        self.touched
+    }
+    fn commit(&self, address: String) {
+        commit(address);
+    }
+
+    async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+        serde_json::to_vec(self).map_err(|error| error.to_string())
+    }
+
+    async fn load_snapshot(
+        bytes: Vec<u8>,
+        _context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
+        serde_json::from_slice(&bytes).map_err(|error| error.to_string())
+    }
+}

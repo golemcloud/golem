@@ -167,8 +167,7 @@ pub(super) fn prepare_rpc_invocation<Ctx: WorkerCtx>(
     input: core_wire::SchemaValueTree,
     streaming_allowed: bool,
 ) -> anyhow::Result<Result<PreparedRpcInvocation, RpcError>> {
-    ctx.check_read_only_allows(host_function_name)
-        .map_err(wasmtime::Error::from)?;
+    ctx.check_rpc_admission(host_function_name)?;
 
     let own_agent_id = ctx.owned_agent_id().clone();
     let (

@@ -67,6 +67,7 @@ fn a_payload_that_does_not_download_retries_an_assisted_attempt_only_when_its_st
             start_outcome::RawStartError::Load(result),
             &agent_id,
             false,
+            false,
         )
     };
     let unavailable = payload_download_failure(
@@ -192,6 +193,7 @@ fn an_out_of_memory_trap_during_the_load_of_an_application_snapshot_retries_the_
             Some(head),
             start_outcome::RawStartError::Load(&out_of_memory),
             &agent_id,
+            false,
             false,
         )
     };
@@ -851,6 +853,7 @@ async fn pending_replay_to_live_is_fail_closed_until_finished() {
         replay_target: OplogIndex::from_u64(42),
         finalization: LiveFinalization::IncompleteBody(continuation),
         linear_memory: memory.clone(),
+        ended: false,
     };
 
     assert_eq!(pending.replay_target(), OplogIndex::from_u64(42));
@@ -875,6 +878,7 @@ async fn pending_replay_to_live_is_fail_closed_until_finished() {
         replay_target: OplogIndex::from_u64(43),
         finalization: LiveFinalization::IncompleteBody(continuation),
         linear_memory: dropped_memory.clone(),
+        ended: false,
     });
     assert!(!dropped_tail.load(Ordering::Acquire));
     assert!(!dropped_memory.usage_is_live());
@@ -889,6 +893,7 @@ async fn completed_entity_settlement_keeps_the_store_non_live() {
         replay_target: OplogIndex::from_u64(42),
         finalization: LiveFinalization::CompletedEntityReplay,
         linear_memory: memory.clone(),
+        ended: false,
     };
 
     assert_eq!(pending.role(), ReplayToLiveRole::NonPrimary);

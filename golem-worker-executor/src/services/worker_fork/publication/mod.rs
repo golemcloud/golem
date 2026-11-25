@@ -26,15 +26,17 @@ pub(crate) fn request_hash(
     cut: OplogIndex,
     selected: Option<(StreamId, Option<StreamOffset>)>,
     guest_result: Option<ForkCallOwner>,
+    never_live: bool,
 ) -> Result<[u8; 32], String> {
     let bytes = golem_common::serialization::serialize(&(
-        "golem-fork-request-v1".to_string(),
+        "golem-fork-request-v2".to_string(),
         source.environment_id,
         source.agent_id,
         fingerprint,
         cut,
         selected,
         guest_result,
+        never_live,
     ))
     .map_err(|error| error.to_string())?;
     Ok(*blake3::hash(&bytes).as_bytes())
@@ -177,6 +179,23 @@ pub(crate) async fn live_instance(
             Some(AgentFingerprint(parameters.instance_id))
         }
         _ => None,
+    }
+}
+
+/// Whether the published durable target `target` is a never-live fork, from its `Create`.
+pub(crate) async fn target_never_live(
+    service: &dyn OplogService,
+    target: &OwnedAgentId,
+) -> Result<bool, WorkerExecutorError> {
+    let initial = service
+        .read_source(target, AgentMode::Durable, OplogIndex::INITIAL, 1)
+        .await
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+    match initial.get(&OplogIndex::INITIAL) {
+        Some(OplogEntry::Create { parameters, .. }) => Ok(parameters.never_live),
+        _ => Err(WorkerExecutorError::runtime(
+            "The published fork target has no Create entry",
+        )),
     }
 }
 

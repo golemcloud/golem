@@ -246,6 +246,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         requires_agent_authority: bool,
         invocation_id: Option<DurableInvocationId>,
     ) -> Result<BegunCall<Pair, P, Ctx>, WorkerExecutorError> {
+        ctx.state
+            .check_never_live_admission(&function_type, &Pair::HOST_FUNCTION_NAME)?;
         ctx.state.refuse_on_bootstrap_cursor(format_args!(
             "the accessor call {}",
             Pair::HOST_FUNCTION_NAME

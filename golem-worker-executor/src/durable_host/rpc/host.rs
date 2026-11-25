@@ -315,8 +315,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         agent_type_name: String,
         constructor: core_wire::SchemaValueTree,
     ) -> anyhow::Result<Result<Resource<WasmRpcEntry>, RpcError>> {
-        self.check_read_only_allows("golem::rpc::wasm-rpc::upsert")
-            .map_err(wasmtime::Error::from)?;
+        self.check_rpc_admission("golem::rpc::wasm-rpc::upsert")?;
         let remote = match self.remote_agent_type(&agent_type_name).await? {
             Ok(remote) => remote,
             Err(error) => {
@@ -444,8 +443,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         agent_type_name: String,
         agent_id: core_wire::AgentId,
     ) -> anyhow::Result<Result<Resource<WasmRpcEntry>, RpcError>> {
-        self.check_read_only_allows("golem::rpc::wasm-rpc::get-by-id")
-            .map_err(wasmtime::Error::from)?;
+        self.check_rpc_admission("golem::rpc::wasm-rpc::get-by-id")?;
         let agent_id = AgentId::from(agent_id);
         let name = AgentTypeName(agent_type_name);
         let request = HostRequestGolemRpcGetById {
@@ -1348,8 +1346,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             None => Ok(None),
         };
         // Trap immediately if the invocation is restricted to read-only side effects.
-        self.check_read_only_allows("golem::rpc::wasm-rpc::async-invoke-and-await")
-            .map_err(wasmtime::Error::from)?;
+        self.check_rpc_admission("golem::rpc::wasm-rpc::async-invoke-and-await")?;
 
         let own_agent_id = self.owned_agent_id().clone();
 

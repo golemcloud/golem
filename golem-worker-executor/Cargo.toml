@@ -169,3 +169,4 @@ tokio-tungstenite = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 tracing-subscriber = { workspace = true }
 wat = { workspace = true }
+wit-parser = { workspace = true }

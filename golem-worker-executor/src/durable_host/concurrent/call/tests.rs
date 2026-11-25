@@ -675,6 +675,7 @@ async fn direct_claim_with_a_wrong_invocation_id_does_not_consume_the_start() {
             crate::durable_host::tool::operation::OwnerToolOperations::new(),
             oplog.current_oplog_index().await,
             None,
+            false,
         )
         .await
         .unwrap();
@@ -814,6 +815,7 @@ async fn replay_state_with(
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
         oplog.current_oplog_index().await,
         None,
+        false,
     )
     .await
     .unwrap()

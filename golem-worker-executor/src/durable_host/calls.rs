@@ -186,13 +186,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<(OplogIndex, Tx)> {
         use concurrent::DurableContext;
 
+        let scope_name = HostFunctionName::Custom("<scope:transaction>".to_string());
+        // A never-live owner begins no transaction where it would really execute, also not in
+        // a snapshot hook, where the begin would reach the database before any record.
+        self.state
+            .check_never_live_execution(&scope_name.to_string())?;
+
         if self.state.durability_is_suppressed() {
             let (_, tx) = handler.create_new().await.map_err(|error| anyhow!(error))?;
             let begin_index = self.state.current_oplog_index().await;
             return Ok((begin_index, tx));
         }
 
-        let scope_name = HostFunctionName::Custom("<scope:transaction>".to_string());
         self.state.refuse_on_bootstrap_cursor(&scope_name)?;
         let owner = self.transaction_scope_owner(observational_owner)?;
         let invocation_id = owner.invocation_id;

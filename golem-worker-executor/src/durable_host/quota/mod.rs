@@ -251,6 +251,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         }))
                     }
                     EnforcementAction::Throttle => {
+                        // A recorded throttle replays into this arm too. A never-live owner
+                        // refuses it before it schedules a `Resume` or suspends, either of which
+                        // would leave its update without an outcome.
+                        self.state
+                            .refuse_native_peer_effect("quota::throttle-resume")?;
                         let agent_created_by = self.created_by();
                         let owned_agent_id = self.owned_agent_id().clone();
                         let target_worker_fingerprint = self

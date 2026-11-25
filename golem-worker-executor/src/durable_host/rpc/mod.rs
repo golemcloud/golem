@@ -288,3 +288,18 @@ use values::*;
 pub use target::construct_wasm_rpc_resource;
 #[cfg(test)]
 mod tests;
+
+impl<Ctx: WorkerCtx> crate::durable_host::DurableWorkerCtx<Ctx> {
+    /// The admission of an RPC entry point, which traps before its durable call starts. For a
+    /// never-live owner the never-live admission decides first, as at the durable-call admission
+    /// sites, and the read-only strictness check runs after it. So a refused RPC in a
+    /// load hook of a never-live owner is not replayable, not a read-only violation.
+    pub(super) fn check_rpc_admission(&self, host_function: &str) -> anyhow::Result<()> {
+        self.state
+            .check_never_live_execution(host_function)
+            .map_err(wasmtime::Error::from)?;
+        self.check_read_only_allows(host_function)
+            .map_err(wasmtime::Error::from)?;
+        Ok(())
+    }
+}

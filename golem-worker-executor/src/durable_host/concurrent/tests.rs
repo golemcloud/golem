@@ -327,6 +327,7 @@ async fn marker_record_over(oplog: Arc<InMemoryOplog>) -> CompletionMarkerRecord
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
         seed_oplog_dyn.current_oplog_index().await,
         None,
+        false,
     )
     .await
     .expect("failed to build replay state");
@@ -475,6 +476,7 @@ async fn a_fenced_completion_marker_is_reported_rather_than_panicked() {
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
         seed_oplog_dyn.current_oplog_index().await,
         None,
+        false,
     )
     .await
     .expect("failed to build replay state");
@@ -518,6 +520,7 @@ async fn completion_delivery_markers_preserve_handoff_order() {
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
         seed_oplog_dyn.current_oplog_index().await,
         None,
+        false,
     )
     .await
     .expect("failed to build replay state");
@@ -865,6 +868,7 @@ async fn the_delivered_hook_runs_at_the_recorded_marker_on_replay() {
         (TerminalConsumption::NotDelivered, None),
     ] {
         let (_oplog, replay_state, mut token) = tail_gated_token_over_crash_tail(
+            false,
             vec![OplogEntry::CompletionDelivered {
                 timestamp: Timestamp::now_utc(),
                 start_index: idx(2),
@@ -905,7 +909,7 @@ async fn the_delivered_hook_runs_without_an_observer_only_for_a_settled_delivery
     let engine = wasmtime::Engine::new(&config).unwrap();
     let mut store = wasmtime::Store::new(&engine, None::<u32>);
     let (_tail_oplog, _replay_state, at_tail) =
-        tail_gated_token_over_crash_tail(vec![], None).await;
+        tail_gated_token_over_crash_tail(false, vec![], None).await;
     let (tx, _rx) = mpsc::unbounded_channel();
     let live = live_delivery_token(
         Arc::new(InMemoryOplog::new()),
@@ -1071,8 +1075,10 @@ async fn completion_delivery_replay_tokens_are_inert() {
 /// Builds an in-memory oplog `[RecoverySucceeded, Start, End]` (a markerless completed call — the recorded
 /// run crashed after the `End` became durable but before delivery), a replay state over it with
 /// the call claimed and resolved (as `replay_access_deferred` guarantees), and the tail-gated
-/// token exactly as the deferred accessor replay path constructs one.
+/// token exactly as the deferred accessor replay path constructs one, for a never-live owner
+/// when `never_live` is set.
 async fn tail_gated_token_over_crash_tail(
+    never_live: bool,
     extra_tail: Vec<OplogEntry>,
     cleanup_sink: Option<mpsc::UnboundedSender<DropEvent>>,
 ) -> (Arc<InMemoryOplog>, ReplayState, CompletionDelivery) {
@@ -1130,6 +1136,7 @@ async fn tail_gated_token_over_crash_tail(
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
         oplog_dyn.current_oplog_index().await,
         None,
+        never_live,
     )
     .await
     .expect("failed to build replay state");
@@ -1160,6 +1167,7 @@ async fn tail_gated_token_converts_to_live_and_delivered_records_marker() {
     // delivery records a durable `CompletionDelivered` marker — a second crash after the tail
     // delivery replays marker-gated instead of re-opening the crash window.
     let (oplog, replay_state, mut token) = tail_gated_token_over_crash_tail(
+        false,
         vec![OplogEntry::Log {
             timestamp: Timestamp::now_utc(),
             parent_start_index: None,
@@ -1199,11 +1207,64 @@ async fn tail_gated_token_converts_to_live_and_delivered_records_marker() {
     panic!("the delivered marker append never landed");
 }
 
+/// A never-live owner never hands a markerless completion to the guest: at the tail the token
+/// does not convert to live, its preparation stays pending also after the replay ended, and
+/// dropping it with the token appends no marker.
+#[test]
+async fn a_never_live_owner_withholds_a_markerless_completion_for_good() {
+    let (oplog, replay_state, mut token) =
+        tail_gated_token_over_crash_tail(true, vec![], None).await;
+    let recorded = oplog.entries.lock().await.len();
+
+    {
+        let mut preparation = Box::pin(token.prepare_delivery(None));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), preparation.as_mut())
+                .await
+                .is_err(),
+            "the preparation must wait at the tail"
+        );
+        let now = std::time::Instant::now();
+        let memory = crate::services::linear_memory::LinearMemoryTracker::new(
+            2,
+            2,
+            golem_common::model::agent::AgentMode::Durable,
+            true,
+            true,
+            Arc::new(crate::services::resource_limits::AtomicResourceEntry::new(
+                0, 10, 0, 0, 0,
+            )),
+            Arc::new(std::sync::Mutex::new(
+                crate::services::active_agents::MemoryGrant::inert(2),
+            )),
+            now,
+        );
+        memory.grow(2, now);
+        assert!(matches!(
+            replay_state.publish_primary_live(&memory).await.unwrap(),
+            crate::durable_host::replay_state::ReplayToLiveOutcome::Ended
+        ));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), preparation.as_mut())
+                .await
+                .is_err(),
+            "the preparation must not deliver after the replay ended"
+        );
+    }
+
+    assert!(!token.is_live_armed());
+    assert!(!replay_state.is_live_published());
+    drop(token);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(oplog.entries.lock().await.len(), recorded);
+}
+
 #[test]
 async fn tail_gated_token_torn_after_conversion_records_discarded_marker() {
     // After tail conversion the token is a real live-armed token: tearing it (dropping the
     // delivering future) must record a `CompletionDiscarded` marker through the drain queue.
-    let (oplog, _replay_state, mut token) = tail_gated_token_over_crash_tail(vec![], None).await;
+    let (oplog, _replay_state, mut token) =
+        tail_gated_token_over_crash_tail(false, vec![], None).await;
     let (tx, mut rx) = mpsc::unbounded_channel();
     token
         .prepare_delivery(None)
@@ -1241,7 +1302,7 @@ async fn tail_gated_token_delivered_without_prepare_poisons_replay() {
     // A delivery boundary firing while the completion is still tail-gated means the call site
     // never awaited `prepare_delivery`: replay must fail loudly instead of silently re-opening
     // the crash window the gate closes.
-    let (_oplog, replay_state, token) = tail_gated_token_over_crash_tail(vec![], None).await;
+    let (_oplog, replay_state, token) = tail_gated_token_over_crash_tail(false, vec![], None).await;
     token.delivered();
 
     let err = replay_state
@@ -1256,6 +1317,7 @@ async fn marker_gated_preparation_keeps_tail_activity_until_delivery() {
     use crate::durable_host::tail_work::TailWorkTracker;
 
     let (oplog, replay_state, mut token) = tail_gated_token_over_crash_tail(
+        false,
         vec![
             OplogEntry::RemoveRetryPolicy {
                 timestamp: Timestamp::now_utc(),
@@ -1773,6 +1835,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
         persist_oplog.current_oplog_index().await,
         None,
+        false,
     )
     .await
     .expect("failed to build replay state");

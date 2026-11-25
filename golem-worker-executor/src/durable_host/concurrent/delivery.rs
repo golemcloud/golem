@@ -611,6 +611,17 @@ impl CompletionDelivery {
             CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtReplayTail(live)) => {
                 let replay_state = live.marker.recorder.replay_state.clone();
                 replay_state.await_natural_tail_end(activity).await?;
+                if replay_state.is_never_live() {
+                    // Handing the completion to the guest after the tail is a live delivery. A
+                    // never-live owner withholds it for good: the settler of the replay applies
+                    // the update and ends the generation, which drops the still tail-gated
+                    // token and leaves the `End` markerless.
+                    let withheld = std::future::pending::<Result<(), WorkerExecutorError>>();
+                    return match activity {
+                        Some(activity) => activity.park(withheld).await,
+                        None => withheld.await,
+                    };
+                }
                 if let CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtReplayTail(
                     live,
                 )) = std::mem::replace(&mut self.state, CompletionDeliveryState::Done)
@@ -921,6 +932,7 @@ impl CompletionDelivery {
             crate::durable_host::tool::operation::OwnerToolOperations::new(),
             oplog.current_oplog_index().await,
             None,
+            false,
         )
         .await?;
         let recorder = CompletionMarkerRecorder::new(oplog, replay_state);

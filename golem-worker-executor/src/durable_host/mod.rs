@@ -26,6 +26,7 @@ mod error_history;
 mod execution_state;
 mod filesystem;
 mod invocation;
+pub(crate) mod never_live;
 mod recovery;
 mod replay_to_live;
 mod resources;
@@ -69,8 +70,8 @@ use replay_to_live::{
     LiveFinalization, StoreReplayState, begin_local_live_continuation, begin_replay_to_live,
 };
 pub(crate) use replay_to_live::{
-    is_tool_attachment_live_admission_rejection, tool_attachment_live_admission_cancelled_error,
-    tool_attachment_live_admission_rejected_error,
+    is_tool_attachment_live_admission_rejection, never_live_ended_error,
+    tool_attachment_live_admission_cancelled_error, tool_attachment_live_admission_rejected_error,
 };
 #[cfg(test)]
 use resources::validate_unshared_memory_growth;
@@ -589,7 +590,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         WakeupScheduler,
         crate::services::golem_config::SuspendConfig,
     )> {
-        (self.agent_mode() == AgentMode::Durable).then(|| {
+        // A never-live owner never suspends: its wakeup would create a promise and schedule its
+        // completion in the shared scheduler.
+        (self.agent_mode() == AgentMode::Durable && !self.state.never_live).then(|| {
             (
                 self.state.wakeup_scheduler(
                     self.public_state
@@ -1049,6 +1052,9 @@ pub(crate) enum FinishReplayToLive {
     Live,
     AttachmentAdmissionRejected,
     Cancelled,
+    /// The never-live owner's replay ended. The primary processes its replay events; no
+    /// consumer goes live.
+    Ended,
 }
 
 #[must_use = "replay cleanup must finish before live attachment admission is finalized"]
@@ -1057,6 +1063,8 @@ pub(crate) struct PendingReplayToLive {
     replay_target: OplogIndex,
     finalization: LiveFinalization,
     linear_memory: LinearMemoryTracker,
+    /// The replay of a never-live owner ended: `finish_at` gives `Ended` and admits nothing.
+    ended: bool,
 }
 
 const TOOL_ATTACHMENT_LIVE_ADMISSION_REJECTED: &str =
@@ -1205,6 +1213,8 @@ struct PrivateDurableWorkerState {
 
     socket_entries: sockets::SocketEntries,
 
+    /// Whether the owner is a never-live sandbox fork. Fixed for the Store's life.
+    never_live: bool,
     snapshotting_mode: bool,
 
     /// The index of the `AgentInvocationFinished` entry of the last invocation of this Store that
@@ -1666,6 +1676,70 @@ impl PrivateDurableWorkerState {
                     "the core initializer may make only direct reads outside the permission-card and fork families, because recovery replays its bootstrap block before it loads a snapshot, but it called {call}"
                 ),
             ))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Refuses a durable call of `host_function` with `function_type` for a never-live owner when
+    /// the call executes now instead of returning its recorded result, unless it is `ReadLocal`
+    /// ([`never_live::admits`]). A call executes now when the Store is live for it, which a
+    /// never-live Store never is, or when durability is suppressed for a snapshot hook. A call
+    /// that can only return its recorded result is admitted, so recorded replay does not change.
+    /// Unmarked owners are admitted.
+    ///
+    /// The admission functions run this check before the read-only strictness check, so that a
+    /// load hook's refused call is not replayable instead of a read-only violation.
+    pub(crate) fn check_never_live_admission(
+        &self,
+        function_type: &DurableFunctionType,
+        host_function: &HostFunctionName,
+    ) -> Result<(), WorkerExecutorError> {
+        if never_live::admits(
+            self.never_live,
+            self.never_live_call_executes_now(),
+            function_type,
+            host_function,
+        ) {
+            Ok(())
+        } else {
+            Err(never_live::refusal(&host_function.to_string()))
+        }
+    }
+
+    /// Refuses the call at `boundary` for a never-live owner when it executes now, whatever its
+    /// type: a call without a typed durable call of its own, such as an RPC entry point, a
+    /// transaction scope or a positional read.
+    pub(crate) fn check_never_live_execution(
+        &self,
+        boundary: &str,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.never_live && self.never_live_call_executes_now() {
+            Err(never_live::refusal(boundary))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn never_live_call_executes_now(&self) -> bool {
+        self.durable_call_is_live() || self.durability_is_suppressed()
+    }
+
+    /// Whether the owner is a never-live sandbox fork.
+    pub(crate) fn never_live(&self) -> bool {
+        self.never_live
+    }
+
+    /// Refuses a native operation that would reach a peer, such as a TCP connect or a name
+    /// lookup, for a never-live owner. It runs before the Wasmtime call on every path, historical
+    /// replay included, since the native operation is not a durable call: only its recorded
+    /// permission check replays.
+    pub(crate) fn refuse_native_peer_effect(
+        &self,
+        boundary: &str,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.never_live {
+            Err(never_live::refusal(boundary))
         } else {
             Ok(())
         }

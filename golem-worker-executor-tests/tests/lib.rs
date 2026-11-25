@@ -61,6 +61,7 @@ pub mod key_value_storage;
 pub mod keyvalue;
 pub mod mcp_stdout;
 pub mod namespace_routed_key_value_storage;
+pub mod never_live;
 pub mod observability;
 pub mod oplog_archive_schedule;
 pub mod oplog_blob_archive;
@@ -151,6 +152,7 @@ tag_suite!(external_durable_stream, group1);
 tag_suite!(rdbms_guest, group1);
 
 tag_suite!(hot_update, group2);
+tag_suite!(never_live, group2);
 tag_suite!(instance_layer, group2);
 tag_suite!(owner_tool_isolation, group2);
 tag_suite!(active_agents, group2);
@@ -483,6 +485,12 @@ test_component!(
     "golem_it_constructor_parameter_echo"
 );
 test_component!(
+    agent_initializer,
+    "agent_initializer",
+    "it_agent_initializer_release",
+    "it:agent-initializer"
+);
+test_component!(
     agent_update_v1,
     "agent_update_v1",
     "it_agent_update_v1_release",
@@ -492,6 +500,12 @@ test_component!(
     agent_update_v2,
     "agent_update_v2",
     "it_agent_update_v2_release",
+    "it:agent-update"
+);
+test_component!(
+    agent_update_v3,
+    "agent_update_v3",
+    "it_agent_update_v3_release",
     "it:agent-update"
 );
 test_component!(

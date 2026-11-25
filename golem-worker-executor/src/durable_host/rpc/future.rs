@@ -933,8 +933,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::rpc::future-invoke-result", "cancel");
 
         // Trap immediately if the invocation is restricted to read-only side effects.
-        self.check_read_only_allows("golem::rpc::future-invoke-result::cancel")
-            .map_err(wasmtime::Error::from)?;
+        self.check_rpc_admission("golem::rpc::future-invoke-result::cancel")?;
 
         // Decide what to cancel while holding the table borrow, taking the durable call handle out
         // of the state (a live handle must never drop while still owned here). The background task,

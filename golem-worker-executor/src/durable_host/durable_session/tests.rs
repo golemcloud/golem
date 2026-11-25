@@ -648,6 +648,7 @@ async fn recorded_input_observation() -> (
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
         oplog.current_oplog_index().await,
         None,
+        false,
     )
     .await
     .unwrap();
@@ -7988,6 +7989,7 @@ async fn guest_byte_journal_covers_only_observed_bytes_after_reconstruction() {
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
         oplog.current_oplog_index().await,
         None,
+        false,
     )
     .await
     .unwrap();
@@ -8637,6 +8639,7 @@ async fn replay_input_disposal_recognizes_exact_source_terminals_without_cancel_
             crate::durable_host::tool::operation::OwnerToolOperations::new(),
             horizon,
             None,
+            false,
         )
     };
     let replay = replay_at(before, Default::default()).await.unwrap();

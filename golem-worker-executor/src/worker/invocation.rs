@@ -1339,8 +1339,11 @@ fn classify_guest_call_settlement<R>(
             })
         } else if let Some(error) = error.chain().find_map(|cause| {
             let error = cause.downcast_ref::<WorkerExecutorError>()?;
-            (matches!(error, WorkerExecutorError::RecoveryRequired { .. })
-                || crate::durable_host::is_tool_attachment_live_admission_rejection(error))
+            (matches!(
+                error,
+                WorkerExecutorError::RecoveryRequired { .. }
+                    | WorkerExecutorError::NeverLiveEffectRefused { .. }
+            ) || crate::durable_host::is_tool_attachment_live_admission_rejection(error))
             .then(|| error.clone())
         }) {
             GuestCallSettlementError::Infrastructure(error)
@@ -2380,14 +2383,16 @@ fn replay_divergence_from_trap(
     error: &anyhow::Error,
     is_live: bool,
 ) -> Option<WorkerExecutorError> {
-    (!is_live)
-        .then(|| {
-            error
-                .chain()
-                .find_map(|error| error.downcast_ref::<WorkerExecutorError>())
+    error
+        .chain()
+        .filter_map(|error| error.downcast_ref::<WorkerExecutorError>())
+        .find(|error| match error {
+            WorkerExecutorError::UnexpectedOplogEntry { .. } => !is_live,
+            // A refused peer effect of a never-live agent keeps its type in every phase,
+            // including a snapshot load, which counts as live.
+            WorkerExecutorError::NeverLiveEffectRefused { .. } => true,
+            _ => false,
         })
-        .flatten()
-        .filter(|error| matches!(error, WorkerExecutorError::UnexpectedOplogEntry { .. }))
         .cloned()
 }
 
@@ -3804,6 +3809,20 @@ mod tests {
 
         assert_eq!(replay_divergence_from_trap(&error, false), Some(divergence));
         assert_eq!(replay_divergence_from_trap(&error, true), None);
+    }
+
+    #[test]
+    fn never_live_refusal_trap_keeps_its_type_in_every_phase() {
+        let refusal = WorkerExecutorError::NeverLiveEffectRefused {
+            boundary: "golem::keyvalue::eventual::get".to_string(),
+        };
+        let error = anyhow::Error::new(refusal.clone()).context("guest call failed");
+
+        assert_eq!(
+            replay_divergence_from_trap(&error, false),
+            Some(refusal.clone())
+        );
+        assert_eq!(replay_divergence_from_trap(&error, true), Some(refusal));
     }
 
     #[test]

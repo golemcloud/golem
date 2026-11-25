@@ -700,6 +700,12 @@ pub trait ToolStreamingCaller {
     async fn dynamic_mcp_stdout_probe(&self, value: String) -> String;
     async fn clock_races_through_tool_entity(&self) -> Vec<String>;
     async fn long_clock_through_tool_entity(&self) -> Vec<String>;
+    /// Starts three calls that do not end: an RPC call to `wait_long` of the caller agent
+    /// `peer`, a direct call; a P3 HTTP request to `127.0.0.1:http_port`, an accessor call; and a
+    /// tool entity body that sleeps for ten minutes. Never returns while the peers stay silent.
+    async fn overlapping_incomplete_calls(&self, http_port: u16, peer: String);
+    /// Waits ten minutes on a P3 clock.
+    async fn wait_long(&self);
     async fn aggregate_clocks_through_tool_entities(&self) -> Vec<String>;
     async fn local_clocks_then_tool_clocks(&self, local_reads: u32, tool_calls: u32) -> u32;
     async fn filesystem_tool_roundtrip(&self) -> Vec<String>;
@@ -1225,6 +1231,36 @@ async fn raw_chunk(stdout: &mut InputStream) -> Vec<u8> {
         Some(Ok(bytes)) => bytes,
         other => panic!("expected raw stdout chunk, got {other:?}"),
     }
+}
+
+/// Sends a P3 HTTP GET to `127.0.0.1:port` and waits for its response.
+async fn silent_http_get(port: u16) {
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::wit_future;
+
+    let headers = types::Fields::from_list(&[]).expect("valid request fields");
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    let (request, transmit) = types::Request::new(headers, None, trailers_rx, None);
+    request
+        .set_scheme(Some(&types::Scheme::Http))
+        .expect("set the scheme");
+    request
+        .set_authority(Some(&format!("127.0.0.1:{port}")))
+        .expect("set the authority");
+    request
+        .set_method(&types::Method::Get)
+        .expect("set the method");
+    request
+        .set_path_with_query(Some("/"))
+        .expect("set the path");
+    let send = async move {
+        let _ = client::send(request).await;
+    };
+    let finish = async move {
+        let _ = trailers_tx.write(Ok(None)).await;
+        let _ = transmit.await;
+    };
+    let ((), ()) = (send, finish).join().await;
 }
 
 async fn wait_at_crash_checkpoint(name: &str) {
@@ -2992,6 +3028,25 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .expect("await long P3 clock");
         let follow_up = client.follow_up().await.expect("clock follow-up");
         vec![timer.to_string(), follow_up]
+    }
+
+    async fn overlapping_incomplete_calls(&self, http_port: u16, peer: String) {
+        let rpc = async move {
+            ToolStreamingCallerClient::upsert(peer).wait_long().await;
+        };
+        let http = silent_http_get(http_port);
+        let body = async {
+            ClockRaceClient::new()
+                .race_p3_sleeps(vec![600])
+                .await
+                .expect("await the long tool clock");
+        };
+        // The body starts first, so its entity call starts before the HTTP send waits.
+        let ((), (), ()) = (body, rpc, http).join().await;
+    }
+
+    async fn wait_long(&self) {
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(600 * 1_000_000_000).await;
     }
 
     async fn local_clocks_then_tool_clocks(&self, local_reads: u32, tool_calls: u32) -> u32 {

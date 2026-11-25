@@ -159,7 +159,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     ) -> Result<FinishReplayToLive, WorkerExecutorError> {
         let role = pending.role();
         let outcome = pending.finish_at(boundary).await?;
-        if outcome == FinishReplayToLive::Live && role == ReplayToLiveRole::PrimaryAgent {
+        if matches!(
+            outcome,
+            FinishReplayToLive::Live | FinishReplayToLive::Ended
+        ) && role == ReplayToLiveRole::PrimaryAgent
+        {
             self.process_pending_replay_events().await?;
         }
         Ok(outcome)
@@ -313,6 +317,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Option<(OplogIndex, OplogEntry)>> {
         concurrent::drain_queued_dropped_call_events(self).await?;
         let expected = request.expected_description();
+        self.state.check_never_live_execution(expected)?;
         self.state.refuse_on_bootstrap_cursor(expected)?;
         loop {
             if self.is_live() {
@@ -384,7 +389,16 @@ impl FinishReplayToLive {
                 Err(tool_attachment_live_admission_rejected_error())
             }
             Self::Cancelled => Err(tool_attachment_live_admission_cancelled_error()),
+            Self::Ended => Err(never_live_ended_error()),
         }
+    }
+}
+
+/// The error of a live continuation that a never-live owner refuses: the replay ended, and
+/// nothing may run live.
+pub(crate) fn never_live_ended_error() -> WorkerExecutorError {
+    WorkerExecutorError::Interrupted {
+        kind: InterruptKind::NeverLive,
     }
 }
 
@@ -407,6 +421,9 @@ impl PendingReplayToLive {
             golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal,
         >,
     ) -> Result<FinishReplayToLive, WorkerExecutorError> {
+        if self.ended {
+            return Ok(FinishReplayToLive::Ended);
+        }
         match self.finalization {
             LiveFinalization::IncompleteTool {
                 continuation,
@@ -543,6 +560,8 @@ pub(in crate::durable_host) async fn begin_replay_to_live<Ctx: WorkerCtx>(
                     .await?;
                 replay_state.publish_primary_live(linear_memory).await?
             }
+            // An entity Store of a never-live owner never goes live.
+            _ if replay_state.is_never_live() => ReplayToLiveOutcome::Ended,
             _ => {
                 let replay_target = replay_state.exhaust_replay_prefix().await?;
                 linear_memory.switch_to_live();
@@ -557,8 +576,15 @@ pub(in crate::durable_host) async fn begin_replay_to_live<Ctx: WorkerCtx>(
                 replay_target,
                 finalization,
                 linear_memory: linear_memory.clone(),
+                ended: false,
             }))
         }
+        ReplayToLiveOutcome::Ended => Ok(BeginReplayToLive::Pending(PendingReplayToLive {
+            replay_target: replay_state.replay_target(),
+            finalization,
+            linear_memory: linear_memory.clone(),
+            ended: true,
+        })),
     }
 }
 
@@ -584,11 +610,16 @@ pub(in crate::durable_host) async fn begin_local_live_continuation<Ctx: WorkerCt
         linear_memory,
     )
     .await?;
+    // A never-live owner continues nothing live, also after its replay ended.
+    if replay_state.is_never_live() {
+        return Err(never_live_ended_error());
+    }
     let finalization = store_replay_state.finalization(tool_entity, tool_operation)?;
     linear_memory.switch_to_live();
     Ok(PendingReplayToLive {
         replay_target,
         finalization,
         linear_memory: linear_memory.clone(),
+        ended: false,
     })
 }

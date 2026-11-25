@@ -56,6 +56,49 @@ impl UpdateTest for UpdateTestImpl {
     }
 }
 
+/// Takes snapshots with the executor's default policy. Its load hook reads the key of the loaded
+/// value from the bucket `snapshot-load`, a remote read.
+#[agent_definition(snapshotting = "enabled")]
+pub trait KeyValueLoadTest {
+    fn new() -> Self;
+    fn set(&mut self, value: u64) -> u64;
+}
+
+struct KeyValueLoadTestImpl {
+    last: u64,
+}
+
+#[agent_implementation]
+impl KeyValueLoadTest for KeyValueLoadTestImpl {
+    fn new() -> Self {
+        Self { last: 0 }
+    }
+
+    fn set(&mut self, value: u64) -> u64 {
+        self.last = value;
+        self.last
+    }
+
+    async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+        Ok(self.last.to_be_bytes().to_vec())
+    }
+
+    async fn load_snapshot(
+        bytes: Vec<u8>,
+        _context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
+        let last = u64::from_be_bytes(
+            bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| "Invalid snapshot".to_string())?,
+        );
+        let bucket = Bucket::open_bucket("snapshot-load").map_err(|error| format!("{error:?}"))?;
+        get(&bucket, &last.to_string()).map_err(|error| format!("{error:?}"))?;
+        Ok(Self { last })
+    }
+}
+
 #[agent_definition]
 pub trait RevisionEnvAgent {
     fn new() -> Self;

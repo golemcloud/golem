@@ -1486,6 +1486,12 @@ impl AgentStatusRecord {
         self.running.as_ref().map(|running| &running.key)
     }
 
+    /// Whether a start of the agent may run. A never-live agent runs only to replay its history
+    /// for a pending update; every other agent may run.
+    pub fn may_start(&self) -> bool {
+        !self.never_live || !self.pending_updates.is_empty()
+    }
+
     pub fn has_pending_work(&self, now: Timestamp) -> bool {
         self.pending_invocations
             .iter()

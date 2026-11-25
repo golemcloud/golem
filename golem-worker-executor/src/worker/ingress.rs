@@ -1262,6 +1262,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 return Ok((None, None));
             }
 
+            // A never-live agent accepts no new work. A known invocation ID still answers
+            // above, from the recorded result. The mark never changes, so this check holds for
+            // the keyed append below.
+            if self.never_live() {
+                return Err(WorkerExecutorError::AgentNeverLive {
+                    agent_id: self.owned_agent_id.agent_id,
+                });
+            }
+
             let caller_payload = invocation.clone().into_parts().1;
             let (semantic_idempotency_key, entry) = self
                 .pending_invocation_entry(&self.oplog, invocation, not_before)

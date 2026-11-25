@@ -195,6 +195,8 @@ pub trait SnapshotUpdateTest {
     fn suffix_host_value(&self) -> u32;
     fn suffix_trap(&self) -> u32;
     fn suffix_exit(&self) -> u32;
+    /// Returns 7. In agent-updates-v2 it fails by a host error: a read from an unknown stream.
+    fn suffix_host_error(&self) -> u32;
     fn accumulated_value(&self) -> u32;
     fn revision_two_only(&self) -> u32;
     fn revision_cache_probe(&mut self) -> u32;
@@ -261,6 +263,13 @@ impl SnapshotUpdateTest for SnapshotUpdateTestImpl {
 
     fn suffix_exit(&self) -> u32 {
         std::process::exit(1)
+    }
+
+    fn suffix_host_error(&self) -> u32 {
+        // SAFETY: no input stream has this handle, so the host refuses the read.
+        let unknown = unsafe { wasi::io::streams::InputStream::from_handle(0x00ff_ffff) };
+        let _ = unknown.read(1);
+        7
     }
 
     fn accumulated_value(&self) -> u32 {

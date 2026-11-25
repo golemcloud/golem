@@ -333,6 +333,9 @@ impl From<WorkerExecutorError> for ApiEndpointError {
             WorkerExecutorError::AgentKeyCollision { .. } => {
                 Self::conflict(api::error_code::AGENT_KEY_COLLISION, error)
             }
+            WorkerExecutorError::AgentNeverLive { .. } => {
+                Self::conflict(api::error_code::AGENT_NEVER_LIVE, error)
+            }
             WorkerExecutorError::CreateIdempotencyKeyConflict { .. } => {
                 Self::unprocessable_entity(api::error_code::CREATE_IDEMPOTENCY_KEY_CONFLICT, error)
             }
