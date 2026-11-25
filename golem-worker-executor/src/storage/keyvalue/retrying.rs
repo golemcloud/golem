@@ -217,9 +217,12 @@ impl KeyValueStorage for RetryingKeyValueStorage {
     /// truth: the comparison row now holds what this call itself wrote, so it no longer matches
     /// `expected`.
     ///
-    /// The invocation-result index is the only caller, and a spurious `false` makes it reload and
-    /// reconcile the state this call may already have written. Refusing to retry instead would
-    /// surface a brief backend outage as a hard failure.
+    /// Two callers tolerate a spurious `false`. The rejection of periodic snapshots
+    /// (`reject_periodic_snapshots`) reads the rejected indexes again, finds its own write and
+    /// stops. The advance of the retained start
+    /// (`advance_oplog_retention`) reads the record again and sees its own write, so it does not
+    /// write again. Refusing to retry instead would surface a brief backend outage as a hard
+    /// failure.
     ///
     /// If a caller ever branches on the flag in a way an incorrect `false` would break, this is the
     /// line to change, and `NonIdempotent` still expresses it.
