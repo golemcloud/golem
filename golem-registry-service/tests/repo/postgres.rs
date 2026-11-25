@@ -374,6 +374,28 @@ async fn test_audit_staging_keeps_the_record_of_a_decision(
 }
 
 #[test]
+async fn test_audit_staging_fills_the_target_account_from_the_environment(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_audit_staging_fills_the_target_account_from_the_environment(deps)
+        .await;
+}
+
+#[test]
+async fn test_audit_staging_keeps_the_target_account_of_the_record(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_audit_staging_keeps_the_target_account_of_the_record(deps).await;
+}
+
+#[test]
+async fn test_audit_staging_stores_a_record_of_an_unknown_environment_without_an_account(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_audit_staging_stores_a_record_of_an_unknown_environment_without_an_account(deps).await;
+}
+
+#[test]
 async fn test_runtime_card_parent_integrity(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_runtime_card_parent_integrity(deps).await;
 }

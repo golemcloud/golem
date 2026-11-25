@@ -106,11 +106,24 @@ pub struct DbAuditStagingRepo<DBP: Pool> {
 
 static METRICS_SVC_NAME: &str = "audit_staging";
 
+/// A record that names an environment but no account (the target of an agent, a tool or an
+/// invocation names only its environment) gets the environment's account in the same
+/// statement, so that the export finds the account it routes by. An environment that the
+/// registry does not know gives no account, and the record is still stored. The record itself
+/// stays as the decision named it. `WHERE true` keeps SQLite from reading `ON CONFLICT` as a
+/// join constraint of the `SELECT`.
 const INSERT: &str = indoc! { r#"
     INSERT INTO audit_staging
         (event_id, recorded_at, surface, operation, outcome,
          target_account_id, target_environment_id, record)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    SELECT $1, $2, $3, $4, $5,
+           COALESCE($6, (SELECT applications.account_id
+                         FROM environments
+                         JOIN applications
+                           ON applications.application_id = environments.application_id
+                         WHERE environments.environment_id = $7)),
+           $7, $8
+    WHERE true
     ON CONFLICT (event_id) DO NOTHING
 "#};
 

@@ -15782,6 +15782,59 @@ pub async fn test_audit_staging_insert_commits_with_its_transaction(deps: &Deps)
     );
 }
 
+pub async fn test_audit_staging_fills_the_target_account_from_the_environment(deps: &Deps) {
+    let account = deps.create_account().await;
+    let application = deps.create_application(account.revision.account_id).await;
+    let environment = deps.create_env(application.revision.application_id).await;
+    // An agent's record names its environment but no account.
+    let mut record = audit_staging_record(0xa4);
+    record.target_account_id = None;
+    record.target_environment_id = Some(environment.revision.environment_id);
+
+    deps.audit_staging_repo.insert(&record).await.unwrap();
+
+    let stored = deps
+        .audit_staging_repo
+        .get(record.event_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(stored.target_account_id == Some(application.account_id));
+    assert!(stored.target_environment_id == Some(environment.revision.environment_id));
+    assert!(stored.record == record.record);
+}
+
+pub async fn test_audit_staging_keeps_the_target_account_of_the_record(deps: &Deps) {
+    let account = deps.create_account().await;
+    let application = deps.create_application(account.revision.account_id).await;
+    let environment = deps.create_env(application.revision.application_id).await;
+    let mut record = audit_staging_record(0xa5);
+    record.target_environment_id = Some(environment.revision.environment_id);
+
+    deps.audit_staging_repo.insert(&record).await.unwrap();
+
+    let stored = deps
+        .audit_staging_repo
+        .get(record.event_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(stored.target_account_id == record.target_account_id);
+}
+
+pub async fn test_audit_staging_stores_a_record_of_an_unknown_environment_without_an_account(
+    deps: &Deps,
+) {
+    let mut record = audit_staging_record(0xa6);
+    record.target_account_id = None;
+    record.target_environment_id = Some(Uuid::from_u128(0xe0e0));
+
+    deps.audit_staging_repo.insert(&record).await.unwrap();
+
+    let stored = deps.audit_staging_repo.get(record.event_id).await.unwrap();
+    assert!(stored == Some(record));
+}
+
 pub async fn test_audit_staging_keeps_the_record_of_a_decision(deps: &Deps) {
     use golem_common::model::AgentFingerprint;
     use golem_common::model::auth::TokenId;
