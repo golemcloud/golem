@@ -480,7 +480,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-local-dev-server` | Starting, configuring, and debugging the local Golem development server with `golem server` — verbosity flags, useful tracing targets, and key log lines |
 | `golem-rollback` | Rolling back a Golem deployment to a previous revision or version |
 | `golem-redeploy-agents` | Redeploying existing agents by deleting and recreating them |
-| `golem-create-agent-instance-moonbit` | Creating a new agent instance with `golem agent new` |
+| `golem-create-agent-instance-moonbit` | Creating a new agent instance with `golem agent create` or `golem agent upsert` |
 | `golem-invoke-agent-moonbit` | Invoking a Golem agent method from the CLI |
 | `golem-trigger-agent-moonbit` | Triggering a fire-and-forget invocation on a Golem agent |
 | `golem-schedule-agent-moonbit` | Scheduling a future invocation on a Golem agent |
@@ -501,7 +501,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-recurring-task-moonbit` | Implementing recurring (cron-like) tasks via self-scheduling — periodic polling, cleanup, heartbeats, backoff, and cancellation |
 | `golem-wait-for-external-input-moonbit` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
 | `golem-add-webhook-moonbit` | Creating and awaiting webhooks for integrating with webhook-driven external APIs |
-| `golem-multi-instance-agent-moonbit` | Creating multiple agent instances with the same constructor parameters using phantom agents |
+| `golem-multi-instance-agent-moonbit` | Creating multiple agents with the same constructor parameters as agents without a key |
 | `golem-add-transactions-moonbit` | Saga-pattern transactions with compensation |
 | `golem-add-http-endpoint-moonbit` | Exposing an agent over HTTP with mount paths and endpoint annotations |
 | `golem-http-params-moonbit` | Mapping path, query, header, and body parameters for HTTP endpoints |
@@ -545,15 +545,15 @@ This is a **Golem Application** — a distributed computing project targeting We
 Key concepts:
 - **Component**: A WASM module compiled from MoonBit, defining one or more agent types
 - **Agent type**: A struct annotated with `#derive.agent`, defining the agent's API via its public methods
-- **Agent (worker)**: A running instance of an agent type, identified by constructor parameters, with persistent state
+- **Agent (worker)**: A running instance of an agent type, identified by its agent ID (a UUID), with persistent state
 
 ## Agent Fundamentals
 
-- Every agent is uniquely identified by its **constructor parameter values** — two agents with the same parameters are the same agent
+- Every agent is identified by its **agent ID**. A keyed agent also has a **key**, the agent type and its constructor parameter values (`Type(params)`): there is at most one keyed agent per key, and `upsert` returns it. An agent created without a key is reachable only by its ID
 - Agents are **durable by default** — their state persists across invocations, failures, and restarts
 - Invocations are processed **sequentially in a single thread** — no concurrency within a single agent, no need for locks
 - Agents can **spawn other agents** and communicate with them via **RPC** (see Agent-to-Agent Communication)
-- An agent is created implicitly on first invocation — no separate creation step needed
+- A keyed agent is created implicitly by `upsert` or by the first invocation by key — no separate creation step needed
 - **Async handles cannot outlive invocations** — every WASI `pollable` or `future-*` resource (e.g. those returned by `@http.handle`) must be subscribed to / `get()`-ed within the same invocation; do not store unresolved pollables or futures in agent state to consume them from a later invocation
 
 ## Durability & Automatic Retries
@@ -566,7 +566,7 @@ Retryable failures in the following operations are handled transparently:
 - **RPC calls** between agents
 - **Database / storage calls** — `golem:rdbms/postgres`, `golem:rdbms/mysql`, `golem:rdbms/ignite2`, `wasi:blobstore`, `wasi:keyvalue`
 
-An uncaught `raise`, abort, or panic is a deterministic guest trap and fails the invocation without retry. Recovery replays completed outcomes and repairs only an eligible incomplete call at its own `Start`. MoonBit has no public saga helper. For domain compensation, implement ordinary guest control flow that compensates completed steps before appending fresh calls. Such an application loop has no SDK-provided attempt bound or backoff guarantee.
+A method that raises an `AgentError` fails only that invocation, without automatic retry or rollback. Earlier mutations remain, and a durable agent can run its next invocation. Constructor errors, aborts, panics and actual Wasm traps remain agent-fatal. Recovery replays completed outcomes and repairs only an eligible incomplete call at its own `Start`. MoonBit has no public saga helper. For domain compensation, implement ordinary guest control flow that compensates completed steps before appending fresh calls. Such an application loop has no SDK-provided attempt bound or backoff guarantee.
 
 Only customize when the *strategy* needs to change (different backoff, give-up conditions, per-status-code policies). For that, see the `golem-retry-policies-moonbit` skill.
 
@@ -595,7 +595,7 @@ golem-temp/                       # Build artifacts (gitignored)
 
 ## Name Mapping
 
-All MoonBit identifiers are used **as-is** (matching the source code) when used externally in CLI commands, REPL, and agent IDs:
+All MoonBit identifiers are used **as-is** (matching the source code) when used externally in CLI commands, REPL, and agent keys:
 
 - **Agent type names**: `CounterAgent` → `CounterAgent`, `TaskManager` → `TaskManager` (PascalCase)
 - **Method names**: `get_value` → `get_value`, `add_task` → `add_task` (snake_case)

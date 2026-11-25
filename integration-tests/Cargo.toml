@@ -22,7 +22,6 @@ golem-test-framework = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
-chrono = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 base64 = { workspace = true }
@@ -32,6 +31,7 @@ clap = { workspace = true }
 futures-concurrency = { workspace = true }
 headers = { workspace = true }
 indoc = { workspace = true }
+jiff = { workspace = true }
 pretty_assertions = { workspace = true, features = [ "unstable" ] }
 prost = { workspace = true }
 rand = { workspace = true }

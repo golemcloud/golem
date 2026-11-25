@@ -333,6 +333,59 @@ macro_rules! declare_structs {
     )* }
 }
 
+/// Declares a domain object and its OpenAPI boundary from one field list.
+/// A field can select an OpenAPI adapter with `=> AdapterType`.
+/// The three lists contain domain attributes, OpenAPI attributes, and boundary
+/// example implementations, respectively.
+#[macro_export]
+macro_rules! declare_datetime_struct {
+    ($original:path, [$(#[$attr:meta])*], [$(#[$openapi_attr:meta])*], [$($example:item)*],
+        $vis:vis struct $name:ident {
+            $($(#[$field_attr:meta])* $field_vis:vis $field:ident: $ty:ty $(=> $adapter:ty)?,)*
+        }
+    ) => {
+        #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        $(#[$attr])*
+        $vis struct $name {
+            $($(#[$field_attr])* $field_vis $field: $ty,)*
+        }
+
+        #[cfg(feature = "full")]
+        $crate::datetime_object! {
+            $original, $name, [$($example)*],
+            $crate::datetime_boundary_struct! {
+                [$(#[$openapi_attr])*], $name, [],
+                $($(#[$field_attr])* $field: $ty $(=> $adapter)?,)*
+            }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! datetime_boundary_struct {
+    ([$($attr:tt)*], $name:ident, [$($fields:tt)*],
+        $(#[$field_attr:meta])* $field:ident: $ty:ty => $adapter:ty, $($rest:tt)*) => {
+        $crate::datetime_boundary_struct! {
+            [$($attr)*], $name, [$($fields)* $(#[$field_attr])* $field: $adapter,], $($rest)*
+        }
+    };
+    ([$($attr:tt)*], $name:ident, [$($fields:tt)*],
+        $(#[$field_attr:meta])* $field:ident: $ty:ty, $($rest:tt)*) => {
+        $crate::datetime_boundary_struct! {
+            [$($attr)*], $name, [$($fields)* $(#[$field_attr])* $field: $ty,], $($rest)*
+        }
+    };
+    ([$($attr:tt)*], $name:ident, [$($fields:tt)*],) => {
+        #[derive(serde::Serialize, serde::Deserialize, poem_openapi::Object)]
+        #[serde(rename_all = "camelCase")]
+        #[oai(rename_all = "camelCase")]
+        $($attr)*
+        struct $name { $($fields)* }
+    };
+}
+
 #[macro_export]
 macro_rules! declare_unions {
     ($($i:item)*) => { $(

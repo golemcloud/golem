@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use anyhow::Context;
-use chrono::{DateTime, Utc};
+
 use golem_client::api::{
     RegistryServiceClearAccountAdminResourceGrantError,
     RegistryServiceClearAccountStorageOverrideError, RegistryServiceClient,
@@ -36,6 +36,7 @@ use golem_service_base::clients::registry::{
     ResourceUsageUpdate,
 };
 use golem_service_base::grpc::client::GrpcClientConfig;
+use golem_service_base::repo::SqlDateTime;
 use golem_test_framework::components::rdb::DbInfo;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
@@ -78,9 +79,9 @@ async fn insert_usage_for_period(
     deps: &EnvBasedTestDependencies,
     account_id: AccountId,
     period: AccountUsagePeriod,
-) -> anyhow::Result<DateTime<Utc>> {
+) -> anyhow::Result<jiff::Timestamp> {
     let usage_key = period.to_string();
-    let updated_at = DateTime::<Utc>::from_timestamp_micros(Utc::now().timestamp_micros())
+    let updated_at = jiff::Timestamp::from_microsecond(jiff::Timestamp::now().as_microsecond())
         .expect("current timestamp is representable at database precision");
     const VALUES: [(i32, i64); 4] = [(2, 1_500_000), (10, 140), (11, 500), (12, 14)];
     match deps.rdb().info() {
@@ -104,7 +105,7 @@ async fn insert_usage_for_period(
                 .bind(usage_type)
                 .bind(&usage_key)
                 .bind(value)
-                .bind(updated_at)
+                .bind(SqlDateTime::new(updated_at))
                 .execute(&pool)
                 .await
                 .with_context(|| format!("failed to seed SQLite usage type {usage_type}"))?;
@@ -117,7 +118,7 @@ async fn insert_usage_for_period(
             )
             .bind(account_id.0)
             .bind(&usage_key)
-            .bind(updated_at)
+            .bind(SqlDateTime::new(updated_at))
             .execute(&pool)
             .await
             .context("failed to seed SQLite metering state")?;
@@ -137,7 +138,7 @@ async fn insert_usage_for_period(
                 .bind(usage_type)
                 .bind(&usage_key)
                 .bind(value)
-                .bind(updated_at)
+                .bind(SqlDateTime::new(updated_at))
                 .execute(&pool)
                 .await
                 .with_context(|| format!("failed to seed PostgreSQL usage type {usage_type}"))?;
@@ -150,7 +151,7 @@ async fn insert_usage_for_period(
             )
             .bind(account_id.0)
             .bind(&usage_key)
-            .bind(updated_at)
+            .bind(SqlDateTime::new(updated_at))
             .execute(&pool)
             .await
             .context("failed to seed PostgreSQL metering state")?;
@@ -171,7 +172,7 @@ async fn account_usage_reports_all_customer_dimensions(
     let registry_client = registry_client(deps);
     let byte_seconds_per_gb_month = BYTE_SECONDS_PER_GB_MONTH as f64;
 
-    let updates_started_at = Utc::now();
+    let updates_started_at = jiff::Timestamp::now();
     for (fuel_delta, durable_storage_byte_seconds_delta, ephemeral_storage_byte_seconds_delta) in
         [(1_000_000, 133, 476), (500_000, 7, 24)]
     {
@@ -197,7 +198,7 @@ async fn account_usage_reports_all_customer_dimensions(
             )]))
             .await?;
     }
-    let updates_finished_at = Utc::now();
+    let updates_finished_at = jiff::Timestamp::now();
 
     let usage = registry_service
         .client(&user.token)
@@ -473,7 +474,7 @@ async fn account_owner_explicitly_changes_monthly_usage_mode(
         .create_impersonation_token(
             &user.account_id.0,
             &TokenCreation {
-                expires_at: Utc::now() + chrono::Duration::minutes(5),
+                expires_at: jiff::Timestamp::now() + jiff::SignedDuration::from_mins(5),
             },
         )
         .await?;
@@ -564,7 +565,7 @@ async fn account_usage_history_is_authenticated_and_empty_for_new_account(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
-    let request_started_at = Utc::now();
+    let request_started_at = jiff::Timestamp::now();
 
     let current = deps
         .registry_service()
@@ -572,7 +573,7 @@ async fn account_usage_history_is_authenticated_and_empty_for_new_account(
         .await
         .get_account_usage(&user.account_id.0, None)
         .await?;
-    let request_finished_at = Utc::now();
+    let request_finished_at = jiff::Timestamp::now();
 
     assert_eq!(current.usage.compute_gcu, 0.0);
     assert_eq!(current.usage.memory_gb_seconds, 0);
@@ -1106,7 +1107,7 @@ async fn admin_resource_grant_endpoints_authorize_validate_and_resolve(
         .create_impersonation_token(
             &user.account_id.0,
             &TokenCreation {
-                expires_at: Utc::now() + chrono::Duration::minutes(5),
+                expires_at: jiff::Timestamp::now() + jiff::SignedDuration::from_mins(5),
             },
         )
         .await?;
@@ -1219,7 +1220,7 @@ async fn admin_resource_grant_endpoints_authorize_validate_and_resolve(
             &SetAdminResourceGrant {
                 value: 2_000_000_000_000,
                 reason: AdminResourceGrantReason::Promotional,
-                expires_at: Some(Utc::now() - chrono::Duration::seconds(1)),
+                expires_at: Some(jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1)),
             },
         )
         .await

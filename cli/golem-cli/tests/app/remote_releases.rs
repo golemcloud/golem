@@ -14,7 +14,6 @@
 
 use crate::app::{Output, TestContext, cmd, flag};
 use crate::{Tracing, workspace_path};
-use chrono::{DateTime, Utc};
 use golem_cli::fs;
 use golem_cli::versions::sdk::MANIFEST as MANIFEST_VERSION;
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
@@ -43,6 +42,7 @@ use golem_common::schema::tool::{
     CommandBody, CommandNode, CommandTree, Doc, Globals, Positionals, Tool, ToolMiddleware,
     ToolMiddlewareScope,
 };
+use jiff::Timestamp;
 use reqwest_middleware::ClientBuilder;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -88,7 +88,7 @@ pub(super) async fn create_registry_user(
         .create_token(
             &account.id.0,
             &TokenCreation {
-                expires_at: DateTime::<Utc>::MAX_UTC,
+                expires_at: Timestamp::MAX,
             },
         )
         .await?

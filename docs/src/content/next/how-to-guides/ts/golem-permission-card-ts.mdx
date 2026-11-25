@@ -186,7 +186,7 @@ template.release();
 ```
 
 Reflected and dynamic clients take the scope card as a trailing argument:
-`method.invokeValue(input, signal, scope)`. `await Def.client.getById(agentId, { scopeCard })` sets a
+`method.invokeValue(input, signal, scope)`. `Def.client.getById(agentId, { scopeCard })` sets a
 default on a client bound to an existing agent; `create(id, { scopeCard })` takes it too.
 
 ## Cards in agent and tool schemas

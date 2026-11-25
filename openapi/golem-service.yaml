@@ -15833,6 +15833,11 @@ components:
         canonicalKey:
           description: The canonical key text of a keyed agent. An agent without a key has none.
           type: string
+        origin:
+          description: 'How the agent came to exist: keyed, created without a key, or forked.'
+          allOf:
+          - $ref: '#/components/schemas/AgentOrigin'
+          - description: 'How the agent came to exist: keyed, created without a key, or forked.'
         constructorParameters:
           description: |-
             The canonical constructor parameter text of a component agent, without its type
@@ -15925,6 +15930,7 @@ components:
       required:
       - agentId
       - ownerKind
+      - origin
       - environmentId
       - createdBy
       - env
@@ -16018,6 +16024,13 @@ components:
             $ref: '#/components/schemas/AgentFilter'
       required:
       - filters
+    AgentOrigin:
+      description: How an agent came to exist.
+      type: string
+      enum:
+      - keyed
+      - created
+      - forked
     AgentReference:
       title: AgentReference
       type: object
@@ -25682,7 +25695,7 @@ components:
       example:
         accountId: 00000000-0000-0000-0000-000000000001
         actorAccountId: 00000000-0000-0000-0000-000000000002
-        changedAt: 2023-11-14T22:13:20+00:00
+        changedAt: 2023-11-14T22:13:20Z
         dimension: monthlyComputeGcu
         eventType: override_granted
         newValue:
@@ -26331,7 +26344,7 @@ components:
       example:
         accountId: 00000000-0000-0000-0000-000000000001
         actorAccountId: 00000000-0000-0000-0000-000000000002
-        changedAt: 2023-11-14T22:13:20+00:00
+        changedAt: 2023-11-14T22:13:20Z
         dimension: monthlyComputeGcu
         eventType: override_cleared
         newValue:
@@ -28757,7 +28770,7 @@ components:
         activeAdminGrant:
           actorAccountId: 00000000-0000-0000-0000-000000000002
           dimension: maxMemoryPerAgent
-          grantedAt: 2023-11-14T22:13:20+00:00
+          grantedAt: 2023-11-14T22:13:20Z
           reason: support
           value: 2147483648
         ceiling:
@@ -28947,7 +28960,7 @@ components:
     MonthlyUsageModeTransition:
       example:
         actorAccountId: 00000000-0000-0000-0000-000000000001
-        changedAt: 2023-11-14T22:13:20+00:00
+        changedAt: 2023-11-14T22:13:20Z
         newMode: hardLimit
         previousMode: allowOverage
         source: owner
@@ -30561,7 +30574,7 @@ components:
         activeAdminGrant:
           actorAccountId: 00000000-0000-0000-0000-000000000002
           dimension: maxStoragePerAgent
-          grantedAt: 2023-11-14T22:13:20+00:00
+          grantedAt: 2023-11-14T22:13:20Z
           reason: support
           value: 2147483648
         ceiling:

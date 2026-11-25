@@ -328,11 +328,12 @@ impl TryFrom<Timetz> for golem_common::model::oplog::payload::types::TimeTz {
 
     fn try_from(value: Timetz) -> Result<Self, Self::Error> {
         let time = value.time.try_into()?;
-        let offset = chrono::offset::FixedOffset::west_opt(value.offset)
-            .ok_or("Offset value is not valid")?;
+        if !(-86_399..=86_399).contains(&value.offset) {
+            return Err("Offset value is not valid".to_string());
+        }
         Ok(Self {
             time,
-            offset: offset.utc_minus_local(),
+            offset: value.offset,
         })
     }
 }
@@ -458,12 +459,12 @@ impl TryFrom<Numrange> for golem_common::model::oplog::payload::types::ValuesRan
 }
 
 impl TryFrom<Daterange>
-    for golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDate>
+    for golem_common::model::oplog::payload::types::ValuesRange<jiff::civil::Date>
 {
     type Error = String;
 
     fn try_from(value: Daterange) -> Result<Self, Self::Error> {
-        fn to_bounds(v: Datebound) -> Result<Bound<chrono::NaiveDate>, String> {
+        fn to_bounds(v: Datebound) -> Result<Bound<jiff::civil::Date>, String> {
             match v {
                 Datebound::Included(v) => Ok(Bound::Included(v.try_into()?)),
                 Datebound::Excluded(v) => Ok(Bound::Excluded(v.try_into()?)),
@@ -478,12 +479,12 @@ impl TryFrom<Daterange>
 }
 
 impl TryFrom<Tsrange>
-    for golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDateTime>
+    for golem_common::model::oplog::payload::types::ValuesRange<jiff::civil::DateTime>
 {
     type Error = String;
 
     fn try_from(value: Tsrange) -> Result<Self, Self::Error> {
-        fn to_bounds(v: Tsbound) -> Result<Bound<chrono::NaiveDateTime>, String> {
+        fn to_bounds(v: Tsbound) -> Result<Bound<jiff::civil::DateTime>, String> {
             match v {
                 Tsbound::Included(v) => Ok(Bound::Included(v.try_into()?)),
                 Tsbound::Excluded(v) => Ok(Bound::Excluded(v.try_into()?)),
@@ -498,12 +499,12 @@ impl TryFrom<Tsrange>
 }
 
 impl TryFrom<Tstzrange>
-    for golem_common::model::oplog::payload::types::ValuesRange<chrono::DateTime<chrono::Utc>>
+    for golem_common::model::oplog::payload::types::ValuesRange<jiff::Timestamp>
 {
     type Error = String;
 
     fn try_from(value: Tstzrange) -> Result<Self, Self::Error> {
-        fn to_bounds(v: Tstzbound) -> Result<Bound<chrono::DateTime<chrono::Utc>>, String> {
+        fn to_bounds(v: Tstzbound) -> Result<Bound<jiff::Timestamp>, String> {
             match v {
                 Tstzbound::Included(v) => Ok(Bound::Included(v.try_into()?)),
                 Tstzbound::Excluded(v) => Ok(Bound::Excluded(v.try_into()?)),
@@ -565,15 +566,11 @@ impl From<golem_common::model::oplog::payload::types::ValuesRange<BigDecimal>> f
     }
 }
 
-impl From<golem_common::model::oplog::payload::types::ValuesRange<chrono::DateTime<chrono::Utc>>>
-    for Tstzrange
-{
+impl From<golem_common::model::oplog::payload::types::ValuesRange<jiff::Timestamp>> for Tstzrange {
     fn from(
-        value: golem_common::model::oplog::payload::types::ValuesRange<
-            chrono::DateTime<chrono::Utc>,
-        >,
+        value: golem_common::model::oplog::payload::types::ValuesRange<jiff::Timestamp>,
     ) -> Self {
-        fn to_bounds(v: Bound<chrono::DateTime<chrono::Utc>>) -> Tstzbound {
+        fn to_bounds(v: Bound<jiff::Timestamp>) -> Tstzbound {
             match v {
                 Bound::Included(v) => Tstzbound::Included(v.into()),
                 Bound::Excluded(v) => Tstzbound::Excluded(v.into()),
@@ -587,13 +584,13 @@ impl From<golem_common::model::oplog::payload::types::ValuesRange<chrono::DateTi
     }
 }
 
-impl From<golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDateTime>>
+impl From<golem_common::model::oplog::payload::types::ValuesRange<jiff::civil::DateTime>>
     for Tsrange
 {
     fn from(
-        value: golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDateTime>,
+        value: golem_common::model::oplog::payload::types::ValuesRange<jiff::civil::DateTime>,
     ) -> Self {
-        fn to_bounds(v: Bound<chrono::NaiveDateTime>) -> Tsbound {
+        fn to_bounds(v: Bound<jiff::civil::DateTime>) -> Tsbound {
             match v {
                 Bound::Included(v) => Tsbound::Included(v.into()),
                 Bound::Excluded(v) => Tsbound::Excluded(v.into()),
@@ -607,13 +604,13 @@ impl From<golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveD
     }
 }
 
-impl From<golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDate>>
+impl From<golem_common::model::oplog::payload::types::ValuesRange<jiff::civil::Date>>
     for Daterange
 {
     fn from(
-        value: golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDate>,
+        value: golem_common::model::oplog::payload::types::ValuesRange<jiff::civil::Date>,
     ) -> Self {
-        fn to_bounds(v: Bound<chrono::NaiveDate>) -> Datebound {
+        fn to_bounds(v: Bound<jiff::civil::Date>) -> Datebound {
             match v {
                 Bound::Included(v) => Datebound::Included(v.into()),
                 Bound::Excluded(v) => Datebound::Excluded(v.into()),

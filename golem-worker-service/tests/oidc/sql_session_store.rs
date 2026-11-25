@@ -17,7 +17,6 @@ use super::session_store::{
     sample_pending_pkce, sample_session,
 };
 use super::{Tracing, postgres_config, postgres_store, unique_postgres_config};
-use chrono::{TimeDelta, Utc};
 use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -33,6 +32,7 @@ use golem_worker_service::custom_api::oidc::session_store::{
     PostgresSessionStore, SessionStore, SqliteSessionStore, migrated_postgres_pool,
     migrated_sqlite_pool,
 };
+use jiff::{SignedDuration, Timestamp};
 use sqlx::{Connection, Executor, Row};
 use std::time::Duration;
 use tempfile::NamedTempFile;
@@ -60,7 +60,7 @@ const WRITER_EXPIRATION: Duration = Duration::from_secs(1);
 /// session that stays valid. The store must have a `pending_login_expiration` of
 /// [`WRITER_EXPIRATION`].
 async fn store_expiring_and_live_records(store: &dyn SessionStore) -> anyhow::Result<SessionId> {
-    let soon = Utc::now() + TimeDelta::from_std(WRITER_EXPIRATION)?;
+    let soon = Timestamp::now() + SignedDuration::try_from(WRITER_EXPIRATION)?;
     let binding = sample_binding();
 
     store
@@ -107,7 +107,10 @@ async fn store_expiring_and_live_records(store: &dyn SessionStore) -> anyhow::Re
 
     let live = SessionId(Uuid::now_v7());
     store
-        .store_authenticated_session(&live, sample_session(Utc::now() + TimeDelta::minutes(5)))
+        .store_authenticated_session(
+            &live,
+            sample_session(Timestamp::now() + SignedDuration::from_mins(5)),
+        )
         .await?;
     Ok(live)
 }

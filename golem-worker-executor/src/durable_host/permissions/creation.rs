@@ -14,11 +14,11 @@
 
 use super::{
     AgentPermissionMonomorphizationContext, CallReplayOutcome, CardId, CardManagedByRuntimeDerived,
-    CardRevokeResult, CardState, DateTime, DurableCallSession, DurableFunctionType,
-    DurableWorkerCtx, GolemPermissionsInstallChildPersist, HostPayloadPair,
-    HostRequestPermissionCardDerive, HostResponsePermissionCardDerived, NotCancellable, OplogEntry,
-    OplogIndex, PermissionCardDeriveError, PolymorphicCard, ResolvedCall, RuntimeCardCreation,
-    StoredCard, Timestamp, Utc, WorkerCtx, WorkerExecutorError, agent_recipient_pattern, anyhow,
+    CardRevokeResult, CardState, DurableCallSession, DurableFunctionType, DurableWorkerCtx,
+    GolemPermissionsInstallChildPersist, HostPayloadPair, HostRequestPermissionCardDerive,
+    HostResponsePermissionCardDerived, NotCancellable, OplogEntry, OplogIndex,
+    PermissionCardDeriveError, PolymorphicCard, ResolvedCall, RuntimeCardCreation, StoredCard,
+    Timestamp, WorkerCtx, WorkerExecutorError, agent_recipient_pattern, anyhow,
     derive_error_to_permission_error, deserialize, durable_now,
     ensure_install_permission_in_surface, instantiate_polymorphic_card_for_agent,
     permission_error_to_derive_error, permissions_types, serialize,
@@ -37,7 +37,7 @@ use std::sync::Arc;
 pub(super) async fn refused_runtime_card_parent<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     card: &StoredCard,
-    parent_expires_at: Option<DateTime<Utc>>,
+    parent_expires_at: Option<jiff::Timestamp>,
 ) -> Result<Option<PermissionCardDeriveError>, WorkerExecutorError> {
     let parent_ids = card.parent_ids().to_vec();
     if parent_ids.is_empty() {
@@ -53,7 +53,9 @@ pub(super) async fn refused_runtime_card_parent<Ctx: WorkerCtx>(
             Some(CardState::Live(_)) => {}
             Some(CardState::Revoked) | Some(CardState::Unknown) => {
                 return Ok(Some(
-                    if parent_expires_at.is_some_and(|expires_at| expires_at <= Utc::now()) {
+                    if parent_expires_at
+                        .is_some_and(|expires_at| expires_at <= jiff::Timestamp::now())
+                    {
                         PermissionCardDeriveError::CardExpired(format!(
                             "parent card {} is expired",
                             parent_id.0
@@ -80,7 +82,7 @@ pub(super) async fn complete_runtime_card_creation<Ctx, Pair>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     mut handle: DurableCallSession<Pair, NotCancellable>,
     card: StoredCard,
-    parent_expires_at: Option<DateTime<Utc>>,
+    parent_expires_at: Option<jiff::Timestamp>,
     provenance: CardManagedByRuntimeDerived,
 ) -> anyhow::Result<HostResponsePermissionCardDerived>
 where
@@ -156,7 +158,7 @@ pub(super) async fn persist_runtime_card<Ctx, Pair, DeriveCardId, BuildCard, Rep
     ctx: &mut DurableWorkerCtx<Ctx>,
     derive_card_id: DeriveCardId,
     build_card: BuildCard,
-    parent_expires_at: Option<DateTime<Utc>>,
+    parent_expires_at: Option<jiff::Timestamp>,
     repair_authorization: RepairAuthorization,
 ) -> anyhow::Result<Result<StoredCard, permissions_types::PermissionError>>
 where

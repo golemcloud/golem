@@ -124,8 +124,15 @@ async fn run_recovery() -> Unit {
 async test "streaming recovery rejects or completes" {
   connect_attempt_timeout_ms.val = 200
   stable_connection_ms.val = __STABLE__
-  if "__MODE__" == "input-failure-replay" || "__MODE__" == "input-eof-replay" {
+  if "__MODE__" == "input-failure-replay" ||
+    "__MODE__" == "input-eof-replay" ||
+    "__MODE__" == "input-queued-ready" {
     run_input_terminal_recovery("__MODE__" == "input-failure-replay")
+    return
+  }
+  if "__MODE__" == "input-server-failure" ||
+    "__MODE__" == "input-server-outcome-resume" {
+    run_input_server_failure()
     return
   }
   if "__MODE__" == "input-prefetch-delayed" ||
@@ -210,6 +217,45 @@ async fn run_input_terminal_recovery(failed : Bool) -> Unit {
   assert_eq(input.failure.diagnostic, "")
   assert_eq(input.failure.bytes, 0)
   assert_true(input.pending is None)
+}
+
+///|
+/// A failed input end from the server is at an item the caller sent, so the
+/// call fails with that failure.
+/// A resumed acceptance can carry the same failure as the input outcome.
+async fn run_input_server_failure() -> Unit {
+  let source : AgentStream[String] = AgentStream::from_next(fn() {
+    Some("item")
+  })
+  let context = StreamEncodeContext::new()
+  let reference = register_input_stream(
+    context,
+    source,
+    fn(value) { StringValue(value) },
+    public_value_codec("{\"root\":{\"kind\":\"string\",\"value\":{}}}"),
+  )
+  let unit_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"tuple\",\"value\":{\"elements\":[]}}}",
+  )
+  let input_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"stream\",\"value\":{\"inner\":{\"kind\":\"string\",\"value\":{}}}}}",
+  )
+  let resolved = recovery_agent()
+  let failure = try {
+    ignore(
+      invoke_streaming_agent(
+        context, unit_codec, input_codec, unit_codec, resolved, "run", reference,
+      ),
+    )
+    None
+  } catch {
+    StreamFailed(failure) => Some(failure)
+    error => fail("unexpected error: \{error}")
+  }
+  assert_eq(
+    failure,
+    Some(Interrupted("input item 1 does not satisfy the element schema")),
+  )
 }
 
 ///|

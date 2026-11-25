@@ -14,13 +14,13 @@
 
 use super::{
     AccountEmail, AgentPermissionMonomorphizationContext, BTreeSet, Card, CardId,
-    CardResourcePattern, CardVerb, DateTime, DecidedScopeParent, DelegationCard, DelegationSurface,
+    CardResourcePattern, CardVerb, DecidedScopeParent, DelegationCard, DelegationSurface,
     DerivedGrantSets, DurabilityHost, DurableWorkerCtx, EffectiveSurface,
     GolemPermissionsDeriveDecision, GolemPermissionsDeriveFromWalletDecision,
     GolemPermissionsDerivePersist, GolemPermissionsDeriveScopeDecision, PermissionCardEntry,
     PermissionCardHandleRep, PermissionPattern, PersistentDerivationSource, PolymorphicCard,
     PolymorphicPermissionPattern, Resource, ScopeCard, ScopeDerivationParent,
-    SerializablePermissionError, StoredCard, Utc, WalletDerivationParent, WorkerCtx,
+    SerializablePermissionError, StoredCard, WalletDerivationParent, WorkerCtx,
     WorkerExecutorError, agent_delegation_surface_from_wallet, anyhow,
     caller_monomorphization_context, derive_expires_at, durable_now, ensure_card_permission,
     ensure_card_permission_in_surface, handle_card_id, monomorphize_card_for_agent,
@@ -66,8 +66,8 @@ impl DerivedGrantSets {
         self,
         card_id: CardId,
         parent_id: CardId,
-        created_at: DateTime<Utc>,
-        expires_at: Option<DateTime<Utc>>,
+        created_at: jiff::Timestamp,
+        expires_at: Option<jiff::Timestamp>,
     ) -> StoredCard {
         match self.as_concrete() {
             Some(grants) => StoredCard::Concrete(Card {
@@ -431,10 +431,10 @@ pub(super) fn ensure_persistent_derivation_repair_authority(
 pub(super) async fn persist_derived_card<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     parent_id: CardId,
-    parent_expires_at: Option<DateTime<Utc>>,
+    parent_expires_at: Option<jiff::Timestamp>,
     grants: DerivedGrantSets,
-    created_at: DateTime<Utc>,
-    expires_at: Option<DateTime<Utc>>,
+    created_at: jiff::Timestamp,
+    expires_at: Option<jiff::Timestamp>,
     source: PersistentDerivationSource,
 ) -> anyhow::Result<Result<permissions_types::PersistentCard, permissions_types::PermissionError>> {
     let created = match persist_runtime_card::<Ctx, GolemPermissionsDerivePersist, _, _, _>(

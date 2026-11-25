@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use golem_common::model::{Pod, ShardId};
 use golem_shard_manager::{
     ExecutorAddr, ExecutorId, ExternalRevision, HealthCheck, HealthCheckError, NO_REVISION,
     RoutingTablePersistence, ShardAssignmentPush, ShardEpoch, ShardLeaseGrant, ShardLeaseRevision,
     ShardLeaseState, ShardManagement, ShardManagerError, WorkerExecutorService,
 };
+use jiff::Timestamp;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
@@ -413,8 +413,8 @@ pub(crate) fn executor(idx: u128) -> ExecutorId {
     ExecutorId(Uuid::from_u128(idx))
 }
 
-fn granted_at() -> DateTime<Utc> {
-    DateTime::from_timestamp(1_700_000_000, 0).expect("valid timestamp")
+fn granted_at() -> Timestamp {
+    Timestamp::new(1_700_000_000, 0).expect("valid timestamp")
 }
 
 fn shard_state_with_executors(
@@ -464,7 +464,7 @@ fn claim_of(
         .collect()
 }
 
-fn expiry_of(shard_state: &ShardLeaseState, executor_id: ExecutorId) -> DateTime<Utc> {
+fn expiry_of(shard_state: &ShardLeaseState, executor_id: ExecutorId) -> Timestamp {
     shard_state.executor_leases[&executor_id].expires_at
 }
 
@@ -660,11 +660,11 @@ async fn embedded_restart_discards_stored_executors_before_serving() {
         if !expired {
             seeded.regrant_leases(
                 &HashSet::from([executor(1), executor(2)]),
-                Utc::now(),
+                Timestamp::now(),
                 LEASE_TTL,
             );
         }
-        assert_eq!(seeded.has_expired_lease(Utc::now()), expired);
+        assert_eq!(seeded.has_expired_lease(Timestamp::now()), expired);
         let epochs = seeded.shard_epochs.clone();
         let persistence = TestPersistence::at_revision(seeded, 37);
         let worker_executors = Arc::new(TestWorkerExecutors::default());
@@ -1916,7 +1916,7 @@ async fn a_takeover_within_every_lease_does_not_wait_for_a_health_check() {
         executor(1),
         ExecutorAddr::from(silent_pod),
         Some("worker-executor-1".to_string()),
-        Utc::now(),
+        Timestamp::now(),
         LEASE_TTL,
     );
     let worker_executors = Arc::new(TestWorkerExecutors::default());
@@ -2394,9 +2394,9 @@ async fn a_lease_that_lapsed_before_its_renewal_is_not_found() {
 async fn a_renewal_under_a_shortened_lease_keeps_the_outstanding_deadline() {
     let worker_executors = Arc::new(TestWorkerExecutors::default());
     let mut state = balanced_pair();
-    let outstanding = Utc::now() + chrono::Duration::seconds(60);
+    let outstanding = Timestamp::now() + jiff::SignedDuration::from_secs(60);
     for lease in state.executor_leases.values_mut() {
-        lease.granted_at = Utc::now();
+        lease.granted_at = Timestamp::now();
         lease.expires_at = outstanding;
     }
     let (shard_management, persistence, mut join_set) =
@@ -2482,7 +2482,7 @@ async fn past_expiries_do_not_evict_a_healthy_cluster_on_restart() {
     let worker_executors = Arc::new(TestWorkerExecutors::default());
     let seeded = balanced_pair();
     assert!(
-        expiry_of(&seeded, executor(1)) < Utc::now(),
+        expiry_of(&seeded, executor(1)) < Timestamp::now(),
         "this test only means something if the seeded expiries are already in the past"
     );
 
@@ -2503,8 +2503,8 @@ async fn past_expiries_do_not_evict_a_healthy_cluster_on_restart() {
         Some(shard_ids(&[2, 3]))
     );
     assert!(after.get_unassigned_shards().is_empty());
-    assert!(expiry_of(&after, executor(1)) > Utc::now());
-    assert!(expiry_of(&after, executor(2)) > Utc::now());
+    assert!(expiry_of(&after, executor(1)) > Timestamp::now());
+    assert!(expiry_of(&after, executor(2)) > Timestamp::now());
     // the re-grant moves the lease clock only: no shard changed owner, so no epoch moved
     assert_eq!(
         claim_of(&after, executor(1)),

@@ -3737,6 +3737,57 @@ async fn cancelled_tool_body_with_in_flight_mcp_call_recovers_after_restart(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    run_cancelled_mcp_body_probe(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        CancelledMcpBodyRecovery::Restart,
+    )
+    .await
+}
+
+/// The live run of `cancelled_tool_body_with_in_flight_mcp_call_recovers_after_restart` is
+/// reverted to the cut after the middleware observed its checkpoint promise and before the
+/// in-flight MCP call's `End` and the body's `Cancelled`. Such a cut uses ordinary
+/// incomplete-call recovery: the resumed middleware cancels the incomplete MCP body live, and the
+/// body must end with `Cancelled` and the invocation must complete, as in the live run.
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn reverted_cancelled_mcp_body_completes_the_retained_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_cancelled_mcp_body_probe(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        CancelledMcpBodyRecovery::RevertBeforeCancellation,
+    )
+    .await
+}
+
+/// How the agent of `run_cancelled_mcp_body_probe` continues after its live run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CancelledMcpBodyRecovery {
+    /// Two executor restarts replay the complete history.
+    Restart,
+    /// A revert to the cut before the body's cancellation, then one executor restart.
+    RevertBeforeCancellation,
+}
+
+async fn run_cancelled_mcp_body_probe(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    provider: &PrecompiledComponent,
+    caller: &PrecompiledComponent,
+    recovery: CancelledMcpBodyRecovery,
+) -> anyhow::Result<()> {
     use serde_json::{Value, json};
     use std::sync::Mutex;
 
@@ -3994,6 +4045,81 @@ async fn cancelled_tool_body_with_in_flight_mcp_call_recovers_after_restart(
     let live = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     assert_cancelled_mcp_body_history(&live);
 
+    if recovery == CancelledMcpBodyRecovery::RevertBeforeCancellation {
+        use golem_common::model::agent::{RevertToOplogIndex, RevertWorkerTarget};
+
+        for entry in &live {
+            eprintln!(
+                "CANCELLED_MCP_BODY_RECORDED {} {}",
+                entry.oplog_index,
+                describe_public_entry(&entry.entry)
+            );
+        }
+        let cut = cancelled_mcp_body_cut(&live);
+        eprintln!("CANCELLED_MCP_BODY_CUT {cut}");
+        executor
+            .revert(
+                &worker_id,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: cut,
+                }),
+            )
+            .await?;
+        drop(executor);
+        let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        let probe: String = executor
+            .invoke_and_await_agent(&caller_component, &agent_id, "replay_probe", data_value!())
+            .await?
+            .into_typed()?;
+        assert_eq!(probe, "replayed");
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        for entry in oplog.iter().filter(|entry| entry.oplog_index > cut) {
+            eprintln!(
+                "CANCELLED_MCP_BODY_RESUMED {} {}",
+                entry.oplog_index,
+                describe_public_entry(&entry.entry)
+            );
+        }
+        assert_eq!(
+            *requests.lock().unwrap(),
+            expected_requests,
+            "the resumed middleware called the MCP server again"
+        );
+        let retained = retained_after_revert(&oplog, cut);
+        assert_reverted_cancelled_mcp_body_history(&retained);
+
+        // The history that the resumed agent wrote replays too.
+        drop(executor);
+        let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        let probe: String = executor
+            .invoke_and_await_agent(&caller_component, &agent_id, "replay_probe", data_value!())
+            .await?
+            .into_typed()?;
+        assert_eq!(probe, "replayed");
+        let replayed = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        assert_eq!(
+            replayed[..oplog.len()]
+                .iter()
+                .map(|entry| entry.oplog_index)
+                .collect::<Vec<_>>(),
+            oplog
+                .iter()
+                .map(|entry| entry.oplog_index)
+                .collect::<Vec<_>>(),
+            "the replay kept the resumed history"
+        );
+        assert_eq!(
+            *requests.lock().unwrap(),
+            expected_requests,
+            "replaying the resumed history called the MCP server again"
+        );
+        assert_reverted_cancelled_mcp_body_history(&retained_after_revert(&replayed, cut));
+        drop(executor);
+        drop(server);
+        checkpoint_server.abort();
+        return Ok(());
+    }
+
     let mut executor = executor;
     let mut history = live;
     for restart in 1..=2 {
@@ -4053,6 +4179,141 @@ async fn cancelled_tool_body_with_in_flight_mcp_call_recovers_after_restart(
     drop(server);
     checkpoint_server.abort();
     Ok(())
+}
+
+/// The last index that a revert of the cancelled-MCP-body history retains: the last
+/// `CompletionDelivered` before the in-flight MCP call's `End` and the entity body's `Cancelled`.
+/// The middleware's checkpoint promise is the last completion it observes before it cancels.
+fn cancelled_mcp_body_cut(oplog: &[PublicOplogEntryWithIndex]) -> OplogIndex {
+    let body = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Cancelled(cancelled) => Some(cancelled.start_index),
+            _ => None,
+        })
+        .expect("the entity body is cancelled");
+    let in_flight = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name == "golem::tool::mcp::call"
+                    && start.parent_start_index == Some(body) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("an MCP call is in flight under the cancelled body");
+    let first_terminal = oplog
+        .iter()
+        .find(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) => end.start_index == in_flight,
+            PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == body,
+            _ => false,
+        })
+        .map(|entry| entry.oplog_index)
+        .expect("the in-flight call or the body has a terminal");
+    oplog
+        .iter()
+        .filter(|entry| {
+            entry.oplog_index < first_terminal
+                && matches!(entry.entry, PublicOplogEntry::CompletionDelivered(_))
+        })
+        .map(|entry| entry.oplog_index)
+        .next_back()
+        .expect("the middleware observed its checkpoint promise before the cancellation")
+}
+
+/// The entries of `oplog` that one revert to `cut` retains: the prefix up to `cut` and every
+/// entry after the `Revert` entry.
+fn retained_after_revert(
+    oplog: &[PublicOplogEntryWithIndex],
+    cut: OplogIndex,
+) -> Vec<PublicOplogEntryWithIndex> {
+    let revert = oplog
+        .iter()
+        .find(|entry| matches!(entry.entry, PublicOplogEntry::Revert(_)))
+        .map(|entry| entry.oplog_index)
+        .expect("the oplog records the revert");
+    oplog
+        .iter()
+        .filter(|entry| entry.oplog_index <= cut || entry.oplog_index > revert)
+        .cloned()
+        .collect()
+}
+
+/// Checks the retained history of `reverted_cancelled_mcp_body_completes_the_retained_invocation`:
+/// the entity body is cancelled once; the MCP call that was in flight under it, whose `End` the
+/// revert removed, gets no new terminal (it is a `LeaveIncompleteOnDrop` call of a cancelled body);
+/// every other `Start` has a terminal; every invocation finishes once.
+fn assert_reverted_cancelled_mcp_body_history(oplog: &[PublicOplogEntryWithIndex]) {
+    let terminals = |start: OplogIndex| {
+        oplog
+            .iter()
+            .filter(|entry| match &entry.entry {
+                PublicOplogEntry::End(end) => end.start_index == start,
+                PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == start,
+                _ => false,
+            })
+            .count()
+    };
+    let cancelled = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Cancelled(cancelled) => Some(cancelled.start_index),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cancelled.len(),
+        1,
+        "one entity body is cancelled: {cancelled:?}"
+    );
+    let body = cancelled[0];
+    let in_flight = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name == "golem::tool::mcp::call"
+                    && start.parent_start_index == Some(body) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        in_flight.len(),
+        1,
+        "one MCP call was in flight under the cancelled body"
+    );
+    assert!(
+        terminals(in_flight[0]) <= 1,
+        "the in-flight MCP call has at most one terminal"
+    );
+    for entry in oplog {
+        if let PublicOplogEntry::Start(start) = &entry.entry
+            && entry.oplog_index != in_flight[0]
+        {
+            assert_eq!(
+                terminals(entry.oplog_index),
+                1,
+                "the Start of {} at {} has one terminal",
+                start.function_name,
+                entry.oplog_index
+            );
+        }
+    }
+    let mut finished = BTreeMap::new();
+    for entry in oplog {
+        if let PublicOplogEntry::AgentInvocationFinished(params) = &entry.entry {
+            *finished.entry(params.invocation_id).or_insert(0) += 1;
+        }
+    }
+    assert!(
+        finished.values().all(|count| *count == 1),
+        "every invocation finishes once: {finished:?}"
+    );
 }
 
 /// The `AgentInvocationSettled` of the first invocation that starts in `entries`.
@@ -11949,7 +12210,7 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
             expires_at: None,
             system_card: false,
             managed_by: None,
@@ -21766,7 +22027,7 @@ async fn builtin_git_remote_secrets_redirects_and_discovery(
             secret_id: secret_id.0,
             config_key: Some(secret_path),
             version: 0,
-            resolved_at: chrono::Utc::now(),
+            resolved_at: jiff::Timestamp::now(),
             category: None,
         }))),
     };
@@ -23709,7 +23970,7 @@ async fn native_tool_secret_permissions_and_completed_replay(
             secret_id: secret_id.0,
             config_key: Some(path),
             version: 0,
-            resolved_at: chrono::Utc::now(),
+            resolved_at: jiff::Timestamp::now(),
             category: None,
         });
         for fail in [false, true] {
