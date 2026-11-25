@@ -989,6 +989,49 @@ pub fn guest_search_batch(
     }
 }
 
+/// The next batch of a guest search whose cursor is `next_oplog_index`, and the component
+/// revision to decode its first entry with. [`guest_search_start`] gives the start of the batch,
+/// and [`guest_search_batch`] cuts the batch to the window of the grant from the cursor.
+/// `continued` is the revision of a search that already ran a batch.
+#[allow(clippy::too_many_arguments)]
+pub async fn guest_search_plan(
+    oplog_service: Arc<dyn OplogService>,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    retention: OplogRetention,
+    next_oplog_index: OplogIndex,
+    page_size: NonZeroU64,
+    continued: Option<ComponentRevision>,
+    configured: ScanBudget,
+) -> Result<(GuestSearchBatch, ComponentRevision), WorkerExecutorError> {
+    let (start, revision) = guest_search_start(
+        oplog_service,
+        owned_agent_id,
+        agent_mode,
+        retention,
+        next_oplog_index,
+        continued,
+    )
+    .await?;
+    Ok((
+        guest_search_batch(next_oplog_index, page_size, start, configured),
+        revision,
+    ))
+}
+
+/// The text of a failed guest oplog read. The guest gets it in `internal-error`, because the
+/// guest oplog API has no case for an expired read. An expired read names the expired cause and
+/// the retained start with the same words as for every other caller.
+pub fn guest_oplog_read_error(error: PublicOplogReadError) -> String {
+    match error {
+        PublicOplogReadError::Unreadable(UnreadableOplog {
+            agent_id,
+            error: crate::services::oplog::OplogReadError::Expired { retained_start },
+        }) => WorkerExecutorError::oplog_expired(agent_id, retained_start).to_string(),
+        other => other.to_string(),
+    }
+}
+
 /// The cursor of an oplog page of `query` whose next unread entry is `next_oplog_index`. A page has
 /// a cursor if and only if the oplog has entries after the page, also when the page itself is
 /// empty because a search spent its scan budget before any match.

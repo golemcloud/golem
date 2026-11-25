@@ -24,7 +24,7 @@ use crate::model::public_oplog::PublicOplogEntryOps;
 use crate::model::public_oplog::find_component_revision_at;
 use crate::model::public_oplog::get_public_oplog_chunk;
 use crate::model::public_oplog::search_public_oplog;
-use crate::model::public_oplog::{GuestSearchBatch, guest_search_batch, guest_search_start};
+use crate::model::public_oplog::{GuestSearchBatch, guest_oplog_read_error, guest_search_plan};
 use crate::preview2::golem_api_1_x;
 use crate::preview2::golem_api_1_x::oplog::Host as OplogHost;
 use crate::preview2::golem_api_1_x::oplog::HostGetOplog;
@@ -260,7 +260,7 @@ async fn get_oplog_chunk<Ctx: WorkerCtx>(
         GUEST_CLAIM_VISIBILITY,
     )
     .await
-    .map_err(|error| error.to_string())
+    .map_err(guest_oplog_read_error)
 }
 
 async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
@@ -281,28 +281,25 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         .retention(&entry.owned_agent_id, agent_mode)
         .await
         .map_err(|error| error.to_string())?;
-    let (start, current_component_revision) = guest_search_start(
+    let agent_type = &identity.create_parameters().agent_type_name;
+    // The scanner caps each storage read at the remaining entry budget, even when a chunk has no
+    // matches, so the budget of the batch keeps the scan inside the window of its grant.
+    let page_size = NonZeroU64::new(entry.page_size as u64).expect("search page size is nonzero");
+    let (batch, current_component_revision) = guest_search_plan(
         ctx.state.oplog_service(),
         &entry.owned_agent_id,
         agent_mode,
         retention,
         entry.next_oplog_index,
+        page_size,
         entry
             .initialized
             .then_some(entry.current_component_revision),
+        ctx.state.config.limits.scan_budget,
     )
     .await
     .map_err(|error| error.to_string())?;
-    let agent_type = &identity.create_parameters().agent_type_name;
-    // The scanner caps each storage read at the remaining entry budget, even when a chunk has no
-    // matches, so the budget of the batch keeps the scan inside the window of its grant.
-    let page_size = NonZeroU64::new(entry.page_size as u64).expect("search page size is nonzero");
-    let (start, budget) = match guest_search_batch(
-        entry.next_oplog_index,
-        page_size,
-        start,
-        ctx.state.config.limits.scan_budget,
-    ) {
+    let (start, budget) = match batch {
         GuestSearchBatch::SkipTo(start) => {
             let last_index = match entry.last_oplog_index {
                 Some(last_index) => last_index,
@@ -340,7 +337,7 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         GUEST_CLAIM_VISIBILITY,
     )
     .await
-    .map_err(|error| error.to_string())
+    .map_err(guest_oplog_read_error)
 }
 
 impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {

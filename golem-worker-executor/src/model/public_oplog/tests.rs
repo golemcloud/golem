@@ -4724,6 +4724,39 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         Ok((OplogIndex::from_u64(2), updated_revision)),
         "a search that read a page before keeps its position"
     );
+    // The first batch of a new search reads from the retained start, and only the part of the
+    // window of its grant from the cursor at or after the start.
+    let plan = guest_search_plan(
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        retention,
+        OplogIndex::INITIAL,
+        std::num::NonZeroU64::new(100).unwrap(),
+        None,
+        ScanBudget {
+            entries: std::num::NonZeroU64::new(1000).unwrap(),
+            time: std::time::Duration::from_secs(7),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(
+            plan,
+            (GuestSearchBatch::Read { start, budget }, revision)
+                if start == retained_start
+                    && budget.entries.get() == 97
+                    && revision == ComponentRevision::INITIAL
+        ),
+        "{plan:?}"
+    );
+    // A guest gets the expired error of a read below the start as text in `internal-error`.
+    // The text names the expired cause and the retained start.
+    assert_eq!(
+        guest_oplog_read_error(guest_chunk(1).await.err().expect("expired")),
+        format!("The oplog of {agent_id} expired: it starts at index 4")
+    );
     let guest_search = search_public_oplog(
         Arc::new(PanicComponentService),
         oplog_service.clone(),
