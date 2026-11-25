@@ -400,7 +400,7 @@ pub async fn invoke_live_observed_and_traced<Ctx: WorkerCtx>(
 /// - `store`: reference to the wasmtime instance's store
 /// - `instance`: reference to the wasmtime instance
 /// - `stream_session`: the session to materialize before ending the invocation scope
-/// - `recorder`: records the result of an agent method with a non-streaming result, or of the
+/// - `recorder`: records the result of an agent method that uses no streams, or of the
 ///   constructor, at the export's return, before the background work of the invocation drains
 ///
 /// Pending live invocations must first pass admission through
@@ -466,7 +466,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
-    let records_at_return = recorder.is_some() && lowered.records_result_at_return(stream_session);
+    let records_at_return = recorder.is_some() && lowered.records_result_at_return();
     let LoweredInvocation {
         display_name,
         read_only_method,
@@ -867,6 +867,70 @@ fn retain_invocation_failure(
     {
         *result = failure;
     }
+}
+
+/// Persists the result of a stream-free method in the durable streaming session that admitted
+/// it, at the export's return. It runs after the deadline and a pending interrupt lost to the
+/// return and immediately before the result is recorded, the same order as a streaming result,
+/// whose session result precedes its recorded terminal. The result holds no streams: nothing is
+/// produced or drained, and the Store does not run, so background work cannot fail the result.
+async fn persist_session_result_at_return<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    result: AgentInvocationResult,
+    display_name: &str,
+    idempotency_key: &InvocationId,
+) -> Result<AgentInvocationResult, WorkerExecutorError> {
+    let AgentInvocationResult::AgentMethod { output } = result else {
+        return Ok(result);
+    };
+    let component = store.data().component_metadata();
+    let agent_id = store.data().parsed_agent_id();
+    let agent_type = agent_id
+        .as_ref()
+        .and_then(|id| {
+            component
+                .metadata
+                .find_agent_type_by_name_ref(&id.agent_type)
+        })
+        .ok_or_else(|| {
+            WorkerExecutorError::runtime("durable invocation result schema is unavailable")
+        })?;
+    let method = agent_type
+        .methods
+        .iter()
+        .find(|method| method.name == display_name)
+        .ok_or_else(|| {
+            WorkerExecutorError::runtime("durable invocation result method schema is unavailable")
+        })?;
+    let graph = agent_type.schema.clone();
+    let root = method
+        .output_schema
+        .schema()
+        .cloned()
+        .unwrap_or_else(|| SchemaType::tuple(Vec::new()));
+    let component_revision = component.revision;
+    let worker = store.data().get_public_state().worker();
+    let runtime = store.data().durable_ctx().runtime_suspension.clone();
+    let preparation = runtime.as_ref().map(|runtime| runtime.external_activity());
+    let output_tasks = store.data().durable_ctx().schema_output_spawner()?;
+    let attribution = store.data().durable_ctx().attribution.clone();
+    let invocation_key = store.data().durable_ctx().invocation_key();
+    let output = attribution
+        .scoped(
+            Some(invocation_key),
+            worker.materialize_durable_streaming_result(
+                idempotency_key,
+                output,
+                &graph,
+                &root,
+                component_revision,
+                runtime.as_ref().map(|runtime| runtime.source()),
+                preparation,
+                &output_tasks,
+            ),
+        )
+        .await?;
+    Ok(AgentInvocationResult::AgentMethod { output })
 }
 
 /// Publishes the early stream-bearing result and drives its producers to completion.
@@ -1632,6 +1696,8 @@ impl ReturnRecorded {
 
 /// Records a `Succeeded` or `MethodFailed` result at the export's return, live or by consuming
 /// the recorded terminal in replay, and gives `result` back. Any other result records nothing.
+/// With `uses_streams`, a success is first persisted in the invocation's durable streaming
+/// session; a failure to persist it is a failure to record it.
 pub(crate) async fn record_result_at_return<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     display_name: &str,
@@ -1643,8 +1709,32 @@ pub(crate) async fn record_result_at_return<Ctx: WorkerCtx>(
             result,
             consumed_fuel,
         } => {
+            let mut result = *result;
+            if uses_streams
+                && let Some(idempotency_key) = store.data().get_current_idempotency_key().await
+            {
+                match persist_session_result_at_return(
+                    store,
+                    result.clone(),
+                    display_name,
+                    &idempotency_key,
+                )
+                .await
+                {
+                    Ok(persisted) => result = persisted,
+                    Err(error) => {
+                        return (
+                            InvokeResult::Succeeded {
+                                result: Box::new(result),
+                                consumed_fuel,
+                            },
+                            Some(ReturnRecorded::Succeeded(Err(error))),
+                        );
+                    }
+                }
+            }
             let mut output = AgentInvocationOutput {
-                result: *result,
+                result,
                 consumed_fuel: Some(consumed_fuel),
                 invocation_status: None,
                 component_revision: Some(store.data().component_metadata().revision),
@@ -2808,18 +2898,13 @@ pub struct LoweredInvocation {
 impl LoweredInvocation {
     /// Whether the invocation records its result at the export's return, before its background
     /// work drains, when its caller supplies a [`ReturnRecorder`]: the constructor and an agent
-    /// method with a non-streaming result that runs without a durable streaming session.
-    /// `stream_session` is the session the caller passes to [`invoke_observed_and_traced`]; a
-    /// method with stream inputs runs in one even when its result has no streams.
-    pub(crate) fn records_result_at_return(&self, stream_session: Option<&InvocationId>) -> bool {
-        if stream_session.is_some() {
-            return false;
-        }
+    /// method that uses no streams in the component the Store executes. A stream-free method
+    /// admitted through a durable streaming session records at the return too; the session only
+    /// carries its result.
+    pub(crate) fn records_result_at_return(&self) -> bool {
         match &self.call {
             LoweredCall::Initialize { .. } => true,
-            LoweredCall::Invoke {
-                expected_output, ..
-            } => !expected_output.uses_streams(),
+            LoweredCall::Invoke { uses_streams, .. } => !uses_streams,
             _ => false,
         }
     }
@@ -2853,6 +2938,8 @@ enum LoweredCall {
         input: SchemaValue,
         caller: golem_common::model::caller::Caller,
         expected_output: Box<ExpectedInvokeOutput>,
+        /// Whether the method has stream inputs or a stream result in the executing component.
+        uses_streams: bool,
     },
     SaveSnapshot {
         caller: golem_common::model::caller::Caller,
@@ -2984,6 +3071,7 @@ fn materialize_call<Ctx: WorkerCtx>(
             input,
             caller,
             expected_output,
+            ..
         } => {
             let input = {
                 let mut resolver = StoreValueResolver::new(store);
@@ -3191,6 +3279,7 @@ pub fn lower_invocation(
                     input,
                     caller,
                     expected_output,
+                    uses_streams: stream_metadata.uses_streams(),
                 },
             })
         }
