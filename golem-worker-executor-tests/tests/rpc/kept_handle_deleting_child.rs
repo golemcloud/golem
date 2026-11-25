@@ -8,7 +8,6 @@
 
 use super::*;
 use crate::panic_watch::{panics_naming, watch_panics_naming};
-use chrono::{DateTime, Utc};
 use golem_common::model::agent::{
     AgentConfigEntryDto, InvocationFreshnessDisposition, ParsedAgentKey,
 };
@@ -217,7 +216,7 @@ impl Rpc for GatedSchedule {
         expected_fingerprint: golem_common::model::AgentFingerprint,
         request_key: golem_common::model::InvocationRequestKey,
         invocation: AgentInvocation,
-        scheduled_at: DateTime<Utc>,
+        scheduled_at: jiff::Timestamp,
         self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<ScheduleId, RpcError> {

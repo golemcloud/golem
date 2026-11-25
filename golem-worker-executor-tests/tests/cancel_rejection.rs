@@ -82,7 +82,8 @@ async fn unrepresentable_schedule_is_rejected_before_committing_pending_work(
     let invocation = |key: InvocationId| AgentInvocation::AgentMethod {
         idempotency_key: key,
         method_name: "inc_global_by".to_string(),
-        input: data_value!(1u64).into_parts().1,
+        input: data_value!(1u64).into_parts().1.try_into().unwrap(),
+        allow_streams: false,
         invocation_context: InvocationContextStack::fresh(),
         caller: callers::agent(
             owner.agent_id,
