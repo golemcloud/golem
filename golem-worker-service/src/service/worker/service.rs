@@ -526,6 +526,8 @@ pub struct ManagedAgent {
     pub agent_id: OwnedAgentId,
     pub component: Component,
     pub metadata: AgentMetadataDto,
+    /// The index of the latest oplog entry other than an invocation settlement.
+    pub state_oplog_index: OplogIndex,
 }
 
 impl ManagedAgent {
@@ -687,6 +689,7 @@ impl WorkerService {
                     agent_id: agent_id.clone(),
                     component,
                     metadata: existing.metadata,
+                    state_oplog_index: existing.state_oplog_index,
                 };
                 if expected_fingerprint
                     .is_some_and(|expected| expected != agent.metadata.fingerprint)
@@ -1228,6 +1231,27 @@ impl WorkerService {
             )
             .await?;
         Ok(agent.metadata)
+    }
+
+    /// The agent's fingerprint and the index of its latest oplog entry other than an invocation
+    /// settlement, from one metadata read. Read-only HTTP validators name this pair.
+    pub async fn get_state_validator(
+        &self,
+        agent_id: &OwnedAgentId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<(AgentFingerprint, OplogIndex)> {
+        let agent = self
+            .managed_agent(
+                agent_id,
+                None,
+                &auth_ctx,
+                &[AgentPermission::Agent(
+                    AgentVerb::View,
+                    AgentResourcePattern::Empty,
+                )],
+            )
+            .await?;
+        Ok((agent.metadata.fingerprint, agent.state_oplog_index))
     }
 
     /// Lists existing agents of a retained type, including removed declarations.
@@ -5260,6 +5284,7 @@ mod tests {
             match *self.metadata_component_revision.lock().unwrap() {
                 Some(component_revision) => Ok(ExistingAgent {
                     component_id: self.component_id,
+                    state_oplog_index: OplogIndex::INITIAL,
                     metadata: AgentMetadataDto {
                         agent_id: *agent_id,
                         environment_id,

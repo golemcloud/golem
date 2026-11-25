@@ -764,6 +764,10 @@ pub struct AgentStatusRecord {
     pub total_linear_memory_size: u64,
     pub owned_resources: HashMap<AgentResourceId, AgentResourceDescription>,
     pub oplog_idx: OplogIndex,
+    /// The index of the latest entry other than `AgentInvocationSettled`. A settlement only marks
+    /// the end of the background work that follows a recorded result, so the agent state that the
+    /// result describes stays at this index. Read-only HTTP validators name it.
+    pub state_oplog_idx: OplogIndex,
     pub active_plugins: HashSet<EnvironmentPluginGrantId>,
     pub oplog_processor_checkpoints:
         HashMap<EnvironmentPluginGrantId, OplogProcessorCheckpointState>,
@@ -840,6 +844,7 @@ impl Default for AgentStatusRecord {
             total_linear_memory_size: 0,
             owned_resources: HashMap::new(),
             oplog_idx: OplogIndex::default(),
+            state_oplog_idx: OplogIndex::default(),
             active_plugins: HashSet::new(),
             oplog_processor_checkpoints: HashMap::new(),
             revoked_cards: HashSet::new(),
