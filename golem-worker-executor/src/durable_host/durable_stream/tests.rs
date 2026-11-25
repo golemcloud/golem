@@ -10770,6 +10770,79 @@ async fn the_stream_index_and_the_control_refresh_read_from_the_retained_start()
     assert_eq!(read_starts(at(1)).await, (Some(idx(1)), Some(idx(1))));
 }
 
+/// A stream registered after the retained start reads its items by handle through the retained
+/// oplog. Each item keeps the offset that its write gave, which holds the original oplog index.
+#[test]
+async fn items_read_after_the_retained_start_keep_their_original_offsets() {
+    use crate::services::oplog::retention::RetentionOplog;
+    use crate::services::oplog::retention::test_oplog::{at, jump};
+    use futures::{StreamExt, TryStreamExt};
+    use golem_common::model::durable_stream::StreamHandleReadRequest;
+
+    let identity = identity();
+    let physical = Arc::new(TestOplog::default());
+    futures::stream::iter(1..=3)
+        .then(|index| physical.add(jump(index)))
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    let live = producer(physical.clone(), &identity, None).await;
+    let handle = live
+        .register(None, root_registration(&identity))
+        .await
+        .unwrap()
+        .value;
+    let written = live
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![3, 9, 17]),
+        )
+        .await
+        .unwrap()
+        .value;
+    assert!(
+        written
+            .iter()
+            .all(|offset| offset.producer_oplog_index() > OplogIndex::from_u64(4)),
+        "{written:?}"
+    );
+    drop(live);
+
+    let oplog: Arc<dyn Oplog> = Arc::new(RetentionOplog::new(
+        physical.clone(),
+        identity.agent_id,
+        at(4),
+    ));
+    let retained = DurableStreamStore::load(
+        oplog,
+        identity.environment_id,
+        identity.agent_id,
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let read = retained
+        .read_by_handle(StreamHandleReadRequest {
+            handle,
+            after: None,
+            max_items: 10,
+            max_bytes: 100,
+            wait_millis: 0,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        read.events
+            .iter()
+            .map(|event| event.offset)
+            .collect::<Vec<_>>(),
+        written
+    );
+}
+
 /// The control metadata starts at the retained start, so an attach of a reader that a record
 /// below the start introduced fails with the expired error that names the start. With the
 /// introducing record at the start, the same attach commits, and a repeat finds the commit.

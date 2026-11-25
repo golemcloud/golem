@@ -224,11 +224,16 @@ impl RetainedOplog {
     }
 
     pub async fn open(&self) -> Arc<dyn Oplog> {
+        self.open_in(AgentMode::Durable).await
+    }
+
+    /// The open oplog of the agent in `agent_mode`.
+    pub async fn open_in(&self, agent_mode: AgentMode) -> Arc<dyn Oplog> {
         self.service
             .open(
                 &mut self.service.lock_lifecycle(self.agent_id()).await,
                 &self.owned_agent_id,
-                AgentMode::Durable,
+                agent_mode,
                 None,
                 self.metadata(),
                 last_known_status(),
@@ -273,10 +278,15 @@ impl RetainedOplog {
     }
 
     pub async fn advance(&self, to: u64) -> OplogRetention {
+        self.advance_in(AgentMode::Durable, to).await
+    }
+
+    /// Moves the retained start of the oplog of the agent in `agent_mode` forward to `to`.
+    pub async fn advance_in(&self, agent_mode: AgentMode, to: u64) -> OplogRetention {
         advance_oplog_retention(
             self.key_value_storage.as_ref(),
             &self.owned_agent_id,
-            AgentMode::Durable,
+            agent_mode,
             idx(to),
         )
         .await

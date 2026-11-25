@@ -659,10 +659,44 @@ mod tests {
         assert_eq!(oplog.start().await, idx(5));
     }
 
+    /// Each agent mode has its own start. An ephemeral start survives a reopen of the ephemeral
+    /// oplog next to the durable start of the same agent.
+    #[test]
+    async fn each_agent_mode_keeps_its_own_start_through_a_reopen() {
+        let oplog = RetainedOplog::new().await;
+        assert_eq!(
+            oplog.advance_in(AgentMode::Ephemeral, 6).await.start(),
+            idx(6)
+        );
+        assert_eq!(
+            oplog.advance_in(AgentMode::Durable, 4).await.start(),
+            idx(4)
+        );
+
+        assert_eq!(
+            oplog
+                .open_in(AgentMode::Ephemeral)
+                .await
+                .retention()
+                .start(),
+            idx(6)
+        );
+        assert_eq!(
+            oplog.open_in(AgentMode::Durable).await.retention().start(),
+            idx(4)
+        );
+        let stored = |agent_mode| oplog.service.retention(&oplog.owned_agent_id, agent_mode);
+        assert_eq!(stored(AgentMode::Ephemeral).await.unwrap().start(), idx(6));
+        assert_eq!(stored(AgentMode::Durable).await.unwrap().start(), idx(4));
+    }
+
     #[test]
     async fn the_length_counts_the_retained_entries_and_the_last_index_stays() {
         let oplog = RetainedOplog::new().await;
         oplog.with_jumps(10).await;
+        // The entries below the start are gone, so the length of the stored entries is not the
+        // last index.
+        oplog.open().await.drop_prefix(idx(3)).await;
         oplog.advance(4).await;
 
         let handle = oplog.open().await;

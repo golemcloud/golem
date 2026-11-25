@@ -696,8 +696,9 @@ mod tests {
         );
     }
 
-    /// A writer that read the record before another writer moved the start to 5 loses its
-    /// compare-and-set, reads the record again, and keeps the start at 5 without a second write.
+    /// The record holds a start of 2. A writer that read it before another writer moved the start
+    /// to 5 loses its compare-and-set, reads the record again, and keeps the start at 5 without a
+    /// second write.
     #[test]
     async fn a_stale_writer_does_not_move_the_start_back() {
         let faults = KeyValueStorageFaults::default();
@@ -708,6 +709,10 @@ mod tests {
             golem_common::model::environment::EnvironmentId::new(),
             &AgentId::from_parts(7, 3),
         );
+        // A record exists before the race, so both writers compare a stored start.
+        advance_oplog_retention(&storage, &owned_agent_id, AgentMode::Durable, idx(2))
+            .await
+            .unwrap();
         let gate = faults.pause_next("advance_retention");
         let (stale, other) = futures::join!(
             advance_oplog_retention(&storage, &owned_agent_id, AgentMode::Durable, idx(3)),
@@ -724,7 +729,7 @@ mod tests {
         assert_eq!(stale.unwrap(), at(5));
         assert_eq!(
             faults.calls("advance_retention"),
-            2,
+            3,
             "the stale writer lost its compare-and-set and wrote nothing after it read 5"
         );
         assert_eq!(

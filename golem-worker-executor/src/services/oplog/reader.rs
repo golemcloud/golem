@@ -489,6 +489,23 @@ mod tests {
             )),
             WorkerExecutorError::oplog_expired(agent_id, retained_start)
         );
+        // A gap is missing data, not an expired read: the layer gives a gap that ends below the
+        // retained start as `Expired` before this conversion.
+        assert_eq!(
+            WorkerExecutorError::from(UnreadableOplog::new(
+                &agent_id,
+                OplogReadError::Gap {
+                    start: OplogIndex::from_u64(2),
+                    end: OplogIndex::from_u64(4),
+                }
+            )),
+            WorkerExecutorError::OplogFailed {
+                agent_id,
+                failure: OplogFailure::Failed {
+                    details: "missing oplog entries in range [2..=4]".to_string(),
+                },
+            }
+        );
         assert!(
             !UnreadableOplog::new(
                 &agent_id,

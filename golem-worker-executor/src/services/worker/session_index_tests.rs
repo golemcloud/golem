@@ -680,6 +680,140 @@ async fn source_loss_eof_does_not_advance_the_cascade_producer_prefix() {
     }
 }
 
+/// The consumer probe reads the journal of the consumer from the retained start. The record of
+/// the reader and its source-unavailable overlay are after the start, and an entry before the
+/// start is gone from the retained oplog.
+#[test]
+#[test_r::timeout("30s")]
+async fn the_consumer_probe_reads_the_journal_from_the_retained_start() {
+    use crate::durable_host::durable_stream::{
+        DbDirectStreamAttachmentConsumerProbe, StreamAttachmentConsumerProbe,
+    };
+    use crate::services::oplog::retention::{RetentionOplogService, advance_oplog_retention};
+    use golem_common::model::durable_stream::*;
+    use golem_schema::schema::SchemaFingerprintV1;
+
+    let kv = Arc::new(InMemoryKeyValueStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            Arc::new(InMemoryIndexedStorage::new()),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            100,
+            32,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let oplog_service: Arc<dyn OplogService> =
+        Arc::new(RetentionOplogService::new(primary, kv.clone()));
+    let service = Arc::new(DefaultWorkerService::new(
+        kv.clone(),
+        Arc::new(ShardServiceDefault::new()),
+        oplog_service.clone(),
+        Arc::new(super::tests::IndexTestComponentService),
+        Arc::new(GolemConfig::default()),
+    ));
+    let consumer = owned_agent("retained-consumer");
+    let source = owned_agent("retained-source");
+    let invocation = session_key(&consumer, &test_invocation_id("consume".into()));
+    let oplog = create_oplog_with_identity(
+        oplog_service.as_ref(),
+        &consumer,
+        AgentMode::Durable,
+        invocation.callee_fingerprint,
+    )
+    .await;
+    append_memory_hint(oplog.as_ref()).await;
+    let handle = DurableStreamHandle {
+        format_version: 1,
+        stream_id: StreamId(uuid::Uuid::new_v4()),
+        producer_environment_id: source.environment_id,
+        producer: source.agent_id,
+        expected_producer_fingerprint: AgentFingerprint::new(),
+        producer_generation: OplogIndex::NONE,
+        source_invocation: session_key(&source, &test_invocation_id("produce".into())),
+        component_revision: ComponentRevision::INITIAL,
+        element_schema_fingerprint: SchemaFingerprintV1([0; 32]),
+    };
+    let retained_start = append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
+            format_version: 1,
+            session_key: local_registration(&invocation),
+            mapping: StreamBindingRecord {
+                transport_stream_id: 0,
+                source: StreamRecordReference::Foreign(handle.clone()),
+                role: SessionStreamRole::Input,
+            },
+        }),
+    )
+    .await;
+    assert!(retained_start > OplogIndex::from_u64(2));
+    let reader_id = local_reader(retained_start, 0);
+    let offset = StreamOffset::new(OplogIndex::from_u64(79), 0);
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::SourceUnavailable(StreamSourceUnavailableRecord {
+            format_version: 1,
+            session_key: local_registration(&invocation),
+            reader_id,
+            source_offset: offset,
+            consumer_read_ordinal: 0,
+        }),
+    )
+    .await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    let horizon = oplog.current_oplog_index().await;
+    drop(oplog);
+    advance_oplog_retention(kv.as_ref(), &consumer, AgentMode::Durable, retained_start)
+        .await
+        .unwrap();
+    service
+        .write_cached_status(
+            &consumer,
+            invocation.callee_fingerprint,
+            None,
+            AgentStatusRecord {
+                oplog_idx: horizon,
+                agent_mode: AgentMode::Durable,
+                has_durable_stream_history: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let attachment = StreamAttachmentKey {
+        attachment_id: AttachmentId::primary(
+            consumer.environment_id,
+            &consumer.agent_id,
+            &invocation.idempotency_key,
+        )
+        .unwrap(),
+        stream_id: handle.stream_id,
+        epoch: 1,
+        session_key: invocation.clone(),
+        producer_environment_id: source.environment_id,
+        producer: source.agent_id,
+        expected_producer_fingerprint: handle.expected_producer_fingerprint,
+        consumer_environment_id: consumer.environment_id,
+        consumer: consumer.agent_id,
+        expected_consumer_fingerprint: invocation.callee_fingerprint,
+        consumer_invocation: invocation.clone(),
+    };
+    let probe = DbDirectStreamAttachmentConsumerProbe::new(service, oplog_service);
+
+    let inspection = probe
+        .journal_inspection(&attachment)
+        .await
+        .unwrap()
+        .expect("the reader of the attachment is after the start");
+    assert_eq!(inspection.len(), 1);
+    assert_eq!(inspection[0].reader_id, reader_id);
+    assert_eq!(inspection[0].source_unavailable, Some(offset));
+}
+
 async fn service() -> (DefaultWorkerService, Arc<InMemoryKeyValueStorage>) {
     let kv = Arc::new(InMemoryKeyValueStorage::new());
     let oplog = Arc::new(
