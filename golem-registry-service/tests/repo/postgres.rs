@@ -532,6 +532,203 @@ async fn test_retry_policy_and_agent_secret_natural_key_lookups(
 }
 
 #[test]
+async fn test_component_upload_reference_lifetime(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_component_upload_reference_lifetime(deps).await;
+}
+
+#[test]
+async fn test_component_upload_attachment_races_collection(db: &PostgresDb) {
+    use golem_registry_service::repo::model::environment::EnvironmentRevisionRecord;
+    use golem_registry_service::services::component_object_store::ComponentObjectStore;
+    use golem_service_base::repo::SqlDateTime;
+    use golem_service_base::storage::blob::{BlobStorageLabelledApi, BlobStorageNamespace};
+    use std::path::Path;
+
+    let mut config = db.config.clone();
+    config.schema = Some("upload_attachment_race".to_string());
+    let pool = make_pool(&config).await;
+    let deps = make_deps(pool.clone(), pool.clone()).await;
+    let mut sql = pool.with("test", "upload_attachment_race");
+    let repo = deps.component_repo.as_ref();
+    let store = ComponentObjectStore::new(deps.blob_storage.clone());
+    let bytes: &[u8] = b"identical upload bytes";
+
+    sql.execute(sqlx::query(
+        "CREATE FUNCTION pause_upload_race() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN PERFORM pg_advisory_xact_lock(1512); RETURN NEW; END; $$",
+    ))
+    .await
+    .unwrap();
+
+    for attachment_wins in [true, false] {
+        let owner = deps.create_account().await;
+        let account = AccountId(owner.revision.account_id);
+        let app = deps.create_application(account.0).await;
+        let old_env = deps.create_env(app.revision.application_id).await;
+        let new_env = deps.create_env(app.revision.application_id).await;
+
+        let (hash, old_upload) = store.stage(repo, account, bytes.into()).await.unwrap();
+        let old_key = old_upload.object_key.clone();
+        let record = |id, key| {
+            ComponentRevisionRecord::creation(
+                id,
+                bytes.len() as u64,
+                ComponentMetadata::default(),
+                hash.clone(),
+                None,
+                key,
+                account,
+            )
+        };
+        repo.create_with_upload(
+            old_env.revision.environment_id,
+            "upload-race",
+            record(ComponentId(new_repo_uuid()), old_key.clone()),
+            vec![],
+            Some(old_upload),
+        )
+        .await
+        .unwrap();
+        let _ = deps
+            .environment_repo
+            .delete(EnvironmentRevisionRecord {
+                revision_id: old_env.revision.revision_id + 1,
+                audit: DeletableRevisionAuditFields::deletion(account.0),
+                ..old_env.revision
+            })
+            .await
+            .unwrap();
+
+        let (_, new_upload) = store.stage(repo, account, bytes.into()).await.unwrap();
+        let new_key = new_upload.object_key.clone();
+        let new_id = ComponentId(new_repo_uuid());
+        let (table, event, key_column) = if attachment_wins {
+            ("component_revisions", "INSERT", "object_store_key")
+        } else {
+            ("account_component_digests", "UPDATE", "object_key")
+        };
+        // Pause the winner after it has the mapping lock but before it can commit.
+        sql.execute(sqlx::query(&format!(
+            "CREATE TRIGGER pause_upload_race AFTER {event} ON {table} FOR EACH ROW \
+             WHEN (NEW.{key_column} = '{old_key}') \
+             EXECUTE FUNCTION pause_upload_race()"
+        )))
+        .await
+        .unwrap();
+        let mut gate = sql.begin().await.unwrap();
+        let gate_pid = gate
+            .fetch_one(sqlx::query(
+                "SELECT pg_backend_pid() AS pid, pg_advisory_xact_lock(1512)",
+            ))
+            .await
+            .unwrap()
+            .get::<i32, _>("pid");
+        let wait_for_blocked_backend =
+            |blocker| {
+                let mut sql = pool.with("test", "observe_upload_attachment_race");
+                async move {
+                    loop {
+                        if let Some(row) = sql
+                        .fetch_optional(sqlx::query(
+                            "SELECT pid FROM pg_stat_activity WHERE wait_event_type = 'Lock' \
+                             AND $1 = ANY(pg_blocking_pids(pid))",
+                        ).bind(blocker))
+                        .await
+                        .unwrap()
+                    {
+                        break row.get::<i32, _>("pid");
+                    }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                }
+            };
+        let attach = || async {
+            repo.create_with_upload(
+                new_env.revision.environment_id,
+                "upload-race",
+                record(new_id, new_key.clone()),
+                vec![],
+                Some(new_upload),
+            )
+            .await
+            .unwrap()
+        };
+        let collect = || async {
+            repo.collect_uploads(SqlDateTime::now(), "")
+                .await
+                .unwrap()
+                .1
+        };
+        let (attached, retired) = tokio::time::timeout(Duration::from_secs(10), async {
+            if attachment_wins {
+                let collect = async {
+                    let winner = wait_for_blocked_backend(gate_pid).await;
+                    let release = async {
+                        wait_for_blocked_backend(winner).await;
+                        gate.commit().await.unwrap();
+                    };
+                    tokio::join!(collect(), release).0
+                };
+                tokio::join!(attach(), collect)
+            } else {
+                let attach = async {
+                    let winner = wait_for_blocked_backend(gate_pid).await;
+                    let release = async {
+                        wait_for_blocked_backend(winner).await;
+                        gate.commit().await.unwrap();
+                    };
+                    tokio::join!(attach(), release).0
+                };
+                tokio::join!(attach, collect())
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!("PostgreSQL lock contention not observed: attachment_wins={attachment_wins}")
+        });
+        sql.execute(sqlx::query(&format!(
+            "DROP TRIGGER pause_upload_race ON {table}"
+        )))
+        .await
+        .unwrap();
+
+        assert_eq!(
+            retired.contains(&(account.0, old_key.clone())),
+            !attachment_wins
+        );
+        assert_eq!(
+            attached.revision.object_store_key,
+            if attachment_wins { &old_key } else { &new_key }.as_str()
+        );
+        for (account_id, key) in retired {
+            deps.blob_storage
+                .with("test", "retire_upload")
+                .delete(
+                    BlobStorageNamespace::ComponentUploads {
+                        account_id: AccountId(account_id),
+                    },
+                    Path::new(&key),
+                )
+                .await
+                .unwrap();
+            repo.confirm_upload_deleted(&key).await.unwrap();
+        }
+        let actual = repo
+            .get_by_id_and_revision(new_id.0, attached.revision.revision_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            store
+                .get(account, &actual.record.component.revision.object_store_key)
+                .await
+                .unwrap(),
+            bytes
+        );
+    }
+}
+
+#[test]
 async fn test_component_stage(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_component_stage(deps).await;
 }

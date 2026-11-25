@@ -19,6 +19,7 @@ use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFingerprint, AgentId, Timestamp};
@@ -1385,8 +1386,8 @@ pub enum BlobStorageNamespace {
         agent_mode: AgentMode,
         level: usize,
     },
-    Components {
-        environment_id: EnvironmentId,
+    ComponentUploads {
+        account_id: AccountId,
     },
     PublishedBlobs,
     /// The filesystem snapshots of one incarnation of an agent. Each incarnation has its own
@@ -1461,8 +1462,8 @@ pub(crate) fn namespace_segments(namespace: &BlobStorageNamespace) -> Vec<String
                 environment_id.to_string(),
             ]
         }
-        BlobStorageNamespace::Components { environment_id } => {
-            vec!["component_store".to_string(), environment_id.to_string()]
+        BlobStorageNamespace::ComponentUploads { account_id } => {
+            vec!["component_uploads".to_string(), account_id.to_string()]
         }
         BlobStorageNamespace::PublishedBlobs => vec!["published_blobs".to_string()],
         BlobStorageNamespace::FilesystemSnapshots {

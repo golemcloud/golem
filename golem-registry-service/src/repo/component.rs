@@ -25,6 +25,7 @@ use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
 use futures::future::BoxFuture;
+use golem_common::model::account::AccountId;
 use golem_common::model::card::{
     CardId, CardManagedBy, CardManagedByAgentInitial, CardManagedByComponentInitial,
 };
@@ -33,12 +34,24 @@ use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo::Blob;
-use golem_service_base::repo::{RepoError, RepoResult, ResultExt};
+use golem_service_base::repo::{RepoError, RepoResult, ResultExt, SqlDateTime};
+use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, ExistsResult};
 use indoc::indoc;
 use sqlx::{Database, Row};
 use std::fmt::Debug;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
+
+#[derive(Clone)]
+pub struct ComponentUpload {
+    pub object_key: String,
+    pub(crate) digest: String,
+    pub(crate) storage: Arc<dyn BlobStorage>,
+    pub(crate) bytes: Arc<[u8]>,
+}
 
 #[async_trait]
 pub trait ComponentRepo: Send + Sync {
@@ -48,13 +61,49 @@ pub trait ComponentRepo: Send + Sync {
         name: &str,
         revision: ComponentRevisionRecord,
         cards_to_create: Vec<CardRecord>,
+    ) -> Result<ComponentExtRevisionRecord, ComponentRepoError> {
+        self.create_with_upload(environment_id, name, revision, cards_to_create, None)
+            .await
+    }
+
+    async fn create_with_upload(
+        &self,
+        environment_id: Uuid,
+        name: &str,
+        revision: ComponentRevisionRecord,
+        cards_to_create: Vec<CardRecord>,
+        upload: Option<ComponentUpload>,
     ) -> Result<ComponentExtRevisionRecord, ComponentRepoError>;
 
     async fn update(
         &self,
         revision: ComponentRevisionRecord,
         cards_to_create: Vec<CardRecord>,
+    ) -> Result<ComponentExtRevisionRecord, ComponentRepoError> {
+        self.update_with_upload(revision, cards_to_create, None)
+            .await
+    }
+
+    async fn update_with_upload(
+        &self,
+        revision: ComponentRevisionRecord,
+        cards_to_create: Vec<CardRecord>,
+        upload: Option<ComponentUpload>,
     ) -> Result<ComponentExtRevisionRecord, ComponentRepoError>;
+
+    async fn register_upload(
+        &self,
+        account_id: Uuid,
+        object_key: &str,
+        expires: SqlDateTime,
+    ) -> RepoResult<()>;
+    async fn collect_uploads(
+        &self,
+        now: SqlDateTime,
+        after: &str,
+    ) -> RepoResult<(String, Vec<(Uuid, String)>)>;
+    async fn abandon_upload(&self, object_key: &str) -> RepoResult<()>;
+    async fn confirm_upload_deleted(&self, object_key: &str) -> RepoResult<()>;
 
     async fn delete(
         &self,
@@ -168,27 +217,56 @@ impl<Repo: ComponentRepo> LoggedComponentRepo<Repo> {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
-    async fn create(
+    async fn register_upload(
+        &self,
+        account_id: Uuid,
+        object_key: &str,
+        expires: SqlDateTime,
+    ) -> RepoResult<()> {
+        self.repo
+            .register_upload(account_id, object_key, expires)
+            .await
+    }
+
+    async fn collect_uploads(
+        &self,
+        now: SqlDateTime,
+        after: &str,
+    ) -> RepoResult<(String, Vec<(Uuid, String)>)> {
+        self.repo.collect_uploads(now, after).await
+    }
+
+    async fn abandon_upload(&self, object_key: &str) -> RepoResult<()> {
+        self.repo.abandon_upload(object_key).await
+    }
+
+    async fn confirm_upload_deleted(&self, object_key: &str) -> RepoResult<()> {
+        self.repo.confirm_upload_deleted(object_key).await
+    }
+
+    async fn create_with_upload(
         &self,
         environment_id: Uuid,
         name: &str,
         revision: ComponentRevisionRecord,
         cards_to_create: Vec<CardRecord>,
+        upload: Option<ComponentUpload>,
     ) -> Result<ComponentExtRevisionRecord, ComponentRepoError> {
         self.repo
-            .create(environment_id, name, revision, cards_to_create)
+            .create_with_upload(environment_id, name, revision, cards_to_create, upload)
             .instrument(Self::span_name(environment_id, name))
             .await
     }
 
-    async fn update(
+    async fn update_with_upload(
         &self,
         revision: ComponentRevisionRecord,
         cards_to_create: Vec<CardRecord>,
+        upload: Option<ComponentUpload>,
     ) -> Result<ComponentExtRevisionRecord, ComponentRepoError> {
         let span = Self::span_id(revision.component_id);
         self.repo
-            .update(revision, cards_to_create)
+            .update_with_upload(revision, cards_to_create, upload)
             .instrument(span)
             .await
     }
@@ -370,12 +448,117 @@ impl<DBP: Pool> DbComponentRepo<DBP> {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl ComponentRepo for DbComponentRepo<PostgresPool> {
-    async fn create(
+    async fn register_upload(
+        &self,
+        account_id: Uuid,
+        object_key: &str,
+        expires: SqlDateTime,
+    ) -> RepoResult<()> {
+        self.db_pool.with_rw(METRICS_SVC_NAME, "register_upload").execute(
+            sqlx::query("INSERT INTO component_uploads (object_key, account_id, collect_after, pending) VALUES ($1, $2, $3, TRUE)")
+                .bind(object_key).bind(account_id).bind(expires),
+        ).await?;
+        Ok(())
+    }
+
+    async fn collect_uploads(
+        &self,
+        now: SqlDateTime,
+        after: &str,
+    ) -> RepoResult<(String, Vec<(Uuid, String)>)> {
+        let batch: Vec<(String, bool)> = self
+            .db_pool
+            .with_rw(METRICS_SVC_NAME, "find_uploads_to_collect")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                WITH page AS (
+                    SELECT object_key, collect_after FROM component_uploads
+                    WHERE object_key > $2 ORDER BY object_key LIMIT 100
+                )
+                SELECT u.object_key, u.collect_after <= $1 AND NOT EXISTS (
+                    SELECT 1 FROM component_revisions cr
+                    JOIN components c ON c.component_id = cr.component_id
+                    JOIN environments e ON e.environment_id = c.environment_id
+                    JOIN applications ap ON ap.application_id = e.application_id
+                    JOIN accounts a ON a.account_id = ap.account_id
+                    WHERE cr.object_store_key = u.object_key
+                      AND e.deleted_at IS NULL AND ap.deleted_at IS NULL AND a.deleted_at IS NULL
+                ) AS eligible
+                FROM page u ORDER BY u.object_key
+            "# })
+                .bind(&now)
+                .bind(after),
+            )
+            .await?;
+
+        // Page before checking references, so live uploads and repeated delete failures do not
+        // make one sweep unbounded or keep later keys out of it.
+        let next = if batch.len() == 100 {
+            batch.last().unwrap().0.clone()
+        } else {
+            String::new()
+        };
+
+        let mut retired = Vec::new();
+        for (key, eligible) in batch {
+            if !eligible {
+                continue;
+            }
+            let now = now.clone();
+            if let Some(row) = self.with_tx_err::<_, RepoError, _>("retire_upload", |tx| async move {
+                let row: Option<(Uuid, String)> = tx.fetch_optional_as(sqlx::query_as(
+                    "UPDATE component_uploads SET pending = FALSE WHERE object_key = $1 AND collect_after <= $2 RETURNING account_id, object_key"
+                ).bind(&key).bind(now)).await?;
+                let Some(row) = row else { return Ok(None); };
+
+                // Take the same mapping lock as a revision insert. A fresh statement after
+                // acquiring it sees any reference that committed while we waited for the lock.
+                tx.execute(sqlx::query("UPDATE account_component_digests SET digest = digest WHERE object_key = $1").bind(&key)).await?;
+                let reference: Option<(i32,)> = tx.fetch_optional_as(sqlx::query_as(indoc! { r#"
+                    SELECT 1 FROM component_revisions cr
+                    JOIN components c ON c.component_id = cr.component_id
+                    JOIN environments e ON e.environment_id = c.environment_id
+                    JOIN applications ap ON ap.application_id = e.application_id
+                    JOIN accounts a ON a.account_id = ap.account_id
+                    WHERE cr.object_store_key = $1
+                      AND e.deleted_at IS NULL AND ap.deleted_at IS NULL AND a.deleted_at IS NULL
+                    LIMIT 1
+                "# }).bind(&key)).await?;
+                if reference.is_some() { return Ok(None); }
+                tx.execute(sqlx::query("DELETE FROM account_component_digests WHERE object_key = $1").bind(&key)).await?;
+                Ok(Some(row))
+            }.boxed()).await? {
+                retired.push(row);
+            }
+        }
+        Ok((next, retired))
+    }
+
+    async fn abandon_upload(&self, object_key: &str) -> RepoResult<()> {
+        self.db_pool.with_rw(METRICS_SVC_NAME, "abandon_upload").execute(
+            sqlx::query("UPDATE component_uploads SET pending = FALSE, collect_after = $2 WHERE object_key = $1 AND pending")
+                .bind(object_key).bind(SqlDateTime::now()),
+        ).await?;
+        Ok(())
+    }
+
+    async fn confirm_upload_deleted(&self, object_key: &str) -> RepoResult<()> {
+        self.db_pool
+            .with_rw(METRICS_SVC_NAME, "confirm_upload_deleted")
+            .execute(
+                sqlx::query("DELETE FROM component_uploads WHERE object_key = $1").bind(object_key),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn create_with_upload(
         &self,
         environment_id: Uuid,
         name: &str,
-        revision: ComponentRevisionRecord,
+        mut revision: ComponentRevisionRecord,
         cards_to_create: Vec<CardRecord>,
+        upload: Option<ComponentUpload>,
     ) -> Result<ComponentExtRevisionRecord, ComponentRepoError> {
         let opt_deleted_revision: Option<ComponentRevisionIdentityRecord> = self.with_ro("create - get opt deleted").fetch_optional_as(
             sqlx::query_as(indoc! { r#"
@@ -396,7 +579,9 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                 ComponentId(recreated_revision.component_id),
                 recreated_revision.revision_id.try_into()?,
             );
-            return self.update(recreated_revision, cards_to_create).await;
+            return self
+                .update_with_upload(recreated_revision, cards_to_create, upload)
+                .await;
         }
 
         let name = name.to_owned();
@@ -429,6 +614,10 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     DbCardRepo::<PostgresPool>::create_in_tx(tx, card).await?;
                 }
 
+                if let Some(upload) = upload {
+                    revision.object_store_key =
+                        Self::attach_upload(tx, environment_id, upload).await?;
+                }
                 let revision = Self::insert_revision(tx, revision).await?;
 
                 Ok(ComponentExtRevisionRecord {
@@ -442,10 +631,11 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         .await
     }
 
-    async fn update(
+    async fn update_with_upload(
         &self,
-        revision: ComponentRevisionRecord,
+        mut revision: ComponentRevisionRecord,
         cards_to_create: Vec<CardRecord>,
+        upload: Option<ComponentUpload>,
     ) -> Result<ComponentExtRevisionRecord, ComponentRepoError> {
         self.with_tx_err("update", |tx| {
             async move {
@@ -470,6 +660,9 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     DbCardRepo::<PostgresPool>::create_in_tx(tx, card).await?;
                 }
 
+                if let Some(upload) = upload {
+                    revision.object_store_key = Self::attach_upload(tx, environment_id, upload).await?;
+                }
                 let revision: ComponentRevisionRecord = Self::insert_revision(
                     tx,
                     revision,
@@ -1176,6 +1369,12 @@ trait ComponentRepoInternal: ComponentRepo {
     type Db: Database;
     type Tx: LabelledPoolTransaction;
 
+    async fn attach_upload(
+        tx: &mut Self::Tx,
+        environment_id: Uuid,
+        upload: ComponentUpload,
+    ) -> Result<String, ComponentRepoError>;
+
     async fn insert_revision(
         tx: &mut Self::Tx,
         revision: ComponentRevisionRecord,
@@ -1188,6 +1387,80 @@ trait ComponentRepoInternal: ComponentRepo {
 impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
+
+    async fn attach_upload(
+        tx: &mut Self::Tx,
+        environment_id: Uuid,
+        upload: ComponentUpload,
+    ) -> Result<String, ComponentRepoError> {
+        let (account_id,): (Uuid,) = tx
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+            UPDATE component_uploads SET pending = FALSE, collect_after = $2
+            WHERE object_key = $1 AND pending AND collect_after > $2
+              AND account_id = (
+                SELECT ap.account_id FROM environments e
+                JOIN applications ap ON ap.application_id = e.application_id
+                JOIN accounts a ON a.account_id = ap.account_id
+                WHERE e.environment_id = $3 AND ap.deleted_at IS NULL AND a.deleted_at IS NULL
+              )
+            RETURNING account_id
+        "# })
+                .bind(&upload.object_key)
+                .bind(SqlDateTime::now())
+                .bind(environment_id),
+            )
+            .await?
+            .ok_or(ComponentRepoError::ConcurrentModification)?;
+        let (object_key,): (String,) = tx
+            .fetch_one_as(
+                sqlx::query_as(indoc! { r#"
+            INSERT INTO account_component_digests (account_id, digest, object_key)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (account_id, digest) DO UPDATE SET digest = excluded.digest
+            RETURNING object_key
+        "# })
+                .bind(account_id)
+                .bind(upload.digest)
+                .bind(&upload.object_key),
+            )
+            .await?;
+
+        // Check either key, so fresh and reused uploads take the same normal storage path.
+        // Repair the object in place while the mapping lock still excludes collection.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let namespace = BlobStorageNamespace::ComponentUploads {
+                account_id: AccountId(account_id),
+            };
+            let path = Path::new(&object_key);
+            match upload
+                .storage
+                .exists("component_files", "attach_upload", namespace.clone(), path)
+                .await?
+            {
+                ExistsResult::File => {}
+                ExistsResult::DoesNotExist => {
+                    let _ = upload
+                        .storage
+                        .put_raw_if_absent(
+                            "component_files",
+                            "attach_upload",
+                            namespace,
+                            path,
+                            &upload.bytes,
+                        )
+                        .await?;
+                }
+                ExistsResult::Directory => {
+                    anyhow::bail!("Found a directory at a component upload key")
+                }
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .map_err(anyhow::Error::from)??;
+        Ok(object_key)
+    }
 
     async fn insert_revision(
         tx: &mut Self::Tx,

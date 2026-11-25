@@ -3429,6 +3429,100 @@ fn default_card_contains_current_application_permissions(
     has_environment_permissions && has_component_permissions
 }
 
+pub async fn test_component_upload_reference_lifetime(deps: &Deps) {
+    let user = deps.create_account().await;
+    let account = user.revision.account_id;
+    let app = deps.create_application(account).await;
+    let first = deps.create_env(app.revision.application_id).await;
+    let second = deps.create_env(app.revision.application_id).await;
+    let repo = deps.component_repo.as_ref();
+    let store = ComponentObjectStore::new(deps.blob_storage.clone());
+    let bytes: &[u8] = b"same content";
+    let (hash, primary_upload) = store
+        .stage(repo, AccountId(account), bytes.into())
+        .await
+        .unwrap();
+    let (_, duplicate_upload) = store
+        .stage(repo, AccountId(account), bytes.into())
+        .await
+        .unwrap();
+    let primary = primary_upload.object_key.clone();
+    let duplicate = duplicate_upload.object_key.clone();
+    for (environment_id, upload) in [
+        (first.revision.environment_id, primary_upload),
+        (second.revision.environment_id, duplicate_upload),
+    ] {
+        let revision = repo
+            .create_with_upload(
+                environment_id,
+                "dedup",
+                ComponentRevisionRecord::creation(
+                    ComponentId(new_repo_uuid()),
+                    bytes.len() as u64,
+                    ComponentMetadata::default(),
+                    hash.clone(),
+                    None,
+                    upload.object_key.clone(),
+                    AccountId(account),
+                ),
+                vec![],
+                Some(upload),
+            )
+            .await
+            .unwrap();
+        assert_eq!(revision.revision.object_store_key, primary);
+        assert_eq!(
+            store.get(AccountId(account), &primary).await.unwrap(),
+            bytes
+        );
+        if environment_id == first.revision.environment_id {
+            let _ = deps
+                .blob_storage
+                .delete(
+                    "test",
+                    "simulate_lost_upload",
+                    BlobStorageNamespace::ComponentUploads {
+                        account_id: AccountId(account),
+                    },
+                    &PathBuf::from(&primary),
+                )
+                .await
+                .unwrap();
+            assert!(store.get(AccountId(account), &primary).await.is_err());
+        }
+    }
+
+    let primary_row = (account, primary);
+    let duplicate_row = (account, duplicate);
+    let (_, candidates) = repo.collect_uploads(SqlDateTime::now(), "").await.unwrap();
+    assert!(!candidates.contains(&primary_row));
+    assert!(candidates.contains(&duplicate_row));
+    repo.confirm_upload_deleted(&duplicate_row.1).await.unwrap();
+
+    for (env, eligible) in [(first, false), (second, true)] {
+        let _ = deps
+            .environment_repo
+            .delete(EnvironmentRevisionRecord {
+                revision_id: env.revision.revision_id + 1,
+                audit: DeletableRevisionAuditFields::deletion(account),
+                ..env.revision
+            })
+            .await
+            .unwrap();
+        let (_, candidates) = repo.collect_uploads(SqlDateTime::now(), "").await.unwrap();
+        assert_eq!(candidates.contains(&primary_row), eligible);
+    }
+    repo.confirm_upload_deleted(&primary_row.1).await.unwrap();
+    assert!(
+        !repo
+            .collect_uploads(SqlDateTime::now(), "")
+            .await
+            .unwrap()
+            .1
+            .contains(&primary_row)
+    );
+}
+
 pub async fn test_component_stage(deps: &Deps) {
     let user = deps.create_account().await;
     let app = deps.create_application(user.revision.account_id).await;
