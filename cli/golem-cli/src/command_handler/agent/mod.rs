@@ -51,7 +51,7 @@ use crate::model::agent::oplog::{
     check_oplog_page_scan,
 };
 use crate::model::agent::oplog_html::{
-    OplogViewerDocument, OplogViewerMode, render_oplog_viewer_html,
+    OplogViewerDocument, OplogViewerMode, export_temporary_file, render_oplog_viewer_html,
 };
 use crate::model::agent::{
     AgentAddress, AgentCreateView, AgentGetView, AgentListCursor, AgentUpsertView,
@@ -1200,13 +1200,7 @@ impl AgentCommandHandler {
             .map_service_error()?
             .fingerprint;
 
-        let directory = match path.parent() {
-            Some(parent) if !parent.as_os_str().is_empty() => parent,
-            _ => Path::new("."),
-        };
-        fs::create_dir_all(directory)?;
-        let file = tempfile::NamedTempFile::new_in(directory)
-            .with_context(|| format!("Failed to create a file in {}", directory.display()))?;
+        let file = export_temporary_file(path)?;
         let selection = match query {
             Some(_) => OplogExportSelection::Matches,
             None => OplogExportSelection::EveryEntry(range),
