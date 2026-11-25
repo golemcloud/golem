@@ -4786,7 +4786,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         guest_search.entries
     );
 
-    let range_page = |from: u64, cursor: Option<OplogCursor>| {
+    let range_to = |from: u64, to: u64, cursor: Option<OplogCursor>| {
         get_public_oplog_range_page(
             Arc::new(PanicComponentService),
             oplog_service.clone(),
@@ -4798,7 +4798,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
             None,
             cursor,
             OplogIndex::from_u64(from),
-            OplogIndex::from_u64(5),
+            OplogIndex::from_u64(to),
             PublicOplogPageLimits {
                 count: 10,
                 max_bytes: 1_000_000,
@@ -4811,6 +4811,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
             ClaimVisibility::Hidden,
         )
     };
+    let range_page = |from: u64, cursor: Option<OplogCursor>| range_to(from, 5, cursor);
     let range = range_page(retained_start.as_u64(), None).await.unwrap();
     assert_eq!(
         page_indices(&range.entries),
@@ -4843,6 +4844,39 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         .err(),
         Some(range_expired.clone()),
         "a cursor below the start is expired"
+    );
+    // A gRPC range page without `from` starts at the retained start. A `to` or a cursor below the
+    // start is then expired, not a range that ends before its start or a cursor outside it.
+    let cursor_at = |next: u64| OplogCursor {
+        next_oplog_index: next,
+        current_component_revision: ComponentRevision::INITIAL.into(),
+        query_hash: OplogCursor::query_hash(None),
+    };
+    assert_eq!(
+        range_to(retained_start.as_u64(), 3, None).await.err(),
+        Some(range_expired.clone()),
+        "a range without `from` that ends below the start is expired"
+    );
+    assert_eq!(
+        range_to(retained_start.as_u64(), 5, Some(cursor_at(3)))
+            .await
+            .err(),
+        Some(range_expired.clone()),
+        "a cursor below the start of a range without `from` is expired"
+    );
+    assert!(
+        matches!(
+            range_to(5, 4, None).await,
+            Err(WorkerExecutorError::InvalidRequest { .. })
+        ),
+        "a range at or after the start that ends before its start is not valid"
+    );
+    assert!(
+        matches!(
+            range_to(5, 5, Some(cursor_at(4))).await,
+            Err(WorkerExecutorError::InvalidRequest { .. })
+        ),
+        "a cursor at or after the start but before `from` is not valid"
     );
     // A `from` below the start is expired before the revision lookup, also when the allowance
     // runs out in the lookup.

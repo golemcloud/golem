@@ -781,6 +781,41 @@ pub fn oplog_range_allowance(
     }
 }
 
+/// Checks the request of a range page from `from` to `to` that `cursor` continues, and gives the
+/// start of the range: `from`, or index 1 when `from` is 0. A `to` or a cursor below the retained
+/// start is expired, before the other checks, because a range without `from` starts at the
+/// retained start. Then a range that ends before its start, or a cursor outside the range, is an
+/// invalid request.
+fn checked_range_start(
+    retention: OplogRetention,
+    agent_id: &golem_common::model::AgentId,
+    from: OplogIndex,
+    to: OplogIndex,
+    cursor: Option<&OplogCursor>,
+) -> Result<OplogIndex, WorkerExecutorError> {
+    let from = from.max(OplogIndex::INITIAL);
+    retention.check_agent_from(agent_id, to.max(OplogIndex::INITIAL))?;
+    if let Some(cursor) = cursor {
+        retention.check_agent_from(
+            agent_id,
+            OplogIndex::from_u64(cursor.next_oplog_index).max(OplogIndex::INITIAL),
+        )?;
+    }
+    if to < from {
+        return Err(WorkerExecutorError::invalid_request(format!(
+            "the oplog range ends at {to}, before its start {from}"
+        )));
+    }
+    if let Some(cursor) = cursor
+        && (cursor.next_oplog_index < from.as_u64() || cursor.next_oplog_index > to.as_u64())
+    {
+        return Err(WorkerExecutorError::invalid_request(format!(
+            "the oplog cursor {cursor} is outside the range from {from} to {to}"
+        )));
+    }
+    Ok(from)
+}
+
 /// Reads one oplog page of the range from `from` to `to`, inclusive, for a remote reader, within
 /// `allowance`. The page has the limits of [`get_public_oplog_page`], and reads no entry after
 /// `to`.
@@ -794,8 +829,8 @@ pub fn oplog_range_allowance(
 /// continues the range where the page stopped; it must be within the range.
 ///
 /// `retention` is the retention of the oplog, which the caller reads once. A range read is a
-/// page: a `from` or a cursor below the retained start is expired, also at index 1, before the
-/// read charges any entry to the allowance.
+/// page: a `from`, a `to` or a cursor below the retained start is expired, also at index 1,
+/// before the read charges any entry to the allowance.
 #[allow(clippy::too_many_arguments)]
 pub async fn get_public_oplog_range_page(
     components: Arc<dyn ComponentService>,
@@ -814,19 +849,13 @@ pub async fn get_public_oplog_range_page(
     claims: ClaimVisibility,
 ) -> Result<PublicOplogRangePage, WorkerExecutorError> {
     let mut scan = RangeScan::new(allowance);
-    let from = from.max(OplogIndex::INITIAL);
-    if to < from {
-        return Err(WorkerExecutorError::invalid_request(format!(
-            "the oplog range ends at {to}, before its start {from}"
-        )));
-    }
-    if let Some(cursor) = &cursor
-        && (cursor.next_oplog_index < from.as_u64() || cursor.next_oplog_index > to.as_u64())
-    {
-        return Err(WorkerExecutorError::invalid_request(format!(
-            "the oplog cursor {cursor} is outside the range from {from} to {to}"
-        )));
-    }
+    let from = checked_range_start(
+        retention,
+        &owned_agent_id.agent_id,
+        from,
+        to,
+        cursor.as_ref(),
+    )?;
     let (start, revision) = match cursor {
         Some(cursor) => {
             let (start, revision) = oplog_page_start(
