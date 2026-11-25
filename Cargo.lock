@@ -4260,6 +4260,7 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "walkdir",
  "wasm-metadata 0.251.0",
  "wasm-rquickjs",
  "wasm-wave 0.251.0",
@@ -4323,7 +4324,11 @@ dependencies = [
  "golem-common",
  "tempfile",
  "test-r",
+ "tokio",
+ "walkdir",
+ "wasm-encoder 0.251.0",
  "wasm-rquickjs",
+ "wasmtime",
 ]
 
 [[package]]

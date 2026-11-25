@@ -61,11 +61,14 @@ the tests never silently skip a guest. The Rust tests start no external processe
 
 ## What the tests cover
 
-The `js-guest` binary injects each freshly bundled application into its SDK's real
-`agent_guest.wasm`. It calls the same `golem_common::javascript::preinitialize_js`
-operation as `golem build`, so the initialization export and fuel budget have one
-source of truth. That operation is behind the optional `javascript` feature; other
-`golem-common` consumers need not depend on the JavaScript optimizer.
+The `js-guest` binary exercises both build presets with each freshly bundled
+application and its SDK's real `agent_guest.wasm`. The quick path injects the
+source into the template without Wizer. The optimized path passes the source to
+the unchanged template's initializer through
+`golem_common::javascript::preinitialize_js`, the same operation as `golem build`.
+The initialization export, shared Wasmtime configuration and copy budget have
+one source of truth. That operation is behind the optional `javascript` feature;
+other `golem-common` consumers need not depend on the JavaScript optimizer.
 
 The test then calls the guest's discovery export through the production component
 metadata extractor. Each application computes an asymmetric arithmetic value and
@@ -73,6 +76,17 @@ captures `Date.now()` in its agent description during module initialization.
 Discovery must return the expected value and the preinitialization clock of zero.
 Without preinitialization, discovery captures the host's current clock instead.
 The arithmetic is a recognizable marker, not an arithmetic conformance test.
+
+The compilation-cache tests compare cold, warm and uncached snapshots byte for
+byte. A JS edit must report a native compilation cache hit and discover the edited
+description. Parallel applications must match their uncached snapshots. Different
+engine settings must miss, and truncated entries must recompile successfully.
+Twenty distinct guest components check cache size against the 512 MiB limit.
+The cache contains native code, never initialized stores, instances or JS state.
+Golem trims oversized caches after builds, in addition to Wasmtime's background
+eviction. Parallel builds can temporarily exceed the limit. The cache lives at
+`<Golem config directory>/js-compilation-cache`; deleting it only makes the next
+build cold. The output Wasm is standalone and does not need this cache or external JS.
 
 The tests do not call the agent's `get` method or cover worker execution, awaited
 I/O or source-map diagnostic accuracy. Source maps accompany the build outputs for

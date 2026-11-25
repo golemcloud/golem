@@ -31,6 +31,33 @@ use test_r::test;
 use url::Url;
 
 #[test]
+fn preinitialize_js_requires_a_template_and_source_module() {
+    for module in [None, Some("dist/main.js")] {
+        let mut command = serde_json::json!({
+            "preinitializeJs": "guest.wasm",
+            "into": "initialized.wasm"
+        });
+        if let Some(module) = module {
+            command["module"] = module.into();
+        }
+        let document = serde_json::json!({
+            "app": "test-app",
+            "components": {"app:main": {"build": [command]}}
+        });
+        assert_eq!(
+            serde_json::from_value::<Application>(document.clone()).is_ok(),
+            module.is_some(),
+            "{document}"
+        );
+        assert_eq!(
+            JSON_SCHEMA_VALIDATOR.is_valid(&document),
+            module.is_some(),
+            "{document}"
+        );
+    }
+}
+
+#[test]
 fn node_http_router_ports_match_manifest_schema() {
     for key in [
         "1", "3000", "65535", "0", "03000", "+3000", "65536", "3000.0", "port",
